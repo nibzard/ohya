@@ -10,8 +10,12 @@ Start locally on macOS with Claude Code and polling. Add Codex and the Pi agent
 next; both write append-only JSONL session logs that fit the cursor model.
 OpenCode is a planned phase 2 source, pending a parser spike for its
 per-message JSON storage. Networking
-uses an isolated Tailcat adapter after a feasibility spike; deployment and relay
-requirements are not yet verified. See README.md for implementation order.
+uses an isolated Tailcat adapter: the T014 feasibility spike validated two
+processes exchanging encrypted batches against a self-hosted Headscale
+coordination server (ADR 0002, `cmd/tailcat-spike`), and all transport code
+stays behind the `internal/transport` interfaces consumed by the sync layer.
+The production control-plane choice and forced-relay behavior remain open
+items in that ADR. See README.md for implementation order.
 
 The hub also ingests its own files through the same transactional write path.
 All writes use one writer. Readers use separate restricted connections.

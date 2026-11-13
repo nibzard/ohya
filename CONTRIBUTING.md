@@ -1,7 +1,10 @@
 # Contributing
 
-Read MANIFESTO.md and AGENTS.md first. Go 1.25 or later, CGO and a C compiler
-are required (on macOS, install Xcode Command Line Tools). SQLite is bundled in
+Read MANIFESTO.md and AGENTS.md first. Go 1.27.3 or later, CGO and a C
+compiler are required (on macOS, install Xcode Command Line Tools). The Go
+minimum comes from the pinned Tailcat transport dependency
+([ADR 0002](docs/adr/0002-tailcat-transport.md)); with the default
+GOTOOLCHAIN=auto the toolchain is fetched as needed. SQLite is bundled in
 the driver. From the repository root:
 
 ```sh

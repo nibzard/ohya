@@ -139,3 +139,22 @@ How to use this file:
   or absent delete; an empty batch is accepted with zeros. `updated_at_ms`
   is clamped up to `created_at_ms` on update so a backwards hub clock step
   cannot trip the table CHECK and permanently wedge an annotation.
+
+- Tailcat/tsnet driver facts (2026-11-13, internal/transport, T014; measured
+  in ADR 0002, reproduced by cmd/tailcat-spike against local Headscale
+  v0.29.7):
+  - `tsnet.Server.Up(ctx)` surfaces a rejected pairing key in milliseconds
+    ("authkey already used"); a bare `Dial` would sit in NeedsLogin until
+    the context deadline. The adapter therefore calls Up before dialing so
+    authorization failures fail fast — keep that when the sync layer grows.
+  - A tsnet listener's Accept is not context-aware; close the listener to
+    unblock shutdown.
+  - Ephemeral registration makes the coordination server expire the node at
+    disconnect, orphaning the local state (next start needs a new pairing
+    key). ohya nodes register durably.
+  - WhoIs on an accepted connection returns the peer's login and FQDN —
+    the transport-level device identity for the authorization model.
+  - `tailscale.com` v1.104.4 hard-requires `go >= 1.27.3` in go.mod;
+    GOTOOLCHAIN=auto downloads the toolchain. Headscale v0.29.7 CLI wants
+    numeric user IDs (`preauthkeys create -u 1`), and its `server_url`
+    must be reachable from every node process.
