@@ -1,5 +1,6 @@
 # ohya — Agent Instructions
 - Always read and follow `MANIFESTO.md` — it defines the project's principles and takes precedence over conflicting guidance.
+- Check `NOTES.md` at the start of work and keep it current: record frictions, papercuts, open questions, ideas, and findings there as they come up.
 - Mission: shared, near-real-time, local-first memory for Claude Code, Codex, and other coding agents.
 - Before editing, inspect relevant code, tests, `README.md`, and applicable nested `AGENTS.md` files.
 - Architecture: one Go binary, modular monolith, one hub-owned SQLite WAL database, FTS5/BM25, read-only `sql(query)` and bounded `annotate(operations)` MCP tools.
