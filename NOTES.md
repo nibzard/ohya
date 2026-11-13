@@ -1,16 +1,19 @@
 # ohya — Notes
 
 <!--
-ABOUTME: Working notes for ohya — frictions, papercuts, open questions, ideas.
-ABOUTME: Read at the start of each task; update continuously; prune what is resolved.
+Working notes for ohya — unresolved knowledge useful to future work.
+Read at the start of each task; update when useful; prune what is resolved.
 
 How to use this file:
 - Read it before starting any task; re-read findings that touch your work.
-- Add a dated bullet whenever you hit friction, a papercut, an open question,
-  an idea, or an unverified finding. One topic per bullet; keep it short.
-- Mark uncertain claims as unverified and name what would confirm them.
+- Add a dated bullet for information worth carrying into another session.
+  One topic per bullet; keep it short.
+- Distinguish observed facts from hypotheses. Mark uncertain claims as unverified
+  and include a relevant file reference or verification step when useful.
 - Remove or rewrite bullets once resolved or disproved — this is a live file,
   not an archive.
+- Keep durable decisions in the relevant documentation and actionable tasks in
+  the backlog; use this file for unresolved working knowledge.
 - Never put secrets, transcripts, or large dumps here; link to sources instead.
 -->
 
