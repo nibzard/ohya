@@ -64,15 +64,3 @@ BEGIN
   INSERT INTO events_fts(events_fts, rowid, text)
   VALUES ('delete', OLD.id, OLD.text);
 END;
-
-CREATE TABLE session_labels (
-  session_id          TEXT PRIMARY KEY REFERENCES sessions(id),
-  through_event_count INTEGER NOT NULL,
-  classified_at_ms    INTEGER NOT NULL,
-  classifier          TEXT NOT NULL,
-  work_type           TEXT,
-  outcome             TEXT,
-  needs_followup      INTEGER CHECK (needs_followup IN (0, 1)),
-  confidence          REAL CHECK (confidence BETWEEN 0 AND 1),
-  labels              TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(labels))
-) STRICT;
