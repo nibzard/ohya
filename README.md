@@ -14,8 +14,12 @@ the read-only `sql` tool and the bounded atomic `annotate` tool over stdio.
 Device sync is in progress: the hub-side batch endpoint (`internal/hubsync`)
 implements the model-checked sync contract — registration, bounded batches,
 hub-side normalization with the local parser, device ownership binding and
-idempotent replay — as a library over any transport listener; device pairing
-and the uploader follow. See [MANIFESTO.md](MANIFESTO.md) for
+idempotent replay — as a library over any transport listener, and pairing is
+implemented (`internal/registry`, T018): a hub-owned credential registry in
+its own protected database, one-time expiring invitations, final revocation
+with per-request checks and connection teardown, and `ohya devices
+invite|list|revoke` for operators. The device uploader and the serving
+command follow. See [MANIFESTO.md](MANIFESTO.md) for
 engineering principles, [PRODUCT.md](PRODUCT.md) for the product vision,
 [ARCHITECTURE.md](ARCHITECTURE.md) for system design, and [DB.md](DB.md)
 for the database plan.
@@ -27,12 +31,16 @@ make build
 ./bin/ohya ingest              # import history, then poll until stopped
 ./bin/ohya ingest --once       # one pass, then exit
 ./bin/ohya mcp                 # serve the read-only sql MCP tool on stdio
+./bin/ohya devices invite      # issue a one-time pairing invitation
+./bin/ohya devices list        # show paired devices and invitations
+./bin/ohya devices revoke ID   # revoke a device, final for its identity
 ```
 
 `ohya ingest` watches `~/.claude/projects` (override with `--claude-root`)
 and stores everything in `~/.ohya/hub.db` (override with `--db`; the state
 directory defaults to the database directory and can be set with `--state`).
-The state directory holds `device.json`, the stable device identity, and
+The state directory holds `device.json`, the stable device identity,
+`credential.json`, the owner-only hub pairing credential, and
 `sources/claude-code.json`, the acknowledged byte checkpoint of every
 watched file.
 
@@ -90,9 +98,10 @@ change nothing, not even timestamps. Agents query annotations through the
   modifying original transcript records.
 - Isolated Tailcat transport adapter for encrypted device-to-hub sync. The
   feasibility spike is complete ([ADR 0002](docs/adr/0002-tailcat-transport.md)),
-  and the hub sync endpoint (`internal/hubsync`) commits device batches
-  through the transactional write path; the device uploader and pairing
-  follow.
+  the hub sync endpoint (`internal/hubsync`) commits device batches
+  through the transactional write path, and device pairing with revocation
+  is implemented (`internal/registry`); the device uploader and the serving
+  command follow.
 
 ### Phase 2
 

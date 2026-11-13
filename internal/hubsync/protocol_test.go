@@ -253,3 +253,120 @@ func FuzzReadFrame(f *testing.F) {
 		}
 	})
 }
+
+// TestAuthFrameRoundTrip covers the pairing and hello frames: the client
+// writers and the readers decode each other, and the first-frame reader
+// consumes exactly the frame's bytes, leaving the next frame intact.
+func TestAuthFrameRoundTrip(t *testing.T) {
+	var buf bytes.Buffer
+	if err := WriteHello(&buf, "cred-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteRegistration(&buf, Registration{DeviceID: testDevice, SourceID: testSource,
+		Agent: "claude-code", Path: "/p/s.jsonl"}); err != nil {
+		t.Fatal(err)
+	}
+	hello, pair, err := ReadAuthFrame(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pair != nil || hello == nil || hello.Credential != "cred-1" {
+		t.Fatalf("hello = %+v, pair = %+v; want the credential hello", hello, pair)
+	}
+	frame, err := ReadFrame(&buf)
+	if err != nil || frame.Registration == nil {
+		t.Fatalf("next frame = %+v, %v; want the registration that followed", frame, err)
+	}
+
+	buf.Reset()
+	if err := WritePairRequest(&buf, "inv-1", testDevice); err != nil {
+		t.Fatal(err)
+	}
+	hello, pair, err = ReadAuthFrame(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hello != nil || pair == nil || pair.Invitation != "inv-1" || pair.DeviceID != testDevice {
+		t.Fatalf("hello = %+v, pair = %+v; want the pairing request", hello, pair)
+	}
+
+	buf.Reset()
+	if err := WriteCredentialReply(&buf, CredentialReply{DeviceID: testDevice, Credential: "cred-1"}); err != nil {
+		t.Fatal(err)
+	}
+	reply, perr, err := ReadCredentialReply(&buf)
+	if err != nil || perr != nil || reply.DeviceID != testDevice || reply.Credential != "cred-1" {
+		t.Fatalf("credential reply = %+v, %+v, %v", reply, perr, err)
+	}
+
+	// Writers refuse what the reader would reject.
+	if err := WriteHello(&buf, ""); err == nil {
+		t.Fatal("an empty credential was framed")
+	}
+	if err := WriteHello(&buf, strings.Repeat("c", maxSecretLen+1)); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("oversized credential err = %v; want ErrTooLarge", err)
+	}
+	if err := WritePairRequest(&buf, "", testDevice); err == nil {
+		t.Fatal("an empty invitation was framed")
+	}
+}
+
+// TestReadAuthFrameRejectsBrokenFrames pins the first-frame gate: wrong
+// version, wrong marker, oversize and truncation all fail, and the bounds
+// hold before any allocation.
+func TestReadAuthFrameRejectsBrokenFrames(t *testing.T) {
+	oversized := []byte{'H', ProtocolVersion}
+	oversized = appendLen16(oversized, strings.Repeat("c", maxSecretLen+1))
+	oversized = append(oversized, strings.Repeat("c", maxSecretLen+1)...)
+	for _, tc := range []struct {
+		name  string
+		frame []byte
+		want  error
+		sub   string
+	}{
+		{"registration first", []byte{'R', ProtocolVersion}, nil, "bad auth frame marker"},
+		{"batch first", []byte{'B', ProtocolVersion}, nil, "bad auth frame marker"},
+		{"bad version", []byte{'H', ProtocolVersion + 1}, ErrVersion, "version"},
+		{"truncated", []byte{'P', ProtocolVersion, 0}, nil, "read"},
+		{"empty credential", []byte{'H', ProtocolVersion, 0, 0}, nil, "empty credential"},
+		{"oversized credential", oversized, ErrTooLarge, "credential length"},
+	} {
+		_, _, err := ReadAuthFrame(bytes.NewReader(tc.frame))
+		if err == nil {
+			t.Fatalf("%s: decode succeeded, want failure", tc.name)
+		}
+		if tc.want != nil && !errors.Is(err, tc.want) {
+			t.Fatalf("%s: err = %v; want %v", tc.name, err, tc.want)
+		}
+		if tc.sub != "" && !strings.Contains(err.Error(), tc.sub) {
+			t.Fatalf("%s: err = %v; want text %q", tc.name, err, tc.sub)
+		}
+	}
+}
+
+// FuzzReadAuthFrame checks the first-frame decoder against arbitrary input:
+// it must never panic. Run with go test -fuzz=FuzzReadAuthFrame for deep
+// fuzzing.
+func FuzzReadAuthFrame(f *testing.F) {
+	var buf bytes.Buffer
+	if err := WriteHello(&buf, "cred-1"); err != nil {
+		f.Fatal(err)
+	}
+	f.Add(buf.Bytes())
+	buf.Reset()
+	if err := WritePairRequest(&buf, "inv-1", testDevice); err != nil {
+		f.Fatal(err)
+	}
+	f.Add(buf.Bytes())
+	f.Add([]byte{'H', ProtocolVersion, 0})
+	f.Add([]byte("garbage"))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		hello, pair, err := ReadAuthFrame(bytes.NewReader(data))
+		if err != nil {
+			return // rejected input, including truncation
+		}
+		if hello == nil && pair == nil {
+			t.Fatal("a decoded frame carries neither hello nor pairing request")
+		}
+	})
+}

@@ -109,8 +109,11 @@ newly inserted count and, when the parser refused a record, the stop offset
 and reason. Every declared length is checked against a bound before
 allocation: 1 MiB per record, 8 MiB per batch, 65,536 records per batch. The
 endpoint authenticates each connection through an `Authenticator` interface
-and rejects any frame naming another device; pairing (T018) will back the
-interface with the credential registry and Tailcat WhoIs. Normalization runs
+and rejects any frame naming another device; the credential registry backs
+the interface (T018, `internal/registry`), with a per-frame registry check
+and revocation teardown through its `SessionAuthorizer` extension. Tailcat
+WhoIs can back the same interfaces for transport-level identity when the
+serving command ships (T033, T034). Normalization runs
 the local parser and adapter (`internal/claudecode`, `internal/events`), so
 hub-side normalization is byte-identical to local ingestion, and a record the
 parser refuses commits its valid prefix and reports the stop, mirroring local
@@ -156,6 +159,29 @@ the design decisions the model fixes: revocation is final for a device identity,
 and orphaned sources stay locked rather than rebindable. Pairing implementation
 (T018) follows this specification; keep it in step with any rule change here.
 
+Implemented (T018): `internal/registry` owns the device credential registry as
+its own SQLite database (`registry.db` in the owner-only state directory,
+WAL, synchronous FULL, schema pinned by `PRAGMA user_version`) — a protected
+store the transcript database and its `sql` tool can never read, so no
+deny-list entry is needed. Invitations are 128-bit random secrets stored as
+SHA-256 digests, one-time and expiring; consumption is one transaction that
+consumes the invitation and admits only a stranger device, so a revoked
+identity can never re-pair (re-admission means a new device identity). The
+hub mints the device credential at pairing; the device keeps it in
+`credential.json`, an owner-only durably replaced file that reports
+unusable states instead of silently re-pairing. `ohya devices
+invite|list|revoke` is the operator surface. On the wire, the first frame
+of a connection is a pairing request (`P`) or a credential hello (`H`);
+`internal/registry.Authenticator` backs the endpoint's `Authenticator`
+interface, and its `SessionAuthorizer` extension carries the two
+per-request rules: `Authorize` gates every request frame after it is read,
+and `WatchRevocations` closes the revoked device's live connections and
+cancels their in-flight request contexts (revocations from another process
+reach the endpoint within the poll interval; a request that already
+returned its data cannot be recalled). A Tailcat WhoIs-based authenticator
+can implement the same interfaces once the serving command exists (T033,
+T034); the registry still decides admission and revocation.
+
 SQL runs with a read-only connection, SQLite authorizer, one statement, execution
 deadline, row/byte limits and bounded concurrency. Deny attachment, extension
 loading, unsafe functions and state-changing pragmas. Verify driver support for
@@ -169,9 +195,9 @@ scanner before execution, because the driver executes every statement in the
 input and answers with the last one's rows. The authorizer deny-lists
 `load_extension` and `fts3_tokenizer`, allow-lists the schema-inspection pragmas
 (plus `data_version`, which FTS5 reads internally), and deny-lists named tables
-through `EngineOptions.DenyTables`; the device-credential registry required for
-remote access must be added there before it ships — note the table deny-list is
-data-level, so credential column names should not be sensitive either.
+through `EngineOptions.DenyTables`. The device-credential registry lives in its
+own protected database (T018, `internal/registry`), so the tool's connection
+cannot reach it and no deny-list entry is needed.
 Defaults: 5 s deadline,
 500 rows, 256 KiB of row JSON, 4 concurrent queries, 64 KiB query text; a
 caller past the concurrency bound fails fast instead of queueing.

@@ -7,8 +7,8 @@ authorization, pairing, and revocation rules from its "Authorization and
 SQL" and "Agent annotations" sections. TLC model-checks both against the
 safety invariants and liveness properties recorded here. The sync
 endpoint (T017, `internal/hubsync`), the uploader (T019), and pairing
-with revocation (T018) must implement these state machines; change the
-specifications first when a contract changes.
+with revocation (T018, `internal/registry`) must implement these state
+machines; change the specifications first when a contract changes.
 
 ## Run
 
@@ -166,8 +166,11 @@ rules in the "Authorization and SQL" and "Agent annotations" sections of
 [ARCHITECTURE.md](../ARCHITECTURE.md): the hub-owned device credential
 registry, one-time expiring pairing invitations, per-request revocation
 checks, source ownership, and annotation writer ownership. Pairing,
-credentials, and revocation (T018) must implement this state machine;
-change this specification first when a rule changes. `Sync.tla` assumes
+credentials, and revocation (T018) implement this state machine in
+`internal/registry` (the registry store and its endpoint authenticator)
+with `internal/hubsync` carrying the per-request `Authorize` gate and the
+revocation teardown; change this specification first when a rule changes.
+`Sync.tla` assumes
 fixed source ownership — this model is that assumption, checked.
 
 ## What the model covers

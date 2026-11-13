@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/nibzard/ohya/internal/claudecode"
 	"github.com/nibzard/ohya/internal/events"
@@ -25,13 +26,35 @@ import (
 // backlog bounds the rest.
 const DefaultMaxConns = 16
 
+// DefaultAuthTimeout bounds the first frame of a connection — the
+// authentication exchange — so a silent stranger cannot hold a connection
+// slot indefinitely.
+const DefaultAuthTimeout = 30 * time.Second
+
 // Authenticator maps one accepted connection to the device ID of its
 // authenticated peer. Implementations derive the identity from the transport
 // (Tailcat WhoIs) and the pairing registry; they never trust a device ID
-// carried inside a frame. Pairing and revocation (T018) implement this with
-// the hub-owned credential registry.
+// carried inside a frame. The credential registry (internal/registry)
+// implements it with one-time pairing invitations and device credentials.
 type Authenticator interface {
 	Authenticate(ctx context.Context, conn net.Conn) (deviceID string, err error)
+}
+
+// SessionAuthorizer extends Authenticator with the per-request registry
+// check and the revocation notification of tla/Auth.tla. When an endpoint's
+// authenticator implements it, the endpoint re-checks authorization before
+// every request frame and, whenever a device becomes revoked, closes that
+// device's live connections and cancels their in-flight requests. Data a
+// request already returned before the revocation cannot be recalled.
+type SessionAuthorizer interface {
+	Authenticator
+	// Authorize reports an error unless the device is currently active in
+	// the registry. The endpoint applies it to every request frame.
+	Authorize(ctx context.Context, deviceID string) error
+	// WatchRevocations calls fn with each device as it becomes revoked,
+	// until ctx is done. Revocations from any process sharing the registry
+	// file are reported.
+	WatchRevocations(ctx context.Context, fn func(deviceID string)) error
 }
 
 // StaticAuthenticator authenticates every connection as one fixed device: a
@@ -53,6 +76,9 @@ type Options struct {
 	// external process holding the database lock past the busy timeout.
 	// Deterministic rejections never retry.
 	Retry RetryPolicy
+	// AuthTimeout bounds the authentication exchange of one connection.
+	// Values <= 0 select DefaultAuthTimeout.
+	AuthTimeout time.Duration
 }
 
 // Endpoint serves the sync protocol to devices. Serve it on the listener of
@@ -60,13 +86,24 @@ type Options struct {
 type Endpoint struct {
 	db     *store.DB
 	auth   Authenticator
+	authz  SessionAuthorizer
 	opts   Options
 	slots  chan struct{}
 	gates  sourceGates
 	mu     sync.Mutex
-	conns  map[net.Conn]struct{}
+	conns  map[*connSession]struct{}
+	byDev  map[string]map[*connSession]struct{}
 	closed bool
 	wg     sync.WaitGroup
+}
+
+// connSession is one served connection: its per-connection context, which
+// revocation cancels, and its authenticated device, empty before
+// authentication.
+type connSession struct {
+	conn     net.Conn
+	deviceID string
+	cancel   context.CancelFunc
 }
 
 // NewEndpoint builds an endpoint over the hub database.
@@ -82,27 +119,44 @@ func NewEndpoint(db *store.DB, auth Authenticator, opts Options) (*Endpoint, err
 		maxConns = DefaultMaxConns
 	}
 	opts.MaxConns = maxConns
+	if opts.AuthTimeout <= 0 {
+		opts.AuthTimeout = DefaultAuthTimeout
+	}
+	authz, _ := auth.(SessionAuthorizer)
 	return &Endpoint{
 		db:    db,
 		auth:  auth,
+		authz: authz,
 		opts:  opts,
 		slots: make(chan struct{}, maxConns),
-		conns: map[net.Conn]struct{}{},
+		conns: map[*connSession]struct{}{},
+		byDev: map[string]map[*connSession]struct{}{},
 	}, nil
 }
 
 // Serve accepts device connections on ln until ctx is canceled or the
 // listener closes. Canceling ctx closes every live connection and waits for
 // their handlers; batches in flight either commit or leave the cursor
-// untouched.
+// untouched. When the authenticator is a SessionAuthorizer, revocations it
+// reports close the revoked device's connections and cancel their in-flight
+// requests the same way.
 func (e *Endpoint) Serve(ctx context.Context, ln net.Listener) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go func() {
 		<-ctx.Done()
 		_ = ln.Close()
-		e.closeConns()
+		e.closeAll()
 	}()
+	if e.authz != nil {
+		e.wg.Add(1)
+		go func() {
+			defer e.wg.Done()
+			// A watch failure leaves the per-request registry check in
+			// force; the endpoint keeps serving.
+			_ = e.authz.WatchRevocations(ctx, e.closeDevice)
+		}()
+	}
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -122,34 +176,51 @@ func (e *Endpoint) Serve(ctx context.Context, ln net.Listener) error {
 			_ = conn.Close()
 			continue
 		}
-		e.track(conn)
+		cctx, ccancel := context.WithCancel(ctx)
+		session := &connSession{conn: conn, cancel: ccancel}
+		e.track(session)
 		e.wg.Add(1)
 		go func() {
 			defer e.wg.Done()
-			defer e.untrack(conn)
+			defer e.untrack(session)
 			defer func() { <-e.slots }()
-			e.serveConn(ctx, conn)
+			e.serveConn(cctx, session)
 		}()
 	}
 }
 
 // serveConn authenticates the peer, then serves one request frame per
-// exchange until the device closes, a frame is undecodable, or the endpoint
-// shuts down. Frames on one connection are strictly sequential, so a
-// connection holds at most one decoded frame in memory.
-func (e *Endpoint) serveConn(ctx context.Context, conn net.Conn) {
+// exchange until the device closes, a frame is undecodable, the endpoint
+// shuts down, or the device is revoked. Frames on one connection are strictly
+// sequential, so a connection holds at most one decoded frame in memory.
+// Every frame re-checks the registry: a revocation lands at the next frame
+// at the latest, and closing the connection reaches it sooner.
+func (e *Endpoint) serveConn(ctx context.Context, session *connSession) {
+	conn := session.conn
 	defer conn.Close()
-	deviceID, err := e.auth.Authenticate(ctx, conn)
+	deviceID, err := e.authenticate(ctx, conn)
 	if err != nil {
 		_ = WriteError(conn, CodeAuth, err.Error())
 		return
 	}
+	e.bind(session, deviceID)
 	br := bufio.NewReaderSize(conn, 64<<10)
 	for {
 		frame, err := ReadFrame(br)
 		if err != nil {
 			e.replyDecodeError(conn, err)
 			return // the stream is not resynchronizable
+		}
+		// The registry check gates the request, not the idle wait: a
+		// revocation that lands while the connection sits between frames is
+		// caught here, as fresh as possible before the frame is processed.
+		// One that lands mid-request is caught by cancelling the request
+		// (closeDevice); already returned data cannot be recalled.
+		if e.authz != nil {
+			if err := e.authz.Authorize(ctx, deviceID); err != nil {
+				_ = WriteError(conn, CodeAuth, err.Error())
+				return // no longer an active device: the connection ends
+			}
 		}
 		var closeConn bool
 		switch {
@@ -162,6 +233,15 @@ func (e *Endpoint) serveConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 	}
+}
+
+// authenticate runs the authenticator under the connection's auth timeout.
+// The read deadline bounds a silent peer; it is cleared afterwards so the
+// request frames face no deadline of their own.
+func (e *Endpoint) authenticate(ctx context.Context, conn net.Conn) (string, error) {
+	_ = conn.SetReadDeadline(time.Now().Add(e.opts.AuthTimeout))
+	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
+	return e.auth.Authenticate(ctx, conn)
 }
 
 // handleRegistration binds one source to the authenticated device. It
@@ -334,29 +414,73 @@ func (e *Endpoint) replyDecodeError(conn net.Conn, err error) {
 	_ = WriteError(conn, code, err.Error())
 }
 
-func (e *Endpoint) track(conn net.Conn) {
+func (e *Endpoint) track(s *connSession) {
 	e.mu.Lock()
-	e.conns[conn] = struct{}{}
+	e.conns[s] = struct{}{}
 	e.mu.Unlock()
 }
 
-func (e *Endpoint) untrack(conn net.Conn) {
+func (e *Endpoint) untrack(s *connSession) {
 	e.mu.Lock()
-	delete(e.conns, conn)
+	delete(e.conns, s)
+	if s.deviceID != "" {
+		if set := e.byDev[s.deviceID]; set != nil {
+			delete(set, s)
+			if len(set) == 0 {
+				delete(e.byDev, s.deviceID)
+			}
+		}
+	}
 	e.mu.Unlock()
 }
 
-// closeConns closes every live connection so blocked handlers return when
-// the endpoint shuts down.
-func (e *Endpoint) closeConns() {
+// bind records the session's authenticated device, so revocation can find
+// and close it.
+func (e *Endpoint) bind(s *connSession, deviceID string) {
+	e.mu.Lock()
+	s.deviceID = deviceID // written once, before the session joins the map
+	set := e.byDev[deviceID]
+	if set == nil {
+		set = map[*connSession]struct{}{}
+		e.byDev[deviceID] = set
+	}
+	set[s] = struct{}{}
+	e.mu.Unlock()
+}
+
+// closeAll cancels and closes every live connection so blocked handlers
+// return when the endpoint shuts down.
+func (e *Endpoint) closeAll() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
 		return
 	}
 	e.closed = true
-	for conn := range e.conns {
-		_ = conn.Close()
+	for s := range e.conns {
+		s.cancel()
+		_ = s.conn.Close()
+	}
+}
+
+// closeDevice cancels and closes one device's live connections: the endpoint
+// half of RevokeDevice in tla/Auth.tla. Cancelling stops the device's
+// in-flight requests; closing unblocks its readers. Data a request already
+// returned cannot be recalled.
+func (e *Endpoint) closeDevice(deviceID string) {
+	e.mu.Lock()
+	if e.closed {
+		e.mu.Unlock()
+		return
+	}
+	sessions := make([]*connSession, 0, len(e.byDev[deviceID]))
+	for s := range e.byDev[deviceID] {
+		sessions = append(sessions, s)
+	}
+	e.mu.Unlock()
+	for _, s := range sessions {
+		s.cancel()
+		_ = s.conn.Close()
 	}
 }
 

@@ -1,6 +1,6 @@
 // Package device owns the local device identity: a stable random ID,
-// persisted once and never regenerated in place. Authentication credentials
-// are a separate later concern (see ARCHITECTURE.md).
+// persisted once and never regenerated in place — and the pairing credential
+// that authenticates that identity to a hub (credential.go).
 package device
 
 import (

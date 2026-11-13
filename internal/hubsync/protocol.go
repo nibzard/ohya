@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 
 	"github.com/nibzard/ohya/internal/claudecode"
 )
@@ -36,6 +37,9 @@ const (
 	// maxMessageLen bounds error and stop-reason text, which never carries
 	// transcript content.
 	maxMessageLen = 1024
+	// maxSecretLen holds pairing invitations and device credentials: 32
+	// hex characters from internal/registry with room to spare.
+	maxSecretLen = 128
 
 	// MaxRecordBytes is one record's JSON text without its line terminator.
 	// It is the hub parser's own record limit: a record the parser would
@@ -61,11 +65,17 @@ const (
 //	                 count * [ offset(8) len(4) json ]
 //	ack          = 'A' ver(1) status(1) cursor(8) inserted(8) stopOffset(8) stopLen(2) stop
 //	error        = 'E' ver(1) code(1) msgLen(2) msg
+//	hello        = 'H' ver(1) credLen(2) cred
+//	pair         = 'P' ver(1) invLen(2) inv devLen(2) dev
+//	credential   = 'C' ver(1) devLen(2) dev credLen(2) cred
 const (
 	markerRegistration = 'R'
 	markerBatch        = 'B'
 	markerAck          = 'A'
 	markerError        = 'E'
+	markerHello        = 'H'
+	markerPair         = 'P'
+	markerCredential   = 'C'
 )
 
 // ErrTooLarge marks a frame whose declared lengths exceed the protocol
@@ -594,6 +604,213 @@ func WriteError(w io.Writer, code ErrorCode, msg string) error {
 		return fmt.Errorf("hubsync: write error frame: %w", err)
 	}
 	return nil
+}
+
+// Hello presents one device credential: the first frame a paired device
+// sends on a connection. The credential registry behind the endpoint maps it
+// to the device identity; frames inside the connection never establish one.
+type Hello struct {
+	Credential string
+}
+
+// PairRequest asks the hub to consume one pairing invitation and enroll the
+// named device: the first frame a stranger sends to join. The device ID is
+// the peer's stable local identity (internal/device); the hub mints and
+// returns the credential.
+type PairRequest struct {
+	Invitation string
+	DeviceID   string
+}
+
+// CredentialReply carries the hub-minted credential of a newly paired
+// device, exactly once, for storage in its protected credential file.
+type CredentialReply struct {
+	DeviceID   string
+	Credential string
+}
+
+// ReadAuthFrame reads a connection's first frame: a Hello from a paired
+// device, or a PairRequest from a stranger joining. It reads exactly the
+// frame's bytes — never past it — so the endpoint's own reader starts at the
+// next frame. Any other marker, an unsupported version, or a truncation is
+// an error; the caller closes the connection.
+func ReadAuthFrame(r io.Reader) (*Hello, *PairRequest, error) {
+	fr := &frameReader{r: r}
+	marker, err := fr.u8()
+	if err != nil {
+		return nil, nil, fmt.Errorf("hubsync: read auth frame: %w", err)
+	}
+	version, err := fr.u8()
+	if err != nil {
+		return nil, nil, fmt.Errorf("hubsync: read auth frame: %w", err)
+	}
+	if version != ProtocolVersion {
+		return nil, nil, fmt.Errorf("%w: auth frame carries version %d, want %d",
+			ErrVersion, version, ProtocolVersion)
+	}
+	switch marker {
+	case markerHello:
+		credential, err := fr.str16(maxSecretLen, "credential")
+		if err != nil {
+			return nil, nil, err
+		}
+		return &Hello{Credential: credential}, nil, nil
+	case markerPair:
+		var p PairRequest
+		if p.Invitation, err = fr.str16(maxSecretLen, "invitation"); err != nil {
+			return nil, nil, err
+		}
+		if p.DeviceID, err = fr.str16(maxDeviceIDLen, "device ID"); err != nil {
+			return nil, nil, err
+		}
+		return nil, &p, nil
+	default:
+		return nil, nil, fmt.Errorf("hubsync: bad auth frame marker %q; want a credential hello or a pairing request", marker)
+	}
+}
+
+// WriteHello frames one credential presentation.
+func WriteHello(w io.Writer, credential string) error {
+	if credential == "" {
+		return fmt.Errorf("hubsync: hello has an empty credential")
+	}
+	if len(credential) > maxSecretLen {
+		return fmt.Errorf("%w: credential length %d exceeds %d", ErrTooLarge, len(credential), maxSecretLen)
+	}
+	head := []byte{markerHello, ProtocolVersion}
+	head = appendLen16(head, credential)
+	head = append(head, credential...)
+	if _, err := w.Write(head); err != nil {
+		return fmt.Errorf("hubsync: write hello: %w", err)
+	}
+	return nil
+}
+
+// WritePairRequest frames one pairing request.
+func WritePairRequest(w io.Writer, invitation, deviceID string) error {
+	for _, f := range []struct {
+		value string
+		max   int
+		what  string
+	}{
+		{invitation, maxSecretLen, "invitation"},
+		{deviceID, maxDeviceIDLen, "device ID"},
+	} {
+		if f.value == "" {
+			return fmt.Errorf("hubsync: pairing request has an empty %s", f.what)
+		}
+		if len(f.value) > f.max {
+			return fmt.Errorf("%w: %s length %d exceeds %d", ErrTooLarge, f.what, len(f.value), f.max)
+		}
+	}
+	head := []byte{markerPair, ProtocolVersion}
+	head = appendLen16(head, invitation)
+	head = append(head, invitation...)
+	head = appendLen16(head, deviceID)
+	head = append(head, deviceID...)
+	if _, err := w.Write(head); err != nil {
+		return fmt.Errorf("hubsync: write pairing request: %w", err)
+	}
+	return nil
+}
+
+// WriteCredentialReply frames one minted credential.
+func WriteCredentialReply(w io.Writer, r CredentialReply) error {
+	for _, f := range []struct {
+		value string
+		max   int
+		what  string
+	}{
+		{r.DeviceID, maxDeviceIDLen, "device ID"},
+		{r.Credential, maxSecretLen, "credential"},
+	} {
+		if f.value == "" {
+			return fmt.Errorf("hubsync: credential reply has an empty %s", f.what)
+		}
+		if len(f.value) > f.max {
+			return fmt.Errorf("%w: %s length %d exceeds %d", ErrTooLarge, f.what, len(f.value), f.max)
+		}
+	}
+	head := []byte{markerCredential, ProtocolVersion}
+	head = appendLen16(head, r.DeviceID)
+	head = append(head, r.DeviceID...)
+	head = appendLen16(head, r.Credential)
+	head = append(head, r.Credential...)
+	if _, err := w.Write(head); err != nil {
+		return fmt.Errorf("hubsync: write credential reply: %w", err)
+	}
+	return nil
+}
+
+// ReadCredentialReply reads the hub's answer to a pairing request: the
+// minted credential, or a protocol-level rejection.
+func ReadCredentialReply(r io.Reader) (CredentialReply, *Error, error) {
+	fr := &frameReader{r: r}
+	marker, err := fr.u8()
+	if err != nil {
+		return CredentialReply{}, nil, err
+	}
+	version, err := fr.u8()
+	if err != nil {
+		return CredentialReply{}, nil, err
+	}
+	if version != ProtocolVersion {
+		return CredentialReply{}, nil, fmt.Errorf("%w: reply carries version %d, want %d",
+			ErrVersion, version, ProtocolVersion)
+	}
+	switch marker {
+	case markerCredential:
+		var reply CredentialReply
+		if reply.DeviceID, err = fr.str16(maxDeviceIDLen, "device ID"); err != nil {
+			return CredentialReply{}, nil, err
+		}
+		if reply.Credential, err = fr.str16(maxSecretLen, "credential"); err != nil {
+			return CredentialReply{}, nil, err
+		}
+		return reply, nil, nil
+	case markerError:
+		code, err := fr.u8()
+		if err != nil {
+			return CredentialReply{}, nil, err
+		}
+		msgLen, err := fr.u16()
+		if err != nil {
+			return CredentialReply{}, nil, err
+		}
+		msg, err := fr.bytes(uint32(msgLen), maxMessageLen, "error message")
+		if err != nil {
+			return CredentialReply{}, nil, err
+		}
+		if code == 0 {
+			return CredentialReply{}, nil, fmt.Errorf("hubsync: error frame carries no code")
+		}
+		return CredentialReply{}, &Error{Code: ErrorCode(code), Message: string(msg)}, nil
+	default:
+		return CredentialReply{}, nil, fmt.Errorf("hubsync: bad pairing reply marker %q", marker)
+	}
+}
+
+// Pair performs the device side of pairing over one connection: it presents
+// the invitation and the device's stable identity, and returns the
+// hub-minted credential. The caller stores it in its protected credential
+// file (internal/device) and keeps the connection, which is now an
+// authorized session of the device. Set deadlines on conn to bound the
+// exchange.
+func Pair(conn net.Conn, invitation, deviceID string) (string, error) {
+	if err := WritePairRequest(conn, invitation, deviceID); err != nil {
+		return "", err
+	}
+	reply, perr, err := ReadCredentialReply(conn)
+	if err != nil {
+		return "", fmt.Errorf("hubsync: pair: %w", err)
+	}
+	if perr != nil {
+		return "", perr
+	}
+	if reply.DeviceID != deviceID {
+		return "", fmt.Errorf("hubsync: pair: hub enrolled device %s, not %s", reply.DeviceID, deviceID)
+	}
+	return reply.Credential, nil
 }
 
 // appendLen16 appends one u16 length prefix.
