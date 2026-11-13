@@ -1,0 +1,37 @@
+# Design: Migration runner and durable SQLite configuration
+
+## Problem
+The bootstrap shipped 001_initial.sql as plain DDL applied by tests.
+Nothing recorded which schema versions a database had, nothing
+prevented rewriting applied history, and durability pragmas lived in
+migration SQL where SQLite silently ignores parts of them.
+
+## Approach
+Versioned, embedded, checksummed migrations applied one-per-transaction
+by Go code on a single writer connection. The runner, not the SQL,
+owns schema_migrations. Connection settings moved from 001_initial.sql
+into DSN parameters applied to every pooled connection.
+
+## Key Trade-offs
+- One transaction per migration (not one for the whole set): a failed
+  file rolls back alone and the next run resumes at the first pending
+  version, which also makes "fix an unapplied broken file" legal while
+  editing an applied one stays an error.
+- Pragmas in code, not SQL: PRAGMA journal_mode cannot run inside a
+  transaction and PRAGMA foreign_keys is a no-op there, so migration
+  files must stay schema/data only.
+- Readers use mode=ro pools with foreign_keys: read-only connections
+  cannot create the database or recover the WAL, so the writer must be
+  open first; that ordering is documented on DB.Reader.
+- Version gaps in the file set are allowed (order is what the runner
+  enforces), but back-filling a number below the newest applied
+  version is rejected, keeping the set append-only.
+
+## Gotchas
+- count(*) on an external-content FTS5 table reads the content table,
+  so index-vs-table consistency must be asserted with the
+  integrity-check command and MATCH enumeration, not row counts.
+
+## References
+- DB.md "Migrations" and "Connections and durability"
+- docs/adr/0001-dependencies.md (driver selection)
