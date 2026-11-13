@@ -23,3 +23,14 @@ Google and supports servers and clients. Version 1.8.0 declares Go 1.25. Pin it 
 imports it, after checking protocol compatibility; an unused
 SDK is not a runtime dependency. Tailcat selection and packaging remain deferred
 until its feasibility spike. No transport or MCP code is included in bootstrap.
+
+Pinned 2026-11-13 (T008): `github.com/modelcontextprotocol/go-sdk v1.8.0` is a
+direct dependency, imported by `internal/mcpserver`. Protocol compatibility
+verified before pinning: the SDK supports versions 2024-11-05 through
+2026-07-28, clients pinned to 2024-11-05, 2025-03-26 and 2025-06-18 (what
+Claude Code negotiates) complete the handshake and call the tool
+(`TestServerProtocolCompatibility`), and the full stdio path runs against a
+real subprocess in `cmd/ohya`. The SDK pulls the transitive dependencies
+listed in go.mod (jsonschema-go for tool schemas, oauth2 and jwt for its auth
+package, and related support libraries); only `mcp` and `jsonrpc` are imported
+by ohya code.

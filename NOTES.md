@@ -82,3 +82,32 @@ How to use this file:
   then stays quiet until the offset moves; fresh sources from replacement or
   truncation are reported because they re-import history, new files are not
   (a first import of thousands of files must not print a line per file).
+
+- SQL tool boundaries (2026-11-13, internal/mcpserver, T008) — driver facts
+  the read-only policy relies on, all verified by probe against
+  mattn/go-sqlite3 v1.14.53:
+  - The driver's `QueryContext` executes EVERY statement in the input and
+    returns the last statement's rows (sqlite3.go `query` loops the prepare
+    tail). One-statement-per-call is therefore enforced by our own scanner
+    (`statement.go`) before execution; the authorizer alone would not stop
+    `SELECT 1; <anything read-only-but-second>`.
+  - This build's authorizer op codes differ from the classic sqlite3.h
+    numbering (SELECT=21, READ=20, PRAGMA=19, FUNCTION=31, SAVEPOINT=32);
+    always compare against the driver constants, never hardcoded values.
+    SQLITE_RECURSIVE (=33 here) is not exported by the driver at all —
+    `sqliteOpRecursive` hardcodes it, and the recursive-CTE test case pins
+    it; re-verify on any driver bump.
+  - FTS5 MATCH internally reads `PRAGMA data_version`, so a pragma
+    allow-list must include it or all FTS queries die with "authorization
+    denied". MATCH also fires FUNCTION op with arg2="match".
+  - Authorizer denials surface with three different SQLite messages:
+    "not authorized" (most ops), "access to table.column is prohibited"
+    (SQLITE_READ), "authorization denied" (VACUUM). queryError maps all
+    three to ErrDenied.
+  - `CREATE TRIGGER ... BEGIN ...; ... END` trips the one-statement scanner
+    (body semicolons). Harmless: statement blocks only exist in denied DDL.
+  - MCP SDK v1.8.0 e2e stdio tests must use the TestMain fork-server trick
+    (env var → run server instead of tests, like cmd/ohya/mcp_test.go):
+    a test binary serving on stdout interleaves framework output ("PASS")
+    with protocol frames. `mcp.NewInMemoryTransports()` covers the
+    protocol-level tests without processes.

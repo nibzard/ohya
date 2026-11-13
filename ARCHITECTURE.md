@@ -118,6 +118,19 @@ FTS5, authorizer and cancellation before selecting it. Output truncation is expl
 Publish schema and examples in the MCP tool description; permit safe schema
 inspection through SQL. Credentials and internal authorization state are not exposed.
 
+Implemented in `internal/mcpserver` and served by `ohya mcp` on stdio (official
+MCP Go SDK, pinned per ADR 0001). One statement per call is enforced by a local
+scanner before execution, because the driver executes every statement in the
+input and answers with the last one's rows. The authorizer deny-lists
+`load_extension` and `fts3_tokenizer`, allow-lists the schema-inspection pragmas
+(plus `data_version`, which FTS5 reads internally), and deny-lists named tables
+through `EngineOptions.DenyTables`; the device-credential registry required for
+remote access must be added there before it ships — note the table deny-list is
+data-level, so credential column names should not be sensitive either.
+Defaults: 5 s deadline,
+500 rows, 256 KiB of row JSON, 4 concurrent queries, 64 KiB query text; a
+caller past the concurrency bound fails fast instead of queueing.
+
 ## Deferred
 
 Built-in classification, filesystem notifications, extra platforms and indexed file-reference

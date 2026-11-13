@@ -1,6 +1,7 @@
 // Command ohya runs the local hub: it captures agent session logs into one
-// hub-owned SQLite database with full-text search. The MCP tools arrive in a
-// later round.
+// hub-owned SQLite database with full-text search, and serves the read-only
+// sql MCP tool to coding agents. The annotate MCP tool arrives in a later
+// round.
 package main
 
 import (
@@ -21,6 +22,7 @@ const usageText = `ohya — one memory for all your coding agents
 Usage:
 
   ohya ingest   Import Claude Code history once, then poll incrementally
+  ohya mcp      Serve the read-only sql MCP tool on stdio
 `
 
 func main() {
@@ -39,6 +41,8 @@ func run(args []string) error {
 	switch cmd {
 	case "ingest":
 		return runIngestCommand(rest, os.Stdout, os.Stderr)
+	case "mcp":
+		return runMcpCommand(rest, os.Stderr)
 	default:
 		fmt.Fprint(os.Stderr, usageText)
 		return fmt.Errorf("unknown subcommand %q", cmd)
