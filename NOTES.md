@@ -61,3 +61,10 @@ How to use this file:
   whether or not it currently exists; tests must compare against normalized
   paths. Lost state is reported, never silently restarted: an unreadable
   device.json or sources/<agent>.json is a recovery error.
+
+- Write-path open question (2026-11-13, internal/store, T006):
+  `sessions.repo` stays NULL — no rule derives a repository path from observed
+  record fields yet (git root discovery from `cwd` is unspecified, and the
+  Claude Code directory encoding is lossy). Define the derivation before any
+  query relies on `repo`. Token aggregate policy is settled in DB.md; tool
+  aggregates remain deferred pending a query need.
