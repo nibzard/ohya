@@ -11,7 +11,7 @@
 (* Each source models one device's uploader; several sources in one model  *)
 (* synchronize concurrently on separate connections. Device identity,      *)
 (* authentication, and the source-ownership binding are the authorization  *)
-(* model (backlog T016), not this one.                                     *)
+(* model (Auth.tla), not this one.                                         *)
 (*                                                                         *)
 (* Scope and assumptions are recorded in tla/README.md. The companion      *)
 (* configurations check this spec with TLC:                                *)

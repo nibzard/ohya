@@ -1,5 +1,5 @@
 #!/bin/sh
-# Run TLC on every sync model. Downloads the pinned TLA+ tools jar on
+# Run TLC on every protocol model. Downloads the pinned TLA+ tools jar on
 # first use and verifies its checksum. Requires Java 11 or later.
 #
 # Usage: make tla   (or ./tla/run-tlc.sh from the repository root)
@@ -38,12 +38,19 @@ fi
 # -deadlock: the drained system legitimately reaches a quiescent fixed
 # point where no action changes state; that is not an error. See
 # tla/README.md.
-for cfg in SyncConcurrent SyncFailures SyncLiveness; do
-    echo ""
-    echo "=== $cfg ==="
-    java -XX:+UseParallelGC -XX:MaxRAMPercentage=75 \
-        -cp "$JAR" tlc2.TLC -deadlock -config "${cfg}.cfg" Sync.tla
-done
+check() { # module config...
+    module=$1
+    shift
+    for cfg in "$@"; do
+        echo ""
+        echo "=== $cfg ==="
+        java -XX:+UseParallelGC -XX:MaxRAMPercentage=75 \
+            -cp "$JAR" tlc2.TLC -deadlock -config "${cfg}.cfg" "$module.tla"
+    done
+}
+
+check Sync SyncConcurrent SyncFailures SyncLiveness
+check Auth Auth AuthWide
 
 echo ""
-echo "All sync models checked: no errors."
+echo "All models checked: no errors."

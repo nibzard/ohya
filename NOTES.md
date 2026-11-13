@@ -166,6 +166,29 @@ How to use this file:
     eventual-reconnection assumption. Liveness checking is the cost driver
     (12k states, ~13 s, ~1.1 GB) versus seconds for 54k safety states.
 
+- Authorization model choices (2026-11-13, tla/Auth.tla, T016):
+  - Immutability properties ("ownership cannot move") are invisible in a
+    state invariant without history: a move overwrites its own trace. The
+    model carries monotone history variables (`srcEverOwned`, `revokedEver`,
+    `annRowSes`) and checks "at most one owner ever" as cardinality bounds;
+    six one-line mutations each tripped a distinct invariant. One mutation
+    survived by design (an active device consuming a second invitation
+    breaks no stated property); the guard blocks it anyway.
+  - "A revoked device cannot establish a new authorized session" forces
+    revocation to be final per device identity: if a revoked identity could
+    consume a fresh invitation, the property would be false. Re-admission
+    therefore means a new device.json identity. Orphaned sources stay
+    locked (no rebind) — the conservative reading of the sync contract.
+  - Invitation expiry is a nondeterministic action, not a clock: the
+    protocol fact is that consumption must race expiry and can lose; TTL
+    length is configuration. Safety-only model — pairing liveness is device
+    reconnection, owned by Sync.tla's eventual-reconnection assumption.
+  - String sets work as cfg CONSTANT values ({"d1","d2"}), so the registry
+    can be indexed by device atoms directly — no structural workaround
+    needed, unlike per-element model values.
+  - Auth.cfg 46k states ~1 s; AuthWide.cfg (3 devices, 2 invitations —
+    pairing scarcity) 127k states ~3 s; all invariants hold.
+
 - Tailcat/tsnet driver facts (2026-11-13, internal/transport, T014; measured
   in ADR 0002, reproduced by cmd/tailcat-spike against local Headscale
   v0.29.7):

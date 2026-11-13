@@ -124,6 +124,13 @@ Use one-time expiring pairing invitations and protected credential files. Check
 revocation on every request; close existing connections and cancel active requests
 on revocation. Already returned data cannot be revoked. Model-check authorization
 and invitation consumption before shipping pairing; do not implement cryptography.
+Done for this contract: `tla/Auth.tla` is the executable specification — TLC checks
+its invariants (single-use invitations, no new session for a revoked device,
+immovable source ownership, session-derived annotation writers) in CI through
+`make tla`, and tla/README.md records the assumptions, the checked scenarios, and
+the design decisions the model fixes: revocation is final for a device identity,
+and orphaned sources stay locked rather than rebindable. Pairing implementation
+(T018) follows this specification; keep it in step with any rule change here.
 
 SQL runs with a read-only connection, SQLite authorizer, one statement, execution
 deadline, row/byte limits and bounded concurrency. Deny attachment, extension
@@ -180,7 +187,9 @@ unchanged operation counts; failure applies nothing. No arbitrary SQL or changes
 to events, sessions, sources, cursors or FTS are permitted through this tool.
 
 Check authorization/revocation for annotation requests as for queries. Include
-annotation ownership in the authorization model before remote writes ship. Tests
+annotation ownership in the authorization model before remote writes ship: done —
+`tla/Auth.tla` pins the writer to the authenticated session, so a request can
+never name another writer's row. Tests
 must cover atomic failure, limits, foreign keys, writer spoofing, cross-writer
 isolation, retry behavior and unchanged raw records. Annotations are queried via
 `sql`; no extra read tool or annotation FTS index is needed initially.

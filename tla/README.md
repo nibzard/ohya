@@ -1,11 +1,14 @@
-# Sync protocol model
+# TLA+ protocol models
 
-`Sync.tla` is the executable TLA+ specification of the sync cursor and
-acknowledgment protocol from the "Sync contract" in
-[ARCHITECTURE.md](../ARCHITECTURE.md). TLC model-checks it against the
-safety invariants and the liveness property recorded here. The sync
-endpoint (T017) and the uploader (T019) must implement this state
-machine; change this specification first when the contract changes.
+Two executable specifications live here. `Sync.tla` specifies the sync
+cursor and acknowledgment protocol from the "Sync contract" in
+[ARCHITECTURE.md](../ARCHITECTURE.md); `Auth.tla` specifies the
+authorization, pairing, and revocation rules from its "Authorization and
+SQL" and "Agent annotations" sections. TLC model-checks both against the
+safety invariants and liveness properties recorded here. The sync
+endpoint (T017), the uploader (T019), and pairing with revocation (T018)
+must implement these state machines; change the specifications first when
+a contract changes.
 
 ## Run
 
@@ -17,6 +20,14 @@ The runner (`run-tlc.sh`) needs Java 11 or later. It downloads the pinned
 TLA+ tools jar (1.8.0), verifies its SHA-256 checksum, and checks every
 model below. TLC output ends with `Model checking completed. No error has
 been found.` per model.
+
+# Sync protocol model
+
+`Sync.tla` is the executable TLA+ specification of the sync cursor and
+acknowledgment protocol from the "Sync contract" in
+[ARCHITECTURE.md](../ARCHITECTURE.md). The sync endpoint (T017) and the
+uploader (T019) must implement this state machine; change this
+specification first when the contract changes.
 
 ## What the model covers
 
@@ -107,7 +118,7 @@ must sync whatever has arrived, on any schedule.
   batch. The registration step is T017.
 - **Fixed ownership.** Each source's device is fixed. Authentication,
   spoofing, revocation, and ownership binding are the authorization model
-  (T016), not this one.
+  (`Auth.tla`, below), not this one.
 
 ## Models
 
@@ -142,6 +153,164 @@ each produced a TLC violation:
   assumption above.
 - Transport behavior (Tailcat framing, reconnect mechanics): behind the
   `internal/transport` boundary; the model is transport-independent.
-- Authorization, pairing, and revocation: T016.
+- Authorization, pairing, and revocation: `Auth.tla`, below.
 - Hub cursor regression after backup restoration: T019.
+- Finite bounds only: TLC checks the models listed above, not all sizes.
+
+# Authorization model
+
+`Auth.tla` is the executable TLA+ specification of the authorization
+rules in the "Authorization and SQL" and "Agent annotations" sections of
+[ARCHITECTURE.md](../ARCHITECTURE.md): the hub-owned device credential
+registry, one-time expiring pairing invitations, per-request revocation
+checks, source ownership, and annotation writer ownership. Pairing,
+credentials, and revocation (T018) must implement this state machine;
+change this specification first when a rule changes. `Sync.tla` assumes
+fixed source ownership — this model is that assumption, checked.
+
+## What the model covers
+
+| Domain concept | Model element |
+|---|---|
+| Pairing invitation (one-time, expiring) | `invState[i]`: unissued → open → used or expired |
+| Device that consumed an invitation | `invUsedBy[i]` |
+| Device credential registry | `registry[d]`: absent → active → revoked |
+| Credential provenance of a device | `pairedVia[d]`, set once at admission |
+| Revocation history | `revokedEver`, the set of ever-revoked devices |
+| Session (connection) | `sesDevice[c]`, permanent binding, and `sesLive[c]` |
+| Source ownership | `srcOwner[s]`, with history `srcEverOwned[s]` |
+| Annotation slot (event, namespace, key) | constant `Annotations`; the writer completes the identity |
+| Annotation rows and their writers | `annRows[a]`, `annRowSes[a][d]` |
+
+Actions and the scenarios they cover:
+
+| Action | Scenario |
+|---|---|
+| `IssueInvitation` | The operator issues an invitation |
+| `ExpireInvitation` | An invitation dies before consumption; unfair, so consumption must race it and can lose |
+| `ConsumeInvitation` | One atomic hub transaction consumes the invitation and admits the device; only a stranger ("absent") device may consume |
+| `RevokeDevice` | Registry flips to revoked and every live session of the device closes with its in-flight requests cancelled, in one step |
+| `OpenSession` | Only an active device establishes a session; the slot binds to it permanently |
+| `CloseSession` | A session ends; the device binding survives |
+| `Upload` | The first accepted upload binds the source to the session's device; the same device's retries are accepted; any other device — stranger, paired, or the revoked former owner — is rejected |
+| `Annotate` / `DeleteAnnotation` | Upsert or delete of the session device's own row on a slot; the request carries no writer |
+
+A rejected request is the absence of a transition: the authorization
+guard fails and no state changes.
+
+## Safety invariants
+
+Every configuration checks all of these.
+
+- `InvitationSingleUse` — at most one device ever paired through one
+  invitation. An invitation cannot be consumed twice.
+- `PairingConsistent` / `InvitationUsedByPairer` — the registry admits
+  devices only through invitation consumption, and what the pairing
+  record claims is true: the invitation is used, by exactly this device.
+  A pairing through an expired or still-open invitation breaks this.
+- `NoLiveSessionForRevoked` — no live session belongs to a device that is
+  not active. A revoked device cannot establish a new authorized session.
+- `RevocationIrreversible` — a device revoked at any time is revoked now.
+- `OwnershipImmobile` / `OwnerIsRegistrar` — a source is bound by at most
+  one device ever, and the live owner is exactly that registrar. Source
+  ownership cannot move between devices.
+- `AnnotationWriterFromSession` / `AnnotationRowTouched` — every recorded
+  annotation write or delete went through a session bound to the row's
+  writer. The writer comes from the session, never from the request.
+
+## Design decisions fixed by the model
+
+- **Revocation is final for the device identity.** Re-pairing a revoked
+  device with a fresh invitation would establish a new authorized
+  session, which the safety property forbids — so consumption requires
+  registry state "absent", which revocation never returns to. Re-admitting
+  a user means enrolling a new device identity, not re-inviting the old
+  one.
+- **Orphaned sources stay locked.** Revocation does not unbind a device's
+  sources, and no other device may take them over. This is the
+  conservative reading of the sync contract's "reject … change source
+  ownership".
+- **Revocation closes sessions atomically in the model.** The per-request
+  registry check in `Authorized` is redundant in-model (the atomic close
+  already ends the sessions) but stays in the specification, because a
+  real hub cannot tear a connection down atomically with a request
+  already in flight — the check is the rule every request applies, and
+  the single hub writer serializes it against revocation.
+
+## Assumptions
+
+- **Unguessable, protected credentials.** Authentication yields the true
+  device identity; spoofing and credential theft are excluded.
+  Cryptography is explicitly out of scope (ARCHITECTURE.md).
+- **Correct transport identity.** The mapping from the transport-level
+  peer identity (Tailcat `WhoIs`) to the registry device is correct.
+- **One serialization point.** Every request and every revocation commits
+  through the single hub writer, so each atomic model action is one
+  implementation transaction.
+- **Requests ride live connections.** A closed connection cannot carry a
+  request; the transport guarantees it, so the model does not re-check
+  `sesLive` outside `Authorized`.
+- **Already returned data cannot be revoked.** An acknowledged limit, not
+  a property. Revocation also does not erase history: revoked devices'
+  annotation rows stay written.
+- **Expiry is a nondeterministic action, not a clock.** The protocol
+  property is that consumption must race expiry and can lose; the TTL
+  length is configuration, not protocol.
+- **Annotation value semantics are out of model.** Atomic batches,
+  identical-retry no-ops, limits, and foreign keys are Go tests
+  (`internal/store`, T009). This model covers only ownership and
+  authorization.
+- **Reads are out of model.** The same `Authorized` guard applies to
+  queries; reads carry no ownership state to check.
+
+## Models
+
+| Configuration | Bounds | What it exercises | Size (checked 2026-11-13) |
+|---|---|---|---|
+| `Auth.cfg` | 2 devices, 2 invitations, 3 sessions, 2 sources | Full interleaving: pairing races, revocation under live sessions, cross-writer annotations on one slot | 46,289 states, ~1 s |
+| `AuthWide.cfg` | 3 devices, 2 invitations, 3 sessions, 2 sources | Pairing scarcity: one device stays a stranger whatever happens; one device owning both sources while another owns none | 126,933 states, ~3 s |
+
+Both run with `-deadlock`: the drained system (every invitation dead,
+every paired device revoked, no live session) is a legitimate fixed
+point.
+
+## Non-vacuousness
+
+Six one-line mutations, run against `Auth.cfg` during review of this
+model, each produced a TLC violation (TLC reports the first violated
+invariant):
+
+- Consume a used or expired invitation: `InvitationUsedByPairer` violated.
+- Upload rebinds another device's source: `OwnershipImmobile` violated.
+- Revoke without closing the device's sessions:
+  `NoLiveSessionForRevoked` violated.
+- The hub writes the row the request names instead of the session's
+  device (spoofed `writer_id`): `AnnotationWriterFromSession` violated.
+- A revoked device consumes a fresh invitation:
+  `RevocationIrreversible` violated.
+- A session opens without the registry check:
+  `NoLiveSessionForRevoked` violated.
+
+One further mutation survived by design: an already-active device
+consuming a second invitation violates no stated property (each
+invitation is still single-use); the specification blocks it anyway with
+the "absent" guard.
+
+## No liveness property
+
+Every property in scope is safety. Pairing and revocation are single
+atomic decisions with no retry protocol at this abstraction; the retry
+loop that makes pairing eventually succeed is device reconnection, whose
+liveness assumption (eventual reconnection) belongs to `Sync.tla`. An
+invitation may always expire first — that is required behavior, not a
+starvation bug.
+
+## Not proved here
+
+- Cryptography, credential storage, and transport security: assumptions
+  above.
+- Annotation value and batch semantics: Go tests (`internal/store`, T009).
+- Batch validation, cursors, and replay: `Sync.tla` and Go tests (T017).
+- Hub-side rate limiting, connection bounds, request quotas: operational
+  limits, not protocol states.
 - Finite bounds only: TLC checks the models listed above, not all sizes.
