@@ -9,8 +9,9 @@ One Go binary, one SQLite database, no cloud account.
 
 Status: pre-MVP. Local Claude Code ingestion runs end to end: `ohya ingest`
 imports existing session history once, then polls incrementally into one
-SQLite WAL database through the transactional write path. MCP tools and
-device sync are not implemented yet. See [MANIFESTO.md](MANIFESTO.md) for
+SQLite WAL database through the transactional write path. The read-only
+`sql` MCP tool is served over stdio by `ohya mcp`. The `annotate` MCP tool
+and device sync are not implemented yet. See [MANIFESTO.md](MANIFESTO.md) for
 engineering principles, [PRODUCT.md](PRODUCT.md) for the product vision,
 [ARCHITECTURE.md](ARCHITECTURE.md) for system design, and [DB.md](DB.md)
 for the database plan.
@@ -21,6 +22,7 @@ for the database plan.
 make build
 ./bin/ohya ingest              # import history, then poll until stopped
 ./bin/ohya ingest --once       # one pass, then exit
+./bin/ohya mcp                 # serve the read-only sql MCP tool on stdio
 ```
 
 `ohya ingest` watches `~/.claude/projects` (override with `--claude-root`)
@@ -37,6 +39,28 @@ restart and inserts nothing twice. A malformed record stops its source at
 that offset with a diagnostic and never skips bytes; other sources continue.
 A replaced or truncated file starts a new source and re-imports history —
 the run reports it instead of staying silent.
+
+`ohya mcp` serves the read-only `sql` tool to any MCP client over stdio
+(same `--db` and `--state` flags). The tool runs exactly one statement per
+call — `SELECT` and read-only `PRAGMA` only — on a restricted read-only
+connection guarded by a SQLite authorizer. Writes, schema changes,
+`ATTACH`, extension loading, and state-changing pragmas are denied; queries
+run under a 5 second deadline, return at most 500 rows and 256 KiB of row
+JSON, and report truncation explicitly instead of silently. The tool
+description publishes the schema, SQL examples, the limits, and this
+device's writer ID. To connect an agent, register the command, for example
+for Claude Code:
+
+```json
+{
+  "mcpServers": {
+    "ohya": {
+      "command": "/absolute/path/to/bin/ohya",
+      "args": ["mcp"]
+    }
+  }
+}
+```
 
 ## Scope
 
