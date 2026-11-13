@@ -39,6 +39,19 @@ reimport history: deduplication guarantees retry safety, not semantic deduplicat
 If local identity state is lost, report recovery needs instead of silently
 claiming exactly-once ingestion.
 
+The local state directory holds `device.json` — the stable random Device ID,
+created once and never regenerated in place; an unreadable identity file is an
+error, because a new ID would fork the device — and one checkpoint file per
+agent, `sources/<agent>.json`, mapping each watched path to its source ID,
+platform file identity, acknowledged cursor, and the SHA-256 fingerprint of the
+bytes ending at that cursor (4 KiB window by default). Polling is caller-driven
+(`internal/watch`): every poll takes the caller's discovered paths, rebinds a
+source whose incarnation moved, and registers new sources durably before their
+first ingestion. `ReadPending` re-verifies the incarnation before handing bytes
+to ingestion, and `Acknowledge` advances the checkpoint only after a durable
+commit. An existing but unusable checkpoint file stops the watcher with a
+recovery error rather than a silent restart.
+
 ## Record handling
 
 Parse complete newline-terminated records; retain an incomplete tail for the

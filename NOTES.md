@@ -47,3 +47,17 @@ How to use this file:
   `SELECT count(*)` on an external-content FTS5 table reads the content table, not
   the index. Assert index consistency with the `integrity-check` command and MATCH
   enumeration. Relevant wherever the write path maintains `events_fts` (T006+).
+
+- Source watcher choices (2026-11-13, internal/watch, T005): change detection
+  applies three signals in order — platform identity (dev/ino on Unix), size
+  against the acknowledged cursor, then the checkpoint fingerprint (SHA-256 over
+  a 4 KiB window ending at the cursor). Identity catches replacement, size
+  catches truncation, and the fingerprint catches same-inode rewrites, including
+  truncate-and-regrow between polls. Accepted edges: a cursor-0 source can bind
+  to a reused inode after its file is deleted (harmless — nothing was ingested);
+  a device-number change across reboots (tmpfs) re-imports under new source IDs,
+  which is retry-safe but not semantic dedup. State keys resolve symlinks in
+  parent directories (macOS /tmp → /private/tmp) so one file keeps one key
+  whether or not it currently exists; tests must compare against normalized
+  paths. Lost state is reported, never silently restarted: an unreadable
+  device.json or sources/<agent>.json is a recovery error.
