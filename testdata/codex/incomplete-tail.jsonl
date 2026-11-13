@@ -1,0 +1,4 @@
+{"timestamp":"2026-11-13T11:00:00.000Z","ordinal":0,"type":"session_meta","payload":{"id":"00000000-0000-7000-8000-0000000000c4","timestamp":"2026-11-13T11:00:00.000Z","cwd":"/home/dev/example","originator":"codex_exec","cli_version":"0.166.0","source":"exec","model_provider":"openai"}}
+{"timestamp":"2026-11-13T11:00:01.000Z","ordinal":1,"type":"response_item","payload":{"type":"message","id":"msg_fixture_0201","role":"user","content":[{"type":"input_text","text":"Print the fixture inventory."}]}}
+{"timestamp":"2026-11-13T11:00:02.000Z","ordinal":2,"type":"response_item","payload":{"type":"message","status":"completed","id":"msg_fixture_0202","role":"assistant","content":[{"type":"output_text","text":"Five files under testdata/codex/.","annotations":[],"logprobs":[]}],"phase":"final"}}
+{"timestamp":"2026-11-13T11:00:03.000Z","ordinal":3,"type":"event_msg","payload":{"type":"agent_message","message":"Five files under testdata/cod

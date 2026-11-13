@@ -10,3 +10,4 @@ lists each fixture with the byte range of every record, so tests can assert
 exact offsets.
 
 - [claude-code/](claude-code/README.md) — verified against Claude Code 2.1.280.
+- [codex/](codex/README.md) — verified against codex-cli 0.166.0.
