@@ -26,3 +26,6 @@ How to use this file:
   - Claude Desktop regular chats: server-side, not file-watchable; potentially pollable via unofficial authenticated API (see Claude Explorer / rpeck/claude-explorer) or official export. Would need a new poll-based source type — deferred.
   - ChatGPT desktop: no reliable local transcripts; official export only — deferred.
   - Cowork local sessions may write JSONL under `~/Library/Application Support/Claude/local-agent-mode-sessions/` — absent on current install; check if usage starts.
+
+- macOS distribution still needs native builds on both supported architectures and
+  signing/notarization verification; the SQLite driver requires a C toolchain.

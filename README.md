@@ -7,7 +7,7 @@ agent sessions automatically, synchronizes them across devices, and exposes
 the entire history to any connected agent through read-only SQL and bounded annotation MCP tools.
 One Go binary, one SQLite database, no cloud account.
 
-Status: pre-MVP, design phase. See [MANIFESTO.md](MANIFESTO.md) for
+Status: pre-MVP, Go bootstrap; ingestion and MCP are not implemented. See [MANIFESTO.md](MANIFESTO.md) for
 engineering principles, [PRODUCT.md](PRODUCT.md) for the product vision,
 [ARCHITECTURE.md](ARCHITECTURE.md) for system design, and [DB.md](DB.md)
 for the database plan.
@@ -33,6 +33,12 @@ for the database plan.
 
 Built-in classification, embeddings, vector search, filesystem notifications, extra
 platforms, and any third-party AI processing. See MANIFESTO.md (YAGNI).
+
+## Development
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for build requirements and checks,
+[BACKLOG.md](BACKLOG.md) for implementation order, and the
+[dependency decision](docs/adr/0001-dependencies.md) for tradeoffs.
 
 ## License
 

@@ -1,8 +1,8 @@
 # ohya — Database plan
 
-[ohya_schema.sql](ohya_schema.sql) is the authoritative initial DDL. It defines
+[001_initial.sql](internal/store/migrations/001_initial.sql) is the authoritative initial DDL. It defines
 three ingestion tables, one annotation table and an external-content FTS5 index; do not duplicate the DDL here.
-There is no released database yet. Add versioned migrations with implementation.
+There is no released database yet. This versioned SQL is the fresh-database baseline; a migration runner and upgrade policy remain to be implemented.
 
 | Table | Meaning |
 |---|---|
@@ -87,5 +87,4 @@ ORDER BY e.id LIMIT 100;
 These are illustrative SQL parameters; `sql(query)` callers substitute SQL literals.
 Expose the current writer ID in the MCP tool description. The primary key supports
 per-event annotation lookup. Add broader annotation indexes only with query evidence.
-Existing databases must add this table through a migration when migrations exist;
-the current SQL file remains a fresh-database schema, not an upgrade script.
+The initial migration includes annotations. Future schema changes require new migrations; do not edit an applied migration.
