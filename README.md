@@ -38,7 +38,9 @@ write path, so a crash between commit and checkpoint replays safely on
 restart and inserts nothing twice. A malformed record stops its source at
 that offset with a diagnostic and never skips bytes; other sources continue.
 A replaced or truncated file starts a new source and re-imports history —
-the run reports it instead of staying silent.
+the run reports it instead of staying silent. Hardlinked copies inside the
+watched tree share one file identity and are watched once; the checkpoint
+follows the surviving link when others disappear.
 
 `ohya mcp` serves the read-only `sql` tool to any MCP client over stdio
 (same `--db` and `--state` flags). The tool runs exactly one statement per

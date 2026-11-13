@@ -61,6 +61,17 @@ How to use this file:
   whether or not it currently exists; tests must compare against normalized
   paths. Lost state is reported, never silently restarted: an unreadable
   device.json or sources/<agent>.json is a recovery error.
+- Hardlinks and the watcher (2026-11-13, internal/watch, T028): two live paths
+  can share one platform identity (hardlinking backup tool inside the watched
+  tree; reachable through `ohya ingest`, which passes every discovered *.jsonl
+  to Poll). Poll watches an incarnation once — the first path in path order
+  wins, duplicate candidates are refused — and the rename/move rebuild refuses
+  a move whose target key another source claims (staying entry or competing
+  move), so an acknowledged checkpoint is never overwritten; a refused source
+  stays missing and keeps its checkpoint, and a returning path is reported as a
+  replacement, not a silent "new file". A checkpoint file from a pre-fix build
+  may already hold two sources on one identity: loadState tolerates it (ErrStateLost
+  would brick upgrades for no recovery gain) and the poll guards keep both.
 
 - Write-path open question (2026-11-13, internal/store, T006):
   `sessions.repo` stays NULL — no rule derives a repository path from observed

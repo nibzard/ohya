@@ -1,7 +1,9 @@
 package watch
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -541,6 +543,269 @@ func fingerprintOf(t *testing.T, path string, from, to int64) string {
 		t.Fatalf("fingerprintFile: %v", err)
 	}
 	return sum
+}
+
+// hardlink creates a second path for the file at path, so two live paths
+// share one platform file identity — what a hardlinking backup tool inside
+// the watched tree produces.
+func hardlink(t *testing.T, path, link string) {
+	t.Helper()
+	if err := os.Link(path, link); err != nil {
+		t.Skipf("hardlinks unavailable: %v", err)
+	}
+}
+
+// fileIdentityOf returns the platform identity of the file at path.
+func fileIdentityOf(t *testing.T, path string) string {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	return platformFileIdentity(info)
+}
+
+// writeSharedIdentityState writes a checkpoint file that holds one source
+// per path, all on the same file identity and acknowledged through cursor —
+// the state a build without the duplicate-identity guards leaves behind.
+// It returns the source IDs in path order.
+func writeSharedIdentityState(t *testing.T, dir string, paths []string, identity string, cursor int64) []string {
+	t.Helper()
+	sources := map[string]sourceCheckpoint{}
+	var ids []string
+	for i, p := range paths {
+		norm := normalizePath(p)
+		sum, err := fingerprintFile(norm, cursor, cursor)
+		if err != nil {
+			t.Fatalf("fingerprint %s: %v", norm, err)
+		}
+		id := fmt.Sprintf("%032x", i+1)
+		ids = append(ids, id)
+		sources[norm] = sourceCheckpoint{
+			SourceID:          id,
+			Agent:             agent,
+			Path:              norm,
+			FileIdentity:      identity,
+			CursorBytes:       cursor,
+			SizeBytes:         cursor,
+			FingerprintWindow: cursor,
+			FingerprintSHA256: sum,
+		}
+	}
+	data, err := json.Marshal(checkpointFile{Version: stateVersion, Sources: sources})
+	if err != nil {
+		t.Fatalf("marshal state: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(stateFilePath(dir)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, stateFilePath(dir), string(data))
+	return ids
+}
+
+// readState returns the checkpoint file's raw text.
+func readState(t *testing.T, dir string) string {
+	t.Helper()
+	data, err := os.ReadFile(stateFilePath(dir))
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	return string(data)
+}
+
+func TestHardlinkedPathsWatchedOnce(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.jsonl")
+	b := filepath.Join(dir, "b.jsonl")
+	writeFile(t, a, "line1\n")
+	hardlink(t, a, b)
+
+	w := mustNew(t, dir)
+	outcomes := poll(t, w, a, b)
+	// Hardlinks put two live paths on one file incarnation. Only the first
+	// path in path order becomes a source; the duplicate is the same
+	// incarnation watched through another name.
+	if len(outcomes) != 1 {
+		t.Fatalf("outcomes = %+v, want exactly one for the shared identity", outcomes)
+	}
+	first := outcomes[0]
+	if first.Path != normalizePath(a) || !first.Fresh {
+		t.Fatalf("outcome = %+v, want a fresh source at the first path %s", first, normalizePath(a))
+	}
+	if strings.Contains(readState(t, dir), normalizePath(b)) {
+		t.Fatalf("state watches the hardlinked duplicate path:\n%s", readState(t, dir))
+	}
+
+	ingestAll(t, w, outcomes)
+
+	// A later poll is stable: one source, no second registration.
+	again := sole(t, poll(t, w, a, b))
+	if again.Fresh || again.SourceID != first.SourceID {
+		t.Fatalf("outcome = %+v, want the continued source %s", again, first.SourceID)
+	}
+
+	// When the watched path disappears, the source rebinds to the surviving
+	// link and keeps its acknowledged cursor.
+	if err := os.Remove(a); err != nil {
+		t.Fatalf("remove %s: %v", a, err)
+	}
+	rebound := sole(t, poll(t, w, b))
+	if rebound.Fresh || rebound.Missing || rebound.SourceID != first.SourceID {
+		t.Fatalf("outcome = %+v, want the source %s continued at the surviving link", rebound, first.SourceID)
+	}
+	if rebound.Cursor != 6 {
+		t.Fatalf("cursor = %d, want the acknowledged cursor 6", rebound.Cursor)
+	}
+	if rebound.RenamedFrom != normalizePath(a) {
+		t.Fatalf("outcome tracks a rename from %q, want %q", rebound.RenamedFrom, normalizePath(a))
+	}
+}
+
+func TestSharedIdentityStateKeepsEveryCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.jsonl")
+	b := filepath.Join(dir, "b.jsonl")
+	writeFile(t, a, "line1\n")
+	hardlink(t, a, b)
+	ids := writeSharedIdentityState(t, dir, []string{a, b}, fileIdentityOf(t, a), 6)
+
+	w := mustNew(t, dir)
+	// Both live links keep their own sources: neither entry is dropped.
+	live := poll(t, w, a, b)
+	if len(live) != 2 {
+		t.Fatalf("outcomes = %+v, want one per live path", live)
+	}
+
+	// One link disappears. The survivor keeps its checkpoint, and the
+	// rebind that would move the missing source onto the survivor's key is
+	// refused instead of overwriting it.
+	if err := os.Remove(a); err != nil {
+		t.Fatalf("remove %s: %v", a, err)
+	}
+	after := poll(t, w, b)
+	if len(after) != 2 {
+		t.Fatalf("outcomes = %+v, want a missing and a live outcome", after)
+	}
+	missing, survived := after[0], after[1] // sorted by path: a then b
+	if missing.Path != normalizePath(a) || !missing.Missing {
+		t.Fatalf("outcome = %+v, want the removed path missing", missing)
+	}
+	if missing.SourceID != ids[0] || missing.Cursor != 6 {
+		t.Fatalf("missing outcome = %+v, want source %s with cursor 6 retained", missing, ids[0])
+	}
+	if survived.SourceID != ids[1] || survived.Fresh || survived.Cursor != 6 {
+		t.Fatalf("surviving outcome = %+v, want source %s at cursor 6", survived, ids[1])
+	}
+	state := readState(t, dir)
+	for _, id := range ids {
+		if !strings.Contains(state, id) {
+			t.Fatalf("state dropped the acknowledged source %s:\n%s", id, state)
+		}
+	}
+
+	// The removed path returns as a new incarnation: the replacement is
+	// reported as a fresh source with a reason, not a silent restart.
+	replaceFile(t, a, "another file\n")
+	returned := poll(t, w, a, b)
+	if len(returned) != 2 {
+		t.Fatalf("outcomes = %+v, want two", returned)
+	}
+	fresh, kept := returned[0], returned[1]
+	if !fresh.Fresh || fresh.SourceID == ids[0] {
+		t.Fatalf("outcome = %+v, want a fresh source replacing %s", fresh, ids[0])
+	}
+	if !strings.Contains(fresh.Reason, "identity changed") {
+		t.Fatalf("reason = %q, want the replacement explanation", fresh.Reason)
+	}
+	if kept.SourceID != ids[1] || kept.Fresh {
+		t.Fatalf("surviving outcome = %+v, want source %s kept", kept, ids[1])
+	}
+}
+
+func TestCompetingRebindsAreRefused(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.jsonl")
+	b := filepath.Join(dir, "b.jsonl")
+	c := filepath.Join(dir, "c.jsonl")
+	writeFile(t, a, "line1\n")
+	hardlink(t, a, b)
+	hardlink(t, a, c)
+	ids := writeSharedIdentityState(t, dir, []string{a, b}, fileIdentityOf(t, a), 6)
+
+	// The two watched links vanish while the incarnation stays reachable
+	// under the third path: both missing sources would rebind onto c, so
+	// the ambiguous rebind is refused and both checkpoints stay retained.
+	if err := os.Remove(a); err != nil {
+		t.Fatalf("remove %s: %v", a, err)
+	}
+	if err := os.Remove(b); err != nil {
+		t.Fatalf("remove %s: %v", b, err)
+	}
+	w := mustNew(t, dir)
+	outcomes := poll(t, w, c)
+	if len(outcomes) != 3 {
+		t.Fatalf("outcomes = %+v, want two missing and one fresh", outcomes)
+	}
+	missingA, missingB, fresh := outcomes[0], outcomes[1], outcomes[2] // sorted by path
+	if missingA.Path != normalizePath(a) || !missingA.Missing || missingA.SourceID != ids[0] || missingA.Cursor != 6 {
+		t.Fatalf("outcome = %+v, want source %s missing with cursor 6", missingA, ids[0])
+	}
+	if missingB.Path != normalizePath(b) || !missingB.Missing || missingB.SourceID != ids[1] || missingB.Cursor != 6 {
+		t.Fatalf("outcome = %+v, want source %s missing with cursor 6", missingB, ids[1])
+	}
+	if !fresh.Fresh || fresh.Cursor != 0 {
+		t.Fatalf("outcome = %+v, want a fresh source for the new path", fresh)
+	}
+	state := readState(t, dir)
+	for _, id := range ids {
+		if !strings.Contains(state, id) {
+			t.Fatalf("state dropped the acknowledged source %s:\n%s", id, state)
+		}
+	}
+}
+
+func TestSwappedPathsKeepBothSources(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.jsonl")
+	b := filepath.Join(dir, "b.jsonl")
+	writeFile(t, a, "record a\n")
+	writeFile(t, b, "record b\n")
+
+	w := mustNew(t, dir)
+	first := poll(t, w, a, b)
+	if len(first) != 2 {
+		t.Fatalf("outcomes = %+v, want two fresh sources", first)
+	}
+	ingestAll(t, w, first)
+	idAt := map[string]string{first[0].Path: first[0].SourceID, first[1].Path: first[1].SourceID}
+
+	// Swap both files through a third name: each path changes incarnation
+	// at once, and both sources must survive the swap.
+	tmp := filepath.Join(dir, "tmp.jsonl")
+	for _, step := range [][2]string{{a, tmp}, {b, a}, {tmp, b}} {
+		if err := os.Rename(step[0], step[1]); err != nil {
+			t.Fatalf("rename %s to %s: %v", step[0], step[1], err)
+		}
+	}
+	swapped := poll(t, w, a, b)
+	if len(swapped) != 2 {
+		t.Fatalf("outcomes = %+v, want two", swapped)
+	}
+	for _, o := range swapped {
+		if o.Fresh || o.Missing {
+			t.Fatalf("outcome = %+v, want a continued source", o)
+		}
+		want := idAt[normalizePath(b)] // the incarnation now at this path came from the other path
+		if o.Path == normalizePath(b) {
+			want = idAt[normalizePath(a)]
+		}
+		if o.SourceID != want {
+			t.Fatalf("outcome = %+v, want source %s that moved here", o, want)
+		}
+		if o.Cursor != 9 {
+			t.Fatalf("cursor = %d, want the acknowledged cursor 9", o.Cursor)
+		}
+	}
 }
 
 func TestNormalizePathResolvesSymlinkedDirectories(t *testing.T) {

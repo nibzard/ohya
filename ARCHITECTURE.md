@@ -47,7 +47,12 @@ platform file identity, acknowledged cursor, and the SHA-256 fingerprint of the
 bytes ending at that cursor (4 KiB window by default). Polling is caller-driven
 (`internal/watch`): every poll takes the caller's discovered paths, rebinds a
 source whose incarnation moved, and registers new sources durably before their
-first ingestion. `ReadPending` re-verifies the incarnation before handing bytes
+first ingestion. Two live paths can share one platform file identity through
+hardlinks, for example from a hardlinking backup tool inside the watched tree:
+the incarnation is watched once through the first path in path order, and a
+rebind onto a path that another source already claims is refused — the refused
+source stays missing with its checkpoint retained, so a move never overwrites
+another source's acknowledged checkpoint. `ReadPending` re-verifies the incarnation before handing bytes
 to ingestion, and `Acknowledge` advances the checkpoint only after a durable
 commit. An existing but unusable checkpoint file stops the watcher with a
 recovery error rather than a silent restart.

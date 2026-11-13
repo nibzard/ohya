@@ -317,6 +317,62 @@ func TestIngestMainAndSubagentFilesShareOneSession(t *testing.T) {
 	}
 }
 
+// TestIngestHardlinkedBackupKeepsCheckpoint covers a hardlinking backup tool
+// inside the watched tree: discovery passes two paths on one platform file
+// identity to the watcher. The incarnation is watched once, and when the
+// original path disappears the acknowledged checkpoint rebinds to the
+// surviving link instead of being dropped and re-imported from zero.
+func TestIngestHardlinkedBackupKeepsCheckpoint(t *testing.T) {
+	e := newSliceEnv(t)
+	session := e.session("main-session.jsonl")
+	copyFixture(t, session, "main-session.jsonl")
+	backup := filepath.Join(e.root, "fixture-project", "backup", "main-session.jsonl")
+	if err := os.MkdirAll(filepath.Dir(backup), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(session, backup); err != nil {
+		t.Skipf("hardlinks unavailable: %v", err)
+	}
+
+	// Both paths are discovered, but the shared incarnation is watched once.
+	stats, stderr := e.runPass(t)
+	if stats.sources != 1 || stats.inserted != 16 {
+		t.Fatalf("first pass = %+v, want 16 events from 1 source", stats)
+	}
+	if stderr != "" {
+		t.Fatalf("first pass diagnostics: %s", stderr)
+	}
+	sourceID, cursor := soleCheckpoint(t, e.stateDir)
+	if cursor != 6528 {
+		t.Fatalf("checkpoint cursor = %d, want 6528", cursor)
+	}
+
+	// The original disappears and only the backup link remains: the source
+	// keeps its ID and acknowledged cursor, so the pass imports nothing and
+	// reports no re-import.
+	if err := os.Remove(session); err != nil {
+		t.Fatal(err)
+	}
+	stats, stderr = e.runPass(t)
+	if stats.sources != 1 || stats.inserted != 0 {
+		t.Fatalf("pass after link removal = %+v, want 0 events from 1 source", stats)
+	}
+	if stderr != "" {
+		t.Fatalf("pass after link removal diagnostics: %s", stderr)
+	}
+	id, cursor := soleCheckpoint(t, e.stateDir)
+	if id != sourceID || cursor != 6528 {
+		t.Fatalf("checkpoint = %s at %d, want %s at 6528", id, cursor, sourceID)
+	}
+	hub := openHub(t, e.dbPath)
+	if n := countRows(t, hub.Writer(), `SELECT count(*) FROM sources`); n != 1 {
+		t.Fatalf("sources = %d, want 1", n)
+	}
+	if n := countRows(t, hub.Writer(), `SELECT count(*) FROM events`); n != 16 {
+		t.Fatalf("events = %d, want 16 — history must not duplicate", n)
+	}
+}
+
 // TestIngestIncompleteTailCommitsOnlyCompleteRecords covers a crash during a
 // session write: the partial record stays pending, and once the writer
 // completes the line, the next pass ingests it whole.
