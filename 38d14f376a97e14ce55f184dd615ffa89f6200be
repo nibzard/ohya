@@ -1,0 +1,16 @@
+# Context
+
+## Background
+README, ARCHITECTURE and BACKLOG still described OpenCode with the
+old per-message JSON storage model and listed Codex/Pi format
+verification as open work.
+
+## Why This Way
+The verification on this machine (NOTES.md, 2026-11-13) resolved
+both: formats are confirmed, and OpenCode v2 stores sessions in
+SQLite, which changes the phase 2 spike from "verify enumerated
+file storage" to "design a poll-based cursor".
+
+## Gotchas
+- OpenCode's opencode.db is small locally (1 session); schema was
+  read from it directly, not from docs.
