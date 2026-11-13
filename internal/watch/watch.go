@@ -7,6 +7,13 @@
 // acknowledged cursor, and a content fingerprint of the bytes ending at the
 // checkpoint. A detected replacement, truncation or in-place rewrite starts
 // a new source ID. A rename that keeps the identity keeps the source.
+//
+// Hardlinks put two or more live paths on one file identity, for example a
+// hardlinking backup tool inside the watched tree. One incarnation is
+// watched once: the first path in path order claims it and the duplicate
+// paths are ignored. A rebind that would move a source onto a path another
+// source already claims is refused, so an acknowledged checkpoint is never
+// overwritten; the refused source stays missing and keeps its checkpoint.
 // Filesystem notifications are deferred (ARCHITECTURE.md); the caller drives
 // every poll with the paths it discovered.
 package watch
@@ -101,12 +108,16 @@ type probe struct {
 // Poll observes the candidate paths, which the caller discovers — for
 // example by walking the agent's session directory. Paths that do not exist
 // or are not regular files are unobservable: tracked ones surface as Missing
-// outcomes, untracked ones are ignored.
+// outcomes, untracked ones are ignored. Several live paths can share one
+// platform file identity through hardlinks: only the first such path in
+// path order is watched, because the others hold the same file incarnation.
 //
 // Poll returns one Outcome per live source and one per missing tracked
 // path, sorted by path. Sources with Fresh set, including new files, are
 // durably persisted before Poll returns, so a crash right after Poll cannot
-// lose a new source ID.
+// lose a new source ID. A rebind onto a path that another source claims —
+// including the shared-identity case — is refused: the source stays missing
+// with its checkpoint retained instead of overwriting the other source.
 func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 	probes := make(map[string]probe, len(candidates))
 	for _, p := range candidates {
@@ -124,12 +135,16 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 		probes[norm] = probe{identity: platformFileIdentity(info), size: info.Size()}
 	}
 
-	// Live incarnations by identity, for rename detection. Two live paths
-	// cannot share one identity.
+	// Live incarnations by identity, for rename detection. Hardlinks put
+	// two or more live paths on one identity; the first path in path order
+	// claims the slot, so which path a rebind targets never depends on map
+	// iteration order. Duplicate paths are refused at registration below.
 	byIdentity := make(map[string]string, len(probes))
-	for p, pr := range probes {
-		if pr.identity != "" {
-			byIdentity[pr.identity] = p
+	for _, p := range slices.Sorted(maps.Keys(probes)) {
+		if id := probes[p].identity; id != "" {
+			if _, taken := byIdentity[id]; !taken {
+				byIdentity[id] = p
+			}
 		}
 	}
 
@@ -152,6 +167,36 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 		}
 		if newPath, ok := byIdentity[entry.FileIdentity]; ok && newPath != key {
 			moves[key] = newPath
+		}
+	}
+	if len(moves) > 0 {
+		// Refuse every ambiguous move before rebuilding, so the rebuild
+		// writes each state key at most once and never overwrites another
+		// source's checkpoint. A target is ambiguous while a second entry —
+		// one that stays put, or another move — also claims it; refusing a
+		// move returns its source to the staying set, so the check repeats
+		// until no target is over-claimed. A refused source stays at its
+		// watched path as missing with its checkpoint retained, and a later
+		// poll rebinds it once the ambiguity is gone.
+		for {
+			claims := make(map[string]int, len(w.state.Sources))
+			for key := range w.state.Sources {
+				if target, ok := moves[key]; ok {
+					claims[target]++
+				} else {
+					claims[key]++
+				}
+			}
+			refused := false
+			for key, target := range moves {
+				if claims[target] > 1 {
+					delete(moves, key)
+					refused = true
+				}
+			}
+			if !refused {
+				break
+			}
 		}
 	}
 	if len(moves) > 0 {
@@ -206,14 +251,31 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 		changed = true
 	}
 
-	// Candidate paths no entry claims are new files.
+	// Candidate paths no entry claims are new files. A candidate whose file
+	// identity duplicates a tracked source that is live at its own path is
+	// the same incarnation under another name — a hardlink — and is refused:
+	// watching it again would only duplicate history under a second source
+	// ID. The first path in path order wins.
+	claimed := make(map[string]bool, len(w.state.Sources))
+	for key, entry := range w.state.Sources {
+		if pr, ok := probes[key]; ok && pr.identity != "" && pr.identity == entry.FileIdentity {
+			claimed[pr.identity] = true
+		}
+	}
 	for _, key := range slices.Sorted(maps.Keys(probes)) {
 		if _, tracked := w.state.Sources[key]; tracked {
 			continue
 		}
+		id := probes[key].identity
+		if id != "" && claimed[id] {
+			continue // the same incarnation is already watched through another path
+		}
 		outcome, err := w.register(key, probes[key], "new file")
 		if err != nil {
 			return nil, err
+		}
+		if id != "" {
+			claimed[id] = true
 		}
 		outcomes = append(outcomes, outcome)
 		changed = true
