@@ -37,6 +37,18 @@ func mustRegister(t *testing.T, hub *DB, id, path string) {
 
 func mustIngest(t *testing.T, hub *DB, b Batch) IngestResult {
 	t.Helper()
+	b.DeviceID = deviceHex
+	res, err := hub.Ingest(context.Background(), b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
+// mustIngestAs submits a batch under a chosen device identity.
+func mustIngestAs(t *testing.T, hub *DB, device string, b Batch) IngestResult {
+	t.Helper()
+	b.DeviceID = device
 	res, err := hub.Ingest(context.Background(), b)
 	if err != nil {
 		t.Fatal(err)
@@ -205,8 +217,50 @@ func TestRegisterSource(t *testing.T) {
 	// Ownership never moves.
 	err := hub.RegisterSource(ctx, "s1", "ffffffffffffffffffffffffffffffff", "claude-code", "/a.jsonl")
 	wantError(t, err, "ownership cannot change")
+	if !errors.Is(err, ErrSourceOwnership) {
+		t.Fatalf("ownership error = %v; want ErrSourceOwnership", err)
+	}
 	err = hub.RegisterSource(ctx, "s1", deviceHex, "codex", "/a.jsonl")
 	wantError(t, err, "held for agent")
+	if !errors.Is(err, ErrSourceOwnership) {
+		t.Fatalf("agent-change error = %v; want ErrSourceOwnership", err)
+	}
+}
+
+// TestIngestBindsBatchToDevice pins the sync contract's ownership rule at the
+// write path: a batch naming another device is rejected with
+// ErrSourceOwnership before anything is written, and rejection classes are
+// distinguishable from internal failures through their sentinels.
+func TestIngestBindsBatchToDevice(t *testing.T) {
+	hub := ingestHub(t)
+	mustRegister(t, hub, "s1", "/a.jsonl")
+	other := "ffffffffffffffffffffffffffffffff"
+	_, err := hub.Ingest(context.Background(), Batch{
+		SourceID: "s1", DeviceID: other, Events: []Event{mkEvent(0, rawUser("foreign upload"))},
+	})
+	if !errors.Is(err, ErrSourceOwnership) {
+		t.Fatalf("foreign batch error = %v; want ErrSourceOwnership", err)
+	}
+	wantError(t, err, "batch claims device")
+	if n := countEvents(t, hub, `SELECT count(*) FROM events`); n != 0 {
+		t.Fatalf("events after foreign batch = %d, want 0", n)
+	}
+	// An unregistered source is its own rejection class, not an internal
+	// failure: the uploader must register the source before its first batch.
+	_, err = hub.Ingest(context.Background(), Batch{SourceID: "ghost", DeviceID: other})
+	if !errors.Is(err, ErrSourceNotRegistered) {
+		t.Fatalf("unregistered error = %v; want ErrSourceNotRegistered", err)
+	}
+	_, err = hub.Ingest(context.Background(), Batch{SourceID: "s1", DeviceID: other, Events: []Event{
+		mkEvent(500, rawUser("skips bytes")),
+	}})
+	if !errors.Is(err, ErrSourceOwnership) {
+		t.Fatalf("gap under foreign device = %v; want ErrSourceOwnership (identity first)", err)
+	}
+	// The owning device still commits after the rejected foreign attempts.
+	if res := mustIngest(t, hub, Batch{SourceID: "s1", Events: []Event{mkEvent(0, rawUser("owner upload"))}}); res.Inserted != 1 {
+		t.Fatalf("owner batch = %+v; want 1 insert", res)
+	}
 }
 
 // TestIngestFixtureMainSession drives the write path with the real fixture:
@@ -420,6 +474,7 @@ func TestIngestReplayAndOverlap(t *testing.T) {
 		{SourceID: "s1", Events: []Event{mkEvent(0, `{"type":"user","sessionId":"sess-1","x":1}`)}},
 	}
 	for _, conflicting := range conflicts {
+		conflicting.DeviceID = deviceHex
 		_, err := hub.Ingest(context.Background(), conflicting)
 		wantError(t, err, "conflicting retry at offset 0")
 		if n := countEvents(t, hub, `SELECT count(*) FROM events`); n != 3 {
@@ -457,7 +512,7 @@ func TestIngestRejectsGapsAndBadShape(t *testing.T) {
 	// The valid record after the malformed line starts at 1507. Ingesting it
 	// would skip the malformed bytes; the write path must refuse.
 	valid := mkEvent(1507, rawUser("valid after the malformed line"))
-	_, err := hub.Ingest(context.Background(), Batch{SourceID: "s1", Events: []Event{valid}})
+	_, err := hub.Ingest(context.Background(), Batch{SourceID: "s1", DeviceID: deviceHex, Events: []Event{valid}})
 	wantError(t, err, "bytes would be skipped")
 	if n := countEvents(t, hub, `SELECT count(*) FROM events`); n != 2 {
 		t.Fatalf("events after gap rejection = %d, want 2", n)
@@ -489,7 +544,7 @@ func TestIngestRejectsGapsAndBadShape(t *testing.T) {
 			return e
 		}(), "no native session ID"},
 	} {
-		_, err := hub.Ingest(context.Background(), Batch{SourceID: "s1", Events: []Event{good, tc.event}})
+		_, err := hub.Ingest(context.Background(), Batch{SourceID: "s1", DeviceID: deviceHex, Events: []Event{good, tc.event}})
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Fatalf("%s: err = %v; want %q", tc.name, err, tc.want)
 		}
@@ -499,7 +554,7 @@ func TestIngestRejectsGapsAndBadShape(t *testing.T) {
 	}
 
 	// An unregistered source is an error, not an implicit registration.
-	_, err = hub.Ingest(context.Background(), Batch{SourceID: "ghost"})
+	_, err = hub.Ingest(context.Background(), Batch{SourceID: "ghost", DeviceID: deviceHex})
 	wantError(t, err, "not registered")
 }
 
@@ -513,7 +568,7 @@ func TestIngestOtherSourcesContinue(t *testing.T) {
 	mustIngest(t, hub, Batch{SourceID: "a", Events: []Event{first}})
 
 	skipping := mkEvent(500, rawUser("a skips bytes"))
-	_, err := hub.Ingest(context.Background(), Batch{SourceID: "a", Events: []Event{skipping}})
+	_, err := hub.Ingest(context.Background(), Batch{SourceID: "a", DeviceID: deviceHex, Events: []Event{skipping}})
 	wantError(t, err, "bytes would be skipped")
 
 	other := mkEvent(0, rawUser("b first"))
@@ -661,7 +716,7 @@ func TestIngestInterruptedCommitRollsBack(t *testing.T) {
 	good := mkEvent(0, rawUser("commits"))
 	bad := mkEvent(good.End, rawUser("breaks"))
 	bad.Metadata = "{not json"
-	_, err := hub.Ingest(context.Background(), Batch{SourceID: "s1", Events: []Event{good, bad}})
+	_, err := hub.Ingest(context.Background(), Batch{SourceID: "s1", DeviceID: deviceHex, Events: []Event{good, bad}})
 	if err == nil {
 		t.Fatal("invalid metadata was accepted")
 	}
@@ -679,7 +734,7 @@ func TestIngestInterruptedCommitRollsBack(t *testing.T) {
 	// A canceled context is the same interruption from outside.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := hub.Ingest(ctx, Batch{SourceID: "s1", Events: []Event{good}}); err == nil {
+	if _, err := hub.Ingest(ctx, Batch{SourceID: "s1", DeviceID: deviceHex, Events: []Event{good}}); err == nil {
 		t.Fatal("canceled context was accepted")
 	}
 	if n := countEvents(t, hub, `SELECT count(*) FROM events`); n != 0 {

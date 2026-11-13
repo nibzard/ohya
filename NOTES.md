@@ -81,10 +81,12 @@ How to use this file:
   aggregates remain deferred pending a query need.
 
 - Local slice wiring (2026-11-13, cmd/ohya, T007): the production
-  claudecode.Record → store.Event adapter lives in cmd/ohya/adapter.go
-  (usage field names, contentForm=="string" prompt test). internal/store
-  keeps a mirrored copy in ingest_test.go to drive the write path from
-  fixtures — change both together. The crash window between the Ingest
+  claudecode.Record → store.Event adapter lives in internal/events (moved
+  out of cmd/ohya in T017 so hub-side batch normalization shares it; usage
+  field names, contentForm=="string" prompt test). internal/store keeps a
+  mirrored copy in ingest_test.go — an in-package test cannot import
+  internal/events without an import cycle — so change both together. The
+  crash window between the Ingest
   commit and watch.Acknowledge closes by replay on restart (slice test kills
   a helper process there; replay validates stored bytes and inserts nothing).
   Ingestion batches are bounded at 8 MiB so importing a large history file
@@ -188,6 +190,34 @@ How to use this file:
     needed, unlike per-element model values.
   - Auth.cfg 46k states ~1 s; AuthWide.cfg (3 devices, 2 invitations —
     pairing scarcity) 127k states ~3 s; all invariants hold.
+
+- Hub sync endpoint choices (2026-11-13, internal/hubsync, T017):
+  - The endpoint is transport-agnostic (serves any net.Listener) and
+    authenticates through an Authenticator interface; the wire device ID is
+    only ever compared against the authenticated identity, never trusted.
+    T018's registry + Tailcat WhoIs will implement the interface.
+  - Ownership is enforced at the single write path, not the endpoint:
+    store.Batch carries the submitting DeviceID and Ingest rejects a foreign
+    device (ErrSourceOwnership), so local ingestion and sync share one rule.
+    Rejection classes are sentinels (ErrBatchRejected, ErrSourceOwnership,
+    ErrSourceNotRegistered) — the endpoint maps them to protocol error codes
+    and retries everything else with capped backoff.
+  - A record the hub parser refuses mid-batch commits the valid prefix and
+    acknowledges with a stop offset+reason, mirroring local source-stop
+    semantics; the rest of that batch is dropped (the device repairs and
+    resends). Skipping past the stop is a gap rejection.
+  - Records are parsed per record (JSON + one synthetic terminator) with
+    SourceScope = wire source ID — identical normalization to local
+    ingestion, pinned by a test that compares the full events/sessions rows
+    of both paths over the same fixture bytes. A record whose JSON contains
+    a line terminator fails the "exactly one record at its framed
+    boundaries" cross-check and is rejected.
+  - SQLite trigger gotcha: trigger bodies reject bound parameters and
+    RAISE(ABORT, …) fires inside the write-path transaction — the endpoint
+    tests use one to break a commit mid-transaction and prove rollback
+    leaves the cursor unchanged.
+  - The endpoint has no CLI yet: serving needs a transport config and an
+    authenticator with real identities (T018, T033). The uploader is T019.
 
 - Tailcat/tsnet driver facts (2026-11-13, internal/transport, T014; measured
   in ADR 0002, reproduced by cmd/tailcat-spike against local Headscale

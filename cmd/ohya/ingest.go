@@ -20,6 +20,7 @@ import (
 
 	"github.com/nibzard/ohya/internal/claudecode"
 	"github.com/nibzard/ohya/internal/device"
+	"github.com/nibzard/ohya/internal/events"
 	"github.com/nibzard/ohya/internal/store"
 	"github.com/nibzard/ohya/internal/watch"
 )
@@ -183,7 +184,8 @@ func (r *ingestor) ingestSource(ctx context.Context, o watch.Outcome) (int, int6
 		if len(res.Records) > 0 {
 			result, err := r.hub.Ingest(ctx, store.Batch{
 				SourceID: o.SourceID,
-				Events:   eventsFromRecords(res.Records),
+				DeviceID: r.deviceID,
+				Events:   events.FromClaudeCodeRecords(res.Records),
 			})
 			if err != nil {
 				return inserted, o.Cursor, err

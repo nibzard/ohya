@@ -98,6 +98,30 @@ Allow one in-flight batch per source initially. No acknowledgment can move beyon
 validated committed bytes. Incomplete tails, validation failures and rolled-back
 transactions never advance the cursor. Bound queues and retry with capped backoff.
 
+Implemented (T017): `internal/hubsync` serves this contract as a library on any
+`net.Listener`, so the Tailcat adapter's listener plugs in without transport
+code in the sync layer. One binary frame protocol, shared by the endpoint and
+the future uploader, carries the registration (device, source, agent, path —
+it maps onto `store.RegisterSource`, which binds the source to the
+authenticated device) and the batch (version, device, source, byte range,
+records with their offsets); acknowledgments carry the committed cursor, the
+newly inserted count and, when the parser refused a record, the stop offset
+and reason. Every declared length is checked against a bound before
+allocation: 1 MiB per record, 8 MiB per batch, 65,536 records per batch. The
+endpoint authenticates each connection through an `Authenticator` interface
+and rejects any frame naming another device; pairing (T018) will back the
+interface with the credential registry and Tailcat WhoIs. Normalization runs
+the local parser and adapter (`internal/claudecode`, `internal/events`), so
+hub-side normalization is byte-identical to local ingestion, and a record the
+parser refuses commits its valid prefix and reports the stop, mirroring local
+source-stop semantics. The write path's sentinels (`ErrBatchRejected`,
+`ErrSourceOwnership`, `ErrSourceNotRegistered`) map to protocol error codes so
+a device knows permanent rejections from transient ones; transient write
+failures retry with capped backoff inside the hub. One in-flight batch per
+source is enforced by a per-source gate across connections, and a bounded
+connection count rejects the excess explicitly. The device uploader (T019)
+follows.
+
 Offline replay relies on retained source files. Replacement or deletion before
 upload can lose uncommitted history; surface this limitation. There is no outgoing
 spool or offline query replica in the MVP. Hub backup restoration may roll back

@@ -59,6 +59,10 @@ offsets in the original file, including framing when calculating the next cursor
   identity; a native ID may contain colons (synthetic IDs do).
 - Source IDs survive restarts; replacement/truncation creates a new incarnation.
 - `(source_id, source_offset)` deduplicates retransmission, not copied history.
+- A batch names the device that owns its source (`store.Batch.DeviceID`); the
+  write path rejects a batch claiming another device, because ownership is
+  fixed at registration. The sync endpoint passes the authenticated identity,
+  never a caller-supplied one.
 - Validate byte boundaries and conflicting retries before inserting; uniqueness
   alone does not prove payload equality or contiguous delivery.
 - Insert events, update aggregates and advance the source cursor in one transaction.
