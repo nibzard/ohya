@@ -1,0 +1,20 @@
+# ohya — Agent Instructions
+- Always read and follow `MANIFESTO.md` — it defines the project's principles and takes precedence over conflicting guidance.
+- Mission: shared, near-real-time, local-first memory for Claude Code, Codex, and other coding agents.
+- Before editing, inspect relevant code, tests, `README.md`, and applicable nested `AGENTS.md` files.
+- Architecture: one Go binary, modular monolith, one hub-owned SQLite WAL database, FTS5/BM25, one read-only `sql(query)` MCP tool.
+- Use domain-driven language: Device, Source, Session, Event, Cursor, Batch, Acknowledgment; make invariants explicit.
+- Follow KISS, DRY, and YAGNI: smallest correct change; no speculative layers, services, or dependencies.
+- Keep parsing, domain logic, synchronization, SQLite, Tailcat transport, and MCP at clear boundaries.
+- Preserve original transcript records; normalize deterministically; never require LLMs for ingestion or search.
+- Sync must be idempotent: deduplicate events and acknowledge offsets only after durable transactional commits.
+- Handle partial JSONL lines, file replacement/truncation, retries, offline replay, and process crashes.
+- Treat session content and SQL as untrusted; protect secrets, authenticate peers, and bound read-only queries.
+- Model-check changes to sync/authorization state machines with TLA+/TLC; record assumptions and invariants.
+- Add regression, parser, SQLite, and failure-path tests appropriate to each change; fuzz risky parsers.
+- Before finishing, run `gofmt` on changed Go files, `go test ./...`, and `go vet ./...` where applicable.
+- Update relevant docs, schema/migration notes, and ADRs alongside behavioral or architectural changes.
+- Avoid embeddings, mandatory AI classification, extra infrastructure, or new dependencies without evidence.
+- Preserve unrelated edits; never fabricate test results; report changes, checks run, and remaining risks.
+- Commit continuously: make small, focused commits after each tested, coherent increment; use descriptive messages.
+- Never include unrelated changes in commits; do not push unless explicitly requested.
