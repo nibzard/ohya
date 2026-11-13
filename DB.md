@@ -1,9 +1,10 @@
 # ohya — Database plan
 
 [001_initial.sql](internal/store/migrations/001_initial.sql) is the authoritative initial DDL. It defines
-three ingestion tables, one annotation table and an external-content FTS5 index; do not duplicate the DDL here.
-There is no released database yet, so migration 001 is the fresh-database baseline; every later schema
-change arrives as a new migration file.
+the ingestion, annotation and FTS5 tables; [002_session_token_usage.sql](internal/store/migrations/002_session_token_usage.sql)
+adds the per-response token totals. Do not duplicate the DDL here.
+There is no released database yet, so migrations 001 and 002 are the pre-release baseline; every later
+schema change arrives as a new migration file.
 
 ## Migrations
 
@@ -41,6 +42,7 @@ write-ahead log.
 | `sessions` | Device/agent/native session identity and observed aggregates |
 | `sources` | File incarnation and authoritative committed byte cursor |
 | `events` | One immutable original JSONL record and normalized searchable fields |
+| `session_token_usage` | Token counts of one API response, keyed by session and message ID |
 | `event_annotations` | Agent-written JSON values keyed by event, namespace, key and writer |
 | `events_fts` | Search index over event text, maintained transactionally |
 
@@ -51,7 +53,10 @@ offsets in the original file, including framing when calculating the next cursor
 
 ## Invariants
 
-- Session IDs use an unambiguous encoding of `(device_id, agent, native_id)`.
+- Session IDs use an unambiguous encoding of `(device_id, agent, native_id)`:
+  `agent + ":" + device_id + ":" + native_id`. Agent names and device IDs
+  cannot contain a colon, so the first two separators always split the
+  identity; a native ID may contain colons (synthetic IDs do).
 - Source IDs survive restarts; replacement/truncation creates a new incarnation.
 - `(source_id, source_offset)` deduplicates retransmission, not copied history.
 - Validate byte boundaries and conflicting retries before inserting; uniqueness
@@ -59,9 +64,20 @@ offsets in the original file, including framing when calculating the next cursor
 - Insert events, update aggregates and advance the source cursor in one transaction.
 - Count only newly inserted records. Timestamp bounds use observed min/max;
   missing timestamps do not overwrite known bounds. First prompt is selected by
-  a deterministic source/order tie-break, not arrival order.
-- Defer token/tool aggregates until parser fixtures define cumulative versus
-  incremental values. Never sum ambiguous usage fields.
+  a deterministic source/order tie-break, not arrival order: the candidate with
+  the smallest `(source_id, source_offset)` wins, and `sessions.metadata`
+  records the winner under `firstPromptRef` so a later smaller candidate can
+  replace an earlier arrival. The `cwd`, `branch` and `model` columns keep the
+  first non-empty observation and are never overwritten.
+- Token totals live in `session_token_usage`, one row per
+  `(session_id, message_id)`. The Claude Code fixtures (see
+  testdata/claude-code/README.md, "Usage fields") define the semantics:
+  `message.usage` reports one API request and repeats identically on every
+  record sharing `message.id`, so the write path counts each usage object once
+  and sums the four unambiguous counts. The first usage observed for a
+  message ID wins; a later differing usage for the same message ID is ignored,
+  never summed. Usage without a message ID is ambiguous and contributes
+  nothing. Tool aggregates stay deferred until a query need justifies them.
 - Events and normalized text are immutable in MVP. Future reprocessing needs an
   explicit migration and FTS rebuild; no implicit updates behind insert/delete triggers.
 - Foreign keys are enabled on every relevant connection. WAL and FULL synchronous
@@ -87,6 +103,20 @@ LIMIT 10;
 Agents persist their interpretations in `event_annotations`; there is no built-in
 classifier or dedicated classification table. Add secondary indexes or normalized file references only after real
 query patterns justify them.
+
+## Token totals example
+
+Session token totals are sums over `session_token_usage`; each API response
+contributes one row, so replaying ingestion never changes the result:
+
+```sql
+SELECT s.id, s.first_prompt,
+       sum(u.input_tokens)  AS input_tokens,
+       sum(u.output_tokens) AS output_tokens
+FROM sessions s
+LEFT JOIN session_token_usage u ON u.session_id = s.id
+GROUP BY s.id;
+```
 
 ## Annotation examples
 
