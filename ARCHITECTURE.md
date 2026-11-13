@@ -7,9 +7,11 @@ One Go executable, one hub-owned SQLite WAL transcript database, two MCP tools: 
 and MCP at clear boundaries; introduce interfaces only where consumed.
 
 Start locally on macOS with Claude Code and polling. Add Codex and the Pi agent
-next; both write append-only JSONL session logs that fit the cursor model.
+next; both write append-only JSONL session logs that fit the cursor model
+(verified against installed versions 2026-11-13; see NOTES.md). Pi keeps
+sessions globally under `~/.pi/agent/sessions/`, not in project-local `.pi/`.
 OpenCode is a planned phase 2 source, pending a parser spike for its
-per-message JSON storage. Networking
+SQLite storage (v2 replaced per-message JSON files with `opencode.db`). Networking
 uses an isolated Tailcat adapter after a feasibility spike; deployment and relay
 requirements are not yet verified. See README.md for implementation order.
 

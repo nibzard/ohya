@@ -11,9 +11,10 @@ These are dependencies and acceptance criteria, not a promise of parallel work.
    with connection-level authorizer, single statement, deadline and output limits;
    implement bounded atomic `annotate(operations)` with hub-assigned writer and
    ownership. Test adversarial SQL, limits, isolation, and unchanged source data.
-3. **Additional sources.** Depends on the local slice. Verify Codex and Pi formats
-   against installed versions; add synthetic fixtures, deterministic parsers and
-   recovery/fuzz tests before enabling each source.
+3. **Additional sources.** Depends on the local slice. Codex and Pi formats are
+   verified against installed versions (2026-11-13, see NOTES.md); add synthetic
+   fixtures, deterministic parsers and recovery/fuzz tests before enabling each
+   source.
 4. **Sync and authorization.** Depends on the local slice and a Tailcat feasibility
    spike. Model-check cursor/acknowledgment and authorization/revocation invariants
    with stated failure assumptions before implementation. Test durable commit before
@@ -21,5 +22,6 @@ These are dependencies and acceptance criteria, not a promise of parallel work.
 5. **Distribution and operations.** Depends on working local use. Verify native
    macOS builds for supported architectures, signing/notarization, install,
    upgrades, backup and recovery; document measured limits and operational steps.
-6. **OpenCode spike.** Depends on evidence of demand; verify its per-message storage
-   and design a source cursor suited to it before committing to implementation.
+6. **OpenCode spike.** Depends on evidence of demand; OpenCode v2 stores sessions
+   in SQLite (`opencode.db`), so a byte cursor does not apply. Design a
+   poll-based source cursor before committing to implementation.
