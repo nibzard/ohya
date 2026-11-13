@@ -216,8 +216,45 @@ How to use this file:
     RAISE(ABORT, …) fires inside the write-path transaction — the endpoint
     tests use one to break a commit mid-transaction and prove rollback
     leaves the cursor unchanged.
-  - The endpoint has no CLI yet: serving needs a transport config and an
-    authenticator with real identities (T018, T033). The uploader is T019.
+  - The endpoint has no CLI yet: serving needs a transport config and the
+    production control plane (T033→T034); the credential-registry
+    authenticator now exists (T018). The uploader is T019.
+
+- Device pairing choices (2026-11-13, internal/registry + internal/hubsync + internal/device, T018):
+  - The registry is its own SQLite database (registry.db in the owner-only
+    state directory), not tables in hub.db — the sql MCP tool's connection
+    can never reach it, so no EngineOptions.DenyTables entry is needed. Its
+    schema is pinned by PRAGMA user_version (single version, refuse newer);
+    the store migration runner is deliberately not reused for a two-table
+    protected store.
+  - The registry DSN needs _txlock=immediate: two processes racing to
+    consume one invitation must serialize at BEGIN. With the default
+    deferred BEGIN, both run the SELECT, then both try to upgrade to a
+    write lock and one dies with database-is-locked instead of losing
+    cleanly with ErrInvitationUsed (pinned by TestConsumeRaceSingleUse
+    through two handles).
+  - Per-request check placement matters: Authorize must run AFTER the frame
+    is read, immediately before dispatch. Checking before ReadFrame
+    authorizes the idle wait, not the request — a revocation landing while
+    the connection sits between frames was then missed for the next frame
+    (found by test; the stale check passed, the frame was processed, the
+    probe got an ack after the device was revoked).
+  - Revocation teardown is poll-based: revocations can be committed by any
+    process sharing registry.db (the ohya devices CLI), so the endpoint
+    learns them by polling the revoked set (default 1 s) and then closes
+    the device's connections and cancels their per-connection contexts;
+    in-flight requests die through ctx-aware SQL and the retry loop.
+  - Wire: first frame of a connection is 'P' (pair) or 'H' (hello); the
+    hub mints the credential at Consume and delivers it once ('C'). The
+    auth frames are read with the exact-read frameReader directly off the
+    conn — no bufio — so the endpoint's later bufio.Reader starts exactly
+    at the next frame. AuthTimeout is enforced with a conn read deadline
+    around Authenticate.
+  - Secrets (invitation and credential) are 128-bit crypto/rand hex,
+    stored only as SHA-256 digests; "do not implement new cryptography"
+    reads as stdlib primitives only. Revoked identities can never consume
+    a fresh invitation (registry state must be "absent"), so re-admission
+    is a new device.json — Auth.tla's RevocationIrreversible.
 
 - Tailcat/tsnet driver facts (2026-11-13, internal/transport, T014; measured
   in ADR 0002, reproduced by cmd/tailcat-spike against local Headscale

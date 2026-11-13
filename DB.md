@@ -88,8 +88,13 @@ offsets in the original file, including framing when calculating the next cursor
   durability apply to the writer. Verify these settings and FTS consistency in tests.
 
 Authorization credentials live in a separate protected hub registry before remote
-access is enabled. The schema covers transcript data and annotations, not credentials
-or device-local checkpoints. See ARCHITECTURE.md for ownership and sync semantics.
+access is enabled. That registry (`internal/registry`, T018) is its own SQLite
+database — `registry.db` in the owner-only state directory, WAL with
+synchronous FULL, schema version pinned by `PRAGMA user_version`, secrets kept
+only as SHA-256 digests — so this database's schema and its `sql` MCP tool
+never see credentials. This schema covers transcript data and annotations, not
+credentials or device-local checkpoints. See ARCHITECTURE.md for ownership and
+sync semantics.
 
 ## Search example
 

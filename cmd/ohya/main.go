@@ -22,6 +22,7 @@ Usage:
 
   ohya ingest   Import Claude Code history once, then poll incrementally
   ohya mcp      Serve the sql and annotate MCP tools on stdio
+  ohya devices  Manage device pairing, credentials, and revocation
 `
 
 func main() {
@@ -42,6 +43,8 @@ func run(args []string) error {
 		return runIngestCommand(rest, os.Stdout, os.Stderr)
 	case "mcp":
 		return runMcpCommand(rest, os.Stderr)
+	case "devices":
+		return runDevicesCommand(rest, os.Stdout, os.Stderr)
 	default:
 		fmt.Fprint(os.Stderr, usageText)
 		return fmt.Errorf("unknown subcommand %q", cmd)
