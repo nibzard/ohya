@@ -3,3 +3,6 @@
 *.db-wal
 *.db-shm
 /tailcat-spike
+/tla/.tools/
+/tla/states/
+/tla/Sync_TTrace_*.tla

@@ -107,6 +107,11 @@ unrecoverable gaps. Durability assumes intact hub storage, not immunity to loss.
 Model-check cursor advancement, retries, crashes and lost acknowledgments before
 network sync implementation. State source-retention and durable-storage assumptions;
 liveness assumes eventual reconnection and retries. Test implementation separately.
+Done for this contract: `tla/Sync.tla` is the executable specification — TLC
+checks its invariants and liveness property in CI through `make tla`, and
+tla/README.md records the assumptions, the covered failure scenarios, and what
+the model deliberately leaves to Go tests. Keep the specification in step with
+any change to this contract.
 
 ## Authorization and SQL
 

@@ -140,6 +140,32 @@ How to use this file:
   is clamped up to `created_at_ms` on update so a backwards hub clock step
   cannot trip the table CHECK and permanently wedge an annotation.
 
+- TLA+/TLC tooling facts (2026-11-13, tla/, T015; relevant to T016's model):
+  - TLC 1.8.0 from the GitHub release asset
+    (github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar,
+    sha256 e1f11b75…cdbcd7f) differs from the tla2tools-1.8.0.jar kept by
+    other projects on this machine — pin the release URL, not a local copy.
+  - cfg files accept only scalar sets/numbers/strings/booleans as constant
+    values; records, tuples, and per-element atoms are rejected. That is why
+    Sync.tla models "each source is one device's uploader" structurally
+    instead of an owner function (device identity/ownership is T016 anyway).
+  - TLA+ has no negative numbers and TLC rejects cross-type equality, so
+    no-message sentinels are type-consistent: `<<>>` for the batch channel,
+    `MaxLen + 1` (above every cursor) for the ack channel.
+  - TLC needs `-deadlock`: the drained system's quiescent state is a
+    legitimate fixed point. Its coverage column shows `0` distinct states
+    for reset actions (DropBatch, crashes) — expected, their post-states
+    are always co-reachable via benign paths; the actions still fire.
+  - The reachability bound that keeps the state space small is real
+    protocol structure, not a modeling gap: with one in-flight batch of at
+    most MaxBatch records, the hub cursor can never lead the acknowledged
+    cursor by more than that batch plus an undelivered ack.
+  - Liveness with message loss needs the loss/crash actions disabled
+    (ReliableNet constant): infinite-loss behaviors violate no fairness
+    assumption, so eventual-sync cannot hold without the stated
+    eventual-reconnection assumption. Liveness checking is the cost driver
+    (12k states, ~13 s, ~1.1 GB) versus seconds for 54k safety states.
+
 - Tailcat/tsnet driver facts (2026-11-13, internal/transport, T014; measured
   in ADR 0002, reproduced by cmd/tailcat-spike against local Headscale
   v0.29.7):
