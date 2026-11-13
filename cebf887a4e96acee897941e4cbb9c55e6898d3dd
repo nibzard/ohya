@@ -1,0 +1,1 @@
+Context: T007 vertical slice. The review repair required the CLI to own the production Record->Event adapter and acknowledge at IngestResult.Cursor; cmd/ohya/ingest_test.go drives watch+parse+ingest as one unit, including a helper process killed between commit and acknowledgment. internal/store/ingest_test.go keeps a mirrored test-only mapping - change both together (NOTES.md).
