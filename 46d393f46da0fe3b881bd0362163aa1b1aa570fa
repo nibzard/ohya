@@ -1,0 +1,9 @@
+# Context
+
+## Why This Way
+Task T003 required the upgrade policy to be documented where schema
+decisions live. DB.md states the policy and the connection model;
+CONTRIBUTING.md only points at it, so the rules have one home.
+
+## Related
+- Design note on 729e706 for the runner's trade-offs
