@@ -2,7 +2,9 @@
 
 [001_initial.sql](internal/store/migrations/001_initial.sql) is the authoritative initial DDL. It defines
 the ingestion, annotation and FTS5 tables; [002_session_token_usage.sql](internal/store/migrations/002_session_token_usage.sql)
-adds the per-response token totals. Do not duplicate the DDL here.
+adds the per-response token totals; [003_event_ordinal.sql](internal/store/migrations/003_event_ordinal.sql)
+adds `events.ordinal` and `events.duplicate_of` for replay deduplication across source files.
+Do not duplicate the DDL here.
 There is no released database yet, so migrations 001 and 002 are the pre-release baseline; every later
 schema change arrives as a new migration file.
 
@@ -59,6 +61,14 @@ offsets in the original file, including framing when calculating the next cursor
   identity; a native ID may contain colons (synthetic IDs do).
 - Source IDs survive restarts; replacement/truncation creates a new incarnation.
 - `(source_id, source_offset)` deduplicates retransmission, not copied history.
+- `(session_id, ordinal)` deduplicates records that another file of the same session
+  replays (Codex resumed pages; see testdata/codex/README.md). The first stored copy
+  has `duplicate_of` NULL; a later copy is still inserted, so retry validation and
+  original text stay intact, but it names the first copy in `duplicate_of`, has NULL
+  `text` (so FTS indexes the record once), and adds nothing to the session aggregates
+  or token totals. A partial unique index enforces one original per `(session_id,
+  ordinal)`. Arrival order decides which copy is the original. Records without an
+  ordinal (Claude Code, Codex before 0.147.0) are never deduplicated this way.
 - A batch names the device that owns its source (`store.Batch.DeviceID`); the
   write path rejects a batch claiming another device, because ownership is
   fixed at registration. The sync endpoint passes the authenticated identity,
@@ -78,7 +88,11 @@ offsets in the original file, including framing when calculating the next cursor
   testdata/claude-code/README.md, "Usage fields") define the semantics:
   `message.usage` reports one API request and repeats identically on every
   record sharing `message.id`, so the write path counts each usage object once
-  and sums the four unambiguous counts. The first usage observed for a
+  and sums the four unambiguous counts. Codex `token_usage_record.usage` is per
+  `response_id` (the message ID here); `input_tokens` includes `cached_input_tokens`,
+  so the adapter stores the difference as input and the cached part as cache reads.
+  `cache_write_input_tokens` stays out until its relation to `input_tokens` is
+  verified. The first usage observed for a
   message ID wins; a later differing usage for the same message ID is ignored,
   never summed. Usage without a message ID is ambiguous and contributes
   nothing. Tool aggregates stay deferred until a query need justifies them.

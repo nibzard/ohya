@@ -1,8 +1,9 @@
-// Local Claude Code ingestion: the vertical slice that wires the source
-// watcher, the deterministic parser and the transactional write path into one
-// run. One pass discovers the session files, reads only the unacknowledged
-// bytes, commits them through the single writer, and acknowledges the
-// committed cursor in the local checkpoint. A crash between commit and
+// Local ingestion: the vertical slice that wires the source watcher, the
+// deterministic agent parsers and the transactional write path into one run.
+// Each agent (Claude Code, Codex) has its own session directory, watcher and
+// checkpoint file. One pass discovers every agent's session files, reads only
+// the unacknowledged bytes, commits them through the single writer, and
+// acknowledges the committed cursor in the local checkpoint. A crash between commit and
 // acknowledgment replays safely: the write path validates replayed bytes and
 // counts only new records.
 package main
@@ -18,7 +19,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nibzard/ohya/internal/claudecode"
 	"github.com/nibzard/ohya/internal/device"
 	"github.com/nibzard/ohya/internal/events"
 	"github.com/nibzard/ohya/internal/store"
@@ -31,30 +31,61 @@ import (
 // the committed cursor.
 const maxBatchBytes int64 = 8 << 20
 
-// ingestOptions configures one ingest run.
-type ingestOptions struct {
-	dbPath     string        // hub database; created with its parent directory
-	stateDir   string        // device identity and source checkpoints
-	claudeRoot string        // Claude Code projects directory to watch
-	interval   time.Duration // polling interval in continuous mode
-	once       bool          // run exactly one pass
-	stdout     io.Writer     // progress summaries
-	stderr     io.Writer     // diagnostics
+// agentRoot is one agent's session directory to watch.
+type agentRoot struct {
+	agent string // parser and checkpoint name, for example "codex"
+	dir   string
+	flag  string // command-line flag that sets dir, for diagnostics
+	// optional marks a default directory the user did not ask for: while it
+	// is missing it holds no sessions, so an agent that is not installed
+	// costs nothing, and its sessions are picked up once it appears. A
+	// directory passed explicitly must exist.
+	optional bool
 }
 
-// runIngest imports the existing Claude Code history once, then polls
+// ingestOptions configures one ingest run.
+type ingestOptions struct {
+	dbPath   string        // hub database; created with its parent directory
+	stateDir string        // device identity and source checkpoints
+	roots    []agentRoot   // session directories to watch, one per agent
+	interval time.Duration // polling interval in continuous mode
+	once     bool          // run exactly one pass
+	stdout   io.Writer     // progress summaries
+	stderr   io.Writer     // diagnostics
+}
+
+// runIngest imports the existing history of every agent once, then polls
 // incrementally until the context is canceled (continuous mode) or after one
 // pass (--once). It returns only on systemic failures — an unusable database
 // or a lost checkpoint state needs recovery. A failing source stops that
 // source with a diagnostic; the next sources still commit.
 func runIngest(ctx context.Context, o ingestOptions) error {
-	// Fail before creating anything: a wrong -claude-root must not leave a
-	// database and a device identity behind.
-	if _, err := os.Stat(o.claudeRoot); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("claude-code projects directory %s does not exist; pass -claude-root", o.claudeRoot)
+	// Fail before creating anything: a wrong root must not leave a database
+	// and a device identity behind.
+	if len(o.roots) == 0 {
+		return errors.New("no agent session directory to watch")
+	}
+	present := 0
+	for _, root := range o.roots {
+		if !events.Supported(root.agent) {
+			return fmt.Errorf("agent %q has no parser", root.agent)
 		}
-		return fmt.Errorf("stat %s: %w", o.claudeRoot, err)
+		_, err := os.Stat(root.dir)
+		switch {
+		case err == nil:
+			present++
+		case !errors.Is(err, os.ErrNotExist):
+			return fmt.Errorf("stat %s: %w", root.dir, err)
+		case !root.optional:
+			return fmt.Errorf("%s session directory %s does not exist; pass -%s", root.agent, root.dir, root.flag)
+		}
+	}
+	if present == 0 {
+		var flags []string
+		for _, root := range o.roots {
+			flags = append(flags, "-"+root.flag)
+		}
+		return fmt.Errorf("no agent session directory exists; pass %s", strings.Join(flags, " or "))
 	}
 	if err := os.MkdirAll(filepath.Dir(o.dbPath), 0o700); err != nil {
 		return fmt.Errorf("create database directory: %w", err)
@@ -72,16 +103,24 @@ func runIngest(ctx context.Context, o ingestOptions) error {
 	if err != nil {
 		return err
 	}
-	w, err := watch.New(o.stateDir, claudecode.AgentName, watch.Options{})
-	if err != nil {
-		return err // includes watch.ErrStateLost: recovery, not a silent restart
+	runners := make([]*ingestor, len(o.roots))
+	for i, root := range o.roots {
+		w, err := watch.New(o.stateDir, root.agent, watch.Options{})
+		if err != nil {
+			return err // includes watch.ErrStateLost: recovery, not a silent restart
+		}
+		runners[i] = newIngestor(hub, w, root.agent, deviceID, o.stderr)
 	}
-	r := newIngestor(hub, w, deviceID, o.stderr)
 
 	for pass := 1; ; pass++ {
-		stats, err := r.poll(ctx, o.claudeRoot)
-		if err != nil {
-			return err
+		var stats passStats
+		for i, r := range runners {
+			s, err := r.poll(ctx, o.roots[i].dir, o.roots[i].optional)
+			if err != nil {
+				return err
+			}
+			stats.sources += s.sources
+			stats.inserted += s.inserted
 		}
 		if o.once || pass == 1 || stats.inserted > 0 {
 			fmt.Fprintf(o.stdout, "ohya: imported %d events from %d sources\n",
@@ -103,6 +142,7 @@ func runIngest(ctx context.Context, o ingestOptions) error {
 type ingestor struct {
 	hub      *store.DB
 	watcher  *watch.Watcher
+	agent    string
 	deviceID string
 	stderr   io.Writer
 	// reported remembers the stop offset of every diagnostic already written,
@@ -111,8 +151,8 @@ type ingestor struct {
 	reported map[string]int64
 }
 
-func newIngestor(hub *store.DB, w *watch.Watcher, deviceID string, stderr io.Writer) *ingestor {
-	return &ingestor{hub: hub, watcher: w, deviceID: deviceID, stderr: stderr, reported: map[string]int64{}}
+func newIngestor(hub *store.DB, w *watch.Watcher, agent, deviceID string, stderr io.Writer) *ingestor {
+	return &ingestor{hub: hub, watcher: w, agent: agent, deviceID: deviceID, stderr: stderr, reported: map[string]int64{}}
 }
 
 // passStats summarizes one polling pass.
@@ -122,9 +162,13 @@ type passStats struct {
 }
 
 // poll discovers the session files under root, ingests every live source's
-// pending bytes, and acknowledges the committed cursors.
-func (r *ingestor) poll(ctx context.Context, root string) (passStats, error) {
+// pending bytes, and acknowledges the committed cursors. A missing optional
+// root holds no session files.
+func (r *ingestor) poll(ctx context.Context, root string, optional bool) (passStats, error) {
 	candidates, err := discoverSessionFiles(root)
+	if optional && errors.Is(err, fs.ErrNotExist) {
+		candidates, err = nil, nil
+	}
 	if err != nil {
 		return passStats{}, err
 	}
@@ -146,7 +190,7 @@ func (r *ingestor) poll(ctx context.Context, root string) (passStats, error) {
 			fmt.Fprintf(r.stderr, "ohya: %s: new source %s re-imports from byte zero: %s\n",
 				o.Path, o.SourceID, o.Reason)
 		}
-		if err := r.hub.RegisterSource(ctx, o.SourceID, r.deviceID, claudecode.AgentName, o.Path); err != nil {
+		if err := r.hub.RegisterSource(ctx, o.SourceID, r.deviceID, r.agent, o.Path); err != nil {
 			r.reportSource(o.Path, err)
 			continue
 		}
@@ -180,12 +224,22 @@ func (r *ingestor) ingestSource(ctx context.Context, o watch.Outcome) (int, int6
 		if err != nil {
 			return inserted, o.Cursor, err
 		}
-		res, perr := claudecode.Parse(data, chunk.Cursor, claudecode.Options{SourceScope: o.SourceID})
-		if len(res.Records) > 0 {
+		opts := events.Options{SourceScope: o.SourceID}
+		if chunk.Cursor > 0 {
+			// Records past offset 0 may not name their session (Codex):
+			// the committed first record does.
+			st, err := r.hub.SourceState(ctx, o.SourceID)
+			if err != nil {
+				return inserted, o.Cursor, err
+			}
+			opts.FirstNative = st.FirstNativeID
+		}
+		res, perr := events.Parse(r.agent, data, chunk.Cursor, opts)
+		if len(res.Events) > 0 {
 			result, err := r.hub.Ingest(ctx, store.Batch{
 				SourceID: o.SourceID,
 				DeviceID: r.deviceID,
-				Events:   events.FromClaudeCodeRecords(res.Records),
+				Events:   res.Events,
 			})
 			if err != nil {
 				return inserted, o.Cursor, err
@@ -193,14 +247,18 @@ func (r *ingestor) ingestSource(ctx context.Context, o watch.Outcome) (int, int6
 			inserted += result.Inserted
 			o.Cursor = result.Cursor
 		}
-		if perr != nil {
+		var stop *events.StopError
+		if errors.As(perr, &stop) {
 			// The valid prefix before the offending offset is committed; the
 			// source stops there until the file is repaired. Bytes are never
 			// skipped, so this pass must not read past the stop.
-			r.reportStop(o, perr)
+			r.reportStop(o, stop)
 			return inserted, o.Cursor, nil
 		}
-		if len(res.Records) == 0 {
+		if perr != nil {
+			return inserted, o.Cursor, perr
+		}
+		if len(res.Events) == 0 {
 			return inserted, o.Cursor, nil // the pending bytes are one incomplete record
 		}
 	}
@@ -215,21 +273,19 @@ func (r *ingestor) reportSource(path string, err error) {
 
 // reportStop writes a source's stopping diagnostic once per offset. The text
 // carries offsets and reasons only, never transcript content.
-func (r *ingestor) reportStop(o watch.Outcome, err error) {
-	var perr *claudecode.ParseError
-	if !errors.As(err, &perr) {
+func (r *ingestor) reportStop(o watch.Outcome, stop *events.StopError) {
+	if off, ok := r.reported[o.SourceID]; ok && off == stop.Offset {
 		return
 	}
-	if r.reported[o.SourceID] == perr.Offset {
-		return
-	}
-	r.reported[o.SourceID] = perr.Offset
-	fmt.Fprintf(r.stderr, "ohya: %s: %v\n", o.Path, perr)
+	r.reported[o.SourceID] = stop.Offset
+	fmt.Fprintf(r.stderr, "ohya: %s: %v\n", o.Path, stop)
 }
 
-// discoverSessionFiles walks the Claude Code projects directory and returns
-// every session file: main sessions and subagent transcripts are *.jsonl;
-// spilled tool output and memory files carry other extensions and stay out.
+// discoverSessionFiles walks one agent's session directory and returns every
+// session file. Claude Code main sessions and subagent transcripts are
+// *.jsonl, while spilled tool output and memory files carry other
+// extensions; Codex rollouts are rollout-*.jsonl under dated directories. A
+// missing root wraps fs.ErrNotExist.
 func discoverSessionFiles(root string) ([]string, error) {
 	var files []string
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
@@ -242,7 +298,7 @@ func discoverSessionFiles(root string) ([]string, error) {
 		return nil
 	})
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("claude-code projects directory %s does not exist; pass -claude-root", root)
+		return nil, fmt.Errorf("session directory %s does not exist: %w", root, fs.ErrNotExist)
 	}
 	if err != nil {
 		return nil, err

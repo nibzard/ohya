@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/nibzard/ohya/internal/claudecode"
+	"github.com/nibzard/ohya/internal/codex"
 	"github.com/nibzard/ohya/internal/events"
 	"github.com/nibzard/ohya/internal/store"
 )
@@ -29,7 +30,18 @@ const (
 // records, preserving byte offsets.
 func fixtureRecords(t *testing.T) []Record {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "claude-code", "main-session.jsonl"))
+	recs := framedFixture(t, "claude-code", "main-session.jsonl")
+	if len(recs) != 16 {
+		t.Fatalf("fixture records = %d, want 16", len(recs))
+	}
+	return recs
+}
+
+// framedFixture frames one fixture's complete records, preserving byte
+// offsets.
+func framedFixture(t *testing.T, agent, name string) []Record {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", agent, name))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,9 +55,6 @@ func fixtureRecords(t *testing.T) []Record {
 		recs = append(recs, Record{Offset: off, JSON: data[:idx:idx]})
 		off += int64(idx) + 1
 		data = data[idx+1:]
-	}
-	if len(recs) != 16 {
-		t.Fatalf("fixture records = %d, want 16", len(recs))
 	}
 	return recs
 }
@@ -265,7 +274,8 @@ func queryInt(t *testing.T, hub *store.DB, query string, args ...any) int64 {
 func dumpEvents(t *testing.T, hub *store.DB) []string {
 	t.Helper()
 	rows, err := hub.Writer().Query(
-		`SELECT id, session_id, source_id, source_offset, time_ms, kind, role, tool_name, text, raw_json, metadata
+		`SELECT id, session_id, source_id, source_offset, time_ms, kind, role, tool_name, text, raw_json, metadata,
+		        ordinal, duplicate_of
 		 FROM events ORDER BY id`)
 	if err != nil {
 		t.Fatal(err)
@@ -275,13 +285,14 @@ func dumpEvents(t *testing.T, hub *store.DB) []string {
 	for rows.Next() {
 		var id, offset int64
 		var sid, sourceID, kind, raw, metadata string
-		var timeMS sql.NullInt64
+		var timeMS, ordinal, duplicateOf sql.NullInt64
 		var role, tool, text sql.NullString
-		if err := rows.Scan(&id, &sid, &sourceID, &offset, &timeMS, &kind, &role, &tool, &text, &raw, &metadata); err != nil {
+		if err := rows.Scan(&id, &sid, &sourceID, &offset, &timeMS, &kind, &role, &tool, &text, &raw, &metadata,
+			&ordinal, &duplicateOf); err != nil {
 			t.Fatal(err)
 		}
-		out = append(out, fmt.Sprintf("%d|%s|%s|%d|%+v|%s|%+v|%+v|%q|%s|%s",
-			id, sid, sourceID, offset, timeMS, kind, role, tool, text.String, raw, metadata))
+		out = append(out, fmt.Sprintf("%d|%s|%s|%d|%+v|%s|%+v|%+v|%q|%s|%s|%+v|%+v",
+			id, sid, sourceID, offset, timeMS, kind, role, tool, text.String, raw, metadata, ordinal, duplicateOf))
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
@@ -407,6 +418,95 @@ func TestEndpointCommitsFixtureLikeLocalIngestion(t *testing.T) {
 	}
 	if gotSessions[0] != wantSessions[0] {
 		t.Fatalf("sessions row differs:\n endpoint: %s\n local:    %s", gotSessions[0], wantSessions[0])
+	}
+}
+
+// TestEndpointCommitsCodexLikeLocalIngestion uploads a Codex thread the way
+// the uploader does — the main rollout in two batches, then its resumed page
+// as another source — and compares the hub's rows with local ingestion of
+// the same bytes. The second batch starts past offset 0, so the hub must take
+// the thread from the source's committed first record; the page's replayed
+// ordinals become duplicates.
+func TestEndpointCommitsCodexLikeLocalIngestion(t *testing.T) {
+	db := newTestDB(t)
+	s := startEndpoint(t, db, nil, Options{Retry: RetryPolicy{Base: time.Millisecond}})
+	d := dial(t, s.addr)
+	register := func(source, path string) {
+		d.register(Registration{DeviceID: deviceA, SourceID: source, Agent: codex.AgentName, Path: path})
+		d.mustAck(Ack{})
+	}
+
+	main := framedFixture(t, "codex", "main-session.jsonl")
+	page := framedFixture(t, "codex", "resumed-page.jsonl")
+	register("src-main", "/main.jsonl")
+	register("src-page", "/page.jsonl")
+	d.send(fixtureBatch(deviceA, "src-main", main[:5]))
+	d.mustAck(Ack{Cursor: main[4].End(), Inserted: 5})
+	// A retry overlapping the committed prefix inserts only the rest.
+	d.send(fixtureBatch(deviceA, "src-main", main[3:]))
+	d.mustAck(Ack{Cursor: 4780, Inserted: 9})
+	d.send(fixtureBatch(deviceA, "src-page", page))
+	d.mustAck(Ack{Cursor: 2048, Inserted: 5})
+
+	// A batch past offset 0 of a source with no committed first record
+	// cannot name its thread: rejected, nothing stored.
+	register("src-gap", "/gap.jsonl")
+	d.send(fixtureBatch(deviceA, "src-gap", main[1:3]))
+	d.wantError(CodeRejected, "")
+	if got := queryInt(t, db, `SELECT count(*) FROM events WHERE source_id='src-gap'`); got != 0 {
+		t.Fatalf("gap source stored %d events", got)
+	}
+
+	// Reference run: the same bytes through the local write path.
+	local := newTestDB(t)
+	ctx := context.Background()
+	for _, src := range []struct{ id, path, name string }{
+		{"src-main", "/main.jsonl", "main-session.jsonl"},
+		{"src-page", "/page.jsonl", "resumed-page.jsonl"},
+		{"src-gap", "/gap.jsonl", ""},
+	} {
+		if err := local.RegisterSource(ctx, src.id, deviceA, codex.AgentName, src.path); err != nil {
+			t.Fatal(err)
+		}
+		if src.name == "" {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "codex", src.name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsed, err := events.Parse(codex.AgentName, data, 0, events.Options{SourceScope: src.id})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := local.Ingest(ctx, store.Batch{SourceID: src.id, DeviceID: deviceA, Events: parsed.Events}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gotEvents, wantEvents := dumpEvents(t, db), dumpEvents(t, local)
+	if len(gotEvents) != len(wantEvents) || len(gotEvents) != 19 {
+		t.Fatalf("events via endpoint = %d rows; local = %d; want 19", len(gotEvents), len(wantEvents))
+	}
+	for i := range gotEvents {
+		if gotEvents[i] != wantEvents[i] {
+			t.Fatalf("events row %d differs:\n endpoint: %s\n local:    %s", i, gotEvents[i], wantEvents[i])
+		}
+	}
+	gotSessions, wantSessions := dumpSessions(t, db), dumpSessions(t, local)
+	if len(gotSessions) != 1 || len(wantSessions) != 1 || gotSessions[0] != wantSessions[0] {
+		t.Fatalf("sessions differ:\n endpoint: %v\n local:    %v", gotSessions, wantSessions)
+	}
+	if got := queryInt(t, db, `SELECT count(*) FROM events WHERE duplicate_of IS NOT NULL`); got != 2 {
+		t.Fatalf("duplicates = %d, want the page's 2 replayed records", got)
+	}
+
+	// A malformed Codex line commits the valid prefix and stops there.
+	register("src-bad", "/bad.jsonl")
+	bad := framedFixture(t, "codex", "malformed-line.jsonl")
+	d.send(fixtureBatch(deviceA, "src-bad", bad))
+	ack, _ := d.reply()
+	if !ack.Stopped || ack.StopOffset != 502 || ack.Cursor != 502 || ack.Inserted != 2 {
+		t.Fatalf("malformed ack = %+v", ack)
 	}
 }
 
@@ -749,8 +849,11 @@ func TestRegistrationLifecycle(t *testing.T) {
 	}
 	// The hub parses what its parsers cover; anything else is explicit.
 	d.register(Registration{DeviceID: deviceA, SourceID: "src-2",
-		Agent: "codex", Path: "/c.jsonl"})
+		Agent: "opencode", Path: "/c.jsonl"})
 	d.wantError(CodeUnsupported, "no parser")
+	d.register(Registration{DeviceID: deviceA, SourceID: "src-3",
+		Agent: codex.AgentName, Path: "/rollout.jsonl"})
+	d.mustAck(Ack{})
 }
 
 // TestOwnershipAndIdentity pins the authorization rules the endpoint can

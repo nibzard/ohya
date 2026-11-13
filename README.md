@@ -7,19 +7,22 @@ agent sessions automatically, synchronizes them across devices, and exposes
 the entire history to any connected agent through read-only SQL and bounded annotation MCP tools.
 One Go binary, one SQLite database, no cloud account.
 
-Status: pre-MVP. Local Claude Code ingestion runs end to end: `ohya ingest`
-imports existing session history once, then polls incrementally into one
-SQLite WAL database through the transactional write path. `ohya mcp` serves
+Status: pre-MVP. Local Claude Code and Codex ingestion runs end to end:
+`ohya ingest` imports existing session history once, then polls
+incrementally into one SQLite WAL database through the transactional write
+path. `ohya mcp` serves
 the read-only `sql` tool and the bounded atomic `annotate` tool over stdio.
 Device sync is in progress: the hub-side batch endpoint (`internal/hubsync`)
 implements the model-checked sync contract — registration, bounded batches,
-hub-side normalization with the local parser, device ownership binding and
+hub-side normalization with the local parsers, device ownership binding and
 idempotent replay — as a library over any transport listener, and pairing is
 implemented (`internal/registry`, T018): a hub-owned credential registry in
 its own protected database, one-time expiring invitations, final revocation
 with per-request checks and connection teardown, and `ohya devices
-invite|list|revoke` for operators. The device uploader and the serving
-command follow. See [MANIFESTO.md](MANIFESTO.md) for
+invite|list|revoke` for operators. The device uploader (`internal/uploader`,
+T019) persists hub acknowledgments in the local checkpoints, retries after
+timeouts and reconnects, catches up from retained files, and detects hub
+cursor regression. The serving and joining commands follow. See [MANIFESTO.md](MANIFESTO.md) for
 engineering principles, [PRODUCT.md](PRODUCT.md) for the product vision,
 [ARCHITECTURE.md](ARCHITECTURE.md) for system design, and [DB.md](DB.md)
 for the database plan.
@@ -37,12 +40,17 @@ make build
 ```
 
 `ohya ingest` watches `~/.claude/projects` (override with `--claude-root`)
-and stores everything in `~/.ohya/hub.db` (override with `--db`; the state
-directory defaults to the database directory and can be set with `--state`).
+and the Codex sessions directory, `$CODEX_HOME/sessions` or
+`~/.codex/sessions` (override with `--codex-root`). It stores everything in
+`~/.ohya/hub.db` (override with `--db`; the state directory defaults to the
+database directory and can be set with `--state`). A default directory that
+does not exist holds no sessions, so an agent you do not use costs nothing.
+A directory you pass must exist, and an empty value disables that agent.
 The state directory holds `device.json`, the stable device identity,
-`credential.json`, the owner-only hub pairing credential, and
-`sources/claude-code.json`, the acknowledged byte checkpoint of every
-watched file.
+`credential.json`, the owner-only hub pairing credential, and one
+checkpoint file per agent (`sources/claude-code.json`,
+`sources/codex.json`) with the acknowledged byte cursor of every watched
+file.
 
 The first pass imports existing session files; later polls read only the
 bytes past each checkpoint. All writes commit through one transactional
@@ -53,6 +61,14 @@ A replaced or truncated file starts a new source and re-imports history —
 the run reports it instead of staying silent. Hardlinked copies inside the
 watched tree share one file identity and are watched once; the checkpoint
 follows the surviving link when others disappear.
+
+A Codex thread can span several rollout files: a resumed page replays some
+records of the earlier file. Each file is its own source, and all of them
+join the thread's one session. A replayed record keeps its original text in
+`raw_json`, but `duplicate_of` names the first stored copy, its `text` stays
+empty, and it adds nothing to the session counts. Search therefore returns
+each record once. Use `WHERE duplicate_of IS NULL` to read a thread without
+replays.
 
 `ohya mcp` serves the read-only `sql` tool to any MCP client over stdio
 (same `--db` and `--state` flags). The tool runs exactly one statement per
@@ -100,8 +116,8 @@ change nothing, not even timestamps. Agents query annotations through the
   feasibility spike is complete ([ADR 0002](docs/adr/0002-tailcat-transport.md)),
   the hub sync endpoint (`internal/hubsync`) commits device batches
   through the transactional write path, and device pairing with revocation
-  is implemented (`internal/registry`); the device uploader and the serving
-  command follow.
+  is implemented (`internal/registry`), and so is the device uploader
+  (`internal/uploader`); the serving command follows.
 
 ### Phase 2
 

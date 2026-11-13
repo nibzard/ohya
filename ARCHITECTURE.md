@@ -76,6 +76,24 @@ source at the offending offset and expose a diagnostic without transcript conten
 Do not silently skip bytes. Other sources continue. Recovery requires repairing
 the source or an explicit future recovery operation; automatic skipping is not MVP.
 
+Implemented (T011): `internal/codex` parses Codex rollout files, and
+`internal/events.Parse` selects the parser from the source's agent for both
+local ingestion and the hub endpoint. Codex records carry no session field:
+the `session_meta` at offset 0 names the thread, and every later record of
+the source belongs to it (a first record without a thread id gives the
+source a synthetic ID). A parse that starts past offset 0 takes the native
+ID of the source's committed first record (`store.SourceState`), so a
+restart, a split batch or a hub-side batch names the same session. A thread
+spans several rollout files, and a resumed page replays tail records under
+the same per-thread `ordinal`. The write path stores such a record as a
+duplicate of the first stored copy of `(session, ordinal)`: retained for
+retry validation, without search text, and outside the aggregates. Arrival
+order decides which copy is first. `event_msg` records mirror the
+transcript and add no search text; `event_msg/user_message` marks the human
+prompt for `sessions.first_prompt`, because Codex also sends injected
+context as `user` messages. `ohya ingest` runs one watcher and checkpoint
+file per agent.
+
 ## Sync contract
 
 A batch contains protocol version, device ID, source ID, start/end byte offsets,
@@ -114,7 +132,7 @@ the interface (T018, `internal/registry`), with a per-frame registry check
 and revocation teardown through its `SessionAuthorizer` extension. Tailcat
 WhoIs can back the same interfaces for transport-level identity when the
 serving command ships (T033, T034). Normalization runs
-the local parser and adapter (`internal/claudecode`, `internal/events`), so
+the source agent's local parser and adapter (`internal/events.Parse`), so
 hub-side normalization is byte-identical to local ingestion, and a record the
 parser refuses commits its valid prefix and reports the stop, mirroring local
 source-stop semantics. The write path's sentinels (`ErrBatchRejected`,
@@ -122,14 +140,36 @@ source-stop semantics. The write path's sentinels (`ErrBatchRejected`,
 a device knows permanent rejections from transient ones; transient write
 failures retry with capped backoff inside the hub. One in-flight batch per
 source is enforced by a per-source gate across connections, and a bounded
-connection count rejects the excess explicitly. The device uploader (T019)
-follows.
+connection count rejects the excess explicitly.
+
+Implemented (T019): `internal/uploader` is the device side of this contract,
+a library over a `Dialer` (for example `transport.Device.Dial`) and the
+watcher's checkpoint state. One authenticated connection carries strictly
+sequential exchanges, so each source has at most one batch in flight; a batch
+always starts at the durable checkpoint and stays inside the protocol bounds,
+and a record above the size limit stops its source locally instead of closing
+the connection. Only a hub acknowledgment moves the checkpoint
+(`watch.Acknowledge`): a timeout, a reset, a busy hub or a lost
+acknowledgment leaves it in place, and `Run` reconnects with capped
+exponential backoff. On every new connection each source is registered and
+its hub cursor probed with an empty batch: a hub cursor ahead of the
+checkpoint is a lost acknowledgment and is persisted without resending; one
+behind it is a cursor regression, answered by `watch.Rewind` and a replay of
+the retained file, or reported as an unrecoverable gap when the file is gone
+or changed. Each pass first checks, without blocking, that an idle
+connection is still open, so a hub restart is noticed even when nothing is
+pending. The uploader's checkpoint state must be dedicated to one hub: its
+cursors are that hub's acknowledgments. No command runs it yet; the serving
+and joining commands wait on the production control plane (T033, T034).
 
 Offline replay relies on retained source files. Replacement or deletion before
 upload can lose uncommitted history; surface this limitation. There is no outgoing
 spool or offline query replica in the MVP. Hub backup restoration may roll back
 acknowledged history: detect cursor regression and replay retained files, or report
 unrecoverable gaps. Durability assumes intact hub storage, not immunity to loss.
+The uploader reports each loss it can see: a replaced, truncated or rewritten
+file whose observed bytes passed its acknowledged cursor, and a deleted file
+with unsent bytes. Bytes appended and lost between two polls stay invisible.
 
 Model-check cursor advancement, retries, crashes and lost acknowledgments before
 network sync implementation. State source-retention and durable-storage assumptions;

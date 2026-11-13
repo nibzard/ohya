@@ -16,7 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nibzard/ohya/internal/claudecode"
 	"github.com/nibzard/ohya/internal/events"
 	"github.com/nibzard/ohya/internal/store"
 )
@@ -253,9 +252,9 @@ func (e *Endpoint) handleRegistration(ctx context.Context, conn net.Conn, device
 			"registration names device %s, but the connection belongs to %s", reg.DeviceID, deviceID))
 		return true
 	}
-	if reg.Agent != claudecode.AgentName {
+	if !events.Supported(reg.Agent) {
 		_ = WriteError(conn, CodeUnsupported,
-			fmt.Sprintf("agent %q has no parser at this hub; this hub parses %q", reg.Agent, claudecode.AgentName))
+			fmt.Sprintf("agent %q has no parser at this hub; this hub parses %q", reg.Agent, events.Agents))
 		return false
 	}
 	err := Retry(ctx, e.opts.Retry, permanentStoreError, func() error {
@@ -287,7 +286,19 @@ func (e *Endpoint) handleBatch(ctx context.Context, conn net.Conn, deviceID stri
 	release := e.gates.acquire(b.SourceID)
 	defer release()
 
-	prefix, stop, err := normalize(b)
+	// The registered agent selects the parser, and a source whose records
+	// do not name their session (Codex) needs its first record's native ID.
+	var st store.SourceState
+	err := Retry(ctx, e.opts.Retry, permanentStoreError, func() error {
+		var err error
+		st, err = e.db.SourceState(ctx, b.SourceID)
+		return err
+	})
+	if err != nil {
+		_ = WriteError(conn, storeErrorCode(err), err.Error())
+		return false
+	}
+	prefix, stop, err := normalize(b, st)
 	if err != nil {
 		_ = WriteError(conn, CodeRejected, err.Error())
 		return false
@@ -349,15 +360,15 @@ func validateBoundaries(b Batch) error {
 // records before a parse stop become the committable prefix; the stop itself
 // is reported to the device, mirroring the local source-stop semantics: the
 // valid prefix commits, and the source stops at the offending offset.
-func normalize(b Batch) (prefix []store.Event, stop *claudecode.ParseError, err error) {
-	opts := claudecode.Options{SourceScope: b.SourceID}
+func normalize(b Batch, st store.SourceState) (prefix []store.Event, stop *events.StopError, err error) {
+	opts := events.Options{SourceScope: b.SourceID, FirstNative: st.FirstNativeID}
 	prefix = make([]store.Event, 0, len(b.Records))
 	for i, r := range b.Records {
 		line := make([]byte, 0, len(r.JSON)+1)
 		line = append(line, r.JSON...)
 		line = append(line, '\n')
-		res, perr := claudecode.Parse(line, r.Offset, opts)
-		var parseStop *claudecode.ParseError
+		res, perr := events.Parse(st.Agent, line, r.Offset, opts)
+		var parseStop *events.StopError
 		if perr != nil {
 			if errors.As(perr, &parseStop) {
 				return prefix, parseStop, nil
@@ -367,13 +378,18 @@ func normalize(b Batch) (prefix []store.Event, stop *claudecode.ParseError, err 
 		// The framed record must decode to exactly one record at exactly its
 		// framed boundaries; anything else (for example JSON containing a
 		// line terminator) means the frame lies about its bytes.
-		if len(res.Records) != 1 || res.Records[0].Offset != r.Offset ||
-			res.Records[0].End != r.End() || res.Cursor != r.End() {
+		if len(res.Events) != 1 || res.Events[0].Offset != r.Offset ||
+			res.Events[0].End != r.End() || res.Cursor != r.End() {
 			return nil, nil, fmt.Errorf(
 				"hubsync: record %d at offset %d does not decode to exactly one record spanning [%d, %d)",
 				i, r.Offset, r.Offset, r.End())
 		}
-		prefix = append(prefix, events.FromClaudeCode(res.Records[0]))
+		if r.Offset == 0 {
+			// This batch carries the source's first record: it names the
+			// native session of every later record.
+			opts.FirstNative = res.Events[0].NativeID
+		}
+		prefix = append(prefix, res.Events[0])
 	}
 	return prefix, nil, nil
 }

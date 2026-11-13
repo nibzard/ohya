@@ -102,7 +102,9 @@ must sync whatever has arrived, on any schedule.
 - **Intact hub storage.** A hub commit is atomic and durable (WAL,
   `synchronous = FULL`). Committed cursors and events never roll back.
   Backup restoration that regresses the hub cursor is a recovery problem
-  outside this model; T019 owns its detection.
+  outside this model; the uploader (T019, `internal/uploader`) detects it
+  by probing every source on each new connection, then replays the retained
+  file or reports the unrecoverable gap.
 - **Durable local checkpoints.** The device persists its acknowledged
   cursor atomically (`internal/durablefile`), so a crash loses only
   in-flight messages, never the checkpoint. The device keeps no volatile
@@ -156,7 +158,8 @@ each produced a TLC violation:
 - Transport behavior (Tailcat framing, reconnect mechanics): behind the
   `internal/transport` boundary; the model is transport-independent.
 - Authorization, pairing, and revocation: `Auth.tla`, below.
-- Hub cursor regression after backup restoration: T019.
+- Hub cursor regression after backup restoration: detected and replayed
+  by the uploader, tested in Go (`internal/uploader`, T019).
 - Finite bounds only: TLC checks the models listed above, not all sizes.
 
 # Authorization model

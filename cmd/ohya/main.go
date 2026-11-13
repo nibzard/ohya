@@ -14,13 +14,16 @@ import (
 	"path/filepath"
 	"syscall"
 	"time"
+
+	"github.com/nibzard/ohya/internal/claudecode"
+	"github.com/nibzard/ohya/internal/codex"
 )
 
 const usageText = `ohya — one memory for all your coding agents
 
 Usage:
 
-  ohya ingest   Import Claude Code history once, then poll incrementally
+  ohya ingest   Import Claude Code and Codex history once, then poll incrementally
   ohya mcp      Serve the sql and annotate MCP tools on stdio
   ohya devices  Manage device pairing, credentials, and revocation
 `
@@ -65,7 +68,9 @@ func runIngestCommand(args []string, stdout, stderr io.Writer) error {
 	state := fs.String("state", "",
 		"state `directory` for the device identity and source checkpoints (default: the database directory)")
 	claudeRoot := fs.String("claude-root", filepath.Join(home, ".claude", "projects"),
-		"Claude Code projects `directory` to watch")
+		"Claude Code projects `directory` to watch; empty disables Claude Code")
+	codexRoot := fs.String("codex-root", defaultCodexRoot(home),
+		"Codex sessions `directory` to watch ($CODEX_HOME/sessions when set); empty disables Codex")
 	interval := fs.Duration("interval", 2*time.Second,
 		"polling `interval` in continuous mode")
 	once := fs.Bool("once", false, "run exactly one pass and exit")
@@ -78,6 +83,21 @@ func runIngestCommand(args []string, stdout, stderr io.Writer) error {
 	if !*once && *interval <= 0 {
 		return errors.New("-interval must be positive")
 	}
+	// A default directory may be absent (the agent is not installed); one
+	// the user passes must exist.
+	explicit := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
+	var roots []agentRoot
+	for _, r := range []agentRoot{
+		{agent: claudecode.AgentName, dir: *claudeRoot, flag: "claude-root"},
+		{agent: codex.AgentName, dir: *codexRoot, flag: "codex-root"},
+	} {
+		if r.dir == "" {
+			continue
+		}
+		r.optional = !explicit[r.flag]
+		roots = append(roots, r)
+	}
 	stateDir := *state
 	if stateDir == "" {
 		stateDir = filepath.Dir(*db)
@@ -85,12 +105,21 @@ func runIngestCommand(args []string, stdout, stderr io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return runIngest(ctx, ingestOptions{
-		dbPath:     *db,
-		stateDir:   stateDir,
-		claudeRoot: *claudeRoot,
-		interval:   *interval,
-		once:       *once,
-		stdout:     stdout,
-		stderr:     stderr,
+		dbPath:   *db,
+		stateDir: stateDir,
+		roots:    roots,
+		interval: *interval,
+		once:     *once,
+		stdout:   stdout,
+		stderr:   stderr,
 	})
+}
+
+// defaultCodexRoot is the Codex sessions directory: Codex keeps everything
+// under $CODEX_HOME, which defaults to ~/.codex (testdata/codex/README.md).
+func defaultCodexRoot(home string) string {
+	if dir := os.Getenv("CODEX_HOME"); dir != "" {
+		return filepath.Join(dir, "sessions")
+	}
+	return filepath.Join(home, ".codex", "sessions")
 }

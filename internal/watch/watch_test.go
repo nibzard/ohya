@@ -286,6 +286,10 @@ func TestReplacementCreatesNewSource(t *testing.T) {
 	if !strings.Contains(outcome.Reason, "identity changed") {
 		t.Fatalf("reason = %q, want the replacement explanation", outcome.Reason)
 	}
+	if outcome.ReplacedSourceID != first.SourceID || outcome.ReplacedCursor != first.End {
+		t.Fatalf("replaced = %s@%d, want %s@%d", outcome.ReplacedSourceID, outcome.ReplacedCursor,
+			first.SourceID, first.End)
+	}
 	if outcome.Cursor != 0 || outcome.End != int64(len("brand new file\n")) {
 		t.Fatalf("outcome spans [%d, %d), want a full re-import", outcome.Cursor, outcome.End)
 	}
@@ -840,5 +844,94 @@ func TestStateFilesAreOwnerOnly(t *testing.T) {
 	}
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Fatalf("state permissions = %o, want 600", perm)
+	}
+}
+
+func TestNewFileReportsNoReplacedSource(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.jsonl")
+	writeFile(t, path, "a\n")
+	o := sole(t, poll(t, mustNew(t, dir), path))
+	if !o.Fresh || o.ReplacedSourceID != "" || o.ReplacedCursor != 0 {
+		t.Fatalf("outcome = %+v, want a new file without a replaced source", o)
+	}
+}
+
+// TestRewindReplaysRetainedBytes pins the hub-regression recovery: the
+// checkpoint moves back, the retained bytes are pending again, and the state
+// survives a restart.
+func TestRewindReplaysRetainedBytes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.jsonl")
+	writeFile(t, path, "first\nsecond\n")
+	w := mustNew(t, dir)
+	o := sole(t, poll(t, w, path))
+	ingestAll(t, w, []Outcome{o})
+
+	if err := w.Rewind(path, o.SourceID, 6); err != nil {
+		t.Fatalf("Rewind: %v", err)
+	}
+	again := sole(t, poll(t, mustNew(t, dir), path))
+	if again.Fresh || again.SourceID != o.SourceID || again.Cursor != 6 {
+		t.Fatalf("after rewind = %+v, want source %s at cursor 6", again, o.SourceID)
+	}
+	if got := mustReadPending(t, w, again); got != "second\n" {
+		t.Fatalf("pending = %q, want the rewound bytes", got)
+	}
+	if err := w.Rewind(path, o.SourceID, 0); err != nil {
+		t.Fatalf("Rewind to 0: %v", err)
+	}
+	if again := sole(t, poll(t, w, path)); again.Cursor != 0 {
+		t.Fatalf("cursor = %d, want 0", again.Cursor)
+	}
+}
+
+func TestRewindRejectsBadArguments(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.jsonl")
+	writeFile(t, path, "first\nsecond\n")
+	w := mustNew(t, dir)
+	o := sole(t, poll(t, w, path))
+	if err := w.Acknowledge(path, o.SourceID, 6); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name   string
+		source string
+		cursor int64
+	}{
+		{"forward", o.SourceID, 7},
+		{"negative", o.SourceID, -1},
+		{"other source", "ffffffffffffffffffffffffffffffff", 0},
+	} {
+		if err := w.Rewind(path, tc.source, tc.cursor); err == nil {
+			t.Fatalf("%s: Rewind succeeded", tc.name)
+		}
+	}
+	if err := w.Rewind(filepath.Join(dir, "other.jsonl"), o.SourceID, 0); err == nil {
+		t.Fatal("Rewind of an unwatched path succeeded")
+	}
+}
+
+// TestRewindRefusesChangedBytes pins that only unchanged retained bytes
+// replay: a same-inode rewrite of the acknowledged prefix cannot rewind.
+func TestRewindRefusesChangedBytes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.jsonl")
+	writeFile(t, path, "first\nsecond\n")
+	w := mustNew(t, dir)
+	o := sole(t, poll(t, w, path))
+	ingestAll(t, w, []Outcome{o})
+
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteAt([]byte("FIRST"), 0); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if err := w.Rewind(path, o.SourceID, 0); err == nil {
+		t.Fatal("Rewind over rewritten bytes succeeded")
 	}
 }

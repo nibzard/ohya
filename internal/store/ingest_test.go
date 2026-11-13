@@ -109,7 +109,9 @@ func eventFromRecord(r claudecode.Record) Event {
 		ContentForm string `json:"contentForm"`
 	}
 	_ = json.Unmarshal([]byte(r.Metadata), &md)
-	e.UserPrompt = r.Kind == "user" && md.ContentForm == "string"
+	if r.Kind == "user" && md.ContentForm == "string" {
+		e.Prompt = r.Text
+	}
 	if len(r.Usage) > 0 {
 		var u struct {
 			InputTokens              int64 `json:"input_tokens"`
@@ -643,10 +645,10 @@ func TestIngestFirstPromptTieBreak(t *testing.T) {
 	// steal the main session's first prompt by arriving first.
 	aaaFiller := mkEvent(0, rawOfLen(300))
 	mainPrompt := mkEvent(aaaFiller.End, rawUser("prompt from source aaa"))
-	mainPrompt.UserPrompt = true
+	mainPrompt.Prompt = mainPrompt.Text
 	bbbFiller := mkEvent(0, rawOfLen(100))
 	subPrompt := mkEvent(bbbFiller.End, rawUser("prompt from source bbb"))
-	subPrompt.UserPrompt = true
+	subPrompt.Prompt = subPrompt.Text
 	aaa := Batch{SourceID: "aaa", Events: []Event{aaaFiller, mainPrompt}}
 	bbb := Batch{SourceID: "bbb", Events: []Event{bbbFiller, subPrompt}}
 
@@ -686,10 +688,10 @@ func TestIngestFirstPromptTieBreak(t *testing.T) {
 	hub := ingestHub(t)
 	mustRegister(t, hub, "aaa", "/main.jsonl")
 	first := mkEvent(0, rawUser("the first prompt"))
-	first.UserPrompt = true
+	first.Prompt = first.Text
 	mustIngest(t, hub, Batch{SourceID: "aaa", Events: []Event{first}})
 	second := mkEvent(first.End, rawUser("the second prompt"))
-	second.UserPrompt = true
+	second.Prompt = second.Text
 	mustIngest(t, hub, Batch{SourceID: "aaa", Events: []Event{second}})
 	row := sessionRowFor(t, hub, SessionID(deviceHex, "claude-code", "sess-1"))
 	if !row.FirstPrompt.Valid || row.FirstPrompt.String != first.Text {

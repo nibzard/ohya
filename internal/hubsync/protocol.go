@@ -50,12 +50,12 @@ const (
 	// local ingestion batch bound. A batch never splits a record.
 	MaxBatchBytes = 8 << 20
 
-	// maxRecords bounds the record count of one batch. The byte bound alone
+	// MaxRecords bounds the record count of one batch. The byte bound alone
 	// would admit millions of tiny records, each holding a full Event in
 	// memory during normalization; this cap bounds that work at a level no
 	// real batch reaches — the 8 MiB batch bound with typical records holds
 	// far fewer.
-	maxRecords = 65536
+	MaxRecords = 65536
 )
 
 // Frame layout. All integers are big-endian.
@@ -375,8 +375,8 @@ func readBatch(fr *frameReader) (*Batch, error) {
 		return nil, fmt.Errorf("hubsync: batch end %d precedes its start %d", b.End, b.Start)
 	case b.End-b.Start > MaxBatchBytes:
 		return nil, fmt.Errorf("%w: batch spans %d bytes, want at most %d", ErrTooLarge, b.End-b.Start, MaxBatchBytes)
-	case count > maxRecords:
-		return nil, fmt.Errorf("%w: batch carries %d records, want at most %d", ErrTooLarge, count, maxRecords)
+	case count > MaxRecords:
+		return nil, fmt.Errorf("%w: batch carries %d records, want at most %d", ErrTooLarge, count, MaxRecords)
 	}
 	b.Records = make([]Record, 0, min(int(count), 1024))
 	total := int64(0)
@@ -526,8 +526,8 @@ func WriteBatch(w io.Writer, b Batch) error {
 	if b.End-b.Start > MaxBatchBytes {
 		return fmt.Errorf("%w: batch spans %d bytes, want at most %d", ErrTooLarge, b.End-b.Start, MaxBatchBytes)
 	}
-	if len(b.Records) > maxRecords {
-		return fmt.Errorf("%w: batch carries %d records, want at most %d", ErrTooLarge, len(b.Records), maxRecords)
+	if len(b.Records) > MaxRecords {
+		return fmt.Errorf("%w: batch carries %d records, want at most %d", ErrTooLarge, len(b.Records), MaxRecords)
 	}
 	total := int64(0)
 	for i, r := range b.Records {

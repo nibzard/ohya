@@ -170,7 +170,7 @@ func TestReadFrameRejectsOversizedBatch(t *testing.T) {
 	if _, err := ReadFrame(bytes.NewReader(head(5, 1, 0))); err == nil || !strings.Contains(err.Error(), "precedes") {
 		t.Fatalf("inverted range error = %v", err)
 	}
-	count := maxRecords + 1
+	count := MaxRecords + 1
 	if _, err := ReadFrame(bytes.NewReader(head(0, 0, uint32(count)))); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("count error = %v; want ErrTooLarge", err)
 	}
@@ -197,7 +197,7 @@ func TestWritersRefuseOversizedFrames(t *testing.T) {
 	if err := WriteBatch(&buf, batch); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("oversized span err = %v; want ErrTooLarge", err)
 	}
-	batch = Batch{DeviceID: testDevice, SourceID: testSource, Start: 0, End: 0, Records: make([]Record, maxRecords+1)}
+	batch = Batch{DeviceID: testDevice, SourceID: testSource, Start: 0, End: 0, Records: make([]Record, MaxRecords+1)}
 	if err := WriteBatch(&buf, batch); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("oversized count err = %v; want ErrTooLarge", err)
 	}

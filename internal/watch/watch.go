@@ -72,6 +72,13 @@ type Outcome struct {
 	Fresh bool
 	// Reason explains why a fresh source started; empty otherwise.
 	Reason string
+	// ReplacedSourceID is the source this fresh one replaced at the same
+	// path after a replacement, truncation or in-place rewrite; empty
+	// otherwise. ReplacedCursor is that source's acknowledged cursor: its
+	// bytes after the cursor were never acknowledged and the checkpoint no
+	// longer tracks them, so an uploader that had not sent them lost them.
+	ReplacedSourceID string
+	ReplacedCursor   int64
 	// RenamedFrom is the path this source was watched under before the
 	// file moved; empty when it did not move this poll.
 	RenamedFrom string
@@ -247,6 +254,8 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 		if err != nil {
 			return nil, err
 		}
+		outcome.ReplacedSourceID = entry.SourceID
+		outcome.ReplacedCursor = entry.CursorBytes
 		outcomes = append(outcomes, outcome)
 		changed = true
 	}
@@ -363,18 +372,59 @@ func (w *Watcher) ReadPending(o Outcome) ([]byte, error) {
 // content fingerprint. Acknowledge only after a durable commit: a lost or
 // older checkpoint causes safe replay, never silent data loss.
 func (w *Watcher) Acknowledge(path, sourceID string, end int64) error {
-	p := normalizePath(path)
-	entry, ok := w.state.Sources[p]
-	if !ok {
-		return fmt.Errorf("watch: %s is not a watched path", p)
-	}
-	if entry.SourceID != sourceID {
-		return fmt.Errorf("watch: %s is watched as source %s, not %s", p, entry.SourceID, sourceID)
+	p, entry, err := w.entry(path, sourceID)
+	if err != nil {
+		return err
 	}
 	if end < entry.CursorBytes {
 		return fmt.Errorf("watch: acknowledgment at %d is before the checkpoint cursor %d for %s",
 			end, entry.CursorBytes, p)
 	}
+	return w.checkpoint(p, entry, end)
+}
+
+// Rewind moves the source's checkpoint back to cursor, so the bytes from
+// cursor on are pending again. It is the device's answer to a hub cursor
+// regression, for example after the hub restored a backup: the hub no
+// longer holds what it once acknowledged, and the retained file can replay
+// it. Rewind refuses unless the file still holds the incarnation and the
+// bytes the checkpoint fingerprinted, because only unchanged retained bytes
+// can replay the lost history.
+func (w *Watcher) Rewind(path, sourceID string, cursor int64) error {
+	p, entry, err := w.entry(path, sourceID)
+	if err != nil {
+		return err
+	}
+	if cursor < 0 || cursor > entry.CursorBytes {
+		return fmt.Errorf("watch: rewind to %d is outside the acknowledged range [0, %d] of %s",
+			cursor, entry.CursorBytes, p)
+	}
+	if entry.CursorBytes > 0 {
+		sum, err := fingerprintFile(p, entry.CursorBytes, entry.FingerprintWindow)
+		if err != nil || sum != entry.FingerprintSHA256 {
+			return fmt.Errorf("watch: %s no longer holds the acknowledged bytes; they cannot be replayed", p)
+		}
+	}
+	return w.checkpoint(p, entry, cursor)
+}
+
+// entry returns the checkpoint of the watched path, which must belong to
+// sourceID.
+func (w *Watcher) entry(path, sourceID string) (string, sourceCheckpoint, error) {
+	p := normalizePath(path)
+	entry, ok := w.state.Sources[p]
+	if !ok {
+		return p, entry, fmt.Errorf("watch: %s is not a watched path", p)
+	}
+	if entry.SourceID != sourceID {
+		return p, entry, fmt.Errorf("watch: %s is watched as source %s, not %s", p, entry.SourceID, sourceID)
+	}
+	return p, entry, nil
+}
+
+// checkpoint durably sets the source's cursor to end and refreshes the
+// content fingerprint of the window ending there.
+func (w *Watcher) checkpoint(p string, entry sourceCheckpoint, end int64) error {
 	f, info, err := observe(p, entry.FileIdentity)
 	if err != nil {
 		return err

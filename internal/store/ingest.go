@@ -79,9 +79,17 @@ type Event struct {
 	Usage     Usage
 	HasUsage  bool
 
-	// UserPrompt marks the record as a user prompt — a fresh prompt, not a
-	// tool result — so the write path can select sessions.first_prompt.
-	UserPrompt bool
+	// Prompt is the user's prompt text when the record is a fresh user
+	// prompt — not a tool result or injected context — so the write path can
+	// select sessions.first_prompt. "" marks no prompt.
+	Prompt string
+
+	// HasOrdinal marks a record that the agent numbers within its native
+	// session (Codex ordinal). (session, Ordinal) names one record across
+	// all of the session's source files: a later copy is stored as a
+	// duplicate of the first.
+	HasOrdinal bool
+	Ordinal    int64
 }
 
 // Batch is one source's contiguous records, in source order.
@@ -97,7 +105,8 @@ type Batch struct {
 // IngestResult reports one committed batch.
 type IngestResult struct {
 	// Inserted counts only newly inserted events. Records that replayed
-	// already-stored bytes do not count.
+	// already-stored bytes do not count. A record stored as the duplicate of
+	// another file's copy (same session and ordinal) is a new row and counts.
 	Inserted int
 	// Cursor is the source's committed byte cursor after the commit. It is
 	// the offset the caller may acknowledge durably.
@@ -161,6 +170,37 @@ func (d *DB) RegisterSource(ctx context.Context, id, deviceID, agent, path strin
 		return fmt.Errorf("store: register source %s: commit: %w", id, err)
 	}
 	return nil
+}
+
+// SourceState describes a registered source for parsing its next bytes.
+type SourceState struct {
+	Agent  string
+	Cursor int64 // committed byte cursor
+	// FirstNativeID is the native session ID of the source's record at
+	// offset 0, or "" before that record commits. A parser whose records do
+	// not name their session (Codex) needs it to parse bytes past offset 0.
+	FirstNativeID string
+}
+
+// SourceState reads one registered source's agent, cursor and first native
+// session ID. An unknown source is ErrSourceNotRegistered.
+func (d *DB) SourceState(ctx context.Context, id string) (SourceState, error) {
+	var st SourceState
+	var native sql.NullString
+	err := d.writer.QueryRowContext(ctx,
+		`SELECT src.agent, src.cursor_bytes,
+		        (SELECT s.native_id FROM events e JOIN sessions s ON s.id = e.session_id
+		         WHERE e.source_id = src.id AND e.source_offset = 0)
+		 FROM sources src WHERE src.id = ?`, id).
+		Scan(&st.Agent, &st.Cursor, &native)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SourceState{}, fmt.Errorf("store: source %s is not registered: %w", id, ErrSourceNotRegistered)
+	}
+	if err != nil {
+		return SourceState{}, fmt.Errorf("store: read source %s: %w", id, err)
+	}
+	st.FirstNativeID = native.String
+	return st, nil
 }
 
 // Ingest commits one batch atomically and returns what the commit added.
@@ -270,6 +310,9 @@ func validateBatch(events []Event) error {
 		if e.NativeID == "" {
 			return fmt.Errorf("store: batch record %d at offset %d has no native session ID: %w", i, e.Offset, ErrBatchRejected)
 		}
+		if e.HasOrdinal && e.Ordinal < 0 {
+			return fmt.Errorf("store: batch record %d at offset %d has negative ordinal %d: %w", i, e.Offset, e.Ordinal, ErrBatchRejected)
+		}
 		if want := e.Offset + int64(len(e.RawJSON)) + 1; e.End != want {
 			return fmt.Errorf("store: batch record %d at offset %d ends at %d, but its %d JSON bytes plus one terminator end at %d: %w",
 				i, e.Offset, e.End, len(e.RawJSON), want, ErrBatchRejected)
@@ -346,7 +389,7 @@ type sessionDelta struct {
 	cwd    string
 	branch string
 	model  string
-	prompt *Event // first UserPrompt candidate with text
+	prompt *Event // first record with a Prompt
 }
 
 // insertEvents inserts the batch's new records — those at or beyond the
@@ -372,16 +415,34 @@ func insertEvents(ctx context.Context, tx *sql.Tx, b Batch, cursor int64, device
 		if metadata == "" {
 			metadata = "{}"
 		}
-		var timeMS any
+		var timeMS, ordinal any
 		if e.HasTime {
 			timeMS = e.TimeMS
 		}
+		// A record whose (session, ordinal) is already stored replays it
+		// from another file (or repeats it within one). It is stored for
+		// retention and retry validation, without search text, and adds
+		// nothing to the aggregates.
+		var duplicateOf sql.NullInt64
+		if e.HasOrdinal {
+			ordinal = e.Ordinal
+			err := tx.QueryRowContext(ctx,
+				`SELECT id FROM events WHERE session_id = ? AND ordinal = ? AND duplicate_of IS NULL`,
+				sid, e.Ordinal).Scan(&duplicateOf)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return 0, nil, fmt.Errorf("store: ingest source %s: look up ordinal at offset %d: %w", b.SourceID, e.Offset, err)
+			}
+		}
+		text := nullString(e.Text)
+		if duplicateOf.Valid {
+			text = nil
+		}
 		res, err := tx.ExecContext(ctx,
-			`INSERT INTO events (session_id, source_id, source_offset, time_ms, kind, role, tool_name, text, raw_json, metadata)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`INSERT INTO events (session_id, source_id, source_offset, time_ms, kind, role, tool_name, text, raw_json, metadata, ordinal, duplicate_of)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT (source_id, source_offset) DO NOTHING`,
 			sid, b.SourceID, e.Offset, timeMS, e.Kind, nullString(e.Role),
-			nullString(e.ToolName), nullString(e.Text), e.RawJSON, metadata)
+			nullString(e.ToolName), text, e.RawJSON, metadata, ordinal, duplicateOf)
 		if err != nil {
 			return 0, nil, fmt.Errorf("store: ingest source %s: insert record at offset %d: %w", b.SourceID, e.Offset, err)
 		}
@@ -393,6 +454,9 @@ func insertEvents(ctx context.Context, tx *sql.Tx, b Batch, cursor int64, device
 			continue // already stored; not a newly inserted record
 		}
 		inserted++
+		if duplicateOf.Valid {
+			continue
+		}
 
 		d := deltas[sid]
 		if d == nil {
@@ -417,7 +481,7 @@ func insertEvents(ctx context.Context, tx *sql.Tx, b Batch, cursor int64, device
 		if d.model == "" {
 			d.model = e.Model
 		}
-		if d.prompt == nil && e.UserPrompt && e.Text != "" {
+		if d.prompt == nil && e.Prompt != "" {
 			d.prompt = e
 		}
 		if e.HasUsage && e.MessageID != "" {
@@ -513,7 +577,7 @@ func applySessionDelta(ctx context.Context, tx *sql.Tx, sid string, d *sessionDe
 			replace = candidate.before(*stored)
 		}
 		if replace {
-			firstPrompt = sql.NullString{String: d.prompt.Text, Valid: true}
+			firstPrompt = sql.NullString{String: d.prompt.Prompt, Valid: true}
 			encoded, err := json.Marshal(candidate)
 			if err != nil {
 				return fmt.Errorf("store: ingest session %s: encode first-prompt reference: %w", sid, err)

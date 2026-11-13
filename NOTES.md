@@ -43,6 +43,26 @@ How to use this file:
   malformed and stops the source, like invalid JSON.
 
 
+- Codex parser choices (2026-11-13, internal/codex, T011): the record at
+  offset 0 names the thread (`session_meta.payload.id`); a parse past offset 0
+  needs the committed first record's native ID (`store.SourceState`), so a
+  source whose offset-0 record is missing from the hub cannot parse
+  (`codex.ErrNoNative`, reported, never guessed). Text comes from
+  `response_item` only; `event_msg/user_message` sets `Prompt` (first_prompt)
+  because Codex also sends AGENTS.md and `<environment_context>` blocks as
+  `user` messages. Replays dedupe on `(session, ordinal)` in the write path
+  (migration 003); `session_meta` never takes an ordinal, because a page's
+  opening meta shares the ordinal of its first replayed record. Open:
+  - `cache_write_input_tokens` is 0 in every fixture; its relation to
+    `input_tokens` is unverified, so it is not stored. Check real usage
+    records where it is non-zero before mapping it to cache creation.
+  - Files before 0.147.0 carry no ordinal, so a pre-0.147 resumed page (if
+    any exists) would double its replayed records. Unverified whether such
+    pages exist; check the corpus for `history_base` without `ordinal`.
+  - The duplicate copy is chosen by arrival order, not by file order. Text is
+    identical in the verified pair; if replays ever differ, the stored
+    original depends on ingestion order.
+
 - FTS5 verification gotcha (verified 2026-11-13, internal/store/open_test.go):
   `SELECT count(*)` on an external-content FTS5 table reads the content table, not
   the index. Assert index consistency with the `integrity-check` command and MATCH
@@ -81,9 +101,10 @@ How to use this file:
   aggregates remain deferred pending a query need.
 
 - Local slice wiring (2026-11-13, cmd/ohya, T007): the production
-  claudecode.Record → store.Event adapter lives in internal/events (moved
-  out of cmd/ohya in T017 so hub-side batch normalization shares it; usage
-  field names, contentForm=="string" prompt test). internal/store keeps a
+  record → store.Event adapters live in internal/events (moved out of
+  cmd/ohya in T017 so hub-side batch normalization shares them; T011 added
+  the Codex adapter and the `events.Parse` agent dispatch; usage field
+  names, contentForm=="string" prompt test). internal/store keeps a
   mirrored copy in ingest_test.go — an in-package test cannot import
   internal/events without an import cycle — so change both together. The
   crash window between the Ingest
@@ -218,7 +239,7 @@ How to use this file:
     leaves the cursor unchanged.
   - The endpoint has no CLI yet: serving needs a transport config and the
     production control plane (T033→T034); the credential-registry
-    authenticator now exists (T018). The uploader is T019.
+    authenticator (T018) and the uploader (T019) now exist.
 
 - Device pairing choices (2026-11-13, internal/registry + internal/hubsync + internal/device, T018):
   - The registry is its own SQLite database (registry.db in the owner-only
@@ -274,3 +295,21 @@ How to use this file:
     GOTOOLCHAIN=auto downloads the toolchain. Headscale v0.29.7 CLI wants
     numeric user IDs (`preauthkeys create -u 1`), and its `server_url`
     must be reachable from every node process.
+
+- Device uploader choices (2026-11-13, internal/uploader, T019):
+  - The uploader reuses internal/watch as its checkpoint store: the cursors
+    are hub acknowledgments. A state directory shared with local `ohya
+    ingest` would mix two acknowledgment sources and skip bytes, so the
+    future join/upload command (T034) must use a dedicated state directory.
+  - A pass with nothing pending makes no exchange, so a hub that restarted
+    from a restored backup went unnoticed on an idle connection (found by
+    test). Each pass now checks the open connection with a 1 ms read
+    deadline plus bufio Peek: timeout = open, EOF/reset = reconnect and
+    re-probe every source. A hub host that dies without FIN/RST is still
+    noticed only at the next exchange or by TCP keepalive (unverified for
+    the tsnet netstack).
+  - The endpoint writes CodeBusy and closes before reading the hello, so
+    the device's first write can fail with a reset; the uploader then tries
+    to read the hub's error frame before reporting a plain disconnect.
+  - A parse stop is not resent until the file grows (in-memory mark per
+    process); a restart resends the stopped bytes once.

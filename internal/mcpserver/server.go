@@ -77,7 +77,7 @@ Current writer ID (use as event_annotations.writer_id and for your own annotatio
 Tables:
 - sessions(id, agent, device_id, native_id, repo, cwd, branch, model, first_prompt, started_at_ms, last_event_at_ms, event_count, metadata): one agent session; id = agent + ":" + device_id + ":" + native_id
 - sources(id, device_id, agent, path, file_identity, cursor_bytes, updated_at_ms): one watched file incarnation and its committed byte cursor
-- events(id, session_id, source_id, source_offset, time_ms, kind, role, tool_name, text, raw_json, metadata): one immutable original JSONL record; text is the normalized searchable text
+- events(id, session_id, source_id, source_offset, time_ms, kind, role, tool_name, text, raw_json, metadata, ordinal, duplicate_of): one immutable original JSONL record; text is the normalized searchable text; ordinal is the agent's per-session record number (Codex), and duplicate_of names the first stored copy of a record that another file replayed (its text is NULL; filter with duplicate_of IS NULL)
 - session_token_usage(session_id, message_id, input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens): token counts of one API response
 - event_annotations(event_id, namespace, key, writer_id, value, created_at_ms, updated_at_ms): agent-written JSON values, identity (event_id, namespace, key, writer_id)
 - events_fts: FTS5 full-text index over events.text; rowid equals events.id

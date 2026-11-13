@@ -84,6 +84,7 @@ type sliceEnv struct {
 	root     string
 	dbPath   string
 	stateDir string
+	agent    string // the watched agent; newSliceEnv picks Claude Code
 }
 
 func newSliceEnv(t *testing.T) *sliceEnv {
@@ -93,11 +94,17 @@ func newSliceEnv(t *testing.T) *sliceEnv {
 		root:     filepath.Join(dir, "projects"),
 		dbPath:   filepath.Join(dir, "hub", "hub.db"),
 		stateDir: filepath.Join(dir, "state"),
+		agent:    claudecode.AgentName,
 	}
 	if err := os.MkdirAll(e.root, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	return e
+}
+
+// claudeRoots watches the projects directory as an explicit Claude Code root.
+func (e *sliceEnv) claudeRoots() []agentRoot {
+	return []agentRoot{{agent: claudecode.AgentName, dir: e.root, flag: "claude-root"}}
 }
 
 // session places a session file at the watched path layout.
@@ -124,12 +131,12 @@ func (e *sliceEnv) newRunner(t *testing.T, stderr io.Writer) (*ingestor, func())
 		hub.Close()
 		t.Fatal(err)
 	}
-	w, err := watch.New(e.stateDir, claudecode.AgentName, watch.Options{})
+	w, err := watch.New(e.stateDir, e.agent, watch.Options{})
 	if err != nil {
 		hub.Close()
 		t.Fatal(err)
 	}
-	return newIngestor(hub, w, deviceID, stderr), func() { hub.Close() }
+	return newIngestor(hub, w, e.agent, deviceID, stderr), func() { hub.Close() }
 }
 
 // runPass runs exactly one polling pass against a fresh runner, like one
@@ -139,7 +146,7 @@ func (e *sliceEnv) runPass(t *testing.T) (passStats, string) {
 	var stderr bytes.Buffer
 	r, done := e.newRunner(t, &stderr)
 	defer done()
-	stats, err := r.poll(context.Background(), e.root)
+	stats, err := r.poll(context.Background(), e.root, false)
 	if err != nil {
 		t.Fatalf("poll: %v", err)
 	}
@@ -188,7 +195,13 @@ func soleSourceID(t *testing.T, db *sql.DB) (string, int64) {
 // cursor from the local state file.
 func soleCheckpoint(t *testing.T, stateDir string) (string, int64) {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(stateDir, "sources", claudecode.AgentName+".json"))
+	return soleAgentCheckpoint(t, stateDir, claudecode.AgentName)
+}
+
+// soleAgentCheckpoint reads one agent's checkpoint file the same way.
+func soleAgentCheckpoint(t *testing.T, stateDir, agent string) (string, int64) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(stateDir, "sources", agent+".json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -455,7 +468,7 @@ func TestIngestReportsPersistentDiagnosticOncePerRun(t *testing.T) {
 	r, done := e.newRunner(t, &stderr)
 	defer done()
 	for i := 0; i < 2; i++ {
-		if _, err := r.poll(context.Background(), e.root); err != nil {
+		if _, err := r.poll(context.Background(), e.root, false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -595,11 +608,15 @@ func TestIngestCrashHelper(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	w, err := watch.New(state, claudecode.AgentName, watch.Options{})
+	agent := os.Getenv("OHYA_SLICE_CRASH_AGENT")
+	if agent == "" {
+		agent = claudecode.AgentName
+	}
+	w, err := watch.New(state, agent, watch.Options{})
 	if err != nil {
 		panic(err)
 	}
-	r := newIngestor(hub, w, deviceID, io.Discard)
+	r := newIngestor(hub, w, agent, deviceID, io.Discard)
 	candidates, err := discoverSessionFiles(root)
 	if err != nil {
 		panic(err)
@@ -609,11 +626,11 @@ func TestIngestCrashHelper(t *testing.T) {
 		panic(fmt.Sprintf("poll: %v, %d outcomes", err, len(outcomes)))
 	}
 	o := outcomes[0]
-	if err := hub.RegisterSource(ctx, o.SourceID, deviceID, claudecode.AgentName, o.Path); err != nil {
+	if err := hub.RegisterSource(ctx, o.SourceID, deviceID, agent, o.Path); err != nil {
 		panic(err)
 	}
 	inserted, committed, err := r.ingestSource(ctx, o)
-	if err != nil || inserted != 16 || committed != 6528 {
+	if err != nil || inserted == 0 || committed != o.End {
 		panic(fmt.Sprintf("ingestSource = %d inserts, cursor %d, %v", inserted, committed, err))
 	}
 	os.Exit(3) // die after the durable commit, before the acknowledgment
@@ -632,7 +649,7 @@ func TestIngestRunsUntilCanceled(t *testing.T) {
 	defer cancel()
 	var stdout bytes.Buffer
 	err := runIngest(ctx, ingestOptions{
-		dbPath: e.dbPath, stateDir: e.stateDir, claudeRoot: e.root,
+		dbPath: e.dbPath, stateDir: e.stateDir, roots: e.claudeRoots(),
 		interval: 10 * time.Millisecond,
 		stdout:   firstWriteCanceler{w: &stdout, cancel: cancel},
 		stderr:   io.Discard,
@@ -661,8 +678,8 @@ func TestIngestMissingClaudeRootFails(t *testing.T) {
 	e := newSliceEnv(t)
 	err := runIngest(context.Background(), ingestOptions{
 		dbPath: e.dbPath, stateDir: e.stateDir,
-		claudeRoot: filepath.Join(e.root, "absent"),
-		once:       true, stdout: io.Discard, stderr: io.Discard,
+		roots: []agentRoot{{agent: claudecode.AgentName, dir: filepath.Join(e.root, "absent"), flag: "claude-root"}},
+		once:  true, stdout: io.Discard, stderr: io.Discard,
 	})
 	if err == nil || !strings.Contains(err.Error(), "does not exist") {
 		t.Fatalf("error = %v, want the missing projects directory", err)
