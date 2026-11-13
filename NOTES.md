@@ -18,14 +18,31 @@ How to use this file:
 -->
 
 
-- Verify agent session storage findings before phase 1 parser spikes (researched 2026-11-13, partly from third-party writeups — recheck against installed versions):
-  - Claude Code: `~/.claude/projects/**/*.jsonl` — confirmed locally, append-only JSONL.
-  - Codex: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` — confirmed locally; also `~/.codex/sqlite/codex-dev.db` (`local_thread_catalog` = metadata only, no message bodies). Check `CODEX_HOME` overrides and possible compressed session files.
-  - Pi agent: project-local `.pi/`, one JSONL per session (per writeups; not installed locally yet — verify format when spiking).
-  - OpenCode (phase 2): `~/.local/share/opencode/storage/`, one JSON file per message/part — enumerated storage, not append-only; breaks the byte-cursor model.
-  - Claude Desktop regular chats: server-side, not file-watchable; potentially pollable via unofficial authenticated API (see Claude Explorer / rpeck/claude-explorer) or official export. Would need a new poll-based source type — deferred.
-  - ChatGPT desktop: no reliable local transcripts; official export only — deferred.
-  - Cowork local sessions may write JSONL under `~/Library/Application Support/Claude/local-agent-mode-sessions/` — absent on current install; check if usage starts.
+- Agent session storage — verified on this machine 2026-11-13; local corpus exists for parser spikes:
+  - Claude Code: `~/.claude/projects/<dir-slug>/<uuid>.jsonl`, append-only JSONL
+    with typed records (`type` field; not every line is a message). 2,642
+    session files locally, including `-home-agent-ohya` (this repo's own
+    sessions — convenient test corpus). Also `~/.claude/history.jsonl`
+    (global prompt history).
+  - Codex (codex-cli 0.166.0, `CODEX_HOME` unset): `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`,
+    2,488 files, no compressed sessions. No `~/.codex/sqlite/` on this
+    machine; instead `~/.codex/logs_2.sqlite`, `goals_1.sqlite`,
+    `memories_1.sqlite`. The earlier `codex-dev.db` / `local_thread_catalog`
+    claim is version-dependent — treat rollout JSONL as the corpus.
+  - Pi (pi 0.84.2): sessions are global, not project-local —
+    `~/.pi/agent/sessions/<cwd-slug>/<ISO-ts>_<uuid>.jsonl` (74 files),
+    version-3 typed JSONL with an `id`/`parentId` event chain. Project-local
+    `.pi/` holds config only (extensions, prompts, skills).
+  - OpenCode v2.0.12 (phase 2): storage moved to SQLite —
+    `~/.local/share/opencode/opencode.db` with WAL (tables `session`,
+    `message`, `part`, `event`, and so on). The old one-JSON-per-message
+    layout no longer applies; needs a poll-based SQLite source, not a byte
+    cursor.
+  - Deferred: Claude Desktop regular chats (server-side; unofficial
+    authenticated API via Claude Explorer / rpeck/claude-explorer, or
+    official export), ChatGPT desktop (export only), Cowork local sessions
+    (macOS path `~/Library/Application Support/Claude/local-agent-mode-sessions/`;
+    not observable on Linux).
 
 - macOS distribution still needs native builds on both supported architectures and
   signing/notarization verification; the SQLite driver requires a C toolchain.
