@@ -13,13 +13,14 @@ import (
 // initialize handshake. It tracks the repository state, not a release.
 const ServerVersion = "0.1.0-dev"
 
-// ToolName is the single tool this server serves.
+// ToolName is the read-only query tool's name.
 const ToolName = "sql"
 
 // New returns an MCP server serving the read-only sql(query) tool on the
-// restricted reader pool. Callers run it with Run, typically over stdio.
-func New(readers *sql.DB, o EngineOptions) *mcp.Server {
-	engine := NewEngine(readers, o)
+// restricted reader pool and the annotate(operations) tool on the hub
+// writer. Callers run it with Run, typically over stdio.
+func New(readers, writer *sql.DB, o EngineOptions) *mcp.Server {
+	engine := NewEngine(readers, writer, o)
 	server := mcp.NewServer(&mcp.Implementation{Name: "ohya", Version: ServerVersion}, nil)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        ToolName,
@@ -27,6 +28,19 @@ func New(readers *sql.DB, o EngineOptions) *mcp.Server {
 		Description: ToolDescription(engine.Options()),
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 	}, engine.handle)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        AnnotateToolName,
+		Title:       "Annotate events",
+		Description: AnnotateDescription(engine.Options()),
+		Annotations: &mcp.ToolAnnotations{
+			// The tool writes, and a delete discards a value, so it may be
+			// destructive; only event_annotations is ever touched. A retried
+			// batch converges: identical operations are no-ops.
+			ReadOnlyHint:   false,
+			IdempotentHint: true,
+			OpenWorldHint:  boolPtr(false),
+		},
+	}, engine.handleAnnotate)
 	return server
 }
 

@@ -92,9 +92,22 @@ func callSql(t *testing.T, session *mcp.ClientSession, query string) *mcp.CallTo
 	return result
 }
 
+// callAnnotate runs one annotate tool call over the session.
+func callAnnotate(t *testing.T, session *mcp.ClientSession, operations string) *mcp.CallToolResult {
+	t.Helper()
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "annotate",
+		Arguments: map[string]any{"operations": json.RawMessage(operations)},
+	})
+	if err != nil {
+		t.Fatalf("CallTool(annotate, %s): %v", operations, err)
+	}
+	return result
+}
+
 // TestMCPStdioEndToEnd launches the real command as a subprocess and speaks
-// MCP over stdio: initialize handshake, tool listing, a working query, and
-// an adversarial query rejected as a tool error.
+// MCP over stdio: initialize handshake, tool listing, a working query, an
+// annotation batch, and adversarial calls rejected as tool errors.
 func TestMCPStdioEndToEnd(t *testing.T) {
 	dbPath, stateDir := seedMcpDatabase(t)
 	session := startMcpProcess(t, dbPath, stateDir)
@@ -103,15 +116,22 @@ func TestMCPStdioEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 1 || tools.Tools[0].Name != "sql" {
-		t.Fatalf("tools = %+v", tools.Tools)
+	var descriptions = map[string]string{}
+	for _, tl := range tools.Tools {
+		descriptions[tl.Name] = tl.Description
+	}
+	if len(tools.Tools) != 2 || descriptions["sql"] == "" || descriptions["annotate"] == "" {
+		t.Fatalf("tools = %+v, want exactly sql and annotate", tools.Tools)
 	}
 	deviceID, err := device.LoadOrCreate(stateDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(tools.Tools[0].Description, "Current writer ID (use as event_annotations.writer_id and for your own annotations): "+deviceID) {
-		t.Fatalf("description misses the writer ID %q", deviceID)
+	if !strings.Contains(descriptions["sql"], "Current writer ID (use as event_annotations.writer_id and for your own annotations): "+deviceID) {
+		t.Fatalf("sql description misses the writer ID %q", deviceID)
+	}
+	if !strings.Contains(descriptions["annotate"], "this device writes as "+deviceID) {
+		t.Fatalf("annotate description misses the writer ID %q", deviceID)
 	}
 
 	result := callSql(t, session,
@@ -148,5 +168,70 @@ func TestMCPStdioEndToEnd(t *testing.T) {
 	raw, _ = json.Marshal(result.StructuredContent)
 	if !strings.Contains(string(raw), "[[1]]") {
 		t.Fatalf("events after adversarial calls: %s", raw)
+	}
+}
+
+// TestMCPStdioAnnotateEndToEnd drives the annotate tool over real stdio: a
+// committed batch, an identical retry, and rejected batches that change
+// nothing. The hub derives the writer from the state directory's device
+// identity, never from the call.
+func TestMCPStdioAnnotateEndToEnd(t *testing.T) {
+	dbPath, stateDir := seedMcpDatabase(t)
+	session := startMcpProcess(t, dbPath, stateDir)
+	deviceID, err := device.LoadOrCreate(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// One applied upsert plus one absent delete counted as unchanged.
+	result := callAnnotate(t, session, `[
+		{"op":"upsert","event_id":7,"namespace":"tags","key":"keep","value":{"done": true}},
+		{"op":"delete","event_id":7,"namespace":"tags","key":"absent"}]`)
+	if result.IsError {
+		t.Fatalf("annotate failed: %+v", result)
+	}
+	if raw, _ := json.Marshal(result.StructuredContent); !strings.Contains(string(raw), `"applied":1,"unchanged":1`) {
+		t.Fatalf("first batch payload = %s", raw)
+	}
+
+	// The identical retry is a complete no-op.
+	result = callAnnotate(t, session, `[
+		{"op":"upsert","event_id":7,"namespace":"tags","key":"keep","value":{"done": true}},
+		{"op":"delete","event_id":7,"namespace":"tags","key":"absent"}]`)
+	if result.IsError {
+		t.Fatalf("retry failed: %+v", result)
+	}
+	if raw, _ := json.Marshal(result.StructuredContent); !strings.Contains(string(raw), `"applied":0,"unchanged":2`) {
+		t.Fatalf("retry payload = %s", raw)
+	}
+
+	// The annotation carries the device identity and a compacted value.
+	result = callSql(t, session, `SELECT value, writer_id FROM event_annotations
+		WHERE event_id = 7 AND namespace = 'tags' AND key = 'keep'`)
+	raw, _ := json.Marshal(result.StructuredContent)
+	var stored struct {
+		Rows [][]any `json:"rows"`
+	}
+	if err := json.Unmarshal(raw, &stored); err != nil || len(stored.Rows) != 1 {
+		t.Fatalf("stored annotation = %s (%v)", raw, err)
+	}
+	if fmt.Sprint(stored.Rows[0]) != `[{"done":true} `+deviceID+`]` {
+		t.Fatalf("stored annotation = %v, want compacted {\"done\":true} under writer %s", stored.Rows[0], deviceID)
+	}
+
+	// Spoofing the writer identity and a missing event both fail as tool
+	// errors, and neither applies anything.
+	for _, ops := range []string{
+		`[{"op":"upsert","event_id":7,"namespace":"tags","key":"spoof","value":1,"writer_id":"attacker"}]`,
+		`[{"op":"upsert","event_id":999,"namespace":"tags","key":"missing","value":1}]`,
+	} {
+		if result := callAnnotate(t, session, ops); !result.IsError {
+			t.Fatalf("annotate accepted %s over stdio: %+v", ops, result)
+		}
+	}
+	result = callSql(t, session, `SELECT count(*) FROM event_annotations`)
+	raw, _ = json.Marshal(result.StructuredContent)
+	if !strings.Contains(string(raw), "[[1]]") {
+		t.Fatalf("annotations after rejections: %s", raw)
 	}
 }

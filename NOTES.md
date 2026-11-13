@@ -111,3 +111,20 @@ How to use this file:
     a test binary serving on stdout interleaves framework output ("PASS")
     with protocol frames. `mcp.NewInMemoryTransports()` covers the
     protocol-level tests without processes.
+
+- Annotate tool choices (2026-11-13, internal/mcpserver + internal/store, T009):
+  the SDK's inferred input schema already rejects unknown fields
+  (struct inference sets additionalProperties: false) and runs BEFORE the
+  tool handler, so a spoofed `writer_id` dies in schema validation; the
+  handler re-decodes `req.Params.Arguments` (a json.RawMessage on
+  CallToolParamsRaw) with DisallowUnknownFields for the cases the schema
+  cannot express (upsert/delete value rule, charset, duplicates) and for
+  better error text. jsonschema-go maps `json.RawMessage` to an array of
+  integers — never put it in the schema-facing In type; keep a parallel
+  `Value any` shape for the schema and raw types for decoding. Values are
+  stored compacted, so "identical retry" means equal compact JSON (number
+  spelling like 1e2 still counts as different text). Batch counts: applied
+  = insert/replacement/delete-that-removed; unchanged = identical upsert
+  or absent delete; an empty batch is accepted with zeros. `updated_at_ms`
+  is clamped up to `created_at_ms` on update so a backwards hub clock step
+  cannot trip the table CHECK and permanently wedge an annotation.

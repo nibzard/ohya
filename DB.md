@@ -147,7 +147,12 @@ ORDER BY e.id LIMIT 100;
 ```
 
 These are illustrative SQL parameters; `sql(query)` callers substitute SQL literals.
-Expose the current writer ID in the MCP tool description. The primary key supports
+Rows are written only through the `annotate` MCP tool (`internal/store.Annotate`):
+the hub assigns `writer_id` from the device identity, values are stored as
+compact JSON text, an identical upsert rewrites nothing (timestamps included),
+a changed value keeps `created_at_ms`, and the result reports `applied` and
+`unchanged` counts after the atomic commit. Expose the current writer ID in the
+MCP tool description. The primary key supports
 per-event annotation lookup. Add broader annotation indexes only with query evidence.
 The initial migration includes annotations; later schema changes follow the migration
 policy above.

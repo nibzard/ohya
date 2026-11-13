@@ -17,7 +17,8 @@ import (
 func connect(t *testing.T, o EngineOptions) *mcp.ClientSession {
 	t.Helper()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
-	server := New(openSeededReader(t), o)
+	hub, readers := openSeededHub(t)
+	server := New(readers, hub.Writer(), o)
 	serverSession, err := server.Connect(context.Background(), serverTransport, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -52,10 +53,22 @@ func TestServerServesSQLTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 1 || tools.Tools[0].Name != ToolName {
-		t.Fatalf("tools = %+v, want the single sql tool", tools.Tools)
+	if len(tools.Tools) != 2 {
+		t.Fatalf("tool list = %v, want exactly sql and annotate", tools.Tools)
 	}
-	description := tools.Tools[0].Description
+	var sql, annotate *mcp.Tool
+	for _, tl := range tools.Tools {
+		switch tl.Name {
+		case ToolName:
+			sql = tl
+		case AnnotateToolName:
+			annotate = tl
+		}
+	}
+	if sql == nil || annotate == nil {
+		t.Fatalf("tool list = %v, want both sql and annotate", tools.Tools)
+	}
+	description := sql.Description
 	for _, want := range []string{
 		"Current writer ID", "dev1", "events_fts", "event_annotations",
 		"session_token_usage", "sqlite_master", "one statement per call",
@@ -142,7 +155,8 @@ func TestServerProtocolCompatibility(t *testing.T) {
 			continue
 		}
 		serverTransport, clientTransport := mcp.NewInMemoryTransports()
-		server := New(openSeededReader(t), EngineOptions{WriterID: "dev1"})
+		hub, readers := openSeededHub(t)
+		server := New(readers, hub.Writer(), EngineOptions{WriterID: "dev1"})
 		serverSession, err := server.Connect(context.Background(), serverTransport, nil)
 		if err != nil {
 			t.Fatal(err)

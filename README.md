@@ -9,9 +9,9 @@ One Go binary, one SQLite database, no cloud account.
 
 Status: pre-MVP. Local Claude Code ingestion runs end to end: `ohya ingest`
 imports existing session history once, then polls incrementally into one
-SQLite WAL database through the transactional write path. The read-only
-`sql` MCP tool is served over stdio by `ohya mcp`. The `annotate` MCP tool
-and device sync are not implemented yet. See [MANIFESTO.md](MANIFESTO.md) for
+SQLite WAL database through the transactional write path. `ohya mcp` serves
+the read-only `sql` tool and the bounded atomic `annotate` tool over stdio.
+Device sync is not implemented yet. See [MANIFESTO.md](MANIFESTO.md) for
 engineering principles, [PRODUCT.md](PRODUCT.md) for the product vision,
 [ARCHITECTURE.md](ARCHITECTURE.md) for system design, and [DB.md](DB.md)
 for the database plan.
@@ -61,6 +61,17 @@ for Claude Code:
   }
 }
 ```
+
+The `annotate` tool lets an agent persist its own interpretations — tags,
+classifications, security-review findings — as JSON values on existing
+events, without modifying any original transcript record. Each operation
+upserts or deletes one annotation, identified by `(event_id, namespace, key,
+writer_id)`. The hub assigns the writer from the device identity; a caller
+cannot choose it. A batch of at most 100 operations commits atomically or
+not at all, values are valid JSON of at most 64 KiB stored compacted, and
+the result reports `applied` and `unchanged` counts. Identical retries
+change nothing, not even timestamps. Agents query annotations through the
+`sql` tool like any other table.
 
 ## Scope
 

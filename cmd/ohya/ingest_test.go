@@ -564,16 +564,22 @@ func TestIngestCrashHelper(t *testing.T) {
 }
 
 // TestIngestRunsUntilCanceled covers continuous mode: the loop keeps serving
-// passes and returns without error once the context is canceled.
+// passes and returns without error once the context is canceled. The context
+// is canceled from the first pass summary, not from a fixed deadline: under
+// load a first pass can outgrow any short deadline, report its half-finished
+// sources to stderr, and legally print "imported 0 events" — the assertion
+// would race the machine's speed. A safety timeout still bounds the test.
 func TestIngestRunsUntilCanceled(t *testing.T) {
 	e := newSliceEnv(t)
 	copyFixture(t, e.session("main-session.jsonl"), "main-session.jsonl")
-	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	var stdout bytes.Buffer
 	err := runIngest(ctx, ingestOptions{
 		dbPath: e.dbPath, stateDir: e.stateDir, claudeRoot: e.root,
-		interval: 10 * time.Millisecond, stdout: &stdout, stderr: io.Discard,
+		interval: 10 * time.Millisecond,
+		stdout:   firstWriteCanceler{w: &stdout, cancel: cancel},
+		stderr:   io.Discard,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -581,6 +587,18 @@ func TestIngestRunsUntilCanceled(t *testing.T) {
 	if !strings.Contains(stdout.String(), "imported 16 events from 1 source") {
 		t.Fatalf("stdout misses the pass summary: %q", stdout.String())
 	}
+}
+
+// firstWriteCanceler cancels cancel at the first write, ending the ingest
+// loop right after the one summary this test checks.
+type firstWriteCanceler struct {
+	w      io.Writer
+	cancel context.CancelFunc
+}
+
+func (f firstWriteCanceler) Write(p []byte) (int, error) {
+	f.cancel()
+	return f.w.Write(p)
 }
 
 func TestIngestMissingClaudeRootFails(t *testing.T) {

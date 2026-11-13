@@ -14,9 +14,9 @@ import (
 	"github.com/nibzard/ohya/internal/store"
 )
 
-// openSeededReader opens a hub database with known rows and returns its
-// reader pool; cleanup closes the hub and the pool.
-func openSeededReader(t *testing.T) *sql.DB {
+// openSeededHub opens a hub database with known rows and returns the hub and
+// its reader pool; cleanup closes both.
+func openSeededHub(t *testing.T) (*store.DB, *sql.DB) {
 	t.Helper()
 	hub, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "hub.db"))
 	if err != nil {
@@ -44,14 +44,15 @@ func openSeededReader(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { readers.Close() })
-	return readers
+	return hub, readers
 }
 
-// newTestEngine returns an engine on a freshly seeded reader pool.
+// newTestEngine returns an engine on a freshly seeded hub, writing as dev1.
 func newTestEngine(t *testing.T, o EngineOptions) *Engine {
 	t.Helper()
+	hub, readers := openSeededHub(t)
 	o.WriterID = "dev1"
-	return NewEngine(openSeededReader(t), o)
+	return NewEngine(readers, hub.Writer(), o)
 }
 
 // mustQuery runs a query expected to succeed and fails the test otherwise.
@@ -425,6 +426,7 @@ func TestOptionsDefaults(t *testing.T) {
 	if got.WriterID != "w" || got.MaxRows != DefaultMaxRows ||
 		got.MaxOutputBytes != DefaultMaxOutputBytes || got.MaxQueryBytes != DefaultMaxQueryBytes ||
 		got.Deadline != DefaultDeadline || got.MaxConcurrency != DefaultMaxConcurrency ||
+		got.MaxAnnotateRequestBytes != DefaultMaxAnnotateRequestBytes ||
 		len(got.DenyTables) != 0 {
 		t.Fatalf("defaults = %+v", got)
 	}
