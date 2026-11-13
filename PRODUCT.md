@@ -13,7 +13,7 @@ files remaining available until uploaded.
 
 Claude Code, OpenAI Codex, and other coding agents create valuable context every day: conversations, decisions, debugging sessions, code changes, tool executions, and unfinished work. But that knowledge gets trapped in individual sessions, tools, and devices.
 
-*Phase 1: Claude Code and Codex. Phase 2: Pi agent and OpenCode.*
+*Phase 1: Claude Code, Codex, and Pi agent. Phase 2: OpenCode.*
 
 ohya captures those sessions automatically, synchronizes them across devices, and makes the entire history available to any connected AI agent through read-only SQL and bounded annotation MCP tools.
 

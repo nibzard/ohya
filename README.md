@@ -16,8 +16,8 @@ for the database plan.
 
 ### MVP (phase 1)
 
-- Ingest Claude Code and Codex session logs (macOS, polling) into one
-  hub-owned SQLite WAL database with FTS5/BM25 search.
+- Ingest Claude Code, Codex, and Pi agent session logs (macOS, polling) into
+  one hub-owned SQLite WAL database with FTS5/BM25 search.
 - Read-only `sql(query)` and bounded `annotate(operations)` MCP tools.
   Agents can persist tags, classifications and security-review findings without
   modifying original transcript records.
@@ -26,8 +26,8 @@ for the database plan.
 
 ### Phase 2
 
-- Pi agent and OpenCode as ingestion sources, pending parser spikes for
-  their session-log formats.
+- OpenCode as an ingestion source, pending a parser spike for its
+  per-message JSON storage (enumerated files, not append-only JSONL).
 
 ### Explicitly deferred
 
