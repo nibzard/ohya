@@ -1,7 +1,8 @@
-// The mcp subcommand: serve the read-only sql(query) MCP tool over stdio.
-// The tool is one of two surfaces into the hub database — ingestion writes
-// through the single writer, agents read through restricted reader
-// connections guarded by a SQLite authorizer (internal/mcpserver).
+// The mcp subcommand: serve the sql(query) and annotate(operations) MCP
+// tools over stdio. The tools are the agent-facing surface of the hub
+// database — queries run through restricted reader connections guarded by a
+// SQLite authorizer, annotation batches commit through the single writer, and
+// both stay bounded (internal/mcpserver).
 package main
 
 import (
@@ -48,10 +49,10 @@ func runMcpCommand(args []string, stderr io.Writer) error {
 	return runMcp(ctx, *db, stateDir)
 }
 
-// runMcp opens the hub and serves the sql tool until ctx is done. The writer
-// stays open alongside the readers: it applies pending migrations, and a
-// read-only connection cannot create the database or recover the write-ahead
-// log. The tool itself never writes.
+// runMcp opens the hub and serves the tools until ctx is done. The writer
+// stays open alongside the readers: it applies pending migrations, serves
+// annotation batches, and a read-only connection cannot create the database
+// or recover the write-ahead log. The sql tool itself never writes.
 func runMcp(ctx context.Context, dbPath, stateDir string) error {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
 		return fmt.Errorf("create database directory: %w", err)
@@ -73,6 +74,6 @@ func runMcp(ctx context.Context, dbPath, stateDir string) error {
 	if err != nil {
 		return err
 	}
-	server := mcpserver.New(readers, mcpserver.EngineOptions{WriterID: deviceID})
+	server := mcpserver.New(readers, hub.Writer(), mcpserver.EngineOptions{WriterID: deviceID})
 	return mcpserver.Run(ctx, server)
 }

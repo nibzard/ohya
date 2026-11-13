@@ -1,8 +1,9 @@
-// Package mcpserver exposes the hub database to coding agents through the
-// read-only sql(query) MCP tool. The query engine keeps every safeguard in
-// this package: one statement per call, a connection-level SQLite
-// authorizer, an execution deadline, row and byte output limits, and bounded
-// concurrency.
+// Package mcpserver exposes the hub database to coding agents through two
+// MCP tools: the read-only sql(query) tool and the bounded atomic
+// annotate(operations) tool. The engine keeps every safeguard in this
+// package: one statement per call, a connection-level SQLite authorizer, an
+// execution deadline, row and byte output limits, bounded concurrency, and
+// strict decoding of annotation batches.
 package mcpserver
 
 import (
@@ -27,6 +28,10 @@ const (
 	DefaultMaxQueryBytes  = 64 << 10        // input query text
 	DefaultDeadline       = 5 * time.Second // statement execution deadline
 	DefaultMaxConcurrency = 4               // queries executing at once
+
+	// DefaultMaxAnnotateRequestBytes bounds the JSON text of one annotate
+	// request.
+	DefaultMaxAnnotateRequestBytes = 1 << 20
 )
 
 // Sentinel errors reported to callers. Errors wrap them, so tests and
@@ -67,6 +72,8 @@ type EngineOptions struct {
 	// MaxConcurrency bounds queries executing at once; further calls fail
 	// with ErrBusy instead of queueing.
 	MaxConcurrency int
+	// MaxAnnotateRequestBytes bounds the JSON text of one annotate request.
+	MaxAnnotateRequestBytes int
 	// DenyTables names tables the tool must not read. The transcript tables
 	// are all exposed; the future device-credential registry (see
 	// ARCHITECTURE.md) must be added here before it ships.
@@ -90,6 +97,9 @@ func (o EngineOptions) withDefaults() EngineOptions {
 	if o.MaxConcurrency <= 0 {
 		o.MaxConcurrency = DefaultMaxConcurrency
 	}
+	if o.MaxAnnotateRequestBytes <= 0 {
+		o.MaxAnnotateRequestBytes = DefaultMaxAnnotateRequestBytes
+	}
 	return o
 }
 
@@ -109,19 +119,23 @@ const (
 	truncatedByBytes = "byte_limit"
 )
 
-// Engine runs one read-only statement per call on a restricted reader pool.
-// A pool handed to NewEngine belongs to the tool: the authorizer stays
-// installed on every connection the pool opens.
+// Engine runs one read-only statement per call on a restricted reader pool
+// and commits annotation batches on the hub writer. Pools handed to
+// NewEngine belong to the tool: the authorizer stays installed on every
+// connection the reader pool opens.
 type Engine struct {
 	readers    *sql.DB
+	writer     *sql.DB
 	options    EngineOptions
 	deniedTbls map[string]bool
 	slots      chan struct{}
 }
 
 // NewEngine returns an engine running statements on readers, a read-only
-// pool from store.DB.Reader. Zero-valued limits in o take the defaults.
-func NewEngine(readers *sql.DB, o EngineOptions) *Engine {
+// pool from store.DB.Reader, and annotation batches on writer, the hub's
+// single writer from store.DB.Writer. Zero-valued limits in o take the
+// defaults.
+func NewEngine(readers, writer *sql.DB, o EngineOptions) *Engine {
 	o = o.withDefaults()
 	denied := make(map[string]bool, len(o.DenyTables))
 	for _, t := range o.DenyTables {
@@ -129,6 +143,7 @@ func NewEngine(readers *sql.DB, o EngineOptions) *Engine {
 	}
 	return &Engine{
 		readers:    readers,
+		writer:     writer,
 		options:    o,
 		deniedTbls: denied,
 		slots:      make(chan struct{}, o.MaxConcurrency),

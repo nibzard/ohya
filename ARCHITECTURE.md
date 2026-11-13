@@ -176,3 +176,16 @@ result for each event, including explicit `reviewed` status and an empty finding
 list when appropriate. Resume by querying missing/version-mismatched results.
 Store redacted locations/descriptions of suspected secrets rather than copying
 secret values into annotations. A finding does not redact the original transcript.
+
+Implemented in `internal/mcpserver` (tool surface, strict decoding, request
+limits) and `internal/store` (`Annotate`, the transactional write path on the
+hub writer), served by `ohya mcp` next to `sql`. The tool's input schema and
+the handler's strict decoder reject unknown fields together, so a caller
+cannot supply `writer_id`; the hub always writes the local Device ID. Values
+are stored as compact JSON text, so "identical" means equal compacted JSON:
+a retry with different whitespace is still a no-op. The result counts
+`applied` operations (insert, replacement, delete that removed a row) and
+`unchanged` ones (identical upsert, delete of an absent annotation); an empty
+batch is accepted and reports zeros. A delete carrying a `value` is rejected,
+and `updated_at_ms` never moves below `created_at_ms`, even across a hub
+clock step backwards.
