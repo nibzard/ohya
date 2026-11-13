@@ -2,7 +2,39 @@
 
 [001_initial.sql](internal/store/migrations/001_initial.sql) is the authoritative initial DDL. It defines
 three ingestion tables, one annotation table and an external-content FTS5 index; do not duplicate the DDL here.
-There is no released database yet. This versioned SQL is the fresh-database baseline; a migration runner and upgrade policy remain to be implemented.
+There is no released database yet, so migration 001 is the fresh-database baseline; every later schema
+change arrives as a new migration file.
+
+## Migrations
+
+Migrations are versioned SQL files in `internal/store/migrations/NNN_name.sql`, embedded in the binary.
+`store.Open` applies pending migrations in version order on the single writer before the database is used.
+Each applied migration is recorded in `schema_migrations (version, name, checksum, applied_at_ms)`;
+the runner owns that table, not a migration file. Migration files hold schema and data changes only.
+Connection settings live in `internal/store` code, because SQLite cannot switch journal mode inside a
+transaction and `PRAGMA foreign_keys` is a no-op there.
+
+Upgrade policy:
+
+1. Add a new `NNN_name.sql` with the next version number. Never edit, rename, renumber or delete a
+   file that any database may already have applied.
+2. Each pending migration and its `schema_migrations` row commit in one transaction. A failed migration
+   rolls back completely; the next run resumes at the first pending version.
+3. Every open verifies applied history. A checksum mismatch, a migration missing from the binary, or a
+   new file numbered below the newest applied version is an error, never a silent upgrade.
+4. Until a database ships, 001 is the only baseline. After a release exists, test every new migration
+   by upgrading a database from each released schema, not only by fresh creation.
+5. Keep this file in step with the migration list in the same change, so a review can diff policy
+   against DDL.
+
+## Connections and durability
+
+All writes — ingestion, annotations, migrations — go through the single writer connection that
+`store.Open` configures with WAL journaling, `synchronous = FULL`, foreign keys and a busy timeout.
+Readers get separate read-only connections (`mode=ro`) with foreign keys enabled. The settings apply
+to every pooled connection, and `store.Open` verifies them before use. Open the writer first and keep
+it open while readers run: a read-only connection cannot create the database or recover the
+write-ahead log.
 
 | Table | Meaning |
 |---|---|
@@ -87,4 +119,5 @@ ORDER BY e.id LIMIT 100;
 These are illustrative SQL parameters; `sql(query)` callers substitute SQL literals.
 Expose the current writer ID in the MCP tool description. The primary key supports
 per-event annotation lookup. Add broader annotation indexes only with query evidence.
-The initial migration includes annotations. Future schema changes require new migrations; do not edit an applied migration.
+The initial migration includes annotations; later schema changes follow the migration
+policy above.

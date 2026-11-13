@@ -29,3 +29,8 @@ How to use this file:
 
 - macOS distribution still needs native builds on both supported architectures and
   signing/notarization verification; the SQLite driver requires a C toolchain.
+
+- FTS5 verification gotcha (verified 2026-11-13, internal/store/open_test.go):
+  `SELECT count(*)` on an external-content FTS5 table reads the content table, not
+  the index. Assert index consistency with the `integrity-check` command and MATCH
+  enumeration. Relevant wherever the write path maintains `events_fts` (T006+).
