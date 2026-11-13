@@ -68,3 +68,17 @@ How to use this file:
   Claude Code directory encoding is lossy). Define the derivation before any
   query relies on `repo`. Token aggregate policy is settled in DB.md; tool
   aggregates remain deferred pending a query need.
+
+- Local slice wiring (2026-11-13, cmd/ohya, T007): the production
+  claudecode.Record → store.Event adapter lives in cmd/ohya/adapter.go
+  (usage field names, contentForm=="string" prompt test). internal/store
+  keeps a mirrored copy in ingest_test.go to drive the write path from
+  fixtures — change both together. The crash window between the Ingest
+  commit and watch.Acknowledge closes by replay on restart (slice test kills
+  a helper process there; replay validates stored bytes and inserts nothing).
+  Ingestion batches are bounded at 8 MiB so importing a large history file
+  stays predictable in memory; a batch never splits a record. A stopped
+  (malformed) source prints its diagnostic once per stop offset per run,
+  then stays quiet until the offset moves; fresh sources from replacement or
+  truncation are reported because they re-import history, new files are not
+  (a first import of thousands of files must not print a line per file).
