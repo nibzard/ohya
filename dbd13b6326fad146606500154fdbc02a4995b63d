@@ -1,0 +1,17 @@
+# Context
+
+## Background
+NOTES.md flagged the agent session storage findings as unverified:
+they came partly from third-party writeups, and this was a new machine.
+
+## Why This Way
+All phase 1 agents turned out to be installed locally with real
+session corpora, so every claim could be checked against actual
+files instead of writeups. Two claims changed as a result: Pi
+sessions live globally under ~/.pi/agent/sessions/ (not in
+project-local .pi/), and OpenCode v2.0.12 moved from per-message
+JSON files to SQLite (opencode.db).
+
+## Related
+- Follow-up commit 38d14f3 aligns README/ARCHITECTURE/BACKLOG with
+  these findings.
