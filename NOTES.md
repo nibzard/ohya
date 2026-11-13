@@ -30,6 +30,19 @@ How to use this file:
 - macOS distribution still needs native builds on both supported architectures and
   signing/notarization verification; the SQLite driver requires a C toolchain.
 
+- Claude Code parser normalization choices (2026-11-13, internal/claudecode; relevant to T006
+  aggregates): searchable text per record concatenates block text in source order, and a
+  tool_use block contributes `name + compact sorted-key JSON of input` (so commands and file
+  paths are searchable); bookkeeping records contribute no text. Role comes from message.role,
+  falling back to the record type for user/assistant; tool_name is set only for exactly one
+  tool block. Only the `timestamp` field sets time_ms (cost-state `startTime` is ignored).
+  Records missing sessionId get native ID `ohya-synthetic:<source-scope>` — subagent
+  `started`/`result` records carry no sessionId, so they land in that synthetic session by
+  design. The record size limit counts JSON bytes excluding the line terminator and also stops
+  an incomplete tail already above the limit. A valid-JSON non-object line (array, null) is
+  malformed and stops the source, like invalid JSON.
+
+
 - FTS5 verification gotcha (verified 2026-11-13, internal/store/open_test.go):
   `SELECT count(*)` on an external-content FTS5 table reads the content table, not
   the index. Assert index consistency with the `integrity-check` command and MATCH
