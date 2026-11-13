@@ -1,4 +1,11 @@
-package main
+// Package events maps parsed agent records onto the write path's
+// store.Event. It holds the production adapters shared by local ingestion
+// (cmd/ohya) and hub-side batch normalization (internal/hubsync), so every
+// path into the database normalizes the same record identically. One mapping
+// exists per agent parser; internal/store/ingest_test.go keeps a mirrored
+// copy because an in-package test cannot import this package without an
+// import cycle — change them together.
+package events
 
 import (
 	"encoding/json"
@@ -17,11 +24,11 @@ type usageFields struct {
 	OutputTokens             int64 `json:"output_tokens"`
 }
 
-// eventFromRecord maps one parsed Claude Code record onto the write path's
-// Event. This is the production adapter of the local slice: it knows the
-// native field names, which user records are fresh prompts (string content,
-// observed as contentForm "string") and where the per-request usage lives.
-func eventFromRecord(r claudecode.Record) store.Event {
+// FromClaudeCode maps one parsed Claude Code record onto the write path's
+// Event. It knows the native field names, which user records are fresh
+// prompts (string content, observed as contentForm "string") and where the
+// per-request usage lives.
+func FromClaudeCode(r claudecode.Record) store.Event {
 	e := store.Event{
 		Offset: r.Offset, End: r.End, NativeID: r.Native,
 		Kind: r.Kind, Role: r.Role, ToolName: r.ToolName, Text: r.Text,
@@ -51,11 +58,11 @@ func eventFromRecord(r claudecode.Record) store.Event {
 	return e
 }
 
-// eventsFromRecords maps parsed records in source order.
-func eventsFromRecords(records []claudecode.Record) []store.Event {
+// FromClaudeCodeRecords maps parsed records in source order.
+func FromClaudeCodeRecords(records []claudecode.Record) []store.Event {
 	events := make([]store.Event, len(records))
 	for i, r := range records {
-		events[i] = eventFromRecord(r)
+		events[i] = FromClaudeCode(r)
 	}
 	return events
 }

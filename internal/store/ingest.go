@@ -25,6 +25,20 @@ import (
 // relies on colon-free agent names.
 var agentNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
+// ErrBatchRejected marks a batch the write path refused for a deterministic
+// reason: retrying the same bytes cannot succeed. The sync endpoint maps it
+// to a permanent rejection the device must not retry as-is.
+var ErrBatchRejected = errors.New("store: batch rejected")
+
+// ErrSourceOwnership marks an attempt to move a registered source to another
+// device or another agent. Ownership is fixed when the source is registered
+// and never changes.
+var ErrSourceOwnership = errors.New("store: source ownership cannot change")
+
+// ErrSourceNotRegistered marks a batch for a source the hub never registered.
+// The uploader must register the source before its first batch.
+var ErrSourceNotRegistered = errors.New("store: source is not registered")
+
 // Usage holds the unambiguous token counts of one API request. Agent parsers
 // map their native usage fields onto these; counts the native record omits
 // stay zero. Every other usage field (tiers, costs, details) is deliberately
@@ -73,6 +87,10 @@ type Event struct {
 // Batch is one source's contiguous records, in source order.
 type Batch struct {
 	SourceID string
+	// DeviceID is the identity submitting the batch. A source is bound to one
+	// device at registration, so a batch claiming another device is rejected
+	// instead of silently writing sessions under the wrong identity.
+	DeviceID string
 	Events   []Event
 }
 
@@ -100,13 +118,13 @@ func SessionID(deviceID, agent, nativeID string) string {
 func (d *DB) RegisterSource(ctx context.Context, id, deviceID, agent, path string) error {
 	switch {
 	case id == "":
-		return fmt.Errorf("store: register source: empty source ID")
+		return fmt.Errorf("store: register source: empty source ID: %w", ErrBatchRejected)
 	case deviceID == "":
-		return fmt.Errorf("store: register source %s: empty device ID", id)
+		return fmt.Errorf("store: register source %s: empty device ID: %w", id, ErrBatchRejected)
 	case !agentNameRE.MatchString(agent):
-		return fmt.Errorf("store: register source %s: agent name %q is not a lowercase slug", id, agent)
+		return fmt.Errorf("store: register source %s: agent name %q is not a lowercase slug: %w", id, agent, ErrBatchRejected)
 	case path == "":
-		return fmt.Errorf("store: register source %s: empty path", id)
+		return fmt.Errorf("store: register source %s: empty path: %w", id, ErrBatchRejected)
 	}
 	tx, err := d.writer.BeginTx(ctx, nil)
 	if err != nil {
@@ -128,11 +146,11 @@ func (d *DB) RegisterSource(ctx context.Context, id, deviceID, agent, path strin
 	case err != nil:
 		return fmt.Errorf("store: register source %s: read source: %w", id, err)
 	case storedDevice != deviceID:
-		return fmt.Errorf("store: register source %s: held by device %s, not %s: source ownership cannot change",
-			id, storedDevice, deviceID)
+		return fmt.Errorf("store: register source %s: held by device %s, not %s: %w",
+			id, storedDevice, deviceID, ErrSourceOwnership)
 	case storedAgent != agent:
-		return fmt.Errorf("store: register source %s: held for agent %s, not %s",
-			id, storedAgent, agent)
+		return fmt.Errorf("store: register source %s: held for agent %s, not %s: %w",
+			id, storedAgent, agent, ErrSourceOwnership)
 	case storedPath != path:
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE sources SET path = ? WHERE id = ?`, path, id); err != nil {
@@ -156,7 +174,10 @@ func (d *DB) RegisterSource(ctx context.Context, id, deviceID, agent, path strin
 // Other sources are unaffected; ingest them separately.
 func (d *DB) Ingest(ctx context.Context, b Batch) (IngestResult, error) {
 	if b.SourceID == "" {
-		return IngestResult{}, fmt.Errorf("store: ingest: empty source ID")
+		return IngestResult{}, fmt.Errorf("store: ingest: empty source ID: %w", ErrBatchRejected)
+	}
+	if b.DeviceID == "" {
+		return IngestResult{}, fmt.Errorf("store: ingest source %s: empty device ID: %w", b.SourceID, ErrBatchRejected)
 	}
 	if err := validateBatch(b.Events); err != nil {
 		return IngestResult{}, err
@@ -174,10 +195,15 @@ func (d *DB) Ingest(ctx context.Context, b Batch) (IngestResult, error) {
 		`SELECT cursor_bytes, device_id, agent FROM sources WHERE id = ?`, b.SourceID).
 		Scan(&cursor, &deviceID, &agent)
 	if errors.Is(err, sql.ErrNoRows) {
-		return IngestResult{}, fmt.Errorf("store: ingest: source %s is not registered; register a source before its first batch", b.SourceID)
+		return IngestResult{}, fmt.Errorf("store: ingest: source %s is not registered; register a source before its first batch: %w",
+			b.SourceID, ErrSourceNotRegistered)
 	}
 	if err != nil {
 		return IngestResult{}, fmt.Errorf("store: ingest source %s: read source: %w", b.SourceID, err)
+	}
+	if b.DeviceID != deviceID {
+		return IngestResult{}, fmt.Errorf("store: ingest source %s: source belongs to device %s, but the batch claims device %s: %w",
+			b.SourceID, deviceID, b.DeviceID, ErrSourceOwnership)
 	}
 
 	// Committed records never sit at or beyond the cursor. If they do, the
@@ -197,8 +223,8 @@ func (d *DB) Ingest(ctx context.Context, b Batch) (IngestResult, error) {
 		return IngestResult{Cursor: cursor}, nil
 	}
 	if first := b.Events[0].Offset; first > cursor {
-		return IngestResult{}, fmt.Errorf("store: ingest source %s: batch starts at offset %d, ahead of the committed cursor %d: bytes would be skipped",
-			b.SourceID, first, cursor)
+		return IngestResult{}, fmt.Errorf("store: ingest source %s: batch starts at offset %d, ahead of the committed cursor %d: bytes would be skipped: %w",
+			b.SourceID, first, cursor, ErrBatchRejected)
 	}
 	if err := validateOverlap(ctx, tx, b, cursor); err != nil {
 		return IngestResult{}, err
@@ -236,21 +262,21 @@ func validateBatch(events []Event) error {
 	for i := range events {
 		e := &events[i]
 		if e.Offset < 0 {
-			return fmt.Errorf("store: batch record %d has negative offset %d", i, e.Offset)
+			return fmt.Errorf("store: batch record %d has negative offset %d: %w", i, e.Offset, ErrBatchRejected)
 		}
 		if e.RawJSON == "" {
-			return fmt.Errorf("store: batch record %d at offset %d has no JSON text", i, e.Offset)
+			return fmt.Errorf("store: batch record %d at offset %d has no JSON text: %w", i, e.Offset, ErrBatchRejected)
 		}
 		if e.NativeID == "" {
-			return fmt.Errorf("store: batch record %d at offset %d has no native session ID", i, e.Offset)
+			return fmt.Errorf("store: batch record %d at offset %d has no native session ID: %w", i, e.Offset, ErrBatchRejected)
 		}
 		if want := e.Offset + int64(len(e.RawJSON)) + 1; e.End != want {
-			return fmt.Errorf("store: batch record %d at offset %d ends at %d, but its %d JSON bytes plus one terminator end at %d",
-				i, e.Offset, e.End, len(e.RawJSON), want)
+			return fmt.Errorf("store: batch record %d at offset %d ends at %d, but its %d JSON bytes plus one terminator end at %d: %w",
+				i, e.Offset, e.End, len(e.RawJSON), want, ErrBatchRejected)
 		}
 		if i > 0 && e.Offset != events[i-1].End {
-			return fmt.Errorf("store: batch record %d starts at offset %d, but record %d ends at %d: delivery must be contiguous",
-				i, e.Offset, i-1, events[i-1].End)
+			return fmt.Errorf("store: batch record %d starts at offset %d, but record %d ends at %d: delivery must be contiguous: %w",
+				i, e.Offset, i-1, events[i-1].End, ErrBatchRejected)
 		}
 	}
 	return nil
@@ -289,12 +315,12 @@ func validateOverlap(ctx context.Context, tx *sql.Tx, b Batch, cursor int64) err
 		}
 		e := &b.Events[stored]
 		if e.Offset != offset {
-			return fmt.Errorf("store: ingest source %s: stored record sits at offset %d, but the retry covers offset %d below the committed cursor %d",
-				b.SourceID, offset, e.Offset, cursor)
+			return fmt.Errorf("store: ingest source %s: stored record sits at offset %d, but the retry covers offset %d below the committed cursor %d: %w",
+				b.SourceID, offset, e.Offset, cursor, ErrBatchRejected)
 		}
 		if e.RawJSON != raw {
-			return fmt.Errorf("store: ingest source %s: conflicting retry at offset %d: the stored record and the retry differ (%d and %d JSON bytes)",
-				b.SourceID, offset, len(raw), len(e.RawJSON))
+			return fmt.Errorf("store: ingest source %s: conflicting retry at offset %d: the stored record and the retry differ (%d and %d JSON bytes): %w",
+				b.SourceID, offset, len(raw), len(e.RawJSON), ErrBatchRejected)
 		}
 		stored++
 	}
@@ -302,8 +328,8 @@ func validateOverlap(ctx context.Context, tx *sql.Tx, b Batch, cursor int64) err
 		return fmt.Errorf("store: ingest source %s: read stored records: %w", b.SourceID, err)
 	}
 	if stored < replayed {
-		return fmt.Errorf("store: ingest source %s: no stored record at offset %d below the committed cursor %d",
-			b.SourceID, b.Events[stored].Offset, cursor)
+		return fmt.Errorf("store: ingest source %s: no stored record at offset %d below the committed cursor %d: %w",
+			b.SourceID, b.Events[stored].Offset, cursor, ErrBatchRejected)
 	}
 	return nil
 }

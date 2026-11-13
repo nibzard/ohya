@@ -11,7 +11,11 @@ Status: pre-MVP. Local Claude Code ingestion runs end to end: `ohya ingest`
 imports existing session history once, then polls incrementally into one
 SQLite WAL database through the transactional write path. `ohya mcp` serves
 the read-only `sql` tool and the bounded atomic `annotate` tool over stdio.
-Device sync is not implemented yet. See [MANIFESTO.md](MANIFESTO.md) for
+Device sync is in progress: the hub-side batch endpoint (`internal/hubsync`)
+implements the model-checked sync contract — registration, bounded batches,
+hub-side normalization with the local parser, device ownership binding and
+idempotent replay — as a library over any transport listener; device pairing
+and the uploader follow. See [MANIFESTO.md](MANIFESTO.md) for
 engineering principles, [PRODUCT.md](PRODUCT.md) for the product vision,
 [ARCHITECTURE.md](ARCHITECTURE.md) for system design, and [DB.md](DB.md)
 for the database plan.
@@ -85,8 +89,10 @@ change nothing, not even timestamps. Agents query annotations through the
   Agents can persist tags, classifications and security-review findings without
   modifying original transcript records.
 - Isolated Tailcat transport adapter for encrypted device-to-hub sync. The
-  feasibility spike is complete ([ADR 0002](docs/adr/0002-tailcat-transport.md));
-  sync itself is not implemented yet.
+  feasibility spike is complete ([ADR 0002](docs/adr/0002-tailcat-transport.md)),
+  and the hub sync endpoint (`internal/hubsync`) commits device batches
+  through the transactional write path; the device uploader and pairing
+  follow.
 
 ### Phase 2
 
@@ -103,7 +109,8 @@ platforms, and any third-party AI processing. See MANIFESTO.md (YAGNI).
 See [CONTRIBUTING.md](CONTRIBUTING.md) for build requirements and checks,
 [BACKLOG.md](BACKLOG.md) for implementation order, and the
 [dependency decisions](docs/adr/0001-dependencies.md) for tradeoffs. The
-Tailcat transport spike lives in `cmd/tailcat-spike`; its measurements and
+Tailcat transport spike lives in `cmd/tailcat-spike`; the hub sync endpoint
+lives in `internal/hubsync`. The spike's measurements and
 the selection decision are in
 [ADR 0002](docs/adr/0002-tailcat-transport.md). The sync cursor and
 acknowledgment protocol and the authorization, pairing, and revocation

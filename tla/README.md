@@ -6,9 +6,9 @@ cursor and acknowledgment protocol from the "Sync contract" in
 authorization, pairing, and revocation rules from its "Authorization and
 SQL" and "Agent annotations" sections. TLC model-checks both against the
 safety invariants and liveness properties recorded here. The sync
-endpoint (T017), the uploader (T019), and pairing with revocation (T018)
-must implement these state machines; change the specifications first when
-a contract changes.
+endpoint (T017, `internal/hubsync`), the uploader (T019), and pairing
+with revocation (T018) must implement these state machines; change the
+specifications first when a contract changes.
 
 ## Run
 
@@ -115,7 +115,8 @@ must sync whatever has arrived, on any schedule.
   the device retries. The liveness model states this by disabling loss
   and crash actions (`ReliableNet = TRUE`); the safety models enable them.
 - **Registered sources.** Every source exists at the hub before its first
-  batch. The registration step is T017.
+  batch. The registration step is T017: the 'R' frame of `internal/hubsync`
+  performs it, bound to the authenticated device, and its tests cover it.
 - **Fixed ownership.** Each source's device is fixed. Authentication,
   spoofing, revocation, and ownership binding are the authorization model
   (`Auth.tla`, below), not this one.
@@ -148,7 +149,8 @@ each produced a TLC violation:
 
 - Byte-boundary arithmetic and JSONL framing: the model uses record
   indices. The Go write path tests boundaries, contiguity, and overlap
-  validation (`internal/store`).
+  validation (`internal/store`); the endpoint tests repeat them over the
+  wire (`internal/hubsync`, T017).
 - Content of a conflicting retry: excluded by the immutable-content
   assumption above.
 - Transport behavior (Tailcat framing, reconnect mechanics): behind the
