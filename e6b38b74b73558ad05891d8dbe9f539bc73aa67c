@@ -1,0 +1,1 @@
+Completes 1e6ed29: the deriver binding shipped there but its contract test was not extended; found while reviewing test coverage after the fact.
