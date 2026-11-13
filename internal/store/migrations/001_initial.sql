@@ -1,7 +1,3 @@
-PRAGMA foreign_keys = ON;
-PRAGMA journal_mode = WAL;
-PRAGMA synchronous = FULL;
-
 CREATE TABLE sessions (
   id                TEXT PRIMARY KEY,
   agent             TEXT NOT NULL,

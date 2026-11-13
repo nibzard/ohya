@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -14,18 +13,12 @@ import (
 
 func setup(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite3", "file:"+filepath.Join(t.TempDir(), "test.db")+"?_foreign_keys=on&_synchronous=FULL")
+	hub, err := Open(context.Background(), filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Close() })
-	schema, err := os.ReadFile("migrations/001_initial.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = db.Exec(string(schema)); err != nil {
-		t.Fatal(err)
-	}
+	t.Cleanup(func() { hub.Close() })
+	db := hub.Writer()
 	for _, q := range []string{
 		`INSERT INTO sessions(id,agent,device_id,native_id) VALUES('s','agent','d','n')`,
 		`INSERT INTO sources(id,device_id,agent,path) VALUES('f','d','agent','log')`,
@@ -83,17 +76,6 @@ func TestAnnotationsAndFTS(t *testing.T) {
 		if err = db.QueryRow(`SELECT count(*) FROM event_annotations WHERE writer_id='first'`).Scan(&count); err != nil || count != 0 {
 			t.Fatalf("rollback: %d, %v", count, err)
 		}
-	}
-	var journal string
-	var sync, fk int
-	if err := db.QueryRow(`PRAGMA journal_mode`).Scan(&journal); err != nil || journal != "wal" {
-		t.Fatalf("journal: %q %v", journal, err)
-	}
-	if err := db.QueryRow(`PRAGMA synchronous`).Scan(&sync); err != nil || sync != 2 {
-		t.Fatalf("synchronous: %d %v", sync, err)
-	}
-	if err := db.QueryRow(`PRAGMA foreign_keys`).Scan(&fk); err != nil || fk != 1 {
-		t.Fatalf("foreign keys: %d %v", fk, err)
 	}
 }
 

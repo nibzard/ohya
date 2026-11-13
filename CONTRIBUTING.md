@@ -11,7 +11,10 @@ make build  # bin/ohya
 ```
 
 For individual Go commands use `-tags sqlite_fts5`, including tests and vet;
-without it the SQLite build lacks FTS5. CI runs these checks on macOS. The
-initial SQL migration is the schema source of truth; future migrations must not
-rewrite applied migrations. Use synthetic, non-sensitive fixtures in `testdata/`.
+without it the SQLite build lacks FTS5. CI runs these checks on macOS.
+Migrations are versioned SQL files under `internal/store/migrations/NNN_name.sql`;
+the runner applies them in order and records checksums in `schema_migrations`.
+Never rewrite or delete an applied migration — add a new file instead, and keep
+connection pragmas in `internal/store` code rather than migration SQL (see DB.md
+for the upgrade policy). Use synthetic, non-sensitive fixtures in `testdata/`.
 Do not commit session transcripts or credentials. See BACKLOG.md for work order.
