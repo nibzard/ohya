@@ -19,5 +19,9 @@ Migrations are versioned SQL files under `internal/store/migrations/NNN_name.sql
 the runner applies them in order and records checksums in `schema_migrations`.
 Never rewrite or delete an applied migration — add a new file instead, and keep
 connection pragmas in `internal/store` code rather than migration SQL (see DB.md
-for the upgrade policy). Use synthetic, non-sensitive fixtures in `testdata/`.
+for the upgrade policy). The TLA+ models for the sync and authorization
+protocols live in `tla/`; run `make tla` to check them with TLC (Java 11 or
+later; the pinned TLC jar is downloaded and checksum-verified automatically).
+See tla/README.md for the checked properties and assumptions. Use synthetic,
+non-sensitive fixtures in `testdata/`.
 Do not commit session transcripts or credentials. See BACKLOG.md for work order.

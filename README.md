@@ -105,7 +105,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for build requirements and checks,
 [dependency decisions](docs/adr/0001-dependencies.md) for tradeoffs. The
 Tailcat transport spike lives in `cmd/tailcat-spike`; its measurements and
 the selection decision are in
-[ADR 0002](docs/adr/0002-tailcat-transport.md).
+[ADR 0002](docs/adr/0002-tailcat-transport.md). The sync cursor and
+acknowledgment protocol is model-checked with TLA+/TLC in `tla/`
+(`make tla`; see [tla/README.md](tla/README.md)).
 
 ## License
 
