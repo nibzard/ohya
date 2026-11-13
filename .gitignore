@@ -5,4 +5,4 @@
 /tailcat-spike
 /tla/.tools/
 /tla/states/
-/tla/Sync_TTrace_*.tla
+/tla/*_TTrace_*.tla

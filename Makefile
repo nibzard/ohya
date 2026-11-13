@@ -8,7 +8,7 @@ check:
 	go test -tags sqlite_fts5 ./...
 	go vet -tags sqlite_fts5 ./...
 
-# Model-check the sync TLA+ specification with TLC (tla/README.md).
+# Model-check the TLA+ protocol specifications with TLC (tla/README.md).
 # Needs Java 11 or later; downloads the pinned TLC jar on first use.
 tla:
 	./tla/run-tlc.sh
