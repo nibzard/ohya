@@ -44,5 +44,69 @@ How to use this file:
     (macOS path `~/Library/Application Support/Claude/local-agent-mode-sessions/`;
     not observable on Linux).
 
+- Parser format facts cross-checked against agentsview (2026-11-13, commit
+  b262670; full study at /notes/agentsview-ingestion-study-2026-11-13.md):
+  - Claude Code: session ID is the filename stem; a differing in-file
+    `sessionId` marks a parent/continuation session. Consecutive assistant
+    records sharing one `message.id` are streaming chunks of one message and
+    must merge. Subagent transcripts live under
+    `<project-dir>/<session>/subagents/agent-<id>.jsonl`. Tool results can
+    reference a side file ("Full output saved to: ..."). Recorded `cwd` beats
+    the encoded directory name for project identity; worktrees make cwd-only
+    identity brittle, so keep `git` evidence from records when present.
+  - Codex: rollouts older than about one week are zstd-compressed to
+    `.jsonl.zst` in place (none locally yet; plan a streaming decompressing
+    reader or an explicit skip with a diagnostic). `session_index.jsonl` is a
+    shared, rewritten index — never treat it as an append-only source.
+    Forked/subagent rollouts replay the parent's whole history with
+    re-stamped timestamps; gate on turn-ID membership or usage double-counts.
+    `event_msg.token_count` usage attaches to the last usage-less assistant
+    message in the current turn (never drop tokens silently); distinguish
+    "zero tokens" from "field absent" with presence flags.
+  - Timestamps can disagree with file order in Claude transcripts (queued
+    prompts, hooks); record both and sort deterministically.
+
+- Cursor/checkpoint design inputs from agentsview (2026-11-13, study §1):
+  gate appends on inode/device + size + mtime + ctime ("a write restores mtime
+  but cannot restore ctime"); verify the committed prefix with a SHA-256
+  digest of its last 128 KiB; keep a resumable hash state so appends hash only
+  the suffix. Advance the cursor only through the last complete valid JSON
+  line; if an append contains zero complete records, keep the cursor and write
+  no skip-state, because writers can restore the old mtime. Split small
+  stat-gate metadata from larger resume blobs. These belong in device-local
+  state files (per ARCHITECTURE.md), not the hub schema.
+
+- Version parser output separately from schema (agentsview "dataVersion",
+  179 as of the study): every parser behavior change re-derives rows. Because
+  ohya preserves raw records, re-derivation can run inside the hub from stored
+  raw JSON, without source-file resync. Plan the version marker and a
+  re-derive migration before the first parser ships.
+
+- Open decision, malformed complete lines: ARCHITECTURE.md stops the source
+  at the offending offset; agentsview skips the line, counts it, and surfaces
+  the count. Real archives contain junk lines, and a stopped source blocks all
+  later events for that session. Collect evidence during the Claude Code
+  spike, then confirm or revise the stop-at-offset rule.
+
+- Multi-machine ingestion may not need networking first: agentsview supports
+  out-of-band transport (rsync/git/shared mount) into machine-labeled source
+  roots, one ingesting instance, dedup by native session ID. A "copied roots"
+  source mode could deliver shared history before the Tailcat spike de-risks
+  pairing and relays. Consider the ordering in BACKLOG.md item 4.
+
+- MCP memory patterns for `sql`/`annotate` (2026-11-13, study §6): exclude
+  sessions active in the last 10 minutes by default so agents do not retrieve
+  their own live session; document revision-bound pagination in the tool
+  description; treat transcript text returned to agents as hostile
+  (deterministic injection-bait labels, secret redaction over decoded JSON);
+  fail closed on unreviewed derived values.
+
+- FTS/storage lessons for the hub (2026-11-13, study §4): store
+  content-bearing text once — duplicated tool-result summaries cost agentsview
+  about 40% of file size; drop FTS triggers and derived indexes during bulk
+  import and rebuild after ("any row trigger makes SQLite stage each multi-row
+  INSERT through a temporary table"); keep a one-transaction `rebuild` path
+  for `events_fts` from day one.
+
 - macOS distribution still needs native builds on both supported architectures and
   signing/notarization verification; the SQLite driver requires a C toolchain.
