@@ -1,0 +1,10 @@
+# Context
+
+## Background
+Found while writing the FTS consistency test: external-content FTS5
+answers count(*) from the content table, so a naive index-vs-table
+row count comparison tautologically passes.
+
+## Why This Way
+Kept in NOTES.md because T006 (write path) and T008 (sql tool) will
+maintain and verify events_fts and may reach for count(*).
