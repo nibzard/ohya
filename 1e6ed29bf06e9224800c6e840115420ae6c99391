@@ -1,0 +1,39 @@
+# Design: Pi agent source (T037)
+
+## Problem
+Add the third ingestion source from the corrected, verified layout:
+sessions are global under ~/.pi/agent/sessions/<encoded-cwd>/, one
+append-only JSONL per session; the third-party "project-local .pi/"
+claim is wrong. Identity and usage rules had to follow the captured
+0.84.2/1.5.2 samples, not writeups.
+
+## Approach
+- Reuse the Codex header-first rule: the `session` entry at offset 0
+  names the session; no later entry repeats it. Parses past offset 0
+  take the id from the committed first record (store.SourceState).
+- MessageID is the assistant `responseId`, which makes the store's
+  one-row-per-(session, message_id) usage table sum per-response
+  exactly, with no Claude-Code-style dedupe. An error response has no
+  responseId, so its all-zero usage writes no row.
+- Usage validity check: input + cacheRead + output == totalTokens
+  (identity held in every verified record, cacheRead non-zero in
+  one). Pi's `input` therefore excludes cache reads, unlike Codex.
+  reasoning and cacheWrite stay unmapped until their subset
+  relations are verified (NOTES.md open questions).
+- The 1.5.2 `system` entry (harness preamble, sections, toolsAdded)
+  contributes no search text: it is identical across sessions and
+  would pollute BM25; its shape lands in metadata.
+
+## Key Trade-offs
+- Strict usage-sum validation drops a whole usage when a provider
+  counts reasoning or cacheWrite outside the verified identity —
+  doctrine: ambiguous counts count nothing.
+- The lossy encoded-cwd directory is never decoded; the header cwd
+  is authoritative, so colliding directories stay distinct sessions.
+- --session-dir runs are not discoverable from the environment; the
+  persistent env vars cover the default, -pi-root covers the rest.
+
+## References
+- testdata/pi/README.md (verified format and fixture offsets)
+- NOTES.md bullets: Pi format verification (T012), Pi parser choices
+- Captured samples (outside the repo): see NOTES.md
