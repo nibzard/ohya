@@ -2,7 +2,7 @@
 - Always read and follow `MANIFESTO.md` — it defines the project's principles and takes precedence over conflicting guidance.
 - Mission: shared, near-real-time, local-first memory for Claude Code, Codex, and other coding agents.
 - Before editing, inspect relevant code, tests, `README.md`, and applicable nested `AGENTS.md` files.
-- Architecture: one Go binary, modular monolith, one hub-owned SQLite WAL database, FTS5/BM25, one read-only `sql(query)` MCP tool.
+- Architecture: one Go binary, modular monolith, one hub-owned SQLite WAL database, FTS5/BM25, read-only `sql(query)` and bounded `annotate(operations)` MCP tools.
 - Use domain-driven language: Device, Source, Session, Event, Cursor, Batch, Acknowledgment; make invariants explicit.
 - Follow KISS, DRY, and YAGNI: smallest correct change; no speculative layers, services, or dependencies.
 - Keep parsing, domain logic, synchronization, SQLite, Tailcat transport, and MCP at clear boundaries.

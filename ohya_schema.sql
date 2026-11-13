@@ -64,3 +64,15 @@ BEGIN
   INSERT INTO events_fts(events_fts, rowid, text)
   VALUES ('delete', OLD.id, OLD.text);
 END;
+
+-- Agent-authored interpretation, separate from immutable source records.
+CREATE TABLE event_annotations (
+  event_id      INTEGER NOT NULL REFERENCES events(id),
+  namespace     TEXT NOT NULL CHECK (length(namespace) BETWEEN 1 AND 128),
+  key           TEXT NOT NULL CHECK (length(key) BETWEEN 1 AND 128),
+  value         TEXT NOT NULL CHECK (json_valid(value)),
+  writer_id     TEXT NOT NULL CHECK (length(writer_id) > 0),
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= created_at_ms),
+  PRIMARY KEY (event_id, namespace, key, writer_id)
+) STRICT;

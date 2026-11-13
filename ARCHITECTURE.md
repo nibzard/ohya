@@ -2,8 +2,8 @@
 
 ## Shape and scope
 
-One Go executable, one hub-owned SQLite WAL transcript database, one read-only
-SQL MCP tool. Keep parsing, normalization, persistence, synchronization, transport
+One Go executable, one hub-owned SQLite WAL transcript database, two MCP tools: read-only
+`sql(query)` and bounded `annotate(operations)`. Keep parsing, normalization, persistence, synchronization, transport
 and MCP at clear boundaries; introduce interfaces only where consumed.
 
 Start locally on macOS with Claude Code and polling. Add Codex next. Pi agent
@@ -106,5 +106,46 @@ inspection through SQL. Credentials and internal authorization state are not exp
 
 ## Deferred
 
-Classification, filesystem notifications, extra platforms and indexed file-reference
+Built-in classification, filesystem notifications, extra platforms and indexed file-reference
 tables require demonstrated need. No third-party AI processing is part of MVP.
+
+## Agent annotations
+
+Agents may classify records, attach tags or record security-review findings through
+`annotate(operations)`. Intelligence remains in the calling agent; ohya runs no
+classifier. Annotations are untrusted interpretations, never ingestion facts.
+
+Each operation supplies `op` (`upsert` or `delete`), `event_id`, `namespace`, and
+`key`; upsert additionally supplies a JSON `value`. The hub derives `writer_id`
+from the authenticated device (local stdio uses the local Device ID), never from
+caller input. All authorized devices may annotate any event, but may update or
+delete only their own annotations. Agents on one device share that identity;
+use distinct namespaces for independent workflows. This is not agent authentication.
+
+The annotation identity is `(event_id, namespace, key, writer_id)`. Upsert replaces
+the complete value. Delete of an absent annotation succeeds. Identical upserts
+are no-ops, including timestamps; changed values use hub timestamps and preserve
+creation time. Concurrent writes to the same identity use last committed value;
+there is no revision history or compare-and-swap in MVP. A delayed retry can replace
+a newer value, so callers must serialize writes to each identity.
+
+Accept at most 100 operations and 1 MiB per request, with at most 64 KiB of UTF-8
+JSON per value. Namespaces and keys are 1–128 ASCII characters from letters,
+digits, `_`, `-`, `.`, `/`. Reject unknown fields, duplicate identities in a batch,
+invalid JSON, missing events and oversized input before committing anything.
+Use parameterized statements through the hub writer. Commit the entire batch
+atomically and return success only after durable commit. Report applied and
+unchanged operation counts; failure applies nothing. No arbitrary SQL or changes
+to events, sessions, sources, cursors or FTS are permitted through this tool.
+
+Check authorization/revocation for annotation requests as for queries. Include
+annotation ownership in the authorization model before remote writes ship. Tests
+must cover atomic failure, limits, foreign keys, writer spoofing, cross-writer
+isolation, retry behavior and unchanged raw records. Annotations are queried via
+`sql`; no extra read tool or annotation FTS index is needed initially.
+
+For bulk reviews, page events by ID, inspect them, then persist a versioned review
+result for each event, including explicit `reviewed` status and an empty findings
+list when appropriate. Resume by querying missing/version-mismatched results.
+Store redacted locations/descriptions of suspected secrets rather than copying
+secret values into annotations. A finding does not redact the original transcript.

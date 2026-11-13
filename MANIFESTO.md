@@ -280,9 +280,9 @@ The following decisions define ohya's initial architectural direction.
 | Search | SQLite FTS5 with native BM25 |
 | Synchronization | Incremental, idempotent, acknowledged |
 | Networking | Embedded Tailcat, isolated behind a transport boundary |
-| Agent integration | One read-only SQL MCP tool |
+| Agent integration | Read-only SQL and bounded annotation MCP tools |
 | Intelligence | Agent-side reasoning |
-| Classification | Deferred beyond MVP |
+| Classification | Agent-authored annotations; no built-in classifier |
 | Correctness | Explicit invariants, TLA+, tests, fault injection |
 | Deployment | Minimal configuration, no mandatory cloud services |
 

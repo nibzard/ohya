@@ -1,7 +1,7 @@
 # ohya — Database plan
 
 [ohya_schema.sql](ohya_schema.sql) is the authoritative initial DDL. It defines
-three core tables and an external-content FTS5 index; do not duplicate the DDL here.
+three ingestion tables, one annotation table and an external-content FTS5 index; do not duplicate the DDL here.
 There is no released database yet. Add versioned migrations with implementation.
 
 | Table | Meaning |
@@ -9,9 +9,10 @@ There is no released database yet. Add versioned migrations with implementation.
 | `sessions` | Device/agent/native session identity and observed aggregates |
 | `sources` | File incarnation and authoritative committed byte cursor |
 | `events` | One immutable original JSONL record and normalized searchable fields |
+| `event_annotations` | Agent-written JSON values keyed by event, namespace, key and writer |
 | `events_fts` | Search index over event text, maintained transactionally |
 
-Use Unix milliseconds; absent observations remain NULL. JSON metadata contains
+Use Unix milliseconds; absent observations remain NULL. Ingestion JSON metadata contains
 only deterministic observations, not inferred outcomes. Raw JSON preserves the
 source record text; line terminators are transport framing. Offsets are byte
 offsets in the original file, including framing when calculating the next cursor.
@@ -35,7 +36,7 @@ offsets in the original file, including framing when calculating the next cursor
   durability apply to the writer. Verify these settings and FTS consistency in tests.
 
 Authorization credentials live in a separate protected hub registry before remote
-access is enabled. The three-table claim concerns transcript data, not credentials
+access is enabled. The schema covers transcript data and annotations, not credentials
 or device-local checkpoints. See ARCHITECTURE.md for ownership and sync semantics.
 
 ## Search example
@@ -51,6 +52,40 @@ ORDER BY events_fts.rank
 LIMIT 10;
 ```
 
-Agents interpret evidence to identify unfinished work. There is no classification
-table in MVP. Add secondary indexes or normalized file references only after real
+Agents persist their interpretations in `event_annotations`; there is no built-in
+classifier or dedicated classification table. Add secondary indexes or normalized file references only after real
 query patterns justify them.
+
+## Annotation examples
+
+An agent can submit this MCP argument to record a completed security review:
+
+```json
+{"operations":[{"op":"upsert","event_id":42,"namespace":"security","key":"review","value":{"analysis_version":"v1","status":"reviewed","findings":[]}}]}
+```
+
+The writer is assigned by the hub. A tag can use namespace `tags`, key `needs-review`
+and JSON value `true`; a classification can use namespace `classification`, key
+`work-type` and a value containing its label and analysis version.
+
+Select the next page needing review (bind the current writer and last seen ID):
+
+```sql
+SELECT e.id, e.raw_json
+FROM events e
+WHERE e.id > :after_id
+  AND NOT EXISTS (
+    SELECT 1 FROM event_annotations a
+    WHERE a.event_id = e.id AND a.writer_id = :writer_id
+      AND a.namespace = 'security' AND a.key = 'review'
+      AND json_extract(a.value, '$.analysis_version') = 'v1'
+      AND json_extract(a.value, '$.status') = 'reviewed'
+  )
+ORDER BY e.id LIMIT 100;
+```
+
+These are illustrative SQL parameters; `sql(query)` callers substitute SQL literals.
+Expose the current writer ID in the MCP tool description. The primary key supports
+per-event annotation lookup. Add broader annotation indexes only with query evidence.
+Existing databases must add this table through a migration when migrations exist;
+the current SQL file remains a fresh-database schema, not an upgrade script.

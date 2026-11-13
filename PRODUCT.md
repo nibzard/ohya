@@ -1,7 +1,7 @@
 # ohya
 **One memory for all your coding agents. Everywhere.**
 
-*User-owned history. One binary, one authoritative database, one tool.*
+*User-owned history. One binary, one authoritative database, two tools.*
 
 **Product vision, not shipped functionality.** See README.md for MVP scope.
 Shared-history queries require a reachable hub. Offline capture relies on source
@@ -15,7 +15,7 @@ Claude Code, OpenAI Codex, and other coding agents create valuable context every
 
 *Phase 1: Claude Code and Codex. Phase 2: Pi agent and OpenCode.*
 
-ohya captures those sessions automatically, synchronizes them across devices, and makes the entire history available to any connected AI agent through a single MCP tool.
+ohya captures those sessions automatically, synchronizes them across devices, and makes the entire history available to any connected AI agent through read-only SQL and bounded annotation MCP tools.
 
 No copy-pasting context. No manual memory management. No expensive AI indexing pipeline.
 
@@ -45,8 +45,8 @@ No copy-pasting context. No manual memory management. No expensive AI indexing p
                 | Metadata        |
                 +--------+--------+
                          |
-                   One MCP Tool
-                   sql(query)
+                   Two MCP Tools
+                   sql / annotate
                          |
                          v
                 +-----------------+
@@ -63,7 +63,7 @@ No copy-pasting context. No manual memory management. No expensive AI indexing p
 
 **3. Store and index.** Everything lives in one SQLite database. Native FTS5 and BM25 provide fast, ranked full-text search without embeddings, vector databases, or external services.
 
-**4. Let agents do the thinking.** Every connected agent gets one MCP tool: `sql(query)`. Agents write their own SQL, discover relevant history, join data, search transcripts, and retrieve exactly what they need.
+**4. Let agents do the thinking.** Every connected agent gets `sql(query)` for reading and `annotate(operations)` for writing annotations. Agents write their own SQL, discover relevant history, join data, search transcripts, and retrieve exactly what they need.
 
 ## SQL Mode for agent memory
 
@@ -95,7 +95,9 @@ ohya extracts structured information directly from session logs:
 
 No LLM is required for ingestion or search.
 
-Classification is deferred; agents interpret the retrieved evidence.
+Agents can classify every record, attach tags and persist security-review findings.
+Annotations stay separate from original transcripts, with writer identity and
+timestamps. Built-in classification is deferred; intelligence stays in the agent.
 
 The original transcripts remain the source of truth.
 
@@ -123,7 +125,7 @@ No Docker. No PostgreSQL. No cloud account. No vector infrastructure. No backgro
 
 **Intelligence belongs to the agent.** ohya stores facts and makes them queryable; connected models interpret, organize, and apply them.
 
-**Minimal surface area.** One binary. One database. One MCP tool. Deterministic ingestion and agent-side reasoning.
+**Minimal surface area.** One binary. One database. Two MCP tools. Deterministic ingestion and agent-side reasoning.
 
 ---
 

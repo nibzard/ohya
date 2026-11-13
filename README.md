@@ -4,7 +4,7 @@
 
 ohya is a shared, searchable memory layer for AI coding agents. It captures
 agent sessions automatically, synchronizes them across devices, and exposes
-the entire history to any connected agent through one read-only SQL MCP tool.
+the entire history to any connected agent through read-only SQL and bounded annotation MCP tools.
 One Go binary, one SQLite database, no cloud account.
 
 Status: pre-MVP, design phase. See [MANIFESTO.md](MANIFESTO.md) for
@@ -18,7 +18,9 @@ for the database plan.
 
 - Ingest Claude Code and Codex session logs (macOS, polling) into one
   hub-owned SQLite WAL database with FTS5/BM25 search.
-- One read-only `sql(query)` MCP tool for connected agents.
+- Read-only `sql(query)` and bounded `annotate(operations)` MCP tools.
+  Agents can persist tags, classifications and security-review findings without
+  modifying original transcript records.
 - Isolated Tailcat transport adapter for encrypted device-to-hub sync,
   after a feasibility spike.
 
@@ -29,7 +31,7 @@ for the database plan.
 
 ### Explicitly deferred
 
-Classification, embeddings, vector search, filesystem notifications, extra
+Built-in classification, embeddings, vector search, filesystem notifications, extra
 platforms, and any third-party AI processing. See MANIFESTO.md (YAGNI).
 
 ## License
