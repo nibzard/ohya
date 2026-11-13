@@ -1,0 +1,1 @@
+ADR 0004 closes the dangling 'explicit future recovery operation' deferral that no backlog task owned. Backlog was not editable from this worktree, so the ADR records the decision-against instead of assigning an owner.
