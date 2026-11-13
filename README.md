@@ -7,10 +7,36 @@ agent sessions automatically, synchronizes them across devices, and exposes
 the entire history to any connected agent through read-only SQL and bounded annotation MCP tools.
 One Go binary, one SQLite database, no cloud account.
 
-Status: pre-MVP, Go bootstrap; ingestion and MCP are not implemented. See [MANIFESTO.md](MANIFESTO.md) for
+Status: pre-MVP. Local Claude Code ingestion runs end to end: `ohya ingest`
+imports existing session history once, then polls incrementally into one
+SQLite WAL database through the transactional write path. MCP tools and
+device sync are not implemented yet. See [MANIFESTO.md](MANIFESTO.md) for
 engineering principles, [PRODUCT.md](PRODUCT.md) for the product vision,
 [ARCHITECTURE.md](ARCHITECTURE.md) for system design, and [DB.md](DB.md)
 for the database plan.
+
+## Use
+
+```sh
+make build
+./bin/ohya ingest              # import history, then poll until stopped
+./bin/ohya ingest --once       # one pass, then exit
+```
+
+`ohya ingest` watches `~/.claude/projects` (override with `--claude-root`)
+and stores everything in `~/.ohya/hub.db` (override with `--db`; the state
+directory defaults to the database directory and can be set with `--state`).
+The state directory holds `device.json`, the stable device identity, and
+`sources/claude-code.json`, the acknowledged byte checkpoint of every
+watched file.
+
+The first pass imports existing session files; later polls read only the
+bytes past each checkpoint. All writes commit through one transactional
+write path, so a crash between commit and checkpoint replays safely on
+restart and inserts nothing twice. A malformed record stops its source at
+that offset with a diagnostic and never skips bytes; other sources continue.
+A replaced or truncated file starts a new source and re-imports history —
+the run reports it instead of staying silent.
 
 ## Scope
 
