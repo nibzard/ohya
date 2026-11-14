@@ -1,0 +1,1 @@
+Batch 7a: 814 comments removed from cmd/ohya. Evidence: tokcmp equal; make check and make build pass; go run ./cmd/commentcheck reports no comments.
