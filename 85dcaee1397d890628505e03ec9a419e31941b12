@@ -1,0 +1,1 @@
+Batch 6: 879 comments removed. Evidence: tokcmp equal; go test -race passes for hubsync and uploader; make check passes. make tla not run: no state machine change.
