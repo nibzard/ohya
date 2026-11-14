@@ -36,7 +36,8 @@ serve      run the hub for devices: coordination, sync, remote tools
 join       pair a device with a hub and upload its agent sessions
 mcp        serve the sql and annotate MCP tools on stdio
 devices    manage device pairing and revocation
-rederive   rebuild normalized rows and events_fts after a parser upgrade`,
+rederive   rebuild normalized rows and events_fts after a parser upgrade
+version    print the build, parser, and schema versions`,
 	examples: []string{"ohya ingest --once", "ohya mcp"},
 }
 
@@ -48,6 +49,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 || isHelpArg(args[0]) {
 		writeUsage(stdout, rootSpec, nil)
 		return nil
+	}
+	if isVersionArg(args[0]) {
+		return runVersionCommand(args[1:], stdout, stderr)
 	}
 	cmd, rest := args[0], args[1:]
 	switch cmd {
@@ -63,6 +67,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runDevicesCommand(rest, stdout, stderr)
 	case "rederive":
 		return runRederiveCommand(rest, stdout, stderr)
+	case "version":
+		return runVersionCommand(rest, stdout, stderr)
 	default:
 		return usageError{cmd: "ohya", msg: fmt.Sprintf("unknown subcommand %q", cmd)}
 	}

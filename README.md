@@ -52,6 +52,7 @@ make build
 ./bin/ohya devices list        # show paired devices and invitations
 ./bin/ohya devices revoke ID   # revoke a device, final for its identity
 ./bin/ohya rederive            # rebuild normalized rows after a parser upgrade
+./bin/ohya version             # print the build, parser, and schema versions
 ```
 
 Help is a request, not an error: `ohya`, `ohya --help`, `ohya -h`, and
@@ -67,6 +68,17 @@ as success; the stdout summary carries the failed and stopped counts and
 stderr keeps the per-source diagnostics. Flags
 are spelled with two dashes (`--db`); the parser also accepts one dash. No
 command prompts for input: ohya is non-interactive by design.
+
+`ohya version` (alias: `ohya --version`) prints one line of space-separated
+key=value pairs: `version`, `revision`, and `dirty` from the build metadata
+`go build` embeds, the `go` version, `schema` — the newest embedded
+migration — and each parser's output version (`parser.claude`,
+`parser.codex`, `parser.pi`). A binary built outside a version-controlled
+checkout reports `version=devel` and unknown revision and dirty state. The
+command opens no database and needs no state. Compare a hub's line with the
+local one before `ohya rederive`: a build refuses rows derived by a newer
+parser, so the line tells operators and agents which binary, parser output,
+and schema a hub runs.
 
 `ohya ingest` watches `~/.claude/projects` (override with `--claude-root`),
 the Codex sessions directory, `$CODEX_HOME/sessions` or

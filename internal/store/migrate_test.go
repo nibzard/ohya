@@ -5,7 +5,10 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"io/fs"
+	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -227,5 +230,37 @@ func TestMigrateRejectsInvalidMigrationSets(t *testing.T) {
 				t.Fatal("migrate accepted an invalid migration set")
 			}
 		})
+	}
+}
+
+// TestSchemaVersionIsNewestEmbeddedMigration pins the value the version
+// command reports (T061): the highest NNN of the embedded migration files,
+// read from the file names so the check stays independent of loadMigrations.
+func TestSchemaVersionIsNewestEmbeddedMigration(t *testing.T) {
+	files, err := fs.Glob(migrationsFS, "migrations/*.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) == 0 {
+		t.Fatal("no embedded migrations")
+	}
+	newest := 0
+	for _, file := range files {
+		parts := migrationNameRE.FindStringSubmatch(path.Base(file))
+		if parts == nil {
+			t.Fatalf("embedded migration %q does not match NNN_name.sql", file)
+		}
+		v, err := strconv.Atoi(parts[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		newest = max(newest, v)
+	}
+	got, err := SchemaVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != newest {
+		t.Fatalf("SchemaVersion() = %d; want %d, the newest embedded migration", got, newest)
 	}
 }

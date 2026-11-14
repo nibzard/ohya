@@ -30,6 +30,7 @@ func helpCases() []struct {
 		{"join --help", []string{"join", "--help"}, joinSpec},
 		{"mcp --help", []string{"mcp", "--help"}, mcpSpec},
 		{"rederive --help", []string{"rederive", "--help"}, rederiveSpec},
+		{"version --help", []string{"version", "--help"}, versionSpec},
 		{"devices", []string{"devices"}, devicesSpec},
 		{"devices --help", []string{"devices", "--help"}, devicesSpec},
 		{"devices -h", []string{"devices", "-h"}, devicesSpec},
@@ -167,6 +168,8 @@ func TestProcessExitCodes(t *testing.T) {
 		{"unknown subcommand", []string{"frobnicate"}, 2, false, true},
 		{"bad flag", []string{"ingest", "--nope"}, 2, false, true},
 		{"failure", []string{"mcp", "--db", badDB}, 1, false, true},
+		{"version", []string{"version"}, 0, true, false},
+		{"long version", []string{"--version"}, 0, true, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

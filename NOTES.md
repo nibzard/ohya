@@ -602,6 +602,16 @@ How to use this file:
   tests — put such a sentence on its own "\n" paragraph (wrap() splits on
   newlines); and a chmod-0 unreadable-source fixture needs a skip guard when
   the test process can read through mode 0 (root).
+  T061 done (2026-11-14): `ohya version` / `ohya --version` print one
+  key=value line (cmd/ohya/version.go); schema comes from
+  store.SchemaVersion() (highest embedded migration, no database opened),
+  parser keys from each package's OutputVersion. Verified fact: with Go
+  1.27.3, ReadBuildInfo's Main.Version in a VCS checkout is a pseudo-version
+  (`v0.0.0-20261114181354-e177ac9549f4+dirty`), not "(devel)" — the
+  version=devel fallback only fires outside VCS or without a module version,
+  and vcs.revision/vcs.modified are absent in those builds (revision and
+  dirty print "unknown"). The root alias check (isVersionArg) runs before
+  subcommand dispatch, so `ohya ingest --version` stays a usage error.
 
 - Benchstat tracking choices (2026-11-14, Makefile + .github/workflows/ci.yml, T047):
   - benchstat is a pinned tool install
