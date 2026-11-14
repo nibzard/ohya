@@ -21,17 +21,21 @@ import (
 // test binary runs the production mcp command instead of the tests, so the
 // testing framework writes nothing to the protocol stream on stdout. A first
 // argument of child-serve, child-join or child-mcp runs the production
-// command behind that name, for the end-to-end sync test (serve_e2e_test.go).
+// command behind that name, for the end-to-end sync test (serve_e2e_test.go);
+// child-run runs the full CLI with the production exit-code mapping, for the
+// help and usage-error contract tests (cli_test.go).
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && strings.HasPrefix(os.Args[1], "child-") {
 		var err error
 		switch os.Args[1] {
+		case "child-run":
+			os.Exit(cliMain(os.Args[2:], os.Stdout, os.Stderr))
 		case "child-serve":
 			err = runServeCommand(os.Args[2:], os.Stdout, os.Stderr)
 		case "child-join":
 			err = runJoinCommand(os.Args[2:], os.Stdout, os.Stderr)
 		case "child-mcp":
-			err = runMcpCommand(os.Args[2:], os.Stderr)
+			err = runMcpCommand(os.Args[2:], os.Stdout, os.Stderr)
 		default:
 			fmt.Fprintln(os.Stderr, "ohya test child: unknown role", os.Args[1])
 			os.Exit(2)
@@ -107,7 +111,7 @@ func startMcpProcess(t *testing.T, dbPath, stateDir string) *mcp.ClientSession {
 // only at the missing pairing credential of an unjoined state directory —
 // a string-shaped --remote would instead die at "flag needs an argument".
 func TestMcpRemoteBareFlagParses(t *testing.T) {
-	err := runMcpCommand([]string{"--remote", "--state", t.TempDir()}, io.Discard)
+	err := runMcpCommand([]string{"--remote", "--state", t.TempDir()}, io.Discard, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "pairing credential") {
 		t.Fatalf("err = %v; want the unpaired state directory error", err)
 	}

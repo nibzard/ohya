@@ -54,6 +54,15 @@ make build
 ./bin/ohya rederive            # rebuild normalized rows after a parser upgrade
 ```
 
+Help is a request, not an error: `ohya`, `ohya --help`, `ohya -h`, and
+`ohya <command> --help` (down to the devices subcommands) print the same
+usage template — usage line, description, arguments, flags, examples — on
+stdout and exit 0. A usage error — unknown subcommand, bad flag, missing
+argument — prints one line on stderr that names the matching `--help` and
+exits 2, the flag package convention; every other failure exits 1. Flags
+are spelled with two dashes (`--db`); the parser also accepts one dash. No
+command prompts for input: ohya is non-interactive by design.
+
 `ohya ingest` watches `~/.claude/projects` (override with `--claude-root`),
 the Codex sessions directory, `$CODEX_HOME/sessions` or
 `~/.codex/sessions` (override with `--codex-root`), and the Pi agent

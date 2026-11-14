@@ -5,7 +5,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -17,6 +16,18 @@ import (
 	"github.com/nibzard/ohya/internal/store"
 )
 
+// rederiveSpec is the rederive usage template.
+var rederiveSpec = commandSpec{
+	name:      "ohya rederive",
+	synopsis:  "rebuild normalized rows and events_fts after a parser upgrade",
+	usageLine: "ohya rederive [flags]",
+	description: "Re-derives stale normalized event rows from the stored raw records — inside the hub, with no access to the original files — in one transaction, recomputing sessions and token totals and rebuilding the search index. " +
+		"Event IDs and annotations survive, and an up-to-date hub is a no-op, so the command is safe to run any time.",
+	argsTitle: "Arguments",
+	args:      "(none)",
+	examples:  []string{"ohya rederive", "ohya rederive --db ~/.ohya/hub.db"},
+}
+
 // runRederiveCommand parses the rederive flags and re-derives the hub
 // database in one transaction.
 func runRederiveCommand(args []string, stdout, stderr io.Writer) error {
@@ -24,15 +35,14 @@ func runRederiveCommand(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("resolve home directory: %w", err)
 	}
-	fs := flag.NewFlagSet("ohya rederive", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	db := fs.String("db", filepath.Join(home, ".ohya", "hub.db"),
+	c := newCommandFlags(rederiveSpec)
+	db := c.fs.String("db", filepath.Join(home, ".ohya", "hub.db"),
 		"hub database `path`")
-	if err := fs.Parse(args); err != nil {
+	if err := c.parse(args, stdout); err != nil {
 		return err
 	}
-	if fs.NArg() > 0 {
-		return fmt.Errorf("unexpected argument %q", fs.Arg(0))
+	if c.fs.NArg() > 0 {
+		return c.usageErrorf("unexpected argument %q", c.fs.Arg(0))
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

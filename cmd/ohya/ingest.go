@@ -79,13 +79,13 @@ func runIngest(ctx context.Context, o ingestOptions) error {
 		case !errors.Is(err, os.ErrNotExist):
 			return fmt.Errorf("stat %s: %w", root.dir, err)
 		case !root.optional:
-			return fmt.Errorf("%s session directory %s does not exist; pass -%s", root.agent, root.dir, root.flag)
+			return fmt.Errorf("%s session directory %s does not exist; pass --%s", root.agent, root.dir, root.flag)
 		}
 	}
 	if present == 0 {
 		var flags []string
 		for _, root := range o.roots {
-			flags = append(flags, "-"+root.flag)
+			flags = append(flags, "--"+root.flag)
 		}
 		return fmt.Errorf("no agent session directory exists; pass %s", strings.Join(flags, " or "))
 	}

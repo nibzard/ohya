@@ -7,8 +7,6 @@ package main
 
 import (
 	"context"
-	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -19,21 +17,26 @@ import (
 	"github.com/nibzard/ohya/internal/registry"
 )
 
-const devicesUsage = `ohya devices — manage paired devices
-
-Usage:
-
-  ohya devices invite [--ttl 15m]   Issue a one-time join code (pairing
-                                    invitation plus coordinator admission)
-  ohya devices list                 List devices and invitations
-  ohya devices revoke <device-id>   Revoke a device, final for its identity
-`
+// devicesSpec is the devices dispatch usage template; the subcommands carry
+// their own.
+var devicesSpec = commandSpec{
+	name:      "ohya devices",
+	synopsis:  "manage device pairing and revocation",
+	usageLine: "ohya devices <command> [flags]",
+	description: "The hub operator's surface for pairing: issue one-time expiring invitations, list the device registry, and revoke devices. " +
+		"The registry lives in its own protected database in the state directory, never inside the queryable transcript tables.",
+	argsTitle: "Commands",
+	args: `invite              issue a one-time join code
+list                list devices and invitations
+revoke <device-id>  revoke a device, final for its identity`,
+	examples: []string{"ohya devices invite --ttl 15m", "ohya devices revoke <device-id>"},
+}
 
 // runDevicesCommand dispatches the devices subcommands.
 func runDevicesCommand(args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 {
-		fmt.Fprint(stderr, devicesUsage)
-		return errors.New("missing devices subcommand")
+	if len(args) == 0 || isHelpArg(args[0]) {
+		writeUsage(stdout, devicesSpec, nil)
+		return nil
 	}
 	cmd, rest := args[0], args[1:]
 	switch cmd {
@@ -44,27 +47,25 @@ func runDevicesCommand(args []string, stdout, stderr io.Writer) error {
 	case "revoke":
 		return runDevicesRevoke(rest, stdout, stderr)
 	default:
-		fmt.Fprint(stderr, devicesUsage)
-		return fmt.Errorf("unknown devices subcommand %q", cmd)
+		return usageError{cmd: "ohya devices", msg: fmt.Sprintf("unknown devices subcommand %q", cmd)}
 	}
 }
 
 // registryFlags holds the flags every devices subcommand shares. The registry
 // sits in the state directory, like the device identity and checkpoints.
-// Callers add their own flags, then Parse.
+// Callers add their own flags, then parse.
 type registryFlags struct {
-	fs    *flag.FlagSet
+	c     *commandFlagSet
 	state *string
 }
 
-func newRegistryFlags(name string, stderr io.Writer) (*registryFlags, error) {
+func newRegistryFlags(spec commandSpec) (*registryFlags, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("resolve home directory: %w", err)
 	}
-	f := &registryFlags{fs: flag.NewFlagSet(name, flag.ContinueOnError)}
-	f.fs.SetOutput(stderr)
-	f.state = f.fs.String("state", filepath.Join(home, ".ohya"),
+	f := &registryFlags{c: newCommandFlags(spec)}
+	f.state = f.c.fs.String("state", filepath.Join(home, ".ohya"),
 		"state `directory` holding the device registry")
 	return f, nil
 }
@@ -74,6 +75,19 @@ func (f *registryFlags) openRegistry() (*registry.DB, error) {
 	return registry.Open(filepath.Join(*f.state, registry.FileName))
 }
 
+// devicesInviteSpec is the invite usage template.
+var devicesInviteSpec = commandSpec{
+	name:      "ohya devices invite",
+	synopsis:  "issue a one-time join code",
+	usageLine: "ohya devices invite [flags]",
+	description: "Issues one join code and prints it on the first stdout line, so it can be piped to the joining device. " +
+		"The code carries the pairing invitation plus a single-use coordinator admission key; each half is consumable exactly once within the code's lifetime. " +
+		"Run it on the hub; the device joins with ohya join <code>.",
+	argsTitle: "Arguments",
+	args:      "(none)",
+	examples:  []string{"ohya devices invite --ttl 15m"},
+}
+
 // runDevicesInvite issues one join code and prints it on the first stdout
 // line, so it can be piped to the joining device. The code carries the T018
 // pairing invitation plus the single-use coordinator preauth key minted with
@@ -81,17 +95,20 @@ func (f *registryFlags) openRegistry() (*registry.DB, error) {
 // one code hands one device everything `ohya join` needs, and each half is
 // consumable exactly once within the same lifetime.
 func runDevicesInvite(args []string, stdout, stderr io.Writer) error {
-	flags, err := newRegistryFlags("ohya devices invite", stderr)
+	flags, err := newRegistryFlags(devicesInviteSpec)
 	if err != nil {
 		return err
 	}
-	ttl := flags.fs.Duration("ttl", registry.DefaultInvitationTTL,
+	ttl := flags.c.fs.Duration("ttl", registry.DefaultInvitationTTL,
 		"how long the join code stays consumable")
-	if err := flags.fs.Parse(args); err != nil {
+	if err := flags.c.parse(args, stdout); err != nil {
 		return err
 	}
-	if flags.fs.NArg() > 0 {
-		return fmt.Errorf("unexpected argument %q", flags.fs.Arg(0))
+	if flags.c.fs.NArg() > 0 {
+		return flags.c.usageErrorf("unexpected argument %q", flags.c.fs.Arg(0))
+	}
+	if *ttl <= 0 {
+		return flags.c.usageErrorf("--ttl must be positive")
 	}
 
 	// The coordination plane first: without it there is no admission to
@@ -128,17 +145,28 @@ func runDevicesInvite(args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
+// devicesListSpec is the list usage template.
+var devicesListSpec = commandSpec{
+	name:        "ohya devices list",
+	synopsis:    "list devices and invitations",
+	usageLine:   "ohya devices list [flags]",
+	description: "Prints every paired device with its state and pairing time, then every invitation: used by which device, expired, or open until when.",
+	argsTitle:   "Arguments",
+	args:        "(none)",
+	examples:    []string{"ohya devices list"},
+}
+
 // runDevicesList prints every paired device and every invitation.
 func runDevicesList(args []string, stdout, stderr io.Writer) error {
-	flags, err := newRegistryFlags("ohya devices list", stderr)
+	flags, err := newRegistryFlags(devicesListSpec)
 	if err != nil {
 		return err
 	}
-	if err := flags.fs.Parse(args); err != nil {
+	if err := flags.c.parse(args, stdout); err != nil {
 		return err
 	}
-	if flags.fs.NArg() > 0 {
-		return fmt.Errorf("unexpected argument %q", flags.fs.Arg(0))
+	if flags.c.fs.NArg() > 0 {
+		return flags.c.usageErrorf("unexpected argument %q", flags.c.fs.Arg(0))
 	}
 	reg, err := flags.openRegistry()
 	if err != nil {
@@ -185,20 +213,31 @@ func runDevicesList(args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
+// devicesRevokeSpec is the revoke usage template.
+var devicesRevokeSpec = commandSpec{
+	name:        "ohya devices revoke",
+	synopsis:    "revoke a device, final for its identity",
+	usageLine:   "ohya devices revoke <device-id>",
+	description: "Revokes one device. Revocation is final for the device identity: its connections close, its sources stay bound to the revoked identity, and re-admission needs a new device identity.",
+	argsTitle:   "Arguments",
+	args:        "<device-id>  the device ID shown by ohya devices list",
+	examples:    []string{"ohya devices revoke <device-id>"},
+}
+
 // runDevicesRevoke revokes one device. Revocation is final for the device
 // identity; its connections close and re-admission needs a new identity.
 func runDevicesRevoke(args []string, stdout, stderr io.Writer) error {
-	flags, err := newRegistryFlags("ohya devices revoke", stderr)
+	flags, err := newRegistryFlags(devicesRevokeSpec)
 	if err != nil {
 		return err
 	}
-	if err := flags.fs.Parse(args); err != nil {
+	if err := flags.c.parse(args, stdout); err != nil {
 		return err
 	}
-	if flags.fs.NArg() != 1 {
-		return errors.New("revoke needs exactly one device ID; see ohya devices list")
+	if flags.c.fs.NArg() != 1 {
+		return flags.c.usageErrorf("revoke needs exactly one device ID; see ohya devices list")
 	}
-	deviceID := flags.fs.Arg(0)
+	deviceID := flags.c.fs.Arg(0)
 	reg, err := flags.openRegistry()
 	if err != nil {
 		return err

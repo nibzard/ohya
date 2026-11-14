@@ -370,7 +370,7 @@ func TestIngestRootRules(t *testing.T) {
 	// A missing explicit root fails before creating anything.
 	e = newSliceEnv(t)
 	err := run(e, agentRoot{agent: codex.AgentName, dir: absent, flag: "codex-root"})
-	if err == nil || !strings.Contains(err.Error(), "pass -codex-root") {
+	if err == nil || !strings.Contains(err.Error(), "pass --codex-root") {
 		t.Fatalf("missing explicit root error = %v", err)
 	}
 	if _, err := os.Stat(e.dbPath); !errors.Is(err, os.ErrNotExist) {
@@ -379,7 +379,7 @@ func TestIngestRootRules(t *testing.T) {
 	// Nothing to watch at all is an error, not an idle loop.
 	err = run(e, agentRoot{agent: claudecode.AgentName, dir: absent, flag: "claude-root", optional: true},
 		agentRoot{agent: codex.AgentName, dir: absent, flag: "codex-root", optional: true})
-	if err == nil || !strings.Contains(err.Error(), "-claude-root or -codex-root") {
+	if err == nil || !strings.Contains(err.Error(), "--claude-root or --codex-root") {
 		t.Fatalf("all roots missing error = %v", err)
 	}
 	if err := run(e); err == nil {
