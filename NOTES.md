@@ -803,13 +803,10 @@ How to use this file:
   fails the case. Decide whether benign error items should be report-only,
   then add a regression test for `checkCase` with such an item.
 
-- Live binary finding (2026-11-15): `join` and `mcp --remote` both start
-  a Tailcat node from `<state>/tailcat`. In isolated live tests, `join`
-  uploads appends before remote MCP starts, but a later append stays pending
-  for 90 seconds while both commands use the same state. Remote SQL and
-  annotations still work. Closing remote MCP and restarting `join` uploads
-  the pending record. Shared transport identity is a suspected cause, not
-  yet proven. Define transport ownership for concurrent uploader and MCP
-  processes, then add a regression test for appends during remote queries.
-  Evidence: `/notes/ohya-live-test-2026-11-15.md` and
-  `/tmp/ohya-live-20261115/remote_diagnostic.py`.
+- Shared device transport (2026-11-15, ADR 0006): `join` and remote MCP
+  must use `tailcat.NewSharedDevice`. Independent nodes with the same state
+  stall uploads. The shared adapter owns the node under `owner.lock` and
+  publishes an authenticated loopback proxy in owner-only `proxy.json`.
+  Never delete the lock file. Stop older binaries before upgrading: they
+  do not acquire it. Keep device state on a local filesystem. The regression
+  test covers live appends with two MCP clients and transfer after owner death.

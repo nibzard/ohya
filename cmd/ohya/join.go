@@ -22,6 +22,7 @@ import (
 	"github.com/nibzard/ohya/internal/device"
 	"github.com/nibzard/ohya/internal/hubsync"
 	"github.com/nibzard/ohya/internal/pi"
+	"github.com/nibzard/ohya/internal/transport"
 	"github.com/nibzard/ohya/internal/transport/tailcat"
 	"github.com/nibzard/ohya/internal/uploader"
 	"github.com/nibzard/ohya/internal/watch"
@@ -126,7 +127,7 @@ func runJoin(ctx context.Context, o joinOptions) error {
 			return err
 		}
 	}
-	node, err := tailcat.NewDevice(tailcat.Options{
+	node, err := tailcat.NewSharedDevice(tailcat.Options{
 		Hostname:   deviceHostname(deviceID),
 		AuthKey:    authKey,
 		ControlURL: o.controlURL,
@@ -193,7 +194,7 @@ func runJoin(ctx context.Context, o joinOptions) error {
 	}
 }
 
-func pair(ctx context.Context, node *tailcat.Node, hubAddr, invitation, deviceID string) (device.Credential, error) {
+func pair(ctx context.Context, node transport.Device, hubAddr, invitation, deviceID string) (device.Credential, error) {
 	conn, err := node.Dial(ctx, hubAddr)
 	if err != nil {
 		return device.Credential{}, fmt.Errorf("join: reach the hub at %s: %w", hubAddr, err)

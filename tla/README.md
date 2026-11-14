@@ -1,11 +1,12 @@
 # TLA+ protocol models
 
-Two executable specifications live here. `Sync.tla` specifies the sync
+Three executable specifications live here. `Sync.tla` specifies the sync
 cursor and acknowledgment protocol from the "Sync contract" in
 [ARCHITECTURE.md](../ARCHITECTURE.md); `Auth.tla` specifies the
 authorization, pairing, and revocation rules from its "Authorization and
-SQL" and "Agent annotations" sections. TLC model-checks both against the
-safety invariants and liveness properties recorded here. The sync
+SQL" and "Agent annotations" sections.
+`TransportOwner.tla` checks shared device transport ownership (ADR 0006).
+TLC checks the models against the properties recorded here. The sync
 endpoint (T017, `internal/hubsync`), the uploader (T019), and pairing
 with revocation (T018, `internal/registry`) must implement these state
 machines; change the specifications first when a contract changes.
@@ -375,3 +376,34 @@ starvation bug.
 - Hub-side rate limiting, connection bounds, request quotas: operational
   limits, not protocol states.
 - Finite bounds only: TLC checks the models listed above, not all sizes.
+
+
+# Device transport ownership model
+
+`TransportOwner.tla` models one enrolled transport identity shared by three
+processes: an uploader and two MCP clients. `TransportOwner.cfg` checks it.
+See [ADR 0006](../docs/adr/0006-shared-device-transport.md).
+
+A process acquires the local filesystem lock before starting its node. It
+publishes the proxy after startup. Other processes borrow connections from
+that proxy. Shutdown withdraws the descriptor, stops the node, and then
+releases the lock. A crash stops its sockets and releases its lock, but may
+leave a stale descriptor. A new owner clears that descriptor before startup.
+
+The model checks:
+
+- At most one network stack runs for the identity.
+- Every running stack holds the ownership lock.
+- The ownership lock agrees with each process's lifecycle phase.
+- Borrowers depend on a running stack and never borrow from themselves.
+
+Assumptions: all processes use the shared adapter, locks refer to the same
+local file, the state directory is protected, and process death stops the
+node before the lock becomes available. The lock file is never deleted.
+Successful borrowing requires a live published proxy; stale descriptors
+cannot establish connections. Filesystem and SOCKS5 details are covered by
+Go tests. The model checks safety, with no liveness claim. Network recovery
+and retries retain the assumptions in the sync and authorization models.
+
+Verified with TLC 1.8.0 on 2026-11-15: 139 generated states, 40 distinct
+states, depth 7, no errors, with three processes.

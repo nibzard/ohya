@@ -108,7 +108,7 @@ func runMcpRemote(ctx context.Context, hubAddr, controlURL, stateDir string) err
 	if err != nil {
 		return err
 	}
-	node, err := tailcat.NewDevice(tailcat.Options{
+	node, err := tailcat.NewSharedDevice(tailcat.Options{
 		Hostname:   deviceHostname(deviceID),
 		ControlURL: controlURL,
 		StateDir:   filepath.Join(stateDir, "tailcat"),
@@ -120,6 +120,7 @@ func runMcpRemote(ctx context.Context, hubAddr, controlURL, stateDir string) err
 	session := hubsync.NewRemoteSession(
 		func(ctx context.Context) (net.Conn, error) { return node.Dial(ctx, hubAddr) },
 		cred.Secret)
+	defer session.Close()
 	server := mcpserver.New(session, mcpserver.EngineOptions{WriterID: deviceID})
 	return mcpserver.Run(ctx, server)
 }

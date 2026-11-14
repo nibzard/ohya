@@ -46,6 +46,13 @@ consumable exactly once within the invitation's lifetime. A revocation in
 the registry ends the device's sync sessions; deleting the coordinator node
 is transport hygiene on top, not the authorization boundary.
 
+### Device process ownership (2026-11-15)
+
+[ADR 0006](0006-shared-device-transport.md) defines how `join` and remote
+MCP processes share one node per device state. An exclusive filesystem lock
+protects node ownership. Borrowers use tsnet's authenticated loopback proxy.
+A process acquires ownership before it loads the enrolled transport identity.
+
 ### Deployment defaults
 
 - The coordination plane listens on `127.0.0.1:9417` (coordination protocol

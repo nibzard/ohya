@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"os"
@@ -292,7 +293,101 @@ func TestServeJoinEndToEnd(t *testing.T) {
 		t.Fatalf("annotation writer = %q; want the joined device identity %q", writer, want)
 	}
 
-	stopChild(t, joinCmd, joinLog, 30*time.Second)
+	secondCmd := exec.Command(os.Args[0], "child-mcp",
+		"--remote", "--control", "http://"+ctrlAddr, "--state", devState)
+	secondSession, err := client.Connect(mcpCtx, &mcp.CommandTransport{Command: secondCmd}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secondSession.Close()
+	assertRemoteCount := func(remote *mcp.ClientSession, want int) {
+		t.Helper()
+		e2eCall(t, mcpCtx, remote, "sql",
+			map[string]any{"query": "SELECT count(*) AS n FROM events"}, &count)
+		if len(count.Rows) != 1 || fmt.Sprint(count.Rows[0][0]) != fmt.Sprint(want) {
+			t.Fatalf("remote count = %+v; want %d", count.Rows, want)
+		}
+	}
+	assertRemoteCount(secondSession, wantEvents)
+	appendAndWait := func(uuid string, want int, timeout time.Duration) {
+		t.Helper()
+		appendFile, err := os.OpenFile(filepath.Join(claudeRoot, "session.jsonl"), os.O_APPEND|os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		record := fmt.Sprintf(`{"type":"user","uuid":%q,"sessionId":"00000000-0000-4000-8000-0000000000a1","message":{"role":"user","content":"Append while remote MCP queries the hub."},"timestamp":"2026-11-13T10:00:00Z"}`, uuid)
+		_, writeErr := appendFile.WriteString(record + "\n")
+		closeErr := appendFile.Close()
+		if writeErr != nil || closeErr != nil {
+			t.Fatalf("append: write %v, close %v", writeErr, closeErr)
+		}
+		appendDeadline := time.Now().Add(timeout)
+		for {
+			events, _, _ := hubCounts(t, hubDB)
+			if events == want {
+				break
+			}
+			if time.Now().After(appendDeadline) {
+				t.Fatalf("live append while remote MCP runs: have %d events, want %d", events, want)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	appendAndWait("concurrent-append", wantEvents+1, 15*time.Second)
+	assertRemoteCount(session, wantEvents+1)
+	assertRemoteCount(secondSession, wantEvents+1)
+	t.Log("live append reached the hub while two remote MCP clients remained connected")
+
+	if err := joinCmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if err := joinCmd.Wait(); err == nil {
+		t.Fatal("killed join exited successfully")
+	}
+	assertRemoteCount(session, wantEvents+1)
+	assertRemoteCount(secondSession, wantEvents+1)
+	t.Log("remote MCP recovered after the transport owner was killed")
+
+	restartedLog := &bytes.Buffer{}
+	restartedJoin := exec.Command(os.Args[0], "child-join",
+		"--control", "http://"+ctrlAddr, "--state", devState,
+		"--claude-root", claudeRoot, "--codex-root", "", "--pi-root", "",
+		"--interval", "100ms")
+	restartedJoin.Stderr = restartedLog
+	if err := restartedJoin.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if restartedJoin.ProcessState == nil {
+			restartedJoin.Process.Kill()
+			restartedJoin.Wait()
+		}
+	}()
+	appendAndWait("after-owner-transfer", wantEvents+2, 30*time.Second)
+	assertRemoteCount(session, wantEvents+2)
+	assertRemoteCount(secondSession, wantEvents+2)
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+	appendAndWait("after-mcp-owner-close", wantEvents+3, 30*time.Second)
+	assertRemoteCount(secondSession, wantEvents+3)
+	t.Log("the uploader recovered when the MCP transport owner stopped")
+	stopChild(t, restartedJoin, restartedLog, 30*time.Second)
+	assertRemoteCount(secondSession, wantEvents+3)
+	t.Log("the remaining MCP client took ownership after the uploader stopped")
+
+	var revokeOutput bytes.Buffer
+	if err := runDevicesRevoke([]string{"--state", hubState, readDeviceID(t, devState)}, &revokeOutput, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	result, err := secondSession.CallTool(mcpCtx, &mcp.CallToolParams{
+		Name: "sql", Arguments: map[string]any{"query": "SELECT count(*) FROM events"},
+	})
+	if err != nil || !result.IsError {
+		t.Fatalf("revoked remote call: result %+v, err %v", result, err)
+	}
+	t.Log("revocation still denies remote queries after transport ownership transfers")
+
 	stopChild(t, serveCmd, serveLog, 30*time.Second)
 }
 

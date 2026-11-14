@@ -368,6 +368,17 @@ one retry on transport failure, and a terminal error on a refused
 credential. The end-to-end test (`cmd/ohya/serve_e2e_test.go`) drives real
 serve, join and remote-MCP child processes over free loopback ports.
 
+Device commands share one enrolled transport node per state directory
+([ADR 0006](docs/adr/0006-shared-device-transport.md)). The first dialing
+process holds a filesystem lock for the node's lifetime. Other processes
+use the owner's authenticated tsnet loopback proxy. They do not load another
+network stack with the same identity. The proxy descriptor is an atomic,
+owner-only file; no LocalAPI credential is shared. A new owner discards stale
+proxy state after acquiring the lock. Shutdown closes the node before it
+releases the lock. Borrowers reconnect and can become owners after a crash.
+Hub authentication, source ownership, commit ordering, and annotation writers
+remain governed by the existing sync and authorization protocols.
+
 Offline replay relies on retained source files. Replacement or deletion before
 upload can lose uncommitted history; surface this limitation. There is no outgoing
 spool or offline query replica in the MVP. Hub backup restoration may roll back

@@ -194,6 +194,15 @@ the join state directory. The hub derives the annotation writer from the
 authenticated device, so a caller cannot choose it. A transport failure
 drops the connection; the next call reconnects and retries once.
 
+`join` and all remote MCP processes with the same state directory share one
+transport node. The first process to dial owns it; other processes use its
+authenticated loopback proxy. When the owner stops, another process takes
+over on its next dial. Remote MCP works without a running uploader. All
+processes must use the same `--control` URL. The state directory must be on
+a local filesystem and must not be shared between machines. When upgrading
+from a version without transport sharing, stop all old `join` and remote
+MCP processes first. See [ADR 0006](docs/adr/0006-shared-device-transport.md).
+
 The first pass imports existing session files; later polls read only the
 bytes past each checkpoint. All writes commit through one transactional
 write path, so a crash between commit and checkpoint replays safely on
