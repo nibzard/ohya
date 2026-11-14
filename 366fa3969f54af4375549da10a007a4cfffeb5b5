@@ -1,0 +1,1 @@
+Batch 7b. Evidence: a probe file with an explanatory comment makes commentcheck exit 1 and the clean tree exits 0; the parsed CI YAML is identical before and after; make check passes with the new step.
