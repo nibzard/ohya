@@ -1,0 +1,1 @@
+Batch 2: 730 comments removed. Pure comment deletion: tokcmp equal for all 21 Go files. make check passes. The main worktree has uncommitted edits to internal/codex/parser.go and internal/events/events.go (Codex repository derivation, OutputVersion 2); merging them needs the new version row in DB.md instead of a code comment.
