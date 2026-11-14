@@ -5,12 +5,6 @@ import (
 	"strings"
 )
 
-// singleStatement reports whether query holds exactly one SQL statement.
-// The tool's contract is one statement per call, and the mattn driver would
-// otherwise execute every statement in the input and answer with the last
-// one's rows. The scan follows SQLite's lexical rules far enough to find
-// statement terminators: quotes, comments and bracketed identifiers never
-// terminate a statement.
 func singleStatement(query string) error {
 	var sawStatement, terminated, sawAfterTerminator bool
 	i, n := 0, len(query)
@@ -18,20 +12,18 @@ func singleStatement(query string) error {
 		switch c := query[i]; {
 		case c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f':
 			i++
-		case c == '-' && i+1 < n && query[i+1] == '-': // line comment
+		case c == '-' && i+1 < n && query[i+1] == '-':
 			i += 2
 			for i < n && query[i] != '\n' {
 				i++
 			}
-		case c == '/' && i+1 < n && query[i+1] == '*': // block comment
+		case c == '/' && i+1 < n && query[i+1] == '*':
 			if end := strings.Index(query[i+2:], "*/"); end >= 0 {
 				i += 2 + end + 2
-			} else { // unterminated: SQLite rejects it at prepare
+			} else {
 				i = n
 			}
 		case c == '\'' || c == '"' || c == '`':
-			// Text literal or quoted identifier; the doubling rule ('' "")
-			// escapes a repeated quote inside.
 			quote := c
 			i++
 			for i < n {
@@ -46,7 +38,7 @@ func singleStatement(query string) error {
 				i++
 			}
 			sawStatement, sawAfterTerminator = mark(sawStatement, terminated, sawAfterTerminator)
-		case c == '[': // bracketed identifier, closed by the first ]
+		case c == '[':
 			i++
 			for i < n && query[i] != ']' {
 				i++
@@ -56,8 +48,6 @@ func singleStatement(query string) error {
 			}
 			sawStatement, sawAfterTerminator = mark(sawStatement, terminated, sawAfterTerminator)
 		case c == ';':
-			// The first terminator ends the one allowed statement; any
-			// later one is content after it ("select 1;;" is two).
 			if terminated {
 				sawAfterTerminator = true
 			} else {
@@ -79,8 +69,6 @@ func singleStatement(query string) error {
 	}
 }
 
-// mark records that a real token appeared, before or after the first
-// terminator.
 func mark(sawStatement, terminated, sawAfterTerminator bool) (bool, bool) {
 	if terminated {
 		return sawStatement, true

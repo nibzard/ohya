@@ -14,8 +14,6 @@ import (
 	"github.com/nibzard/ohya/internal/store"
 )
 
-// openSeededHub opens a hub database with known rows and returns the hub and
-// its reader pool; cleanup closes both.
 func openSeededHub(t *testing.T) (*store.DB, *sql.DB) {
 	t.Helper()
 	hub, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "hub.db"))
@@ -47,7 +45,6 @@ func openSeededHub(t *testing.T) (*store.DB, *sql.DB) {
 	return hub, readers
 }
 
-// newTestEngine returns an engine on a freshly seeded hub, writing as dev1.
 func newTestEngine(t *testing.T, o EngineOptions) *Engine {
 	t.Helper()
 	hub, readers := openSeededHub(t)
@@ -55,7 +52,6 @@ func newTestEngine(t *testing.T, o EngineOptions) *Engine {
 	return NewEngine(readers, hub.Writer(), o)
 }
 
-// mustQuery runs a query expected to succeed and fails the test otherwise.
 func mustQuery(t *testing.T, e *Engine, query string) Result {
 	t.Helper()
 	result, err := e.Query(context.Background(), query)
@@ -119,61 +115,50 @@ func TestQuerySelectsAndSchemaInspection(t *testing.T) {
 		`EXPLAIN QUERY PLAN SELECT id FROM events WHERE id = 1`,
 		`WITH RECURSIVE c(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM c WHERE n < 5) SELECT sum(n) FROM c`,
 		`SELECT json_extract(value, '$.status') FROM event_annotations`,
-		`SELECT 1;`,                    // one statement plus its terminator
-		"SELECT 1 -- trailing comment", // comment after the terminator's place
-		`SELECT 1; -- done`,            // terminator then comment only
+		`SELECT 1;`,
+		"SELECT 1 -- trailing comment",
+		`SELECT 1; -- done`,
 		`/* leading */ SELECT 1 /* mid */ ; /* trailing */`,
 		`SELECT ';' AS semi, 'a'';b' AS escaped`,
 	} {
 		mustQuery(t, e, q)
 	}
 
-	// Zero-row results still report their columns and encode rows as [].
 	r = mustQuery(t, e, `SELECT id FROM events WHERE id > 100`)
 	if len(r.Columns) != 1 || r.Rows == nil || len(r.Rows) != 0 || r.RowCount != 0 {
 		t.Fatalf("empty result = %+v", r)
 	}
 }
 
-// TestQueryDeniesAdversarialSQL pins the read-only boundary. Every input
-// must fail, and after the whole battery the data must be unchanged.
 func TestQueryDeniesAdversarialSQL(t *testing.T) {
 	e := newTestEngine(t, EngineOptions{})
 
 	denied := []string{
-		// Data changes, in every shape an agent might try.
 		`INSERT INTO events(id,session_id,source_id,source_offset,kind,raw_json) VALUES(9,'claude:dev1:sess-1','src-1',99,'x','{}')`,
 		`INSERT OR REPLACE INTO sessions(id,agent,device_id,native_id) VALUES('s2','a','d','n')`,
 		`UPDATE events SET text = 'changed'`,
 		`DELETE FROM events`,
 		`DELETE FROM events WHERE id = 1`,
-		// Schema changes, including temporary and virtual objects.
 		`CREATE TABLE t(x)`,
 		`CREATE TEMP TABLE t(x)`,
 		`CREATE VIEW v AS SELECT 1`,
 		`CREATE INDEX i ON events(kind)`,
-		// The trigger body's semicolons trip the one-statement check before
-		// the authorizer sees the DDL; either rejection is correct, and the
-		// only SQL statements with embedded semicolons are denied DDL.
 		`CREATE TRIGGER tr AFTER INSERT ON events BEGIN SELECT 1; END`,
 		`DROP TABLE events`,
 		`DROP INDEX sessions_recent`,
 		`DROP VIEW seeded_view`,
 		`ALTER TABLE events ADD COLUMN extra TEXT`,
 		`CREATE VIRTUAL TABLE v2 USING fts5(text)`,
-		// Reaching outside this database or loading code.
 		`ATTACH '/tmp/other.db' AS other`,
 		`DETACH main`,
 		`SELECT load_extension('evil')`,
 		`SELECT fts3_tokenizer('simple')`,
-		// Transactions and savepoints.
 		`BEGIN`,
 		`BEGIN DEFERRED`,
 		`COMMIT`,
 		`SAVEPOINT s`,
 		`RELEASE s`,
 		`ROLLBACK`,
-		// Pragmas that change connection or database state.
 		`PRAGMA journal_mode = DELETE`,
 		`PRAGMA query_only = 1`,
 		`PRAGMA busy_timeout = 0`,
@@ -182,14 +167,11 @@ func TestQueryDeniesAdversarialSQL(t *testing.T) {
 		`PRAGMA synchronous = OFF`,
 		`PRAGMA trusted_schema = OFF`,
 		`PRAGMA user_version = 7`,
-		// Maintenance that rewrites the file.
 		`VACUUM`,
 		`REINDEX`,
 		`ANALYZE`,
-		// FTS5 commands ride on INSERT, which the authorizer denies.
 		`INSERT INTO events_fts(events_fts) VALUES('rebuild')`,
 		`INSERT INTO events_fts(events_fts) VALUES('integrity-check')`,
-		// A write hidden behind a function call or CTE still prepares a write.
 		`SELECT load_extension('evil', 'entry')`,
 	}
 	for _, q := range denied {
@@ -208,7 +190,6 @@ func TestQueryDeniesAdversarialSQL(t *testing.T) {
 		}
 	}
 
-	// Nothing changed: the same rows, cursors and schema remain.
 	r := mustQuery(t, e, `SELECT (SELECT count(*) FROM events),
 		(SELECT count(*) FROM sessions), (SELECT count(*) FROM event_annotations)`)
 	if fmt.Sprint(r.Rows) != "[[2 1 1]]" {
@@ -216,7 +197,6 @@ func TestQueryDeniesAdversarialSQL(t *testing.T) {
 	}
 	mustQuery(t, e, `SELECT sql FROM sqlite_master WHERE name = 'events'`)
 
-	// A denial leaves the engine usable: the pool is not poisoned.
 	mustQuery(t, e, `SELECT 1`)
 }
 
@@ -232,8 +212,8 @@ func TestQueryOneStatementPerCall(t *testing.T) {
 		`SELECT 1; DELETE FROM events`,
 		`DELETE FROM events; SELECT 1`,
 		`SELECT 1; ATTACH '/tmp/x' AS x`,
-		`SELECT ';' AS a; SELECT 1`,       // the quoted ; is content, the last one terminates
-		"SELECT 1 -- comment\n; SELECT 2", // terminator after comment, then a statement
+		`SELECT ';' AS a; SELECT 1`,
+		"SELECT 1 -- comment\n; SELECT 2",
 		`SELECT 1 /* ; */; SELECT 2`,
 	}
 	for _, q := range multiple {
@@ -251,7 +231,6 @@ func TestQueryOneStatementPerCall(t *testing.T) {
 		!strings.Contains(err.Error(), "input limit") {
 		t.Fatalf("oversized query error = %v", err)
 	}
-	// The rejected write inside the multi-statement input never ran.
 	r := mustQuery(t, e, `SELECT count(*) FROM events`)
 	if fmt.Sprint(r.Rows) != "[[2]]" {
 		t.Fatalf("events after rejected batch = %v", r.Rows)
@@ -288,8 +267,6 @@ func TestQueryLimitsAndExplicitTruncation(t *testing.T) {
 		if len(r.Rows) != 0 || !r.Truncated || r.TruncationReason != truncatedByBytes {
 			t.Fatalf("result = %d rows, truncated=%v reason=%q", len(r.Rows), r.Truncated, r.TruncationReason)
 		}
-		// A 14-byte row JSON (`["aaaaaaaaaa"]`) fits twice in 30 bytes; the
-		// third row crosses the bound and is dropped whole.
 		e2 := newTestEngine(t, EngineOptions{MaxOutputBytes: 30})
 		r = mustQuery(t, e2, `WITH RECURSIVE c(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM c WHERE n < 10)
 			SELECT 'aaaaaaaaaa' FROM c`)
@@ -302,7 +279,7 @@ func TestQueryLimitsAndExplicitTruncation(t *testing.T) {
 	})
 
 	t.Run("byte limit exact fit is not truncation", func(t *testing.T) {
-		e := newTestEngine(t, EngineOptions{MaxOutputBytes: 4}) // one row `[1]` = 3 bytes
+		e := newTestEngine(t, EngineOptions{MaxOutputBytes: 4})
 		r := mustQuery(t, e, `SELECT 1`)
 		if len(r.Rows) != 1 || r.Truncated {
 			t.Fatalf("result = %d rows, truncated=%v", len(r.Rows), r.Truncated)
@@ -324,7 +301,6 @@ func TestQueryDeadlineInterruptsExecution(t *testing.T) {
 	if elapsed := time.Since(before); elapsed > 5*time.Second {
 		t.Fatalf("query ran %s past its deadline", elapsed)
 	}
-	// The interrupted connection returns to the pool and keeps working.
 	mustQuery(t, e, `SELECT 1`)
 }
 
@@ -337,11 +313,9 @@ func TestQueryBusyFailsFastAndRecovers(t *testing.T) {
 	started := make(chan struct{})
 	go func() {
 		close(started)
-		_, _ = e.Query(ctx, slow) // runs until canceled
+		_, _ = e.Query(ctx, slow)
 	}()
 	<-started
-	// The only slot is taken once the slow query is executing; a second call
-	// must fail fast rather than queue behind it.
 	deadline := time.Now().Add(5 * time.Second)
 	var busy error
 	for time.Now().Before(deadline) {
@@ -355,7 +329,6 @@ func TestQueryBusyFailsFastAndRecovers(t *testing.T) {
 		t.Fatalf("second query error = %v, want ErrBusy", busy)
 	}
 	cancel()
-	// The slot frees once the slow query unwinds.
 	time.Sleep(100 * time.Millisecond)
 	mustQuery(t, e, `SELECT 1`)
 }
@@ -370,10 +343,6 @@ func TestQueryDeniedTables(t *testing.T) {
 	}
 }
 
-// TestQueryIsolationAcrossConnections checks that every pooled connection
-// carries the authorizer: concurrent calls on distinct connections deny the
-// same writes and cannot disturb each other's reads. Concurrency is set high
-// enough that the pool opens a connection per call.
 func TestQueryIsolationAcrossConnections(t *testing.T) {
 	e := newTestEngine(t, EngineOptions{MaxConcurrency: 16})
 
@@ -405,9 +374,6 @@ func TestQueryIsolationAcrossConnections(t *testing.T) {
 	}
 }
 
-// TestQueryReaderPoolIsReadOnly proves the defense in depth: a raw
-// connection from the engine's pool, with no authorizer installed by the
-// engine, still cannot write because the pool is opened mode=ro.
 func TestQueryReaderPoolIsReadOnly(t *testing.T) {
 	e := newTestEngine(t, EngineOptions{})
 	ctx := context.Background()

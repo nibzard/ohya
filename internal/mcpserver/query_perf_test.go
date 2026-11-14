@@ -1,10 +1,3 @@
-// Performance regression test for retrieval through the sql tool's engine.
-// Like the ingestion floor test, it fails only on order-of-magnitude
-// regressions, not on machine-speed drift: each query must answer well
-// inside the engine's 5 s deadline on a seeded hub. The benchmarks
-// (query_bench_test.go) carry the precise numbers; docs/performance.md
-// records them.
-
 package mcpserver
 
 import (
@@ -20,11 +13,6 @@ import (
 	"github.com/nibzard/ohya/internal/store"
 )
 
-// TestRetrievalPerformanceCeiling seeds a 12 MiB hub and runs the three
-// patterns agents rely on most: wide full-text search (the most expensive
-// ranked query), session token totals, and annotation paging. Measured
-// 2026-11-14: all under 10 ms. The 2 s ceiling sits far above that; the
-// engine's 5 s deadline is the hard bound an agent actually experiences.
 func TestRetrievalPerformanceCeiling(t *testing.T) {
 	hub, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "hub.db"))
 	if err != nil {

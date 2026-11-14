@@ -44,7 +44,7 @@ func TestSingleStatement(t *testing.T) {
 		`insert into t values(1); drop table t`,
 		`select 1
 		; select 2`,
-		`;;;`, // three empty statements
+		`;;;`,
 	}
 	for _, q := range multiple {
 		if err := singleStatement(q); !errors.Is(err, ErrMultipleStatements) {
@@ -68,8 +68,6 @@ func TestSingleStatement(t *testing.T) {
 	}
 }
 
-// FuzzSingleStatement checks the scanner never panics and stays stable:
-// adding trailing whitespace or comments must not change a verdict.
 func FuzzSingleStatement(f *testing.F) {
 	for _, seed := range []string{
 		`select 1`, `select 1; select 2`, `';'`, `"a""b"`, `/* ; */ x`, `-- ;`,

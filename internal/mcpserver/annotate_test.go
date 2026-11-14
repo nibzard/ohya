@@ -13,8 +13,6 @@ import (
 	"github.com/nibzard/ohya/internal/store"
 )
 
-// callAnnotate runs one annotate tool call with raw JSON arguments, so tests
-// control the exact bytes on the wire.
 func callAnnotate(t *testing.T, session *mcp.ClientSession, arguments string) *mcp.CallToolResult {
 	t.Helper()
 	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
@@ -27,7 +25,6 @@ func callAnnotate(t *testing.T, session *mcp.ClientSession, arguments string) *m
 	return result
 }
 
-// annotateCounts decodes a successful annotate result.
 func annotateCounts(t *testing.T, result *mcp.CallToolResult) store.AnnotateResult {
 	t.Helper()
 	if result.IsError {
@@ -44,7 +41,6 @@ func annotateCounts(t *testing.T, result *mcp.CallToolResult) store.AnnotateResu
 	return payload
 }
 
-// toolText renders a tool result's text content.
 func toolText(result *mcp.CallToolResult) string {
 	var b strings.Builder
 	for _, c := range result.Content {
@@ -55,7 +51,6 @@ func toolText(result *mcp.CallToolResult) string {
 	return b.String()
 }
 
-// queryRows runs one sql tool call and decodes its rows.
 func queryRows(t *testing.T, session *mcp.ClientSession, query string) Result {
 	t.Helper()
 	var payload Result
@@ -68,7 +63,6 @@ func queryRows(t *testing.T, session *mcp.ClientSession, query string) Result {
 func TestAnnotateToolAppliesBatches(t *testing.T) {
 	session := connect(t, EngineOptions{WriterID: "dev1"})
 
-	// Upsert plus delete of an absent annotation: one applied, one unchanged.
 	result := callAnnotate(t, session, `{"operations":[
 		{"op":"upsert","event_id":2,"namespace":"tags","key":"flag","value":{"seen": true}},
 		{"op":"delete","event_id":2,"namespace":"tags","key":"absent"}]}`)
@@ -76,14 +70,12 @@ func TestAnnotateToolAppliesBatches(t *testing.T) {
 		t.Fatalf("first batch = %+v", got)
 	}
 
-	// The annotation is stored compacted and readable through the sql tool.
 	r := queryRows(t, session, `SELECT value FROM event_annotations
 		WHERE event_id = 2 AND namespace = 'tags' AND key = 'flag' AND writer_id = 'dev1'`)
 	if fmt.Sprint(r.Rows) != `[[{"seen":true}]]` {
 		t.Fatalf("stored value = %v, want compacted {\"seen\":true}", r.Rows)
 	}
 
-	// An identical retry — same batch, same spaced value — changes nothing.
 	result = callAnnotate(t, session, `{"operations":[
 		{"op":"upsert","event_id":2,"namespace":"tags","key":"flag","value":{"seen": true}},
 		{"op":"delete","event_id":2,"namespace":"tags","key":"absent"}]}`)
@@ -91,29 +83,23 @@ func TestAnnotateToolAppliesBatches(t *testing.T) {
 		t.Fatalf("retried batch = %+v", got)
 	}
 
-	// A changed value replaces the whole value.
 	result = callAnnotate(t, session, `{"operations":[
 		{"op":"upsert","event_id":2,"namespace":"tags","key":"flag","value":{"seen":false,"note":"replaced"}}]}`)
 	if got := annotateCounts(t, result); got != (store.AnnotateResult{Applied: 1}) {
 		t.Fatalf("changed batch = %+v", got)
 	}
 
-	// The seeded annotation from another test round is this writer's own: an
-	// identical upsert is a no-op.
 	result = callAnnotate(t, session, `{"operations":[
 		{"op":"upsert","event_id":1,"namespace":"security","key":"review","value":{"status":"reviewed"}}]}`)
 	if got := annotateCounts(t, result); got != (store.AnnotateResult{Unchanged: 1}) {
 		t.Fatalf("seeded retry = %+v", got)
 	}
 
-	// An empty batch is accepted and reports zeros.
 	result = callAnnotate(t, session, `{"operations":[]}`)
 	if got := annotateCounts(t, result); got != (store.AnnotateResult{}) {
 		t.Fatalf("empty batch = %+v", got)
 	}
 
-	// Original records stay untouched: the same events and sessions remain,
-	// and only one annotation row was added to the seeded one.
 	r = queryRows(t, session, `SELECT (SELECT count(*) FROM events), (SELECT count(*) FROM sessions),
 		(SELECT count(*) FROM event_annotations)`)
 	if fmt.Sprint(r.Rows) != "[[2 1 2]]" {
@@ -152,7 +138,7 @@ func TestAnnotateToolRejectsInvalidRequests(t *testing.T) {
 	cases := []struct {
 		name      string
 		arguments string
-		want      string // substring of the tool error; empty for any error
+		want      string
 	}{
 		{
 			"writer spoofing",
@@ -199,7 +185,6 @@ func TestAnnotateToolRejectsInvalidRequests(t *testing.T) {
 		}
 	}
 
-	// One over the operation limit fails.
 	var ops []string
 	for i := 0; i <= store.MaxAnnotationOperations; i++ {
 		ops = append(ops, fmt.Sprintf(`{"op":"delete","event_id":2,"namespace":"tags","key":"k%d"}`, i))
@@ -209,7 +194,6 @@ func TestAnnotateToolRejectsInvalidRequests(t *testing.T) {
 		t.Fatalf("oversized batch error = %q", toolText(result))
 	}
 
-	// Every rejection above applied nothing.
 	r := queryRows(t, session, `SELECT count(*) FROM event_annotations`)
 	if fmt.Sprint(r.Rows) != "[[1]]" {
 		t.Fatalf("annotations after rejections = %v, want only the seeded row", r.Rows)
@@ -217,15 +201,12 @@ func TestAnnotateToolRejectsInvalidRequests(t *testing.T) {
 }
 
 func TestAnnotateToolRejectsOversizedRequests(t *testing.T) {
-	// A small limit plus a valid but long namespace (up to 128 characters):
-	// the request passes every schema and field rule, only its size fails.
 	session := connect(t, EngineOptions{WriterID: "dev1", MaxAnnotateRequestBytes: 120})
 	result := callAnnotate(t, session, `{"operations":[{"op":"delete","event_id":2,"namespace":"`+
 		strings.Repeat("n", 100)+`","key":"a"}]}`)
 	if !result.IsError || !strings.Contains(toolText(result), "byte limit") {
 		t.Fatalf("oversized request error = %q", toolText(result))
 	}
-	// The tool stays usable afterwards.
 	result = callAnnotate(t, session, `{"operations":[]}`)
 	if got := annotateCounts(t, result); got != (store.AnnotateResult{}) {
 		t.Fatalf("after rejection = %+v", got)
@@ -238,7 +219,6 @@ func TestAnnotateWriterIsolation(t *testing.T) {
 	remote := NewEngine(readers, hub.Writer(), EngineOptions{WriterID: "dev2"})
 	ctx := context.Background()
 
-	// Both engines annotate the same (event, namespace, key) independently.
 	op := `{"operations":[{"op":"upsert","event_id":2,"namespace":"security","key":"review","value":"mine"}]}`
 	for name, e := range map[string]*Engine{"dev1": local, "dev2": remote} {
 		result, err := e.Annotate(ctx, json.RawMessage(op))
@@ -252,7 +232,6 @@ func TestAnnotateWriterIsolation(t *testing.T) {
 		t.Fatalf("rows for two writers = %d, want 2", rows)
 	}
 
-	// Each engine sees and changes only its own annotation.
 	if result, err := remote.Annotate(ctx, json.RawMessage(
 		`{"operations":[{"op":"delete","event_id":2,"namespace":"security","key":"review"}]}`)); err != nil ||
 		result != (store.AnnotateResult{Applied: 1}) {
@@ -264,8 +243,6 @@ func TestAnnotateWriterIsolation(t *testing.T) {
 		t.Fatalf("dev1 row after dev2 delete = %q, %v", dev1Value, err)
 	}
 
-	// A caller cannot choose the writer identity: writer_id is not a field of
-	// the wire shape, so supplying it fails the strict decode.
 	_, err := local.Annotate(ctx, json.RawMessage(
 		`{"operations":[{"op":"upsert","event_id":2,"namespace":"tags","key":"spoof","value":1,"writer_id":"attacker"}]}`))
 	if err == nil || !strings.Contains(err.Error(), "writer_id") {
@@ -304,9 +281,6 @@ func TestAnnotateConcurrentToolCallsTakeLastCommit(t *testing.T) {
 	}
 }
 
-// TestAnnotateQueryToolSeesAnnotations closes the loop: what annotate
-// commits is immediately visible to the read-only sql tool on a reader
-// connection, not only on the writer.
 func TestAnnotateQueryToolSeesAnnotations(t *testing.T) {
 	session := connect(t, EngineOptions{WriterID: "dev1"})
 	result := callAnnotate(t, session, `{"operations":[
@@ -321,9 +295,6 @@ func TestAnnotateQueryToolSeesAnnotations(t *testing.T) {
 	}
 }
 
-// TestAnnotateWithoutWriterID pins the configuration rule: the hub assigns
-// the writer from the device identity, and an engine without one refuses
-// annotation batches instead of writing under an empty identity.
 func TestAnnotateWithoutWriterID(t *testing.T) {
 	hub, readers := openSeededHub(t)
 	engine := NewEngine(readers, hub.Writer(), EngineOptions{})
@@ -338,11 +309,6 @@ func TestAnnotateWithoutWriterID(t *testing.T) {
 	}
 }
 
-// TestAnnotateAsDerivesWriterFromCaller pins the remote path's writer rule
-// at the engine level: the caller supplies the authenticated identity — the
-// sync endpoint passes the device — and content rejections carry
-// ErrAnnotateRejected or the store's sentinel so a serving endpoint can
-// classify them as deterministic.
 func TestAnnotateAsDerivesWriterFromCaller(t *testing.T) {
 	hub, readers := openSeededHub(t)
 	engine := NewEngine(readers, hub.Writer(), EngineOptions{WriterID: "local"})
@@ -352,8 +318,6 @@ func TestAnnotateAsDerivesWriterFromCaller(t *testing.T) {
 	if res, err := engine.AnnotateAs(ctx, "device-b", op); err != nil || res.Applied != 1 {
 		t.Fatalf("annotate as device-b = %+v, %v", res, err)
 	}
-	// The engine's configured writer keeps its own identity on the same
-	// annotation identity: two rows, one per writer.
 	if res, err := engine.Annotate(ctx, op); err != nil || res.Applied != 1 {
 		t.Fatalf("annotate as local = %+v, %v", res, err)
 	}
@@ -365,20 +329,16 @@ func TestAnnotateAsDerivesWriterFromCaller(t *testing.T) {
 		t.Fatalf("writers = %v", r.Rows)
 	}
 
-	// A content rejection wraps this package's sentinel.
 	_, err = engine.AnnotateAs(ctx, "device-b", json.RawMessage(
 		`{"operations":[{"op":"delete","event_id":2,"namespace":"t","key":"k","value":1}]}`))
 	if !errors.Is(err, ErrAnnotateRejected) {
 		t.Fatalf("delete-with-value error = %v; want ErrAnnotateRejected", err)
 	}
-	// A store validation rejection — a missing event — wraps the store's
-	// sentinel.
 	_, err = engine.AnnotateAs(ctx, "device-b", json.RawMessage(
 		`{"operations":[{"op":"delete","event_id":999,"namespace":"t","key":"k"}]}`))
 	if !errors.Is(err, store.ErrAnnotationRejected) {
 		t.Fatalf("missing event error = %v; want store.ErrAnnotationRejected", err)
 	}
-	// An empty writer identity is refused rather than written.
 	_, err = engine.AnnotateAs(ctx, "", json.RawMessage(
 		`{"operations":[{"op":"delete","event_id":2,"namespace":"t","key":"k"}]}`))
 	if !errors.Is(err, store.ErrAnnotationRejected) || !strings.Contains(err.Error(), "writer ID") {

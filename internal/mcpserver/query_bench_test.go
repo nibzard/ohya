@@ -1,9 +1,3 @@
-// Retrieval benchmarks over a seeded synthetic hub (internal/fixgen). They
-// measure the sql tool's real path — Engine.Query with its authorizer,
-// one-statement scanner, deadline and row/byte limits — so the numbers
-// answer what an agent's query costs at a given corpus volume. The companion
-// measurements and method live in docs/performance.md.
-
 package mcpserver
 
 import (
@@ -20,9 +14,6 @@ import (
 	"github.com/nibzard/ohya/internal/store"
 )
 
-// benchHub lazily seeds one shared hub for all query benchmarks: ingesting
-// the corpus per benchmark would dominate the run. TestMain closes it and
-// removes its directory.
 var benchHub struct {
 	once sync.Once
 	db   *store.DB
@@ -41,9 +32,6 @@ func benchMIB() int {
 	return 32
 }
 
-// seedBenchHub ingests the benchmark corpus (default 32 MiB, OHYA_BENCH_MIB
-// to raise) and builds the engine with the tool's default limits. The
-// caller owns the returned directory.
 func seedBenchHub() (*store.DB, *Engine, string, error) {
 	dir, err := os.MkdirTemp("", "ohya-query-bench-")
 	if err != nil {
@@ -94,9 +82,6 @@ func acquireBenchEngine(b *testing.B) *Engine {
 	return benchHub.eng
 }
 
-// TestMain closes the shared benchmark hub after all benchmarks ran and
-// removes its directory; a benchmark-local cleanup would close it while
-// later benchmarks still use it.
 func TestMain(m *testing.M) {
 	code := m.Run()
 	if benchHub.db != nil {
@@ -108,7 +93,6 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// queryBench runs one query repeatedly and reports per-call latency.
 func queryBench(b *testing.B, name, query string) {
 	b.Run(name, func(b *testing.B) {
 		e := acquireBenchEngine(b)
@@ -123,10 +107,6 @@ func queryBench(b *testing.B, name, query string) {
 	})
 }
 
-// BenchmarkQuery runs the retrieval patterns agents use (DB.md documents
-// them): selective and wide full-text search, session token totals, the
-// recent-sessions listing, an event range within one session, and the
-// annotation paging query.
 func BenchmarkQuery(b *testing.B) {
 	queryBench(b, "FTS-selective", `SELECT e.id, substr(e.text, 1, 200)
 		FROM events_fts JOIN events e ON e.id = events_fts.rowid

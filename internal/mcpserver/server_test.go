@@ -12,8 +12,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// connect starts the server on one end of an in-memory transport pair and a
-// real SDK client on the other, completing the initialize handshake.
 func connect(t *testing.T, o EngineOptions) *mcp.ClientSession {
 	t.Helper()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
@@ -33,7 +31,6 @@ func connect(t *testing.T, o EngineOptions) *mcp.ClientSession {
 	return session
 }
 
-// call runs one tools/call and returns the result.
 func call(t *testing.T, session *mcp.ClientSession, query string) *mcp.CallToolResult {
 	t.Helper()
 	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
@@ -91,7 +88,6 @@ func TestServerServesSQLTool(t *testing.T) {
 		t.Fatalf("payload = %+v", payload)
 	}
 
-	// Zero rows still carry columns; rows encode as [].
 	result = call(t, session, `SELECT id FROM events WHERE id > 99`)
 	if err := redecode(result, &payload); err != nil {
 		t.Fatal(err)
@@ -102,19 +98,15 @@ func TestServerServesSQLTool(t *testing.T) {
 }
 
 func TestServerReportsToolErrorsForBadSQL(t *testing.T) {
-	// A short deadline keeps the expensive final case fast; the others are
-	// rejected before execution.
 	session := connect(t, EngineOptions{Deadline: 500 * time.Millisecond})
 	for _, q := range []string{
-		`DELETE FROM events`,           // denied by the authorizer
-		`SELECT 1; SELECT 2`,           // two statements
-		``,                             // nothing to run
-		`SELECT * FROM missing_table`,  // SQLite error
-		`ATTACH '/tmp/x.db' AS x`,      // attach denied
-		`SELECT load_extension('x')`,   // unsafe function
-		`PRAGMA journal_mode = DELETE`, // state-changing pragma
-		// One row that costs seconds to compute: the deadline, not the row
-		// limit, must stop it.
+		`DELETE FROM events`,
+		`SELECT 1; SELECT 2`,
+		``,
+		`SELECT * FROM missing_table`,
+		`ATTACH '/tmp/x.db' AS x`,
+		`SELECT load_extension('x')`,
+		`PRAGMA journal_mode = DELETE`,
 		`WITH RECURSIVE c(n) AS (VALUES(0) UNION ALL SELECT n+1 FROM c) SELECT sum(n) FROM c`,
 	} {
 		result := call(t, session, q)
@@ -125,14 +117,12 @@ func TestServerReportsToolErrorsForBadSQL(t *testing.T) {
 			t.Fatalf("query %q: error carries no content the agent can read", q)
 		}
 	}
-	// The session stays usable after errors.
 	result := call(t, session, `SELECT 1 AS ok`)
 	if result.IsError {
 		t.Fatalf("session unusable after errors: %+v", result)
 	}
 }
 
-// redecode unmarshals the structured output of a successful tool call.
 func redecode(result *mcp.CallToolResult, payload *Result) error {
 	if result.IsError {
 		return fmt.Errorf("unexpected tool error: %+v", result)
@@ -144,11 +134,6 @@ func redecode(result *mcp.CallToolResult, payload *Result) error {
 	return json.Unmarshal(raw, payload)
 }
 
-// TestServerProtocolCompatibility records the compatibility check behind
-// pinning the SDK: the server must speak the protocol versions its clients
-// use. Claude Code negotiates 2025-06-18; verify a client pinned to it
-// completes the handshake and calls the tool, and that the SDK's supported
-// list covers every version a current client may send.
 func TestServerProtocolCompatibility(t *testing.T) {
 	for _, version := range mcp.SupportedProtocolVersions() {
 		if version != "2025-06-18" && version != "2025-03-26" && version != "2024-11-05" {

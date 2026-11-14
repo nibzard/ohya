@@ -426,6 +426,33 @@ returned its data cannot be recalled). `ohya serve` (T034) runs the
 endpoint behind exactly this authenticator; the registry decides admission
 and revocation, and the coordination plane only carries transport.
 
+Registry details (`internal/registry`):
+
+- The schema version (1) lives in `PRAGMA user_version`. A database with
+  another version, or with registry tables but no version, is refused, never
+  silently upgraded, downgraded, or recreated.
+- The state directory is owner-only (0700) and protects the write-ahead log
+  files; `registry.db` itself is 0600. One writer connection serializes all
+  operations, and across processes the 5 s busy timeout serializes them.
+  Transactions are immediate (`_txlock=immediate`), so two racing consumes
+  serialize on the write lock instead of deadlocking on a read-lock upgrade.
+- Secrets are 16 random bytes, hex-encoded. Invitations expire after 15
+  minutes by default. The secret is shown once at issue time.
+- `Consume` is one transaction that consumes the invitation and admits the
+  device, so no state exists where one happened without the other. Only a
+  stranger device may consume an invitation.
+- Each refusal has its own error, so the endpoint and the CLI can tell the
+  cases apart: unknown, used, or expired invitation; device already paired,
+  revoked, or unknown; already revoked; unknown credential.
+- `Revoke` is one-way. The device's sources and annotation rows stay as
+  history. `WatchRevocations` polls the registry (every second by default),
+  because another process such as the operator CLI can revoke. It reports
+  only devices revoked after the watch starts, because earlier revocations
+  cannot hold connections. A transient read failure does not stop the watch.
+- A Tailcat `WhoIs`-based authenticator can implement the same endpoint
+  interfaces with transport-level identity; the registry would still decide
+  admission and revocation.
+
 SQL runs with a read-only connection, SQLite authorizer, one statement, execution
 deadline, row/byte limits and bounded concurrency. Deny attachment, extension
 loading, unsafe functions and state-changing pragmas. Verify driver support for
@@ -451,6 +478,41 @@ there is the authenticated device, never caller input. `mcpserver.New`
 consumes this surface as a `Backend` interface (query plus writer-derived
 annotate), so the local engine and the device-side `hubsync.RemoteSession`
 (`ohya mcp --remote`, T034) attach to the same MCP tool handlers.
+
+Engine details (`internal/mcpserver`):
+
+- The authorizer allows `SELECT`, recursive CTEs, reads of tables outside
+  `DenyTables`, the allow-listed pragmas (`collation_list`, `data_version`,
+  `database_list`, `foreign_key_list`, `function_list`, `index_info`,
+  `index_list`, `index_xinfo`, `module_list`, `pragma_list`, `table_info`,
+  `table_list`, `table_xinfo`), and every function except `load_extension`
+  and `fts3_tokenizer`. `fts3_tokenizer` rebinds tokenizer pointers, which
+  is an execution primitive even on a read-only connection. Everything else
+  is denied: writes, DDL, `ATTACH`, transactions, savepoints, virtual-table
+  management, `REINDEX`, `ANALYZE`, and connection-state pragmas such as
+  `query_only` or `busy_timeout`. The connection is also read-only, so a
+  policy gap cannot become a write.
+- Workaround: the driver (mattn/go-sqlite3 v1.14.53) does not export
+  `SQLITE_RECURSIVE`, so the engine defines it as 33 from the bundled
+  header. The recursive-CTE query test fails if a driver update renumbers
+  it.
+- SQLite reports authorizer denials with different texts per operation
+  ("not authorized", "access to table.column is prohibited", "authorization
+  denied" for `VACUUM`). The engine maps all of them to `ErrDenied`. Other
+  sentinels are `ErrBusy` (retry later), `ErrMultipleStatements`,
+  `ErrEmptyQuery`, and `ErrDeadline`.
+- The statement scanner follows SQLite's lexical rules far enough to find
+  terminators: quotes (with doubling), `--` and `/* */` comments, and
+  bracketed identifiers never terminate a statement. Any token after the
+  first terminator makes a second statement, so `select 1;;` is two.
+- Output truncation drops whole rows, never parts of a row, and reports
+  `row_limit` or `byte_limit`. BLOBs become base64 text, and non-finite
+  floats become their names.
+- The annotate handler decodes strictly: unknown fields and trailing data
+  are refused, and pointer fields keep absent, null, and empty values apart.
+  Content refusals wrap `ErrAnnotateRejected` before the database is
+  touched. The tool advertises `readOnlyHint: false` and a destructive hint,
+  because a delete discards a value; a retried batch converges.
 
 ## Deferred
 

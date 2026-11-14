@@ -13,7 +13,6 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// openTestRegistry opens a registry in a fresh temporary directory.
 func openTestRegistry(t *testing.T) *DB {
 	t.Helper()
 	db, err := Open(filepath.Join(t.TempDir(), FileName))
@@ -24,8 +23,6 @@ func openTestRegistry(t *testing.T) *DB {
 	return db
 }
 
-// pairTestDevice consumes one fresh invitation for deviceID and returns the
-// credential.
 func pairTestDevice(t *testing.T, db *DB, deviceID string) Credential {
 	t.Helper()
 	inv, err := db.Issue(context.Background(), time.Hour)
@@ -39,9 +36,6 @@ func pairTestDevice(t *testing.T, db *DB, deviceID string) Credential {
 	return cred
 }
 
-// TestIssueAndConsumeRegistersDevice walks the happy path: an issued
-// invitation admits one device, the minted credential authenticates it, and
-// the registry records the provenance the invariants of tla/Auth.tla need.
 func TestIssueAndConsumeRegistersDevice(t *testing.T) {
 	db := openTestRegistry(t)
 	ctx := context.Background()
@@ -89,8 +83,6 @@ func TestIssueAndConsumeRegistersDevice(t *testing.T) {
 	}
 }
 
-// TestInvitationSingleUse pins the InvitationSingleUse invariant: a consumed
-// invitation never admits a second device, in this process or another.
 func TestInvitationSingleUse(t *testing.T) {
 	db := openTestRegistry(t)
 	ctx := context.Background()
@@ -102,14 +94,11 @@ func TestInvitationSingleUse(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Same handle: the invitation is used.
 	_, err = db.Consume(ctx, inv.Secret, "ffffffffffffffffffffffffffffffff")
 	if !errors.Is(err, ErrInvitationUsed) {
 		t.Fatalf("second consume err = %v; want ErrInvitationUsed", err)
 	}
 
-	// Another handle on the same file — another process, for example the
-	// serving endpoint — sees the same consumed state.
 	again, err := Open(db.path)
 	if err != nil {
 		t.Fatal(err)
@@ -121,10 +110,6 @@ func TestInvitationSingleUse(t *testing.T) {
 	}
 }
 
-// TestConsumeRaceSingleUse runs two devices against one invitation at the
-// same time, through two registry handles. Exactly one wins; the loser
-// learns the invitation was used. This is the ConsumeInvitation atomicity of
-// tla/Auth.tla.
 func TestConsumeRaceSingleUse(t *testing.T) {
 	db := openTestRegistry(t)
 	ctx := context.Background()
@@ -168,8 +153,6 @@ func TestConsumeRaceSingleUse(t *testing.T) {
 	}
 }
 
-// TestInvitationExpiry pins that consumption must race expiry and can lose:
-// an invitation past its lifetime is refused, and lazily marked expired.
 func TestInvitationExpiry(t *testing.T) {
 	db := openTestRegistry(t)
 	ctx := context.Background()
@@ -182,16 +165,11 @@ func TestInvitationExpiry(t *testing.T) {
 	if !errors.Is(err, ErrInvitationExpired) {
 		t.Fatalf("expired consume err = %v; want ErrInvitationExpired", err)
 	}
-	// A negative TTL would issue an already-dead invitation; refuse it.
 	if _, err := db.Issue(ctx, -time.Second); err == nil {
 		t.Fatal("negative TTL was accepted")
 	}
 }
 
-// TestRevocationIsFinal pins RevocationIrreversible and
-// NoLiveSessionForRevoked: a revoked credential no longer authenticates, a
-// fresh invitation cannot resurrect the identity, and re-revocation is an
-// explicit no-op.
 func TestRevocationIsFinal(t *testing.T) {
 	db := openTestRegistry(t)
 	ctx := context.Background()
@@ -208,7 +186,6 @@ func TestRevocationIsFinal(t *testing.T) {
 		t.Fatalf("authorize revoked err = %v; want ErrDeviceRevoked", err)
 	}
 
-	// A fresh invitation cannot re-admit the revoked identity.
 	inv, err := db.Issue(ctx, time.Hour)
 	if err != nil {
 		t.Fatal(err)
@@ -216,7 +193,6 @@ func TestRevocationIsFinal(t *testing.T) {
 	if _, err := db.Consume(ctx, inv.Secret, cred.DeviceID); !errors.Is(err, ErrDeviceRevoked) {
 		t.Fatalf("re-pair revoked err = %v; want ErrDeviceRevoked", err)
 	}
-	// The invitation survived the refused attempt and still serves a stranger.
 	if _, err := db.Consume(ctx, inv.Secret, "ffffffffffffffffffffffffffffffff"); err != nil {
 		t.Fatalf("invitation died with the refused consume: %v", err)
 	}
@@ -226,9 +202,6 @@ func TestRevocationIsFinal(t *testing.T) {
 	}
 }
 
-// TestActiveDeviceCannotConsumeSecondInvitation pins the model's "absent"
-// guard: pairing twice would break the pairing record's meaning, so an
-// active device is refused even with a valid fresh invitation.
 func TestActiveDeviceCannotConsumeSecondInvitation(t *testing.T) {
 	db := openTestRegistry(t)
 	ctx := context.Background()
@@ -244,9 +217,6 @@ func TestActiveDeviceCannotConsumeSecondInvitation(t *testing.T) {
 	}
 }
 
-// TestUnknownInputs pins the refusal of strangers: an unknown invitation,
-// an unknown credential, and revocation or authorization of an unknown
-// device.
 func TestUnknownInputs(t *testing.T) {
 	db := openTestRegistry(t)
 	ctx := context.Background()
@@ -275,12 +245,9 @@ func TestUnknownInputs(t *testing.T) {
 	}
 }
 
-// TestProtectedStore pins the protection boundary: the state directory is
-// owner-only, and the registry file itself carries no group or other
-// permission bits.
 func TestProtectedStore(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "sub", FileName) // Open creates the parent
+	path := filepath.Join(dir, "sub", FileName)
 	db, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -305,14 +272,10 @@ func TestProtectedStore(t *testing.T) {
 		t.Fatalf("registry perms = %o; want no group or other access", perm)
 	}
 
-	// No secret is stored in clear: the file holds only digests.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The digest of a known-format secret would be 64 hex characters; assert
-	// the file never contains any 32-hex-character secret-shaped string by
-	// checking a freshly issued secret is absent.
 	inv, err := db.Issue(context.Background(), time.Hour)
 	if err != nil {
 		t.Fatal(err)
@@ -322,8 +285,6 @@ func TestProtectedStore(t *testing.T) {
 	}
 }
 
-// TestPersistenceAcrossReopen pins that pairing survives a hub restart:
-// the registry on disk authenticates the same credential.
 func TestPersistenceAcrossReopen(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, FileName)
@@ -354,9 +315,6 @@ func TestPersistenceAcrossReopen(t *testing.T) {
 	}
 }
 
-// TestWatchRevocations pins the watcher contract: devices revoked before the
-// watch starts are not reported, every new revocation is reported exactly
-// once, and the watch ends with its context.
 func TestWatchRevocations(t *testing.T) {
 	db := openTestRegistry(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -382,7 +340,6 @@ func TestWatchRevocations(t *testing.T) {
 		}
 	}()
 
-	// The pre-existing revocation must not arrive.
 	time.Sleep(30 * time.Millisecond)
 
 	second := pairTestDevice(t, db, "ffffffffffffffffffffffffffffffff")
@@ -431,8 +388,6 @@ func TestWatchRevocations(t *testing.T) {
 	}
 }
 
-// TestSchemaVersionRefusesUnknownDatabase pins the migration posture: a
-// registry written by a newer binary is an error.
 func TestSchemaVersionRefusesUnknownDatabase(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, FileName)
@@ -443,7 +398,6 @@ func TestSchemaVersionRefusesUnknownDatabase(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	// Write the newer version through a plain driver connection.
 	plain, err := sql.Open("sqlite3", "file:"+path+"?_journal_mode=WAL&_foreign_keys=on")
 	if err != nil {
 		t.Fatal(err)

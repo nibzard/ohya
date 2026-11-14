@@ -1,9 +1,3 @@
-// The annotate(operations) MCP tool. Agents persist tags, classifications
-// and security-review findings as JSON annotations on existing events,
-// without touching any original transcript record. The tool decodes one
-// request strictly, enforces the request limits here, and commits the batch
-// atomically through the write path in internal/store.
-
 package mcpserver
 
 import (
@@ -16,22 +10,12 @@ import (
 	"github.com/nibzard/ohya/internal/store"
 )
 
-// AnnotateToolName is the annotation tool's name.
 const AnnotateToolName = "annotate"
 
-// ErrAnnotateRejected reports an annotate request refused on its content
-// before anything touched the database: strict decoding, request limits, or
-// a rule an operation violates. Retrying the same bytes can never succeed.
 var ErrAnnotateRejected = errors.New("annotate tool")
 
-// boolPtr returns a pointer to b, for the tool annotation hints that are
-// pointers so an explicit false reaches clients.
 func boolPtr(b bool) *bool { return &b }
 
-// annotateArgs shapes the tool's advertised input schema. The handler decodes
-// the raw arguments itself, with strict unknown-field rejection and the
-// upsert/delete value rule the schema cannot express; these types only
-// describe the contract to clients.
 type annotateArgs struct {
 	Operations []annotateArgsOperation `json:"operations" jsonschema:"1 to 100 annotation operations, applied atomically"`
 }
@@ -44,14 +28,10 @@ type annotateArgsOperation struct {
 	Value     any    `json:"value,omitempty" jsonschema:"JSON value; required for upsert, forbidden for delete; at most 64 KiB of UTF-8 JSON"`
 }
 
-// annotateRequestJSON is the strict wire shape the handler decodes.
 type annotateRequestJSON struct {
 	Operations []json.RawMessage `json:"operations"`
 }
 
-// annotateOperationJSON decodes one operation strictly. Every required field
-// is a pointer, so absent and null stay distinguishable from empty values;
-// Value is raw text, so absent, null and a JSON null value differ too.
 type annotateOperationJSON struct {
 	Op        *string         `json:"op"`
 	EventID   *int64          `json:"event_id"`
@@ -60,18 +40,10 @@ type annotateOperationJSON struct {
 	Value     json.RawMessage `json:"value,omitempty"`
 }
 
-// Annotate applies one annotate request attributed to this engine's writer
-// identity: the local Device ID of the stdio tool.
 func (e *Engine) Annotate(ctx context.Context, raw json.RawMessage) (store.AnnotateResult, error) {
 	return e.AnnotateAs(ctx, e.options.WriterID, raw)
 }
 
-// AnnotateAs applies one annotate request attributed to writerID, which the
-// caller derives from an authenticated identity, never from request
-// content. The sync endpoint passes the authenticated device; a request can
-// never name a writer, because writer_id fails the strict decode. Every
-// content rejection fires before the batch touches the database, so a
-// rejected request applies nothing.
 func (e *Engine) AnnotateAs(ctx context.Context, writerID string, raw json.RawMessage) (store.AnnotateResult, error) {
 	if len(raw) == 0 {
 		return store.AnnotateResult{}, fmt.Errorf("%w: missing arguments", ErrAnnotateRejected)
@@ -101,9 +73,6 @@ func (e *Engine) AnnotateAs(ctx context.Context, writerID string, raw json.RawMe
 	return store.Annotate(ctx, e.writer, writerID, ops)
 }
 
-// decodeOperation turns one raw operation into a validated store operation.
-// The writer identity is deliberately absent: the hub assigns it, so a caller
-// supplying writer_id fails the unknown-field check below.
 func (e *Engine) decodeOperation(index int, raw json.RawMessage) (store.AnnotationOp, error) {
 	var op annotateOperationJSON
 	if err := decodeStrict(raw, &op); err != nil {
@@ -149,8 +118,6 @@ func (e *Engine) decodeOperation(index int, raw json.RawMessage) (store.Annotati
 	return result, nil
 }
 
-// decodeStrict unmarshals exactly one JSON value into v, rejecting unknown
-// fields and trailing data.
 func decodeStrict(data []byte, v any) error {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
@@ -163,8 +130,6 @@ func decodeStrict(data []byte, v any) error {
 	return nil
 }
 
-// AnnotateDescription publishes the annotate contract, so an agent can call
-// the tool without any out-of-band context.
 func AnnotateDescription(o EngineOptions) string {
 	return fmt.Sprintf(`Apply a batch of annotation operations to existing events, atomically: every operation commits or none does. Annotations are your interpretations (tags, classifications, security-review findings) stored in event_annotations; original transcript records are never modified.
 

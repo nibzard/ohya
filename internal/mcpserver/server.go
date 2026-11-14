@@ -10,34 +10,17 @@ import (
 	"github.com/nibzard/ohya/internal/store"
 )
 
-// ServerVersion is the implementation version advertised in the MCP
-// initialize handshake. It tracks the repository state, not a release.
 const ServerVersion = "0.1.0-dev"
 
-// ToolName is the read-only query tool's name.
 const ToolName = "sql"
 
-// Backend serves the two tool operations behind the MCP surface. The local
-// engine over the hub database implements it, and the device-side bridge of
-// the sync protocol implements it over one authenticated hub connection
-// (internal/hubsync.RemoteSession), so local and remote agents see the same
-// tools under the same bounds. The annotate writer always comes from the
-// caller's identity, never from request content.
 type Backend interface {
-	// Query runs exactly one bounded read-only statement and returns its
-	// truncated-to-limits result.
 	Query(ctx context.Context, query string) (Result, error)
-	// AnnotateAs applies one annotate request's JSON arguments, attributing
-	// every operation of the batch to writerID.
 	AnnotateAs(ctx context.Context, writerID string, raw json.RawMessage) (store.AnnotateResult, error)
 }
 
-// The engine serves the tools over the hub database.
 var _ Backend = (*Engine)(nil)
 
-// New returns an MCP server serving the read-only sql(query) tool and the
-// annotate(operations) tool over one backend: the local engine, or a remote
-// session on a joined device. Callers run it with Run, typically over stdio.
 func New(backend Backend, o EngineOptions) *mcp.Server {
 	o = o.withDefaults()
 	server := mcp.NewServer(&mcp.Implementation{Name: "ohya", Version: ServerVersion}, nil)
@@ -58,9 +41,6 @@ func New(backend Backend, o EngineOptions) *mcp.Server {
 		Title:       "Annotate events",
 		Description: AnnotateDescription(o),
 		Annotations: &mcp.ToolAnnotations{
-			// The tool writes, and a delete discards a value, so it may be
-			// destructive; only event_annotations is ever touched. A retried
-			// batch converges: identical operations are no-ops.
 			ReadOnlyHint:   false,
 			IdempotentHint: true,
 			OpenWorldHint:  boolPtr(false),
@@ -75,18 +55,14 @@ func New(backend Backend, o EngineOptions) *mcp.Server {
 	return server
 }
 
-// Run serves the tool over stdio until ctx is done or stdin closes.
 func Run(ctx context.Context, server *mcp.Server) error {
 	return server.Run(ctx, &mcp.StdioTransport{})
 }
 
-// sqlArgs is the tool's input: one query per call.
 type sqlArgs struct {
 	Query string `json:"query" jsonschema:"one SQL SELECT statement (or read-only PRAGMA); exactly one statement, no semicolon-separated batches"`
 }
 
-// ToolDescription publishes the schema, SQL examples, the limits, and the
-// current writer ID, so an agent can query without any out-of-band context.
 func ToolDescription(o EngineOptions) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, `Run one read-only SQL statement against the ohya agent-transcript database and return its rows as JSON.

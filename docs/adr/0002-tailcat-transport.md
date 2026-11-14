@@ -46,6 +46,40 @@ consumable exactly once within the invitation's lifetime. A revocation in
 the registry ends the device's sync sessions; deleting the coordinator node
 is transport hygiene on top, not the authorization boundary.
 
+### Deployment defaults
+
+- The coordination plane listens on `127.0.0.1:9417` (coordination protocol
+  and embedded DERP) and `127.0.0.1:3478` (STUN). The default URL devices use
+  is `http://127.0.0.1:9417`. Its state lives in `control/`: the generated
+  `config.yaml`, one SQLite database, the noise and DERP keys, and the gRPC
+  unix socket. The configuration uses absolute paths, because headscale
+  resolves relative paths against the configuration directory.
+- Every node enrolls under one coordinator user, `ohya`. Coordination
+  admission is per preauth key; device authorization belongs to the
+  registry.
+- The hub node is `ohya-hub` in the MagicDNS domain `tail.ohya`, and the
+  sync endpoint listens on tailnet port 9027. The port binds inside the
+  node's userspace network stack, never on the host.
+- A join code is `<invitation>:<preauth-key>`. Each half admits exactly one
+  use.
+- `Start` returns once the control server answers its health endpoint, so
+  the hub node can enroll at once. A listener that cannot bind, for
+  example a second serve on the same state, fails `Start` with its reason.
+  The embedded server has no in-process stop; it ends with the process.
+- The hub mints its own preauth key only on first start; a durable node
+  reuses its identity. Losing a node's state directory orphans the node on
+  the coordination server.
+- Nodes come up before use, so a rejected identity or preauth key fails
+  with the server's reason instead of blocking until the deadline.
+- The gRPC socket `<state>/control/headscale.sock` must fit the unix socket
+  path limit; darwin's 104 bytes is the smallest supported. A longer path
+  makes the embedded server fail at its gRPC listener with "bind: invalid
+  argument". Tests therefore use a short `os.MkdirTemp` directory, not
+  `t.TempDir`, which on macOS lives under a long `/var/folders/...` path.
+- A failed STUN bind exits the process inside the pinned library
+  (`log.Fatal`). Tests reserve the STUN port over UDP, because a port that
+  is free on TCP is not necessarily free on UDP.
+
 ## What the spike validated
 
 Two separate OS processes — a hub node listening on tailnet port 9027 and a
