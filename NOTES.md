@@ -592,8 +592,16 @@ How to use this file:
   cliMain(args, stdout, stderr) int is the testable exit-code mapping behind
   main; the process-level test forks through TestMain's `child-run` role.
   Help and error texts spell flags with two dashes; the parser keeps
-  accepting one dash. T060 (exit 3 for degraded ingest) extends the exit
-  code line in rootSpec and the README paragraph.
+  accepting one dash.
+  T060 done (2026-11-14): `ingest --once` returns the errDegraded sentinel
+  (cmd/ohya/ingest.go) when passStats counts any failed or stopped source;
+  cliMain maps it to exit 3 with no extra stderr line (diagnostics already
+  reported per source), and the summary line appends "; N failed, M stopped"
+  only when degraded. Gotchas: writeUsage wraps a spec description at 80
+  columns, so a contract phrase that crosses a wrap boundary breaks substring
+  tests — put such a sentence on its own "\n" paragraph (wrap() splits on
+  newlines); and a chmod-0 unreadable-source fixture needs a skip guard when
+  the test process can read through mode 0 (root).
 
 - Benchstat tracking choices (2026-11-14, Makefile + .github/workflows/ci.yml, T047):
   - benchstat is a pinned tool install

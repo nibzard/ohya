@@ -429,8 +429,8 @@ func TestIngestMalformedLineStopsSourceAndOthersContinue(t *testing.T) {
 	copyFixture(t, e.session("main-session.jsonl"), "main-session.jsonl")
 
 	stats, stderr := e.runPass(t)
-	if stats.sources != 2 || stats.inserted != 18 { // 2 valid prefix + 16 good
-		t.Fatalf("pass = %+v, want 18 events from 2 sources", stats)
+	if stats.sources != 2 || stats.inserted != 18 || stats.stopped != 1 || stats.failed != 0 { // 2 valid prefix + 16 good
+		t.Fatalf("pass = %+v, want 18 events from 2 sources, 1 stopped", stats)
 	}
 	if !strings.Contains(stderr, "offset 1094") {
 		t.Fatalf("diagnostic misses the stop offset:\n%s", stderr)
@@ -455,10 +455,11 @@ func TestIngestMalformedLineStopsSourceAndOthersContinue(t *testing.T) {
 	}
 
 	// A later pass still ingests nothing from the stopped source, and the
-	// diagnostic is not reported again within one run.
+	// diagnostic is not reported again within one run. The source counts as
+	// stopped again — an unrepaired file degrades every --once pass.
 	stats, _ = e.runPass(t)
-	if stats.inserted != 0 {
-		t.Fatalf("stopped source added %d events, want 0", stats.inserted)
+	if stats.inserted != 0 || stats.stopped != 1 {
+		t.Fatalf("later pass = %+v, want 0 events, 1 stopped", stats)
 	}
 }
 
@@ -501,8 +502,8 @@ func TestIngestOversizedRecordStopRecoversWithLargerLimit(t *testing.T) {
 	// Default limit: the source stops at the oversized record with the
 	// flag named as the remedy.
 	stats, stderr := e.runPass(t)
-	if stats.inserted != 1 {
-		t.Fatalf("pass = %+v, want 1 event before the stop", stats)
+	if stats.inserted != 1 || stats.stopped != 1 || stats.failed != 0 {
+		t.Fatalf("pass = %+v, want 1 event before the stop, 1 stopped", stats)
 	}
 	if !strings.Contains(stderr, "record size limit") ||
 		!strings.Contains(stderr, "--max-record-bytes") ||
@@ -517,8 +518,8 @@ func TestIngestOversizedRecordStopRecoversWithLargerLimit(t *testing.T) {
 	// its checkpoint, ingests past the stop, and reports nothing.
 	e.maxRecordBytes = claudecode.DefaultMaxRecordBytes + 4096
 	stats, stderr = e.runPass(t)
-	if stats.inserted != 2 {
-		t.Fatalf("recovery pass = %+v, want 2 events past the stop", stats)
+	if stats.inserted != 2 || stats.stopped != 0 || stats.failed != 0 {
+		t.Fatalf("recovery pass = %+v, want 2 events past the stop, nothing degraded", stats)
 	}
 	if stderr != "" {
 		t.Fatalf("recovery pass diagnostics: %s", stderr)
@@ -530,6 +531,138 @@ func TestIngestOversizedRecordStopRecoversWithLargerLimit(t *testing.T) {
 	if _, cursor := soleCheckpoint(t, e.stateDir); cursor != int64(len(before+oversized+after)) {
 		t.Fatalf("checkpoint cursor = %d, want the file size", cursor)
 	}
+}
+
+// TestIngestUnreadableSourceCountsFailed covers an unreadable source: the
+// watcher's read fails after registration, the failure is reported and
+// counted, and the other sources still commit.
+func TestIngestUnreadableSourceCountsFailed(t *testing.T) {
+	e := newSliceEnv(t)
+	copyFixture(t, e.session("main-session.jsonl"), "main-session.jsonl")
+	locked := e.session("locked.jsonl")
+	copyFixture(t, locked, "main-session.jsonl")
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	// The failure path needs the permission to bite; a privileged process
+	// (root) reads through mode 0.
+	if f, err := os.Open(locked); err == nil {
+		f.Close()
+		t.Skipf("chmod 0 left %s readable", locked)
+	}
+
+	stats, stderr := e.runPass(t)
+	if stats.sources != 2 || stats.inserted != 16 || stats.failed != 1 || stats.stopped != 0 {
+		t.Fatalf("pass = %+v, want 16 events from 2 sources, 1 failed", stats)
+	}
+	if !strings.Contains(stderr, locked) {
+		t.Fatalf("diagnostic misses the unreadable source:\n%s", stderr)
+	}
+}
+
+// TestIngestOnceDegradedReturnsErrDegraded covers the typed result behind
+// exit 3: a --once pass with a stopped source returns errDegraded after the
+// summary line, which carries the failed and stopped counts.
+func TestIngestOnceDegradedReturnsErrDegraded(t *testing.T) {
+	e := newSliceEnv(t)
+	copyFixture(t, e.session("malformed-line.jsonl"), "malformed-line.jsonl")
+	var stdout bytes.Buffer
+	err := runIngest(context.Background(), ingestOptions{
+		dbPath: e.dbPath, stateDir: e.stateDir, roots: e.claudeRoots(),
+		once: true, stdout: &stdout, stderr: io.Discard,
+	})
+	if !errors.Is(err, errDegraded) {
+		t.Fatalf("error = %v, want errDegraded", err)
+	}
+	if got, want := stdout.String(), "ohya: imported 2 events from 1 sources; 0 failed, 1 stopped\n"; got != want {
+		t.Fatalf("summary = %q, want %q", got, want)
+	}
+}
+
+// TestIngestOnceExitCodes exercises the real process (child-run in TestMain),
+// the T060 acceptance: `ingest --once` exits 0 when every source imports, 3
+// with a stopped source (oversize record), and 3 with an unreadable source.
+func TestIngestOnceExitCodes(t *testing.T) {
+	line := func(content string) string {
+		return fmt.Sprintf(`{"type":"user","sessionId":%q,"message":{"role":"user","content":%q}}`+"\n",
+			fixtureNativeID, content)
+	}
+	run := func(t *testing.T, root string) (int, string, string) {
+		t.Helper()
+		dir := t.TempDir()
+		var stdout, stderr bytes.Buffer
+		cmd := exec.Command(os.Args[0], "child-run", "ingest", "--once",
+			"--db", filepath.Join(dir, "hub.db"),
+			"--state", filepath.Join(dir, "state"),
+			"--claude-root", root, "--codex-root", "", "--pi-root", "")
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		runErr := cmd.Run()
+		code := 0
+		if runErr != nil {
+			var exitErr *exec.ExitError
+			if !errors.As(runErr, &exitErr) {
+				t.Fatal(runErr)
+			}
+			code = exitErr.ExitCode()
+		}
+		return code, stdout.String(), stderr.String()
+	}
+
+	t.Run("all sources import", func(t *testing.T) {
+		e := newSliceEnv(t)
+		copyFixture(t, e.session("main-session.jsonl"), "main-session.jsonl")
+		code, stdout, stderr := run(t, e.root)
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0 (stderr: %q)", code, stderr)
+		}
+		if got, want := stdout, "ohya: imported 16 events from 1 sources\n"; got != want {
+			t.Fatalf("stdout = %q, want %q", got, want)
+		}
+		if stderr != "" {
+			t.Fatalf("stderr = %q, want empty", stderr)
+		}
+	})
+
+	t.Run("stopped source", func(t *testing.T) {
+		e := newSliceEnv(t)
+		session := e.session("oversized.jsonl")
+		oversized := line(strings.Repeat("x", claudecode.DefaultMaxRecordBytes+512))
+		writeFile(t, session, line("before")+oversized+line("after"))
+		code, stdout, stderr := run(t, e.root)
+		if code != 3 {
+			t.Fatalf("exit code = %d, want 3 (stderr: %q)", code, stderr)
+		}
+		if !strings.Contains(stdout, "; 0 failed, 1 stopped") {
+			t.Fatalf("summary misses the stopped count: %q", stdout)
+		}
+		if !strings.Contains(stderr, "--max-record-bytes") {
+			t.Fatalf("stderr misses the stop diagnostic: %q", stderr)
+		}
+	})
+
+	t.Run("unreadable source", func(t *testing.T) {
+		e := newSliceEnv(t)
+		copyFixture(t, e.session("main-session.jsonl"), "main-session.jsonl")
+		locked := e.session("locked.jsonl")
+		copyFixture(t, locked, "main-session.jsonl")
+		if err := os.Chmod(locked, 0); err != nil {
+			t.Fatal(err)
+		}
+		if f, err := os.Open(locked); err == nil {
+			f.Close()
+			t.Skipf("chmod 0 left %s readable", locked)
+		}
+		code, stdout, stderr := run(t, e.root)
+		if code != 3 {
+			t.Fatalf("exit code = %d, want 3 (stderr: %q)", code, stderr)
+		}
+		if !strings.Contains(stdout, "; 1 failed, 0 stopped") {
+			t.Fatalf("summary misses the failed count: %q", stdout)
+		}
+		if !strings.Contains(stderr, "locked.jsonl") {
+			t.Fatalf("stderr misses the failure diagnostic: %q", stderr)
+		}
+	})
 }
 
 // TestIngestRecordAboveBatchBoundStillIngests covers the read path behind the
@@ -717,9 +850,10 @@ func TestIngestCrashHelper(t *testing.T) {
 	if err := hub.RegisterSource(ctx, o.SourceID, deviceID, agent, o.Path); err != nil {
 		panic(err)
 	}
-	inserted, committed, err := r.ingestSource(ctx, o)
-	if err != nil || inserted == 0 || committed != o.End {
-		panic(fmt.Sprintf("ingestSource = %d inserts, cursor %d, %v", inserted, committed, err))
+	inserted, committed, stopped, err := r.ingestSource(ctx, o)
+	if err != nil || stopped || inserted == 0 || committed != o.End {
+		panic(fmt.Sprintf("ingestSource = %d inserts, cursor %d, stopped %t, %v",
+			inserted, committed, stopped, err))
 	}
 	os.Exit(3) // die after the durable commit, before the acknowledgment
 }

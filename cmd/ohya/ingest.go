@@ -56,11 +56,19 @@ type ingestOptions struct {
 	stderr         io.Writer     // diagnostics
 }
 
+// errDegraded marks a completed --once pass in which at least one source
+// failed or stopped. The pass committed everything it could — the per-source
+// diagnostics are on stderr and the counts are in the stdout summary — so
+// cliMain maps it to exit code 3 without printing another error line.
+var errDegraded = errors.New("ingest completed with a failed or stopped source")
+
 // runIngest imports the existing history of every agent once, then polls
 // incrementally until the context is canceled (continuous mode) or after one
 // pass (--once). It returns only on systemic failures — an unusable database
 // or a lost checkpoint state needs recovery. A failing source stops that
-// source with a diagnostic; the next sources still commit.
+// source with a diagnostic; the next sources still commit. A --once pass in
+// which any source failed or stopped returns errDegraded (exit 3): the pass
+// completed, but data is missing. The poll loop keeps running instead.
 func runIngest(ctx context.Context, o ingestOptions) error {
 	// Fail before creating anything: a wrong root must not leave a database
 	// and a device identity behind.
@@ -123,12 +131,20 @@ func runIngest(ctx context.Context, o ingestOptions) error {
 			}
 			stats.sources += s.sources
 			stats.inserted += s.inserted
+			stats.failed += s.failed
+			stats.stopped += s.stopped
 		}
 		if o.once || pass == 1 || stats.inserted > 0 {
-			fmt.Fprintf(o.stdout, "ohya: imported %d events from %d sources\n",
-				stats.inserted, stats.sources)
+			summary := fmt.Sprintf("ohya: imported %d events from %d sources", stats.inserted, stats.sources)
+			if stats.failed > 0 || stats.stopped > 0 {
+				summary += fmt.Sprintf("; %d failed, %d stopped", stats.failed, stats.stopped)
+			}
+			fmt.Fprintln(o.stdout, summary)
 		}
 		if o.once {
+			if stats.failed > 0 || stats.stopped > 0 {
+				return errDegraded
+			}
 			return nil
 		}
 		select {
@@ -165,6 +181,8 @@ func newIngestor(hub *store.DB, w *watch.Watcher, agent, deviceID string, maxRec
 type passStats struct {
 	sources  int // live sources observed
 	inserted int // events newly inserted and committed
+	failed   int // sources whose registration, read, commit or acknowledge failed
+	stopped  int // sources stopped at a malformed or oversized record
 }
 
 // poll discovers the session files under root, ingests every live source's
@@ -198,19 +216,25 @@ func (r *ingestor) poll(ctx context.Context, root string, optional bool) (passSt
 		}
 		if err := r.hub.RegisterSource(ctx, o.SourceID, r.deviceID, r.agent, o.Path); err != nil {
 			r.reportSource(o.Path, err)
+			stats.failed++
 			continue
 		}
 		if o.End <= o.Cursor {
 			continue // nothing pending
 		}
-		inserted, committed, err := r.ingestSource(ctx, o)
+		inserted, committed, stopped, err := r.ingestSource(ctx, o)
 		if err != nil {
 			r.reportSource(o.Path, err)
+			stats.failed++
 			continue
+		}
+		if stopped {
+			stats.stopped++
 		}
 		stats.inserted += inserted
 		if err := r.watcher.Acknowledge(o.Path, o.SourceID, committed); err != nil {
 			r.reportSource(o.Path, err)
+			stats.failed++
 		}
 	}
 	return stats, nil
@@ -218,10 +242,11 @@ func (r *ingestor) poll(ctx context.Context, root string, optional bool) (passSt
 
 // ingestSource reads the outcome's pending bytes in bounded batches, parses
 // the complete records, and commits them through the write path. It returns
-// how many events were newly inserted and the committed byte cursor. It never
-// acknowledges: the caller records the cursor, so a crash in between replays
-// the same bytes safely on the next pass.
-func (r *ingestor) ingestSource(ctx context.Context, o watch.Outcome) (int, int64, error) {
+// how many events were newly inserted, the committed byte cursor, and
+// whether the parser stopped the source at a record. It never acknowledges:
+// the caller records the cursor, so a crash in between replays the same
+// bytes safely on the next pass.
+func (r *ingestor) ingestSource(ctx context.Context, o watch.Outcome) (int, int64, bool, error) {
 	inserted := 0
 	// readEnd bounds the bytes of one read. A batch never splits a record,
 	// so when the pending bytes hold one record larger than the batch bound,
@@ -234,7 +259,7 @@ func (r *ingestor) ingestSource(ctx context.Context, o watch.Outcome) (int, int6
 		chunk.End = readEnd
 		data, err := r.watcher.ReadPending(chunk)
 		if err != nil {
-			return inserted, o.Cursor, err
+			return inserted, o.Cursor, false, err
 		}
 		opts := events.Options{SourceScope: o.SourceID, MaxRecordBytes: r.maxRecordBytes}
 		if chunk.Cursor > 0 {
@@ -242,7 +267,7 @@ func (r *ingestor) ingestSource(ctx context.Context, o watch.Outcome) (int, int6
 			// the committed first record does.
 			st, err := r.hub.SourceState(ctx, o.SourceID)
 			if err != nil {
-				return inserted, o.Cursor, err
+				return inserted, o.Cursor, false, err
 			}
 			opts.FirstNative = st.FirstNativeID
 		}
@@ -254,7 +279,7 @@ func (r *ingestor) ingestSource(ctx context.Context, o watch.Outcome) (int, int6
 				Events:   res.Events,
 			})
 			if err != nil {
-				return inserted, o.Cursor, err
+				return inserted, o.Cursor, false, err
 			}
 			inserted += result.Inserted
 			o.Cursor = result.Cursor
@@ -267,21 +292,21 @@ func (r *ingestor) ingestSource(ctx context.Context, o watch.Outcome) (int, int6
 			// applied. Bytes are never skipped, so this pass must not read
 			// past the stop.
 			r.reportStop(o, stop)
-			return inserted, o.Cursor, nil
+			return inserted, o.Cursor, true, nil
 		}
 		if perr != nil {
-			return inserted, o.Cursor, perr
+			return inserted, o.Cursor, false, perr
 		}
 		if len(res.Events) == 0 {
 			if chunk.End >= o.End {
-				return inserted, o.Cursor, nil // one incomplete record still growing
+				return inserted, o.Cursor, false, nil // one incomplete record still growing
 			}
 			// No complete record within a full read: one record exceeds the
 			// batch bound. Extend the read to the record's end.
 			readEnd = min(o.End, readEnd+maxBatchBytes)
 		}
 	}
-	return inserted, o.Cursor, nil
+	return inserted, o.Cursor, false, nil
 }
 
 // reportSource writes one source's failure. The source keeps its checkpoint

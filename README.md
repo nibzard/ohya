@@ -59,7 +59,12 @@ Help is a request, not an error: `ohya`, `ohya --help`, `ohya -h`, and
 usage template — usage line, description, arguments, flags, examples — on
 stdout and exit 0. A usage error — unknown subcommand, bad flag, missing
 argument — prints one line on stderr that names the matching `--help` and
-exits 2, the flag package convention; every other failure exits 1. Flags
+exits 2, the flag package convention; every other failure exits 1. One
+command reports degradation through the exit code: `ohya ingest --once`
+exits 3 when the pass completed but at least one source failed or stopped,
+so a script or agent that checks the exit code does not read missing data
+as success; the stdout summary carries the failed and stopped counts and
+stderr keeps the per-source diagnostics. Flags
 are spelled with two dashes (`--db`); the parser also accepts one dash. No
 command prompts for input: ohya is non-interactive by design.
 
@@ -117,7 +122,9 @@ The first pass imports existing session files; later polls read only the
 bytes past each checkpoint. All writes commit through one transactional
 write path, so a crash between commit and checkpoint replays safely on
 restart and inserts nothing twice. A malformed record stops its source at
-that offset with a diagnostic and never skips bytes; other sources continue.
+that offset with a diagnostic and never skips bytes; other sources continue,
+and the `--once` pass exits 3 (completed, degraded) with the stopped count
+in its summary.
 The diagnostic states the remedy: repair the file at that offset, or — when
 the record exceeds `--max-record-bytes` — rerun with a larger limit, which
 resumes at the stop offset ([ADR 0004](docs/adr/0004-stopped-source-recovery.md)).
