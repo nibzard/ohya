@@ -17,7 +17,7 @@ The commands that report facts take a `--json` flag. Text stays the default;
 nothing about the text output changes.
 
 - Covered commands: `ingest --once`, `devices list`, `devices invite`,
-  `devices revoke`, `rederive`, `version`.
+  `devices revoke`, `rederive`, `doctor`, `version`.
 - Not covered, deliberately: `serve`, `mcp`, `join`, and the polling `ingest`
   are long-running or stream-oriented; a single trailing object helps no
   consumer of a process that never exits. No output-format registry and no
@@ -74,6 +74,11 @@ Timestamps are RFC 3339 UTC strings.
   asked for) and `expires_at`.
 - `devices revoke`: `device_id`.
 - `rederive`: `events`, `sessions`, `duration_ms`.
+- `doctor`: `findings`, one entry per check: `check`, `severity`
+  (`ok`, `warn`, `error`), `detail`, and `remedy` (the one-line remedy, `""`
+  when none is owed). Error findings ride in `data`, not in `error`: the
+  findings are the report and the exit code is the verdict, exactly like a
+  degraded ingest pass carries its stops through `data`.
 - `version`: the T061 keys unchanged — `version`, `revision`, `dirty`, `go`,
   `schema`, `parser.claude`, `parser.codex`, `parser.pi` — so one vocabulary
   spans the text line and the JSON object.

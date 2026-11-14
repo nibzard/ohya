@@ -30,6 +30,7 @@ func helpCases() []struct {
 		{"join --help", []string{"join", "--help"}, joinSpec},
 		{"mcp --help", []string{"mcp", "--help"}, mcpSpec},
 		{"rederive --help", []string{"rederive", "--help"}, rederiveSpec},
+		{"doctor --help", []string{"doctor", "--help"}, doctorSpec},
 		{"version --help", []string{"version", "--help"}, versionSpec},
 		{"devices", []string{"devices"}, devicesSpec},
 		{"devices --help", []string{"devices", "--help"}, devicesSpec},

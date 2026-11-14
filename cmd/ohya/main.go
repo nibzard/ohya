@@ -38,6 +38,7 @@ join       pair a device with a hub and upload its agent sessions
 mcp        serve the sql and annotate MCP tools on stdio
 devices    manage device pairing and revocation
 rederive   rebuild normalized rows and events_fts after a parser upgrade
+doctor     run read-only health checks the sql tool cannot answer
 version    print the build, parser, and schema versions`,
 	examples: []string{"ohya ingest --once", "ohya mcp"},
 }
@@ -68,6 +69,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runDevicesCommand(rest, stdout, stderr)
 	case "rederive":
 		return runRederiveCommand(rest, stdout, stderr)
+	case "doctor":
+		return runDoctorCommand(rest, stdout, stderr)
 	case "version":
 		return runVersionCommand(rest, stdout, stderr)
 	default:

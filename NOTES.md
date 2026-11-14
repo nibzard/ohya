@@ -639,6 +639,44 @@ How to use this file:
     (version 1) cannot go stale; the Pi fixture (version 2) stamped down to
     1 works.
 
+- Doctor choices (2026-11-14, cmd/ohya/doctor.go + internal/store/doctor.go,
+  T063): doctor answers what the sql tool cannot — state tied to this binary
+  or outside the database. Facts future work must keep:
+  - FTS5 integrity-check gotchas on the bundled SQLite 3.54.1 (all verified
+    by probe): the command is a write statement, so mode=ro AND
+    query_only both refuse it ("attempt to write a readonly database");
+    doctor runs it on a private in-memory snapshot taken through the
+    driver's Backup API (store.FTSIndexConsistent) — the hub file stays
+    read-only. Without a rank argument
+    (`INSERT INTO ft(ft, rank) VALUES('integrity-check', N)`) an
+    external-content table gets only the structural check and every
+    index-vs-content drift passes; with N>0 the checksum comparison runs —
+    but it demands a %_docsize row for every content-table row, and the ohya
+    schema deliberately leaves NULL/empty-text events unindexed, so a
+    healthy hub fails. FTSIndexConsistent therefore drops the maintenance
+    trigger and deletes text-less events rows on the snapshot first; the
+    comparison then covers exactly the rows the write path indexes. Note
+    `SELECT rowid`/`count(*)` on external content read the content table,
+    never the index, so no SELECT-only substitute exists.
+  - Single-connection pools: a `:memory:` snapshot DB must SetMaxOpenConns(1)
+    and run every statement through one checked-out *sql.Conn — ExecContext
+    on the pool while the Conn is held blocks forever waiting for a free
+    connection (found by test hang).
+  - Stop detection is read-only re-decision: parse limit+1 bytes at each
+    pending checkpoint cursor (a record within the bound is fully visible —
+    JSON bytes ≤ limit plus one terminator); report only a StopError AT the
+    cursor (the checkpoint's state, matching where ingest acknowledged);
+    FirstNative comes from store.ReadOnlySourceState when cursor > 0 so
+    Codex past offset 0 parses. A stop deeper in pending bytes surfaces
+    after the next ingest pass advances the cursor onto it.
+  - Doctor never creates state: device.Load (new, read-only) instead of
+    LoadOrCreate; watch.InspectSources reads checkpoints without Poll.
+    Missing identity/database = warn (ingest creates them), unusable ones =
+    error. The coordination probe (only when credential.json is present)
+    counts any HTTP response as answered — the control plane 404s on /.
+    Error findings ride in the JSON data with exit 1 (findings are the
+    report, the exit code is the verdict), mirroring degraded ingest.
+
 - Benchstat tracking choices (2026-11-14, Makefile + .github/workflows/ci.yml, T047):
   - benchstat is a pinned tool install
     (golang.org/x/perf/cmd/benchstat@v0.0.0-20261009192801-be2c69fb417e),

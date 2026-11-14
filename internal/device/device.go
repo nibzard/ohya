@@ -38,6 +38,19 @@ type identityFile struct {
 	DeviceID string `json:"device_id"`
 }
 
+// Load returns the device ID stored in dir without creating anything — the
+// read-only counterpart of LoadOrCreate, for inspection (ohya doctor). A
+// missing file is fs.ErrNotExist; an existing but unusable one wraps
+// ErrUnusable.
+func Load(dir string) (string, error) {
+	path := filepath.Join(dir, FileName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return parse(path, data)
+}
+
 // LoadOrCreate returns the stable random device ID stored in dir, creating
 // FileName on first use with a durable atomic write. The ID is 32 lowercase
 // hex characters from crypto/rand and never changes once created.

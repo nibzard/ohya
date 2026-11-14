@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 
 	"github.com/nibzard/ohya/internal/durablefile"
 )
@@ -61,6 +63,38 @@ type checkpointFile struct {
 // statePath returns the checkpoint file holding one agent's sources.
 func statePath(stateDir, agent string) string {
 	return filepath.Join(stateDir, "sources", agent+".json")
+}
+
+// SourceSnapshot is one watched source's checkpoint, exposed for read-only
+// inspection (ohya doctor): enough to re-decide a stop at the acknowledged
+// cursor without polling or writing.
+type SourceSnapshot struct {
+	Agent       string
+	Path        string
+	SourceID    string
+	CursorBytes int64
+}
+
+// InspectSources reads one agent's checkpoint file without polling or
+// writing: a missing file means the agent has no watched sources; an existing
+// but unusable one wraps ErrStateLost, exactly like New. The snapshots are
+// sorted by path.
+func InspectSources(stateDir, agent string) ([]SourceSnapshot, error) {
+	state, err := loadState(stateDir, agent)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SourceSnapshot, 0, len(state.Sources))
+	for _, key := range slices.Sorted(maps.Keys(state.Sources)) {
+		entry := state.Sources[key]
+		out = append(out, SourceSnapshot{
+			Agent:       entry.Agent,
+			Path:        entry.Path,
+			SourceID:    entry.SourceID,
+			CursorBytes: entry.CursorBytes,
+		})
+	}
+	return out, nil
 }
 
 // loadState reads the checkpoint file. A missing file is a fresh start with

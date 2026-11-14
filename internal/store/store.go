@@ -23,10 +23,12 @@ const busyTimeoutMs = 5000
 
 // DB is the hub-owned handle to the transcript database. All writes go
 // through its single writer connection; readers get separate read-only
-// connections.
+// connections. A DB built by OpenReadOnly has no writer and owns one
+// read-only pool instead; its read methods answer through that pool.
 type DB struct {
-	path   string
-	writer *sql.DB
+	path    string
+	writer  *sql.DB
+	readers *sql.DB // set only by OpenReadOnly
 }
 
 // Open opens (creating if needed) the database at path, configures the
@@ -56,8 +58,29 @@ func Open(ctx context.Context, path string) (*DB, error) {
 	return &DB{path: abs, writer: writer}, nil
 }
 
+// OpenReadOnly opens an existing hub database read-only, for inspection only
+// (ohya doctor): it applies no migrations and holds no writer, so nothing it
+// does can write. Writer() returns nil on the result. The database must
+// already exist, be a hub database in WAL mode, and be readable.
+func OpenReadOnly(path string) (*DB, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("store: resolve %s: %w", path, err)
+	}
+	readers, err := sql.Open("sqlite3", readerDSN(abs))
+	if err != nil {
+		return nil, fmt.Errorf("store: open reader %s: %w", abs, err)
+	}
+	if err := verifyReader(readers); err != nil {
+		_ = readers.Close()
+		return nil, err
+	}
+	return &DB{path: abs, readers: readers}, nil
+}
+
 // Writer returns the single connection that may write. Every write —
-// ingestion, annotations, migrations — must go through it.
+// ingestion, annotations, migrations — must go through it. It returns nil on
+// a DB opened with OpenReadOnly.
 func (d *DB) Writer() *sql.DB { return d.writer }
 
 // Reader opens a pool of separate read-only connections. The database must
@@ -76,8 +99,14 @@ func (d *DB) Reader() (*sql.DB, error) {
 	return readers, nil
 }
 
-// Close closes the writer connection.
-func (d *DB) Close() error { return d.writer.Close() }
+// Close closes the writer connection, or the read-only pool of a DB opened
+// with OpenReadOnly.
+func (d *DB) Close() error {
+	if d.writer != nil {
+		return d.writer.Close()
+	}
+	return d.readers.Close()
+}
 
 // dsn builds a SQLite URI for path. Parameters with a leading underscore
 // configure the driver on every pooled connection; others (mode=ro) reach

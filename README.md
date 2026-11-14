@@ -52,6 +52,7 @@ make build
 ./bin/ohya devices list        # show paired devices and invitations
 ./bin/ohya devices revoke ID   # revoke a device, final for its identity
 ./bin/ohya rederive            # rebuild normalized rows after a parser upgrade
+./bin/ohya doctor              # run read-only health checks and report findings
 ./bin/ohya version             # print the build, parser, and schema versions
 ```
 
@@ -71,8 +72,8 @@ command prompts for input: ohya is non-interactive by design.
 
 The commands that report facts also print machine-readable output:
 `ingest --once`, `devices list`, `devices invite`, `devices revoke`,
-`rederive`, and `version` take `--json` (text stays the default) and print
-exactly one JSON object on stdout, for example
+`rederive`, `doctor`, and `version` take `--json` (text stays the default)
+and print exactly one JSON object on stdout, for example
 
 ```json
 {"schema_version":1,"command":"ohya devices list","data":{"devices":[],"invitations":[]},"error":null}
@@ -99,6 +100,26 @@ command opens no database and needs no state. Compare a hub's line with the
 local one before `ohya rederive`: a build refuses rows derived by a newer
 parser, so the line tells operators and agents which binary, parser output,
 and schema a hub runs.
+
+`ohya doctor` runs read-only health checks for state the `sql` tool cannot
+answer, because it sits outside the database or is tied to this binary: the
+database schema against the binary's migrations, stored parser output
+versions above the binary's (`ohya rederive` refuses those), the FTS5
+integrity of `events_fts`, stopped sources in the local watch state with
+their [ADR 0004](docs/adr/0004-stopped-source-recovery.md) remedy, the
+device identity in the state directory, and — when that directory holds a
+pairing credential — whether the coordination URL answers within a short
+timeout. Every finding prints a severity (`ok`, `warn`, `error`) and a
+one-line remedy; `--json` prints the same findings in the
+[ADR 0005](docs/adr/0005-json-output.md) envelope. Doctor is read-only: it
+opens the database read-only — never migrates, repairs, or re-derives —
+creates no device identity, and prints no transcript content or secrets.
+Exit code 0 means no finding is an error; warnings alone do not fail. It
+takes the same `--db` and `--state` flags as `ingest`, `--control` for the
+coordination URL to probe when paired, and `--max-record-bytes` for the stop
+check — pass the bound ingestion last ran with. Check a joined device's own
+state with `--state ~/.ohya/join` and its hub's coordination URL through
+`--control`.
 
 `ohya ingest` watches `~/.claude/projects` (override with `--claude-root`),
 the Codex sessions directory, `$CODEX_HOME/sessions` or
