@@ -95,6 +95,40 @@ Timestamps are ISO 8601 UTC with milliseconds, for example
 `2026-11-13T09:00:01.000Z`. They are mostly increasing but not strictly
 monotonic. Do not sort by timestamp alone.
 
+## Parser normalization
+
+`internal/claudecode` follows the shared parser contract in ARCHITECTURE.md,
+"Record handling". For this format it derives:
+
+- Native ID: a non-empty string `sessionId`. Otherwise the record gets the
+  source's synthetic ID. Subagent bookkeeping records (`started`, `result`)
+  carry no `sessionId`, so they land in the synthetic session and never
+  join the parent session.
+- Kind: the message types `user`, `assistant`, `attachment`, and `system`;
+  the bookkeeping types `queue-operation`, `mode`, `permission-mode`,
+  `atis-latch`, `last-prompt`, `ai-title`, `cost-state`, and `agent-name`;
+  and the subagent types `started`, `result`, `launched`, and `failed`.
+  Every other type is `unknown`.
+- Role: `message.role`. A `user` or `assistant` record without one uses its
+  type as the role.
+- Text: a string `message.content`, or from a content array the `text` and
+  `thinking` blocks, the tool blocks (`tool_use`, `server_tool_use`,
+  `mcp_tool_use`; name from `name` or `tool_name`), and the result blocks
+  (`tool_result`, `mcp_tool_result`; string content or their `text`
+  sub-blocks). An `attachment` contributes `attachment.text`, and a
+  `system` record its string `content`.
+- Observations: `cwd`, `gitBranch`, `message.model`, `message.id` as the
+  message ID, and `message.usage` as written.
+- Metadata: `uuid`, `parentUuid`, `isSidechain` (only when true), `agentId`,
+  `apiBlockIndex`, `contentForm` (`string` or `array`), one `blocks` entry
+  per content block (type, tool name and ID, input, `tool_use_id`,
+  `is_error`), `toolUseResult`, `sourceToolAssistantUUID`,
+  `attachmentType`, and the `system` `subtype` and `level`.
+
+The events adapter marks a `user` record with string content as a fresh
+prompt; tool results use the array form. It maps the four counts of
+`message.usage` onto the token totals (DB.md, "Invariants").
+
 ## Fixtures
 
 Every fixture is synthetic. Each table lists the byte range of each record,

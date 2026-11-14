@@ -12,7 +12,6 @@ import (
 	"time"
 )
 
-// Session ids of the Pi fixtures (testdata/pi/README.md).
 const (
 	mainSession   = "00000000-0000-7000-8000-0000000000b1"
 	errorSession  = "00000000-0000-7000-8000-0000000000b2"
@@ -21,8 +20,6 @@ const (
 	toolCallFixID = "call_fixture_0001|fc_000000000000000000000000000000000000000000000001"
 )
 
-// fixture reads a synthetic Pi fixture; byte offsets in the assertions below
-// come from testdata/pi/README.md.
 func fixture(t testing.TB, name string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "pi", name))
@@ -32,12 +29,10 @@ func fixture(t testing.TB, name string) []byte {
 	return data
 }
 
-// ms builds the Unix millisecond value of a fixture timestamp.
 func ms(min, sec, millis int) int64 {
 	return time.Date(2026, time.November, 13, 9, min, sec, millis*int(time.Millisecond), time.UTC).UnixMilli()
 }
 
-// metadataOf decodes a record's metadata for spot checks.
 func metadataOf(t *testing.T, r Record) map[string]any {
 	t.Helper()
 	var md map[string]any
@@ -47,10 +42,6 @@ func metadataOf(t *testing.T, r Record) map[string]any {
 	return md
 }
 
-// checkInvariants asserts the structural properties every parse result must
-// hold, whatever the input: contiguous boundaries, raw text preserved
-// verbatim, valid metadata, one native ID per source, and a cursor that
-// never moves backwards.
 func checkInvariants(t *testing.T, data []byte, base int64, res Result) {
 	t.Helper()
 	if res.Cursor < base || res.Cursor > base+int64(len(data)) {
@@ -89,7 +80,6 @@ func checkInvariants(t *testing.T, data []byte, base int64, res Result) {
 	}
 }
 
-// want is one expected record of a fixture table.
 type want struct {
 	off, end   int64
 	kind, role string
@@ -97,7 +87,6 @@ type want struct {
 	timeMS     int64
 }
 
-// checkTable compares parsed records with a fixture table.
 func checkTable(t *testing.T, res Result, tests []want) {
 	t.Helper()
 	if len(res.Records) != len(tests) {
@@ -154,8 +143,6 @@ func TestParseMainSession(t *testing.T) {
 	if md := metadataOf(t, header); md["sessionVersion"] != float64(3) {
 		t.Errorf("header metadata = %v", md)
 	}
-	// The session header names the session, not an entry; every other entry
-	// carries its own 8-hex id.
 	for i, r := range res.Records {
 		want := ""
 		if i > 0 {
@@ -171,8 +158,6 @@ func TestParseMainSession(t *testing.T) {
 	if md := metadataOf(t, res.Records[2]); md["thinkingLevel"] != "off" {
 		t.Errorf("thinking_level_change metadata = %v", md)
 	}
-	// The system entry is the harness preamble: its shape is observable, its
-	// text is not conversation.
 	sys := res.Records[3]
 	if md := metadataOf(t, sys); !reflect.DeepEqual(md["sections"], []any{"preamble", "tools"}) ||
 		!reflect.DeepEqual(md["toolsAdded"], []any{"read", "bash"}) {
@@ -224,8 +209,6 @@ func TestParseErrorSession(t *testing.T) {
 		t.Fatalf("native = %q, want %q", res.Native, errorSession)
 	}
 	failed := res.Records[4]
-	// A failed model call persists no responseId; its usage object is all
-	// zero, and the diagnostic stays out of metadata.
 	if failed.MessageID != "" || len(failed.Usage) == 0 {
 		t.Errorf("failed assistant = %q/%s", failed.MessageID, failed.Usage)
 	}
@@ -237,10 +220,6 @@ func TestParseErrorSession(t *testing.T) {
 	}
 }
 
-// TestParseAnthropicSession parses the anthropic-messages fixture: a
-// successful response without a responseId whose usage carries a non-zero
-// cacheWrite, then a final response with a responseId and cache reads plus
-// cache writes (testdata/pi/README.md, "Usage fields").
 func TestParseAnthropicSession(t *testing.T) {
 	data := fixture(t, "anthropic-session.jsonl")
 	res, err := Parse(data, 0, Options{SourceScope: "src-anthropic"})
@@ -274,7 +253,6 @@ func TestParseIncompleteTail(t *testing.T) {
 	if len(res.Records) != 3 || res.Cursor != 502 || res.Native != tailSession {
 		t.Fatalf("records/cursor/native = %d/%d/%q, want 3/502/%q", len(res.Records), res.Cursor, res.Native, tailSession)
 	}
-	// Completing the tail on a later poll accepts exactly the rest.
 	completed := append(append([]byte{}, data[502:]...), []byte("ains `main.py` and `notes.txt`.\"}]}}\n")...)
 	res2, err := Parse(completed, res.Cursor, Options{SourceScope: "src-tail", Native: res.Native})
 	if err != nil {
@@ -297,12 +275,9 @@ func TestParseMalformedLineStopsSource(t *testing.T) {
 	if perr.Offset != 283 || res.Cursor != 283 || len(res.Records) != 2 || res.Native != badSession {
 		t.Fatalf("stop %d, cursor %d, records %d, native %q; want 283/283/2/%q", perr.Offset, res.Cursor, len(res.Records), res.Native, badSession)
 	}
-	// The diagnostic never quotes transcript content.
 	if strings.Contains(perr.Error(), "break") || strings.Contains(perr.Error(), "unescaped") {
 		t.Fatalf("diagnostic leaks content: %v", perr)
 	}
-	// A retry from the stop offset stops at the same place again: bytes are
-	// never skipped.
 	_, err = Parse(data[283:], 283, Options{SourceScope: "src-bad", Native: res.Native})
 	if !errors.As(err, &perr) || perr.Offset != 283 {
 		t.Fatalf("retry error = %v, want a stop at 283", err)
@@ -348,8 +323,6 @@ func TestParseNativeIdentity(t *testing.T) {
 		})
 	}
 
-	// Without a scope, a source whose first record names no session stops
-	// instead of inventing an identity.
 	_, err := Parse([]byte(msg), 0, Options{})
 	var perr *ParseError
 	if !errors.As(err, &perr) || perr.Offset != 0 {
@@ -466,17 +439,14 @@ func TestParseMalformedRecords(t *testing.T) {
 func TestParseRecordSizeLimit(t *testing.T) {
 	rec := `{"type":"model_change","id":"a","modelId":"m"}`
 	limit := int64(len(rec))
-	// A record exactly at the limit passes.
 	if _, err := Parse([]byte(rec+"\n"), 7, Options{Native: "s", MaxRecordBytes: limit}); err != nil {
 		t.Fatalf("record at the limit: %v", err)
 	}
 	var perr *ParseError
-	// One byte more stops the source at the record.
 	_, err := Parse([]byte(rec+"\n"), 7, Options{Native: "s", MaxRecordBytes: limit - 1})
 	if !errors.As(err, &perr) || perr.Offset != 7 || !perr.RecordTooLarge {
 		t.Fatalf("oversized record error = %v", err)
 	}
-	// An incomplete tail already above the limit stops the source too.
 	res, err := Parse([]byte(rec+"\n"+rec), 7, Options{Native: "s", MaxRecordBytes: limit - 1})
 	if !errors.As(err, &perr) || perr.Offset != 7 || len(res.Records) != 0 || !perr.RecordTooLarge {
 		t.Fatalf("tail error = %v", err)
@@ -495,9 +465,6 @@ func TestParseEmptyInput(t *testing.T) {
 }
 
 func TestParseSplitAtEveryOffset(t *testing.T) {
-	// Polling can cut the file anywhere. Parsing the first part, then the
-	// rest from the cursor with the established native, yields exactly the
-	// records of one full parse.
 	data := fixture(t, "main-session.jsonl")
 	full, err := Parse(data, 0, Options{SourceScope: "s"})
 	if err != nil {

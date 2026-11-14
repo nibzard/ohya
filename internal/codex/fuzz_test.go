@@ -8,12 +8,6 @@ import (
 	"testing"
 )
 
-// FuzzParse holds the parser's structural guarantees against arbitrary
-// bytes: contiguous boundaries, verbatim raw text, one native ID per source,
-// a cursor that only lands on accepted record boundaries, deterministic
-// output, prefix stability for any cut of the input, and split stability (a
-// later poll resuming at the cursor with the established native reproduces
-// the full parse).
 func FuzzParse(f *testing.F) {
 	fixtures, err := filepath.Glob(filepath.Join("..", "..", "testdata", "codex", "*.jsonl"))
 	if err != nil {
@@ -35,21 +29,16 @@ func FuzzParse(f *testing.F) {
 			res, err := Parse(data, 0, o)
 			checkInvariants(t, data, 0, res)
 
-			// Determinism: identical inputs produce identical outputs.
 			res2, err2 := Parse(data, 0, o)
 			if !reflect.DeepEqual(res, res2) || !reflect.DeepEqual(err, err2) {
 				t.Fatal("parse is not deterministic")
 			}
 
 			if err == nil {
-				// Without an error every newline was consumed: the
-				// remaining bytes are genuinely the incomplete tail.
 				if bytes.IndexByte(data[res.Cursor:], '\n') >= 0 {
 					t.Fatalf("cursor %d leaves an unparsed newline", res.Cursor)
 				}
 			} else {
-				// With an error the source stops exactly at the cursor,
-				// never past accepted bytes and never skipping any.
 				var perr *ParseError
 				if !errors.As(err, &perr) {
 					t.Fatalf("error is not a ParseError: %v", err)
@@ -60,8 +49,6 @@ func FuzzParse(f *testing.F) {
 			}
 
 			for _, cut := range []int{0, len(data) / 4, len(data) / 2, int(res.Cursor), 3 * len(data) / 4, len(data)} {
-				// Prefix stability: any cut yields a prefix of the same
-				// records and a cursor inside the cut.
 				sub := data[:cut]
 				subRes, _ := Parse(sub, 0, o)
 				checkInvariants(t, sub, 0, subRes)
@@ -77,8 +64,6 @@ func FuzzParse(f *testing.F) {
 					t.Fatalf("cut %d cursor %d exceeds the cut", cut, subRes.Cursor)
 				}
 
-				// Split stability: resuming at the cut's cursor with the
-				// established native reproduces the full parse.
 				if subRes.Cursor == 0 {
 					continue
 				}

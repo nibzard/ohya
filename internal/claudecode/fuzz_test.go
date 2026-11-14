@@ -9,11 +9,6 @@ import (
 	"testing"
 )
 
-// FuzzParse holds the parser's structural guarantees against arbitrary
-// bytes: contiguous boundaries, verbatim raw text, a cursor that only lands
-// on accepted record boundaries, deterministic output, and prefix stability
-// for any cut of the input (an interrupted or partial read must never
-// change what the earlier records mean).
 func FuzzParse(f *testing.F) {
 	fixtures, err := filepath.Glob(filepath.Join("..", "..", "testdata", "claude-code", "*.jsonl"))
 	if err != nil {
@@ -39,14 +34,11 @@ func FuzzParse(f *testing.F) {
 			res, err := Parse(data, 0, o)
 			checkInvariants(t, data, 0, res)
 
-			// Determinism: identical inputs produce identical outputs.
 			res2, err2 := Parse(data, 0, o)
 			if !reflect.DeepEqual(res, res2) || !reflect.DeepEqual(err, err2) {
 				t.Fatal("parse is not deterministic")
 			}
 
-			// Without an error every newline was consumed: the remaining
-			// bytes are genuinely the incomplete tail.
 			if err == nil {
 				if bytes.IndexByte(data[res.Cursor:], '\n') >= 0 {
 					t.Fatalf("cursor %d leaves an unparsed newline", res.Cursor)
@@ -54,8 +46,6 @@ func FuzzParse(f *testing.F) {
 				continue
 			}
 
-			// With an error the source stops exactly at the cursor, never
-			// past accepted bytes and never silently skipping any.
 			var perr *ParseError
 			if !errors.As(err, &perr) {
 				t.Fatalf("error is not a ParseError: %v", err)
@@ -64,8 +54,6 @@ func FuzzParse(f *testing.F) {
 				t.Fatalf("error offset %d, want cursor %d", perr.Offset, res.Cursor)
 			}
 
-			// Prefix stability: any cut of the input yields a prefix of
-			// the same records and a cursor inside the cut.
 			for _, cut := range []int{0, len(data) / 4, len(data) / 2, int(res.Cursor), 3 * len(data) / 4, len(data)} {
 				sub := data[:cut]
 				subRes, _ := Parse(sub, 0, o)

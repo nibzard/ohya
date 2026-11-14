@@ -36,9 +36,6 @@ func TestFromCodexUsage(t *testing.T) {
 	}{
 		{`{"input_tokens":1300,"cached_input_tokens":1250,"output_tokens":30,"reasoning_output_tokens":5}`,
 			store.Usage{InputTokens: 50, CacheReadInputTokens: 1250, OutputTokens: 30}, true},
-		// cache_write_input_tokens is 0 in every verified record (T044), so
-		// its relation to input_tokens is unknown; a non-zero value changes
-		// nothing until a real sample confirms the relation.
 		{`{"input_tokens":1300,"cached_input_tokens":250,"cache_write_input_tokens":400,"output_tokens":30}`,
 			store.Usage{InputTokens: 1050, CacheReadInputTokens: 250, OutputTokens: 30}, true},
 		{`{"input_tokens":10}`, store.Usage{InputTokens: 10}, true},
@@ -72,8 +69,6 @@ func TestParseDispatch(t *testing.T) {
 	if !errors.As(err, &perr) {
 		t.Fatal("StopError hides the parser's error")
 	}
-	// Bytes past offset 0 without the first native are a caller error, not
-	// a source stop.
 	_, err = Parse("codex", data[286:], 286, Options{SourceScope: "s"})
 	if !errors.Is(err, codex.ErrNoNative) || errors.As(err, &stop) {
 		t.Fatalf("missing native error = %v", err)
@@ -99,10 +94,6 @@ func TestParseDispatch(t *testing.T) {
 	}
 }
 
-// TestParseMaxRecordBytesAndStopClassification covers the shared record bound:
-// every parser honors Options.MaxRecordBytes, a size stop carries
-// RecordTooLarge on the StopError, and every other stop does not, so the
-// ingestion diagnostic can state the remedy (ADR 0004).
 func TestParseMaxRecordBytesAndStopClassification(t *testing.T) {
 	small := `{"type":"user","sessionId":"s1","message":{"role":"user","content":"hi"}}` + "\n"
 	big := `{"type":"user","sessionId":"s1","message":{"role":"user","content":"` +
@@ -124,7 +115,6 @@ func TestParseMaxRecordBytesAndStopClassification(t *testing.T) {
 		}
 	}
 
-	// A malformed line stops the source without the size classification.
 	_, err := Parse("claude-code", []byte(small+"{bad\n"), 0, Options{SourceScope: "s"})
 	var stop *StopError
 	if !errors.As(err, &stop) || stop.RecordTooLarge {
@@ -132,9 +122,6 @@ func TestParseMaxRecordBytesAndStopClassification(t *testing.T) {
 	}
 }
 
-// ingestFile parses one fixture the way local ingestion does — in chunks,
-// each chunk past offset 0 using the first native from the store — and
-// commits it as one source.
 func ingestFile(t *testing.T, hub *store.DB, source, name string, chunk int) store.IngestResult {
 	t.Helper()
 	ctx := context.Background()
@@ -158,7 +145,7 @@ func ingestFile(t *testing.T, hub *store.DB, source, name string, chunk int) sto
 			if end == len(data) {
 				return total
 			}
-			chunk *= 2 // the chunk holds part of one record; widen it
+			chunk *= 2
 			continue
 		}
 		r, err := hub.Ingest(ctx, store.Batch{SourceID: source, DeviceID: device, Events: res.Events})
@@ -171,10 +158,6 @@ func ingestFile(t *testing.T, hub *store.DB, source, name string, chunk int) sto
 	}
 }
 
-// TestCodexFixturesThroughWritePath ingests the main session, its resumed
-// page and its subagent: the page joins the main thread's session and its
-// replayed ordinals are stored once as originals, the subagent is its own
-// session, and token totals count each response once.
 func TestCodexFixturesThroughWritePath(t *testing.T) {
 	for _, chunk := range []int{1 << 20, 700} {
 		hub, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "hub.db"))
@@ -212,9 +195,7 @@ func TestCodexFixturesThroughWritePath(t *testing.T) {
 		}
 		rows.Close()
 		want := []session{
-			// 14 main records, plus the page's meta and two new records.
 			{mainThread, "/home/dev/example", "main", "gpt-5-codex", "Add a Codex section to the README.", 17},
-			// The embedded parent meta lends no branch.
 			{subThread, "/home/dev/example", "", "", "", 5},
 		}
 		if len(got) != len(want) {
@@ -226,8 +207,6 @@ func TestCodexFixturesThroughWritePath(t *testing.T) {
 			}
 		}
 
-		// The page's replays of ordinals 12 and 13 are duplicates of the
-		// main file's records.
 		var dups int
 		if err := db.QueryRow(`SELECT count(*) FROM events d JOIN events o ON o.id = d.duplicate_of
 		    WHERE d.source_id = 'src-page' AND o.source_id = 'src-main' AND d.ordinal = o.ordinal
@@ -239,8 +218,6 @@ func TestCodexFixturesThroughWritePath(t *testing.T) {
 			t.Fatalf("chunk %d: original records = %d, %v; want 22", chunk, originals, err)
 		}
 
-		// Two main responses and one subagent response; the replayed usage
-		// record adds nothing.
 		var input, cached, output int64
 		if err := db.QueryRow(`SELECT sum(input_tokens), sum(cache_read_input_tokens), sum(output_tokens)
 		    FROM session_token_usage`).Scan(&input, &cached, &output); err != nil {
@@ -250,8 +227,6 @@ func TestCodexFixturesThroughWritePath(t *testing.T) {
 			t.Fatalf("chunk %d: tokens = %d/%d/%d", chunk, input, cached, output)
 		}
 
-		// Search finds the transcript text once: the response_item, not
-		// its event_msg mirror.
 		var hits int
 		if err := db.QueryRow(`SELECT count(*) FROM events_fts WHERE events_fts MATCH '"no Codex section yet"'`).Scan(&hits); err != nil || hits != 1 {
 			t.Fatalf("chunk %d: search hits = %d, %v; want 1", chunk, hits, err)
@@ -262,11 +237,6 @@ func TestCodexFixturesThroughWritePath(t *testing.T) {
 	}
 }
 
-// TestCodexReenumeratedPageThroughWritePath ingests the main session, a page
-// that byte-replays ordinals 12 and 13, and a page that re-enumerates those
-// ordinals with different records after a rollback: only the byte-identical
-// copies dedupe. The re-enumerated records stay originals — both texts
-// searchable, both per-response usage rows counted.
 func TestCodexReenumeratedPageThroughWritePath(t *testing.T) {
 	for _, chunk := range []int{1 << 20, 700} {
 		hub, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "hub.db"))
@@ -285,8 +255,6 @@ func TestCodexReenumeratedPageThroughWritePath(t *testing.T) {
 		}
 		db := hub.Writer()
 
-		// Only the byte-replay page's copies of ordinals 12 and 13 dedupe;
-		// the re-enumerated page's differing records are originals.
 		var dups int
 		if err := db.QueryRow(`SELECT count(*) FROM events d JOIN events o ON o.id = d.duplicate_of
 		    WHERE d.source_id = 'src-page' AND d.raw_json = o.raw_json AND d.ordinal IN (12, 13)`).Scan(&dups); err != nil || dups != 2 {
@@ -301,8 +269,6 @@ func TestCodexReenumeratedPageThroughWritePath(t *testing.T) {
 			t.Fatalf("chunk %d: originals = %d, %v; want 22", chunk, originals, err)
 		}
 
-		// Three responses count: the original's two and the re-enumerated
-		// turn's new one (raw input totals: 1200 + 1300 + 1400).
 		var input, cached, output int64
 		if err := db.QueryRow(`SELECT sum(input_tokens), sum(cache_read_input_tokens), sum(output_tokens)
 		    FROM session_token_usage`).Scan(&input, &cached, &output); err != nil {
@@ -312,7 +278,6 @@ func TestCodexReenumeratedPageThroughWritePath(t *testing.T) {
 			t.Fatalf("chunk %d: tokens = %d/%d/%d; want all three responses", chunk, input, cached, output)
 		}
 
-		// The rolled-back and the regenerated records are each searchable once.
 		var hits int
 		if err := db.QueryRow(`SELECT count(*) FROM events_fts WHERE events_fts MATCH '"rolled back"'`).Scan(&hits); err != nil || hits != 1 {
 			t.Fatalf("chunk %d: re-enumerated answer hits = %d, %v; want 1", chunk, hits, err)
@@ -333,23 +298,14 @@ func TestFromPiUsage(t *testing.T) {
 			store.Usage{InputTokens: 1840, OutputTokens: 24}, true},
 		{`{"input":345,"output":41,"cacheRead":1536,"cacheWrite":0,"reasoning":0,"totalTokens":1922}`,
 			store.Usage{InputTokens: 345, CacheReadInputTokens: 1536, OutputTokens: 41}, true},
-		// A cache write is additive, not part of input: the two records
-		// below carry the verified anthropic-messages shapes (input 3 +
-		// cacheRead 0 + cacheWrite 5429 + output 186 = totalTokens 5618).
 		{`{"input":3,"output":186,"cacheRead":0,"cacheWrite":5429,"totalTokens":5618}`,
 			store.Usage{InputTokens: 3, OutputTokens: 186, CacheCreationInputTokens: 5429}, true},
 		{`{"input":2,"output":53,"cacheRead":5618,"cacheWrite":7143,"cacheWrite1h":0,"totalTokens":12816}`,
 			store.Usage{InputTokens: 2, CacheReadInputTokens: 5618, CacheCreationInputTokens: 7143, OutputTokens: 53}, true},
-		// A failed call reports all zeros; the usage decodes and counts a
-		// zero row under whatever key the record provides.
 		{`{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"reasoning":0,"totalTokens":0}`,
 			store.Usage{}, true},
-		// reasoning stays outside the identity and the mapping until a
-		// non-zero sample verifies its relation.
 		{`{"input":10,"output":5,"cacheRead":0,"cacheWrite":0,"reasoning":5,"totalTokens":15}`,
 			store.Usage{InputTokens: 10, OutputTokens: 5}, true},
-		// Parts that do not sum to totalTokens contradict the verified
-		// field identity and count nothing.
 		{`{"input":10,"output":2,"cacheRead":0,"totalTokens":11}`, store.Usage{}, false},
 		{`{"input":3,"output":186,"cacheRead":0,"cacheWrite":5000,"totalTokens":5618}`, store.Usage{}, false},
 		{`{"input":10}`, store.Usage{}, false},
@@ -366,10 +322,6 @@ func TestFromPiUsage(t *testing.T) {
 	}
 }
 
-// TestFromPiUsageKey pins the usage-row key: the responseId when the provider
-// emits one, the entry id otherwise. Verified 2026-11-14 over the real
-// sessions: openai-completions records never carry a responseId, and 4 of 7
-// anthropic-messages records lack one.
 func TestFromPiUsageKey(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -389,8 +341,6 @@ func TestFromPiUsageKey(t *testing.T) {
 	}
 }
 
-// ingestPiFixture feeds one Pi fixture through the write path in fixed-size
-// chunks, the way local ingestion polls, and returns the accumulated result.
 func ingestPiFixture(t *testing.T, hub *store.DB, source, name string, chunk int) store.IngestResult {
 	t.Helper()
 	ctx := context.Background()
@@ -417,7 +367,7 @@ func ingestPiFixture(t *testing.T, hub *store.DB, source, name string, chunk int
 			if end == len(data) {
 				return total
 			}
-			chunk *= 2 // the chunk holds part of one record; widen it
+			chunk *= 2
 			continue
 		}
 		r, err := hub.Ingest(ctx, store.Batch{SourceID: source, DeviceID: device, Events: res.Events})
@@ -430,11 +380,6 @@ func ingestPiFixture(t *testing.T, hub *store.DB, source, name string, chunk int
 	}
 }
 
-// TestPiFixturesThroughWritePath ingests the main and the error fixture in
-// chunks, the way local ingestion polls: two sessions with their aggregates,
-// per-response token totals that sum directly over assistant messages, and
-// search text from user, assistant and toolResult entries — the system
-// preamble contributes none.
 func TestPiFixturesThroughWritePath(t *testing.T) {
 	const (
 		mainSess  = "00000000-0000-7000-8000-0000000000b1"
@@ -488,9 +433,6 @@ func TestPiFixturesThroughWritePath(t *testing.T) {
 			}
 		}
 
-		// Three responses carry a key: the main session's two responseIds
-		// and the failed call's entry id (bb000004), whose zero usage adds
-		// nothing to the sums.
 		var rows2 int
 		if err := db.QueryRow(`SELECT count(*) FROM session_token_usage`).Scan(&rows2); err != nil || rows2 != 3 {
 			t.Fatalf("chunk %d: token rows = %d, %v; want 3", chunk, rows2, err)
@@ -504,7 +446,6 @@ func TestPiFixturesThroughWritePath(t *testing.T) {
 			t.Fatalf("chunk %d: tokens = %d/%d/%d", chunk, input, cached, output)
 		}
 
-		// The preamble is not search text; the transcript is.
 		for _, q := range []struct {
 			match string
 			hits  int
@@ -525,11 +466,6 @@ func TestPiFixturesThroughWritePath(t *testing.T) {
 	}
 }
 
-// TestPiAnthropicFixtureThroughWritePath ingests the anthropic-messages
-// fixture: the first response carries a non-zero cacheWrite and no
-// responseId, so its usage row keys on the entry id, while the final
-// response keys on its responseId. Cache writes land in the cache-creation
-// count and the sums include them.
 func TestPiAnthropicFixtureThroughWritePath(t *testing.T) {
 	const anthropicSess = "00000000-0000-7000-8000-0000000000b5"
 	for _, chunk := range []int{1 << 20, 300} {
@@ -575,7 +511,7 @@ func TestPiAnthropicFixtureThroughWritePath(t *testing.T) {
 		}
 		rows.Close()
 		want := []usage{
-			{"0a1b2c04", 3, 5429, 0, 186}, // entry id: no responseId on this response
+			{"0a1b2c04", 3, 5429, 0, 186},
 			{"msg_fixture_0002", 2, 7143, 5618, 53},
 		}
 		if len(got) != len(want) {

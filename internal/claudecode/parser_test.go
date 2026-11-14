@@ -11,8 +11,6 @@ import (
 	"time"
 )
 
-// fixture reads a synthetic Claude Code fixture; byte offsets in the
-// assertions below come from testdata/claude-code/README.md.
 func fixture(t *testing.T, name string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "claude-code", name))
@@ -22,12 +20,10 @@ func fixture(t *testing.T, name string) []byte {
 	return data
 }
 
-// ms builds the Unix millisecond value of a fixture timestamp.
 func ms(hour, min, sec, millis int) int64 {
 	return time.Date(2026, time.November, 13, hour, min, sec, millis*int(time.Millisecond), time.UTC).UnixMilli()
 }
 
-// metadataOf decodes a record's metadata for spot checks.
 func metadataOf(t *testing.T, r Record) map[string]any {
 	t.Helper()
 	var md map[string]any
@@ -37,9 +33,6 @@ func metadataOf(t *testing.T, r Record) map[string]any {
 	return md
 }
 
-// checkInvariants asserts the structural properties every parse result must
-// hold, whatever the input: contiguous boundaries, raw text preserved
-// verbatim, valid metadata, and a cursor that never moves backwards.
 func checkInvariants(t *testing.T, data []byte, base int64, res Result) {
 	t.Helper()
 	if res.Cursor < base || res.Cursor > base+int64(len(data)) {
@@ -208,8 +201,6 @@ func TestParseSubagentSession(t *testing.T) {
 	}
 	checkInvariants(t, fixture(t, "subagent-session.jsonl"), 0, res)
 
-	// started and result carry no sessionId: they must land in the
-	// source-scoped synthetic session, never merged into the parent's.
 	for _, i := range []int{0, 5} {
 		if got := res.Records[i]; got.Native != SyntheticNativeIDPrefix+scope || !got.Synthetic {
 			t.Errorf("record %d native = %q (synthetic %t), want %q", i, got.Native, got.Synthetic, SyntheticNativeIDPrefix+scope)
@@ -263,7 +254,6 @@ func TestParseIncompleteTail(t *testing.T) {
 	}
 	checkInvariants(t, data, 0, res)
 
-	// The next poll resumes at the cursor; the completed line parses then.
 	completion := []byte(` mid-write."}],"stop_reason":"end_turn"},"timestamp":"2026-11-13T10:00:03.000Z"}` + "\n")
 	next := append(append([]byte{}, data[1545:]...), completion...)
 	res2, err := Parse(next, 1545, Options{SourceScope: "src-tail"})
@@ -337,7 +327,6 @@ func TestParseSyntheticNativeID(t *testing.T) {
 		t.Error("missing sessionId without a source scope must fail, not guess")
 	}
 
-	// A non-string sessionId reads as absent identity, not as an ID.
 	nonString := []byte(`{"type":"user","sessionId":42}` + "\n")
 	res, err := Parse(nonString, 0, withScope("scope-a"))
 	if err != nil {
@@ -368,8 +357,6 @@ func TestParseRecordSizeLimit(t *testing.T) {
 		t.Fatalf("records before the limit: %d, cursor %d", len(res.Records), res.Cursor)
 	}
 
-	// A tail already above the limit can never become valid; the source
-	// stops at the tail instead of waiting forever.
 	partial := []byte(small + "\n" + big[:80])
 	res, err = Parse(partial, 0, Options{SourceScope: "s", MaxRecordBytes: 64})
 	if !errors.As(err, &perr) || perr.Offset != int64(len(small)+1) {
@@ -382,7 +369,6 @@ func TestParseRecordSizeLimit(t *testing.T) {
 		t.Fatalf("records before the tail: %d", len(res.Records))
 	}
 
-	// Unset or non-positive limits select the documented default.
 	for _, limit := range []int64{0, -1} {
 		res, err := Parse(data, 0, Options{SourceScope: "s", MaxRecordBytes: limit})
 		if err != nil || len(res.Records) != 2 {
@@ -488,7 +474,6 @@ func TestParseCompoundRecord(t *testing.T) {
 		t.Errorf("one tool use must set the tool field, got %q", res.Records[0].ToolName)
 	}
 
-	// A structured tool_result content array contributes its text blocks.
 	structured := `{"type":"user","sessionId":"s1","message":{"role":"user","content":[` +
 		`{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"a"},{"type":"image"}]}]}}` + "\n"
 	res, err = Parse([]byte(structured), 0, Options{SourceScope: "s"})
@@ -504,7 +489,6 @@ func TestParseCompoundRecord(t *testing.T) {
 }
 
 func TestParseRoleAndTimestampEdges(t *testing.T) {
-	// The type of a message record stands in for a missing message.role.
 	noRole := []byte(`{"type":"user","sessionId":"s1","message":{"content":"prompt"}}` + "\n")
 	res, err := Parse(noRole, 0, Options{SourceScope: "s"})
 	if err != nil {
@@ -514,7 +498,6 @@ func TestParseRoleAndTimestampEdges(t *testing.T) {
 		t.Errorf("role = %q, want user", res.Records[0].Role)
 	}
 
-	// Without a message object there is no role to report.
 	noMessage := []byte(`{"type":"assistant","sessionId":"s1"}` + "\n")
 	res, err = Parse(noMessage, 0, Options{SourceScope: "s"})
 	if err != nil {
@@ -524,7 +507,6 @@ func TestParseRoleAndTimestampEdges(t *testing.T) {
 		t.Errorf("role = %q, kind = %q", res.Records[0].Role, res.Records[0].Kind)
 	}
 
-	// An unparseable timestamp is an absent observation, not a failure.
 	badTime := []byte(`{"type":"user","sessionId":"s1","timestamp":"yesterday","message":{"content":"x"}}` + "\n")
 	res, err = Parse(badTime, 0, Options{SourceScope: "s"})
 	if err != nil {

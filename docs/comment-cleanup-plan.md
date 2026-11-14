@@ -235,3 +235,4 @@ Comment markers inside raw and quoted strings are not comments and are not count
 |---|---|---|---|
 | 1 | `cmd/genfixture`, `internal/fixgen` | 201 | `docs/performance.md`, "Corpus shape" |
 | 1 | `cmd/tailcat-spike`, `cmd/memory-e2e` | 228 | ADR 0002, "Spike harness"; `CONTRIBUTING.md`, memory gate list; open gate finding in `NOTES.md` |
+| 2 | `internal/claudecode`, `internal/codex`, `internal/pi`, `internal/events` | 730 | `ARCHITECTURE.md`, parser contract; "Parser normalization" in each `testdata/<agent>/README.md`; `DB.md`, output version history; `docs/performance.md`, benchmark set |

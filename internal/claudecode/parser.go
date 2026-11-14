@@ -1,10 +1,3 @@
-// Package claudecode implements the deterministic parser for Claude Code
-// session JSONL files (verified against Claude Code 2.1.280; see
-// testdata/claude-code/README.md).
-//
-// Parsing is pure: the same bytes and options always produce the same
-// records, with no clock, network, or model use. The original JSON text of
-// each record is preserved verbatim; normalized fields are additive.
 package claudecode
 
 import (
@@ -17,115 +10,64 @@ import (
 	"unicode/utf8"
 )
 
-// AgentName identifies the agent for this source format. It is one input of
-// the session identity (device, agent, native ID).
 const AgentName = "claude-code"
 
-// SyntheticNativeIDPrefix opens the reserved namespace for source-scoped
-// synthetic native session IDs. A record without a usable sessionId gets
-// this prefix plus the source scope, so records from different sources never
-// share a session and real UUID session IDs can never collide with a
-// synthetic one (UUIDs contain no colon).
 const SyntheticNativeIDPrefix = "ohya-synthetic:"
 
-// OutputVersion versions this parser's normalized output — what the Record
-// fields hold for a given raw record — not the file format and not the
-// database schema. Any change to what Parse derives from the same bytes must
-// bump it; ingestion stores it per event row (events.parser_version), and
-// store.ReDerive rebuilds rows carrying a smaller version from raw_json.
-// 1 is the output of the parser as of the marker's introduction.
 const OutputVersion = 1
 
-// DefaultMaxRecordBytes bounds one record's JSON text, excluding the line
-// terminator, when Options.MaxRecordBytes is unset.
 const DefaultMaxRecordBytes = 1 << 20
 
-// knownKinds lists the record types with dedicated normalization, as
-// observed in Claude Code 2.1.280. Any other type is valid but stored with
-// kind "unknown"; the parser never rejects a record for its type.
 var knownKinds = map[string]bool{
-	// Message records.
 	"user": true, "assistant": true, "attachment": true, "system": true,
-	// Bookkeeping records.
 	"queue-operation": true, "mode": true, "permission-mode": true,
 	"atis-latch": true, "last-prompt": true, "ai-title": true,
 	"cost-state": true, "agent-name": true,
-	// Subagent bookkeeping records.
 	"started": true, "result": true, "launched": true, "failed": true,
 }
 
-// toolBlockTypes are content blocks that invoke a tool.
 var toolBlockTypes = map[string]bool{
 	"tool_use": true, "server_tool_use": true, "mcp_tool_use": true,
 }
 
-// toolResultBlockTypes are content blocks that carry a tool's result.
 var toolResultBlockTypes = map[string]bool{
 	"tool_result": true, "mcp_tool_result": true,
 }
 
-// Options configures one Parse call over one source's bytes.
 type Options struct {
-	// SourceScope names the source (file incarnation) the bytes come from.
-	// It scopes synthetic native IDs so that sessions are never merged or
-	// guessed across sources. The same source must always pass the same
-	// scope.
 	SourceScope string
 
-	// MaxRecordBytes bounds one record's JSON text, excluding the line
-	// terminator. A complete or still-growing record above the bound stops
-	// the source. Values <= 0 select DefaultMaxRecordBytes.
 	MaxRecordBytes int64
 }
 
-// Record is one complete JSONL record with deterministic normalized fields.
-// Empty Role, ToolName, Text, and Metadata never shadow the original: Raw
-// always holds the exact source text.
 type Record struct {
-	// Offset is the record's first byte offset in the source file.
-	Offset int64
-	// End is the byte offset just past the record's line terminator; it is
-	// the cursor position after accepting this record.
-	End    int64
-	Raw    string // original JSON text, without the line terminator
-	Native string // native session ID (sessionId), or the synthetic ID
-	// Synthetic reports that Native is a source-scoped synthetic ID from
-	// the reserved namespace because the record carried no sessionId.
+	Offset    int64
+	End       int64
+	Raw       string
+	Native    string
 	Synthetic bool
-	Kind      string // known type, or "unknown"
-	Role      string // message role; "" when the record has none
-	ToolName  string // sole invoked tool; "" when absent or ambiguous
-	Text      string // searchable text, concatenated in source order
-	// HasTime reports that the record carried a parseable timestamp; only
-	// then is TimeMS meaningful.
+	Kind      string
+	Role      string
+	ToolName  string
+	Text      string
 	HasTime   bool
-	TimeMS    int64  // Unix milliseconds from the timestamp field
-	Cwd       string // working directory observation
-	GitBranch string // branch observation
-	Model     string // model observation from message.model
-	MessageID string // message.id; groups the records of one API response
+	TimeMS    int64
+	Cwd       string
+	GitBranch string
+	Model     string
+	MessageID string
 	Usage     json.RawMessage
-	Metadata  string // compact JSON object of deterministic observations
+	Metadata  string
 }
 
-// Result is the outcome of parsing one buffer of source bytes.
 type Result struct {
 	Records []Record
-	// Cursor is the absolute byte offset just past the last accepted
-	// record's line terminator. Bytes from Cursor on are the incomplete
-	// tail: Parse never consumes them, and the caller retains them by
-	// reading from Cursor on the next poll.
-	Cursor int64
+	Cursor  int64
 }
 
-// ParseError reports the offset at which a source must stop. Reason never
-// contains transcript content.
 type ParseError struct {
-	Offset int64
-	Reason string
-	// RecordTooLarge reports that the record size limit caused this stop, so
-	// a larger Options.MaxRecordBytes remedies it; every other stop needs
-	// the source file repaired.
+	Offset         int64
+	Reason         string
 	RecordTooLarge bool
 }
 
@@ -133,11 +75,6 @@ func (e *ParseError) Error() string {
 	return fmt.Sprintf("claudecode: source stops at offset %d: %s", e.Offset, e.Reason)
 }
 
-// Parse scans data, which must start at absolute file offset base, and
-// returns every complete newline-terminated record in order. Records are
-// returned even when a later line fails: the caller commits them, advances
-// the cursor, and surfaces the diagnostic. The incomplete tail is left for
-// the next poll. Use one Options value per source for stable synthetic IDs.
 func Parse(data []byte, base int64, o Options) (Result, error) {
 	limit := o.MaxRecordBytes
 	if limit <= 0 {
@@ -148,8 +85,6 @@ func Parse(data []byte, base int64, o Options) (Result, error) {
 	for rel < len(data) {
 		idx := bytes.IndexByte(data[rel:], '\n')
 		if idx < 0 {
-			// Incomplete tail: an append-only source can only add bytes,
-			// so a tail already above the limit can never become valid.
 			if int64(len(data)-rel) > limit {
 				return res, &ParseError{
 					Offset:         base + int64(rel),
@@ -180,24 +115,20 @@ func Parse(data []byte, base int64, o Options) (Result, error) {
 	return res, nil
 }
 
-// parseRecord validates one line and derives its normalized fields.
 func parseRecord(line []byte, offset int64, o Options) (Record, error) {
-	// SQLite stores TEXT; a line that is not UTF-8 cannot round-trip.
 	if !utf8.Valid(line) {
 		return Record{}, &ParseError{Offset: offset, Reason: "record is not valid UTF-8"}
 	}
 	dec := json.NewDecoder(bytes.NewReader(line))
-	dec.UseNumber() // metadata keeps numbers exactly as written
+	dec.UseNumber()
 	var obj map[string]any
 	if err := dec.Decode(&obj); err != nil {
 		if _, ok := err.(*json.UnmarshalTypeError); ok {
 			return Record{}, &ParseError{Offset: offset, Reason: "record is not a JSON object"}
 		}
-		// The error text can quote input characters; keep it out of the
-		// diagnostic.
 		return Record{}, &ParseError{Offset: offset, Reason: "record is not valid JSON"}
 	}
-	if obj == nil { // JSON null decodes to a nil map without an error
+	if obj == nil {
 		return Record{}, &ParseError{Offset: offset, Reason: "record is not a JSON object"}
 	}
 	if _, err := dec.Token(); err != io.EOF {
@@ -207,8 +138,6 @@ func parseRecord(line []byte, offset int64, o Options) (Record, error) {
 	rec := Record{Offset: offset, Raw: string(line)}
 	md := map[string]any{}
 
-	// Native session identity: sessionId when present, otherwise a
-	// source-scoped synthetic ID. Never guess or merge.
 	if sid, ok := stringValue(obj, "sessionId"); ok && sid != "" {
 		rec.Native = sid
 	} else if o.SourceScope != "" {
@@ -237,7 +166,6 @@ func parseRecord(line []byte, offset int64, o Options) (Record, error) {
 		}
 	}
 
-	// Uniform observations for every record kind.
 	if v, ok := stringValue(obj, "uuid"); ok {
 		md["uuid"] = v
 	}
@@ -264,7 +192,6 @@ func parseRecord(line []byte, offset int64, o Options) (Record, error) {
 		if r, ok := stringValue(msg, "role"); ok {
 			rec.Role = r
 		} else if rec.Kind == "user" || rec.Kind == "assistant" {
-			// The type of a message record coincides with its role.
 			rec.Role = rec.Kind
 		}
 		if v, ok := stringValue(msg, "id"); ok {
@@ -320,7 +247,7 @@ func parseRecord(line []byte, offset int64, o Options) (Record, error) {
 		}
 	}
 
-	b, err := json.Marshal(md) // map keys sort, so output is deterministic
+	b, err := json.Marshal(md)
 	if err != nil {
 		return Record{}, &ParseError{Offset: offset, Reason: "record observations cannot be serialized"}
 	}
@@ -328,9 +255,6 @@ func parseRecord(line []byte, offset int64, o Options) (Record, error) {
 	return rec, nil
 }
 
-// normalizeContent derives the searchable text, the unambiguous tool name,
-// and the per-block metadata from a message content array, all in source
-// order.
 func normalizeContent(blocks []any) (text string, tool string, blocksMD []any) {
 	var parts []string
 	blocksMD = []any{}
@@ -406,8 +330,6 @@ func normalizeContent(blocks []any) (text string, tool string, blocksMD []any) {
 	return strings.Join(parts, "\n"), tool, blocksMD
 }
 
-// stringValue returns the field only when it is present and a string; a
-// non-string value reads as absent.
 func stringValue(m map[string]any, key string) (string, bool) {
 	v, ok := m[key]
 	if !ok {
@@ -417,11 +339,10 @@ func stringValue(m map[string]any, key string) (string, bool) {
 	return s, ok
 }
 
-// compactJSON serializes a decoded JSON value with sorted map keys.
 func compactJSON(v any) string {
 	b, err := json.Marshal(v)
 	if err != nil {
-		return "" // unreachable for values decoded from JSON
+		return ""
 	}
 	return string(b)
 }

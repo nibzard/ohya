@@ -12,11 +12,6 @@ import (
 	"github.com/nibzard/ohya/internal/store"
 )
 
-// TestDeriversReproduceFreshParse pins the re-derivation contract: parsing
-// each stored record on its own, with the source scope and the native ID the
-// walk supplies, yields exactly the event a fresh ingestion of the same file
-// produced. If this fails after a parser change, re-derivation would rewrite
-// rows differently than ingestion — the two paths must stay identical.
 func TestDeriversReproduceFreshParse(t *testing.T) {
 	byAgent := map[string]store.ParserDeriver{}
 	for _, p := range Derivers() {
@@ -44,8 +39,6 @@ func TestDeriversReproduceFreshParse(t *testing.T) {
 		if deriver.OutputVersion != fresh.version {
 			t.Fatalf("%s: deriver version %d, parser version %d", tc.agent, deriver.OutputVersion, fresh.version)
 		}
-		// The walk feeds each record the native ID of the one before it; a
-		// source's first record establishes it (Codex session_meta).
 		native := ""
 		for i, ev := range fresh.events {
 			derived, err := deriver.Derive(store.DeriveInput{
@@ -64,9 +57,6 @@ func TestDeriversReproduceFreshParse(t *testing.T) {
 	}
 }
 
-// TestDeriversRejectUnfaithfulRecords covers the deriver's own failure paths:
-// a stored record that no longer parses, and one that frames more than the
-// single stored record.
 func TestDeriversRejectUnfaithfulRecords(t *testing.T) {
 	byAgent := map[string]store.ParserDeriver{}
 	for _, p := range Derivers() {
@@ -81,8 +71,6 @@ func TestDeriversRejectUnfaithfulRecords(t *testing.T) {
 		if _, err := p.Derive(store.DeriveInput{Agent: agent, SourceID: "s", SourceOffset: 0, RawJSON: raw}); err == nil {
 			t.Fatalf("%s: a record the parser refuses re-derived without error", agent)
 		}
-		// Two records in one RawJSON cannot be one stored record; the walk
-		// would rewrite one row from two records' bytes.
 		double := `{"type":"user","sessionId":"s1","message":{"role":"user","content":"a"}}` + "\n" +
 			`{"type":"user","sessionId":"s1","message":{"role":"user","content":"b"}}`
 		if agent == "codex" {
@@ -99,15 +87,11 @@ func TestDeriversRejectUnfaithfulRecords(t *testing.T) {
 	}
 }
 
-// parsedFile holds one fixture's fresh parse plus the parser's own output
-// version, so the test can check the binding keeps up with the constant.
 type parsedFile struct {
 	events  []store.Event
 	version int
 }
 
-// parseFixtureFile parses one fixture file with the agent's parser through
-// the production adapters.
 func parseFixtureFile(agent, path, scope string) (parsedFile, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

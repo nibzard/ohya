@@ -111,6 +111,41 @@ including 503 successful responses with non-zero usage. Because each entry
 carries a unique 8-hex `id` and one assistant entry is one response, the
 usage-row key is the `responseId`, falling back to the entry id.
 
+## Parser normalization
+
+`internal/pi` follows the shared parser contract in ARCHITECTURE.md,
+"Record handling". For this format it derives:
+
+- Native ID: the non-empty `id` of the `session` header at offset 0. Every
+  later entry belongs to that session, and a later header (never observed)
+  keeps the established identity. A file whose first record is not such a
+  header gets the source's synthetic ID.
+- Kind: `session`, `model_change`, `thinking_level_change`, and `message`.
+  Every other type is `unknown`.
+- Entry ID: the 8-hex `id` of every entry except the header, whose `id`
+  names the session instead.
+- Time: the entry `timestamp`. The message-level Unix milliseconds mirror it
+  and are not parsed.
+- `session` contributes `cwd` and `version` (as `sessionVersion`).
+  `model_change` contributes `modelId` and `provider`, and
+  `thinking_level_change` its `thinkingLevel`.
+- A `user` message contributes its text blocks as text and as the prompt,
+  because Pi stores only typed input as user messages.
+- An `assistant` message contributes its `text` blocks (`textSignature` is
+  not content) and its `toolCall` blocks (name plus compact arguments
+  JSON). It also contributes `model`, `responseId` as the message ID, the
+  usage object as written, and `provider`, `api`, `stopReason`,
+  `rawStopReason`, `thinkingLevel`, and `durationMs` in metadata. More than
+  one tool call adds `toolNames`.
+- A `toolResult` message contributes `toolName`, its text blocks,
+  `toolCallId`, and `isError` (only when true).
+- A `system` message is the harness preamble. It contributes no text. Its
+  sorted `sections` keys and `toolsAdded` names go to metadata.
+
+The events adapter keys a usage row on the `responseId`, or on the entry ID
+when the provider emits none. It maps usage as DB.md, "Invariants",
+describes.
+
 ## Fixtures
 
 Every fixture is synthetic. Each table lists the byte range of each record,

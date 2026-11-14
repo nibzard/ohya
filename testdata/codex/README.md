@@ -179,6 +179,42 @@ the Codex home, and the "metadata only" claim does not hold for all of them:
 - `logs_2.sqlite`, `goals_1.sqlite`, `memories_1.sqlite`, `queue_1.sqlite` —
   app logs and feature state, not transcripts.
 
+## Parser normalization
+
+`internal/codex` follows the shared parser contract in ARCHITECTURE.md,
+"Record handling". For this format it derives:
+
+- Native ID: the non-empty `payload.id` of a `session_meta` at offset 0.
+  Every later record of the file belongs to that thread. A file whose first
+  record is not such a meta gets the source's synthetic ID.
+- Kind: the top-level types `session_meta`, `response_item`, `event_msg`,
+  `turn_context`, `token_usage_record`, `world_state`, `compacted`, and
+  `inter_agent_communication_metadata`. Every other type is `unknown`. The
+  payload type goes to metadata as `payloadType`.
+- Ordinal: a non-negative integer `ordinal`, never on a `session_meta`,
+  because a page's opening meta repeats an ordinal of the original file.
+- `session_meta`: the thread ID goes to metadata as `threadId`. A meta that
+  names another thread is embedded context (a subagent rollout repeats its
+  parent's meta as line 2). It is marked `embedded` and contributes no
+  observations. The thread's own meta contributes `cwd`, `git.branch`,
+  `originator`, `cli_version`, `history_mode`, `parent_thread_id`,
+  `forked_from_id`, and `source` (`subagent` for a subagent object).
+- `response_item` is the searchable stream. A `message` contributes its role,
+  the text of every content block with a string `text` field, and `phase`.
+  A `reasoning` item contributes its summary and content text. A
+  `function_call` or `custom_tool_call` sets the tool name and contributes
+  the name and its `arguments` or `input` string. Tool outputs contribute
+  their string or block text, and a `web_search_call` its `action.query`.
+  `call_id` and `id` go to metadata as `callId` and `itemId`.
+- `event_msg` contributes no text, because it mirrors the transcript.
+  `event_msg/user_message` sets the prompt from `payload.message`, because
+  `response_item` user messages also carry injected context.
+- `turn_context` contributes `cwd`, `model`, and `turnId`.
+- `token_usage_record` contributes its `response_id` as the message ID, its
+  per-response `usage` as written, and `turnId`.
+
+The events adapter maps usage as DB.md, "Invariants", describes.
+
 ## Fixtures
 
 Every fixture is synthetic. Each table lists the byte range of each record,

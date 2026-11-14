@@ -84,6 +84,27 @@ Benchmarks: `internal/events` (`make bench`), end-to-end run of
 `bin/ohya ingest --once` over 461 files (200 main sessions plus subagent
 transcripts, 138.7 MiB, 43,626 events).
 
+The `internal/events` benchmarks use corpora of `OHYA_BENCH_MIB` MiB
+(default 32). Sessions are about 2 MiB (the verified real mean is 2.3 MB per
+main session). Claude Code and Codex sessions have a mean of two
+quarter-size subagent files; Pi has one file per session. The benchmarks
+batch like `cmd/ohya`: 8 MiB reads, one transaction per batch, and
+`store.SourceState` before each parse past offset 0. A record larger than
+the batch bound extends the read.
+
+- `BenchmarkIngestCorpus` measures a first import. Each iteration opens a
+  fresh database, so the rate includes `store.Open` and its migrations.
+- `BenchmarkParseCorpus`, `BenchmarkParseCorpusCodex`, and
+  `BenchmarkParseCorpusPi` measure the parser alone. The gap to
+  `BenchmarkIngestCorpus` is the cost of the write path.
+- `BenchmarkIngestReplay` measures a fully repeated batch below the
+  committed cursor. This is the cost of a retry after a lost
+  acknowledgment and of the uploader's cursor probe.
+- `BenchmarkIngestAppend` measures eight records (about one turn) appended
+  above a committed prefix of 1,024 records from a 16 MiB session file.
+  When the file runs out of append windows, the benchmark opens a fresh
+  database with only the committed prefix, so it can serve any `b.N`.
+
 | Path | Result | Notes |
 |---|---|---|
 | First import, full path | 4–8 MB/s sustained | Store-level benchmark; single-run spread across disk states, 4.42 MB/s at 128 MiB, up to 19 MB/s with a hot page cache |

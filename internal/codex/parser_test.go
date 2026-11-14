@@ -16,8 +16,6 @@ const (
 	subagentThread = "00000000-0000-7000-8000-0000000000d1"
 )
 
-// fixture reads a synthetic Codex fixture; byte offsets in the assertions
-// below come from testdata/codex/README.md.
 func fixture(t testing.TB, name string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "codex", name))
@@ -27,12 +25,10 @@ func fixture(t testing.TB, name string) []byte {
 	return data
 }
 
-// ms builds the Unix millisecond value of a fixture timestamp.
 func ms(hour, min, sec, millis int) int64 {
 	return time.Date(2026, time.November, 13, hour, min, sec, millis*int(time.Millisecond), time.UTC).UnixMilli()
 }
 
-// metadataOf decodes a record's metadata for spot checks.
 func metadataOf(t *testing.T, r Record) map[string]any {
 	t.Helper()
 	var md map[string]any
@@ -42,10 +38,6 @@ func metadataOf(t *testing.T, r Record) map[string]any {
 	return md
 }
 
-// checkInvariants asserts the structural properties every parse result must
-// hold, whatever the input: contiguous boundaries, raw text preserved
-// verbatim, valid metadata, one native ID per source, and a cursor that
-// never moves backwards.
 func checkInvariants(t *testing.T, data []byte, base int64, res Result) {
 	t.Helper()
 	if res.Cursor < base || res.Cursor > base+int64(len(data)) {
@@ -84,16 +76,14 @@ func checkInvariants(t *testing.T, data []byte, base int64, res Result) {
 	}
 }
 
-// want is one expected record of a fixture table.
 type want struct {
 	off, end   int64
 	kind, role string
 	tool, text string
-	ordinal    int64 // -1 when the record has no ordinal
+	ordinal    int64
 	timeMS     int64
 }
 
-// checkTable compares parsed records with a fixture table.
 func checkTable(t *testing.T, res Result, tests []want) {
 	t.Helper()
 	if len(res.Records) != len(tests) {
@@ -184,7 +174,6 @@ func TestParseMainSession(t *testing.T) {
 	if u1.ResponseID != "resp_fixture_0001" || u2.ResponseID != "resp_fixture_0002" {
 		t.Errorf("response ids = %q/%q", u1.ResponseID, u2.ResponseID)
 	}
-	// usage is per response; the cumulative turn and thread totals stay out.
 	if got := string(u2.Usage); got != `{"cache_write_input_tokens":0,"cached_input_tokens":1250,"input_tokens":1300,"output_tokens":30,"reasoning_output_tokens":0,"total_tokens":1330}` {
 		t.Errorf("second usage = %s", got)
 	}
@@ -204,8 +193,6 @@ func TestParseSubagentSession(t *testing.T) {
 		{1234, 1555, "response_item", "assistant", "", "One file omits the byte ranges: codex/incomplete-tail.jsonl.", 3, ms(9, 1, 2, 0)},
 		{1555, 2362, "token_usage_record", "", "", "", 4, ms(9, 1, 3, 0)},
 	})
-	// The subagent is its own thread; the embedded parent meta joins it
-	// without lending the parent's observations.
 	if res.Native != subagentThread {
 		t.Fatalf("native = %q, want %q", res.Native, subagentThread)
 	}
@@ -235,15 +222,12 @@ func TestParseResumedPage(t *testing.T) {
 	}
 	checkInvariants(t, data, 0, res)
 	checkTable(t, res, []want{
-		// The opening meta repeats ordinal 12 in its envelope; it never
-		// takes part in the (thread, ordinal) identity.
 		{0, 568, "session_meta", "", "", "", -1, ms(10, 30, 0, 0)},
 		{568, 1281, "token_usage_record", "", "", "", 12, ms(9, 0, 6, 0)},
 		{1281, 1500, "event_msg", "", "", "", 13, ms(9, 0, 7, 0)},
 		{1500, 1726, "response_item", "user", "", "Also mention the resumed-page fixture.", 14, ms(10, 30, 1, 0)},
 		{1726, 2048, "response_item", "assistant", "", "Mentioned the resumed-page fixture in the same section.", 15, ms(10, 30, 2, 0)},
 	})
-	// The page continues the main thread: same native ID.
 	if res.Native != mainThread {
 		t.Fatalf("native = %q, want %q", res.Native, mainThread)
 	}
@@ -251,7 +235,6 @@ func TestParseResumedPage(t *testing.T) {
 		t.Errorf("page meta metadata = %v", md)
 	}
 
-	// The replayed records are byte-identical to the originals.
 	main, err := Parse(fixture(t, "main-session.jsonl"), 0, Options{SourceScope: "src-main"})
 	if err != nil {
 		t.Fatal(err)
@@ -263,10 +246,6 @@ func TestParseResumedPage(t *testing.T) {
 	}
 }
 
-// TestParseReenumeratedPage covers the real resumed-page shape (verified
-// 2026-11-14; see testdata/codex/README.md): the page re-enumerates the
-// ordinals past its history_base rollback point with different records, so
-// every colliding ordinal names a different record than the original file.
 func TestParseReenumeratedPage(t *testing.T) {
 	data := fixture(t, "reenumerated-page.jsonl")
 	res, err := Parse(data, 0, Options{SourceScope: "src-reenum"})
@@ -275,8 +254,6 @@ func TestParseReenumeratedPage(t *testing.T) {
 	}
 	checkInvariants(t, data, 0, res)
 	checkTable(t, res, []want{
-		// The opening meta repeats ordinal 12 in its envelope; it never
-		// takes part in the (thread, ordinal) identity.
 		{0, 568, "session_meta", "", "", "", -1, ms(10, 40, 0, 0)},
 		{568, 771, "event_msg", "", "", "", 12, ms(10, 40, 1, 0)},
 		{771, 1484, "token_usage_record", "", "", "", 13, ms(10, 40, 2, 0)},
@@ -293,8 +270,6 @@ func TestParseReenumeratedPage(t *testing.T) {
 		t.Errorf("re-enumerated usage record = %q/%s", r.ResponseID, r.Usage)
 	}
 
-	// Every ordinal the page shares with the original file holds a different
-	// record — the property that makes content-keyed deduplication necessary.
 	main, err := Parse(fixture(t, "main-session.jsonl"), 0, Options{SourceScope: "src-main"})
 	if err != nil {
 		t.Fatal(err)
@@ -322,7 +297,6 @@ func TestParseIncompleteTail(t *testing.T) {
 	if len(res.Records) != 3 || res.Cursor != 797 {
 		t.Fatalf("records/cursor = %d/%d, want 3/797", len(res.Records), res.Cursor)
 	}
-	// Completing the tail on a later poll accepts exactly the rest.
 	completed := append(append([]byte{}, data[797:]...), []byte(`ory/.","phase":"final"}}`+"\n")...)
 	res2, err := Parse(completed, res.Cursor, Options{SourceScope: "src-tail", Native: res.Native})
 	if err != nil {
@@ -344,12 +318,9 @@ func TestParseMalformedLineStopsSource(t *testing.T) {
 	if perr.Offset != 502 || res.Cursor != 502 || len(res.Records) != 2 {
 		t.Fatalf("stop %d, cursor %d, records %d; want 502/502/2", perr.Offset, res.Cursor, len(res.Records))
 	}
-	// The diagnostic never quotes transcript content.
 	if strings.Contains(perr.Error(), "quote") || strings.Contains(perr.Error(), "unescaped") {
 		t.Fatalf("diagnostic leaks content: %v", perr)
 	}
-	// A retry from the stop offset stops at the same place again: bytes are
-	// never skipped.
 	_, err = Parse(data[502:], 502, Options{SourceScope: "src-bad", Native: res.Native})
 	if !errors.As(err, &perr) || perr.Offset != 502 {
 		t.Fatalf("retry error = %v, want a stop at 502", err)
@@ -395,8 +366,6 @@ func TestParseNativeIdentity(t *testing.T) {
 		})
 	}
 
-	// Without a scope, a source whose first record names no thread stops
-	// instead of inventing an identity.
 	_, err := Parse([]byte(msg), 0, Options{})
 	var perr *ParseError
 	if !errors.As(err, &perr) || perr.Offset != 0 {
@@ -524,17 +493,14 @@ func TestParseMalformedRecords(t *testing.T) {
 func TestParseRecordSizeLimit(t *testing.T) {
 	rec := `{"type":"event_msg","payload":{"type":"x"}}`
 	limit := int64(len(rec))
-	// A record exactly at the limit passes.
 	if _, err := Parse([]byte(rec+"\n"), 7, Options{Native: "t", MaxRecordBytes: limit}); err != nil {
 		t.Fatalf("record at the limit: %v", err)
 	}
 	var perr *ParseError
-	// One byte more stops the source at the record.
 	_, err := Parse([]byte(rec+"\n"), 7, Options{Native: "t", MaxRecordBytes: limit - 1})
 	if !errors.As(err, &perr) || perr.Offset != 7 || !perr.RecordTooLarge {
 		t.Fatalf("oversized record error = %v", err)
 	}
-	// An incomplete tail already above the limit stops the source too.
 	res, err := Parse([]byte(rec+"\n"+rec), 7, Options{Native: "t", MaxRecordBytes: limit - 1})
 	if !errors.As(err, &perr) || perr.Offset != 7 || len(res.Records) != 0 || !perr.RecordTooLarge {
 		t.Fatalf("tail error = %v", err)
@@ -553,9 +519,6 @@ func TestParseEmptyInput(t *testing.T) {
 }
 
 func TestParseSplitAtEveryOffset(t *testing.T) {
-	// Polling can cut the file anywhere. Parsing the first part, then the
-	// rest from the cursor with the established native, yields exactly the
-	// records of one full parse.
 	data := fixture(t, "main-session.jsonl")
 	full, err := Parse(data, 0, Options{SourceScope: "s"})
 	if err != nil {

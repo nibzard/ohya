@@ -1,10 +1,3 @@
-// Ingestion benchmarks over a deterministic synthetic corpus (internal/fixgen).
-// They measure the full local path — events.Parse plus the transactional
-// write path — with the same 8 MiB batching cmd/ohya uses, so the numbers
-// answer: how fast does a first import run, what does an idempotent replay
-// cost, and what does one live append (one poll's new bytes) cost? The
-// companion measurements and method live in docs/performance.md.
-
 package events
 
 import (
@@ -23,9 +16,6 @@ import (
 	"github.com/nibzard/ohya/internal/store"
 )
 
-// benchMIB is the benchmark corpus volume, from OHYA_BENCH_MIB. The default
-// keeps a full benchmark run in the tens of seconds; the documented
-// measurements raise it (docs/performance.md).
 func benchMIB() int {
 	var n int
 	if v := os.Getenv("OHYA_BENCH_MIB"); v != "" {
@@ -36,10 +26,6 @@ func benchMIB() int {
 	return 32
 }
 
-// corpus returns a benchmark corpus of about mib MiB: sessions of about
-// 2 MiB (the verified real-corpus mean is 2.3 MB per main session), each
-// with a mean of two subagent transcripts of a quarter size, so one session
-// group averages 3 MiB.
 func corpus(mib int) []fixgen.File {
 	return fixgen.Generate(fixgen.Corpus{
 		Sessions:            mib / 3,
@@ -49,9 +35,6 @@ func corpus(mib int) []fixgen.File {
 	})
 }
 
-// corpusCodex returns a Codex rollout corpus of about mib MiB with the same
-// shape: main rollouts of about 2 MiB, each with a mean of two subagent
-// rollouts of a quarter size (one session group averages 2.5 MiB).
 func corpusCodex(mib int) []fixgen.File {
 	return fixgen.GenerateCodex(fixgen.Corpus{
 		Sessions:            mib * 2 / 5,
@@ -61,9 +44,6 @@ func corpusCodex(mib int) []fixgen.File {
 	})
 }
 
-// corpusPi returns a Pi session corpus of about mib MiB: one file per
-// session of about 2 MiB — Pi sessions never span files and carry no
-// subagent transcripts.
 func corpusPi(mib int) []fixgen.File {
 	return fixgen.GeneratePi(fixgen.Corpus{
 		Sessions:      mib / 2,
@@ -80,23 +60,18 @@ func corpusBytes(files []fixgen.File) int64 {
 	return n
 }
 
-// openBenchHub opens a fresh hub database under a benchmark-owned directory.
 func openBenchHub(b *testing.B) *store.DB {
 	b.Helper()
 	hub, err := store.Open(context.Background(), filepath.Join(b.TempDir(), "hub.db"))
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.Cleanup(func() { hub.Close() }) // Close is idempotent after explicit closes
+	b.Cleanup(func() { hub.Close() })
 	return hub
 }
 
-// benchIngestFile feeds one file through the local ingestion path with cmd/ohya's
-// exact batching: 8 MiB reads, parse, one transaction per batch, SourceState
-// before parses past offset 0. All benchmark corpus records are valid, so a
-// parse error is a benchmark failure, not a source stop.
 func benchIngestFile(b *testing.B, hub *store.DB, f fixgen.File, sourceID string) error {
-	const maxBatchBytes = 8 << 20 // mirrors cmd/ohya maxBatchBytes
+	const maxBatchBytes = 8 << 20
 	ctx := context.Background()
 	if err := hub.RegisterSource(ctx, sourceID, "dev-bench", claudecode.AgentName, "/"+f.Path); err != nil {
 		return err
@@ -125,19 +100,14 @@ func benchIngestFile(b *testing.B, hub *store.DB, f fixgen.File, sourceID string
 			cursor = result.Cursor
 			readEnd = min(end, cursor+maxBatchBytes)
 		} else if readEnd < end {
-			// One record larger than the batch bound: extend the read.
 			readEnd = min(end, readEnd+maxBatchBytes)
 		} else {
-			break // one incomplete record still growing
+			break
 		}
 	}
 	return nil
 }
 
-// BenchmarkIngestCorpus measures a first import: fresh database, every file
-// through the full path. Each iteration gets a fresh database, so the rate
-// includes store.Open (migrations) but is dominated by parse, insert,
-// aggregate and FTS work.
 func BenchmarkIngestCorpus(b *testing.B) {
 	for _, mib := range []int{4, benchMIB()} {
 		b.Run(fmt.Sprintf("%dMiB", mib), func(b *testing.B) {
@@ -162,11 +132,6 @@ func BenchmarkIngestCorpus(b *testing.B) {
 	}
 }
 
-// BenchmarkParseCorpus isolates the parser: the same corpus bytes, no
-// database. The gap to BenchmarkIngestCorpus is the write path's share.
-// The Codex and Pi twins below hold the per-agent parse cost against the
-// shared write path: their corpora draw texts from the same distribution,
-// so the delta reflects the record envelope and parser, not text volume.
 func BenchmarkParseCorpus(b *testing.B) {
 	benchParseCorpus(b, claudecode.AgentName, corpus(benchMIB()))
 }
@@ -193,10 +158,6 @@ func benchParseCorpus(b *testing.B, agent string, files []fixgen.File) {
 	}
 }
 
-// BenchmarkIngestReplay measures a fully repeated batch: every record sits
-// below the committed cursor, so the write path validates stored bytes and
-// commits nothing. This is the cost of a retry after a lost acknowledgment
-// and of the uploader's per-connection cursor probe.
 func BenchmarkIngestReplay(b *testing.B) {
 	ctx := context.Background()
 	hub := openBenchHub(b)
@@ -223,14 +184,6 @@ func BenchmarkIngestReplay(b *testing.B) {
 	}
 }
 
-// BenchmarkIngestAppend measures one live append: eight records (about one
-// turn) parsed and committed on top of a 16 MiB source, the way a poll
-// delivers a running session's new bytes. FULL synchronous durability makes
-// the commit, not the parse, the dominant cost. The corpus holds a bounded
-// number of append windows, so each completed lap re-primes a fresh database
-// holding only the committed prefix: appends must sit above a real cursor,
-// and the benchmark must serve any b.N the framework asks for — fast storage
-// drives b.N past one lap within the default benchtime.
 func BenchmarkIngestAppend(b *testing.B) {
 	ctx := context.Background()
 	const sourceID = "src-append"
@@ -239,7 +192,6 @@ func BenchmarkIngestAppend(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	// Commit a prefix once; the appends continue exactly at its cursor.
 	const prefix = 1024
 	const per = 8
 	if len(res.Events) <= prefix+per {
@@ -254,8 +206,6 @@ func BenchmarkIngestAppend(b *testing.B) {
 	defer os.RemoveAll(dir)
 	dbPath := filepath.Join(dir, "hub.db")
 	var hub *store.DB
-	// reprime replaces the database with a fresh one that holds only the
-	// committed prefix, so the next lap appends above a real cursor again.
 	reprime := func() {
 		if hub != nil {
 			hub.Close()

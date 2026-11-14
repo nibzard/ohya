@@ -82,6 +82,67 @@ the diagnostic states its remedy ([ADR 0004](docs/adr/0004-stopped-source-recove
 size stop clears on the next pass from the checkpointed offset, and every other
 stop needs the source file repaired at that offset; automatic skipping is rejected.
 
+Every agent parser (`internal/claudecode`, `internal/codex`, `internal/pi`)
+has the same contract:
+
+- `Parse(data, base, Options)` reads bytes that start at absolute file offset
+  `base`. It returns every complete `\n`-terminated record in order. A
+  record's `End` is the offset just past its terminator. `Result.Cursor` is
+  the `End` of the last accepted record, and Parse never consumes the bytes
+  after it.
+- On a stop, Parse returns the records before the bad line together with a
+  `*ParseError`. The caller commits those records, advances the cursor, and
+  shows the diagnostic. The reason is a fixed text and never quotes input,
+  because JSON decoder errors can contain transcript characters.
+- `RecordTooLarge` marks a stop that the size limit caused. The limit
+  (`Options.MaxRecordBytes`, default 1 MiB) applies to the JSON text without
+  the terminator. A record exactly at the limit passes. An incomplete tail
+  that is already above the limit also stops the source, because an
+  append-only file cannot make it valid.
+- Each line must be valid UTF-8, because SQLite stores it as TEXT. Each line
+  must be exactly one JSON object: `null`, arrays, and trailing content stop
+  the source.
+- Parsing is pure and deterministic, with no clock, network, or model input.
+  `Raw` holds the exact line without its terminator. Numbers decode with
+  `UseNumber`, so metadata keeps them as written. Metadata is compact JSON
+  with sorted keys.
+- A record of an unknown `type` gets kind `unknown`, with the observed type
+  in metadata under `observedType`. No record is rejected for its type.
+- A field of the wrong JSON type reads as absent. A timestamp that does not
+  parse as RFC 3339 is an absent observation, not a stop.
+- A record without a usable native session ID gets the synthetic ID
+  `ohya-synthetic:` plus `Options.SourceScope` (the source ID). Native IDs
+  are UUIDs and contain no colon, so they cannot collide with a synthetic
+  ID. Without a source scope, such a record stops the source.
+- Codex and Pi records do not name their session; the first record of the
+  file does. A parse with `base > 0` therefore needs `Options.Native`, which
+  is `Result.Native` of the parse that covered offset 0. Ingestion reads it
+  from `store.SourceState.FirstNativeID`. A missing value returns
+  `ErrNoNative`, a caller error and not a source stop. A later header never
+  changes the established identity.
+- Searchable text joins its parts in source order with newlines. A tool
+  call contributes its name, a space, and the compact sorted-key JSON of its
+  input. `ToolName` is set only when the record invokes exactly one named
+  tool.
+
+Each parser has a `FuzzParse` target. It checks contiguous boundaries,
+verbatim raw text, a cursor on accepted boundaries, deterministic output, a
+stop exactly at the cursor, prefix stability for any cut of the input, and
+(for Codex and Pi) that a parse resumed at the cursor with the established
+native ID reproduces the full parse.
+
+`internal/events` maps parser records onto `store.Event` for local ingestion
+and for hub-side batch normalization, so every path into the database
+normalizes a record the same way. `events.Parse` wraps a parser stop in a
+`*StopError` and dispatches on the agent name. `events.Derivers` binds each
+parser to `store.ReDerive` with the same parse calls, so a re-derived row
+equals a freshly ingested one. `internal/store/ingest_test.go` keeps a copy
+of the Claude Code mapping, because an in-package store test cannot import
+`internal/events` without an import cycle. Change both copies together. The
+ingestion benchmarks in `internal/events` copy the 8 MiB batch bound of
+`cmd/ohya` in the same way. The format notes under `testdata/<agent>/`
+describe what each parser derives.
+
 Implemented (T011): `internal/codex` parses Codex rollout files, and
 `internal/events.Parse` selects the parser from the source's agent for both
 local ingestion and the hub endpoint. Codex records carry no session field:

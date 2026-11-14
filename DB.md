@@ -110,6 +110,8 @@ offsets in the original file, including framing when calculating the next cursor
   and sums the four unambiguous counts. Codex `token_usage_record.usage` is per
   `response_id` (the message ID here); `input_tokens` includes `cached_input_tokens`,
   so the adapter stores the difference as input and the cached part as cache reads.
+  A usage whose cached count exceeds its input, or that holds a negative count,
+  is contradictory and counts nothing.
   `cache_write_input_tokens` stays out until its relation to `input_tokens` is
   verified: it is 0 in every record of the full real corpus (checked
   2026-11-14 over all 22,209 usage records, versions 0.153.4 through
@@ -155,6 +157,17 @@ session assignment — not the shape of the tables. Each parser owns an
 stamps it per row and refuses records that name no version. Bump the constant
 whenever a parser derives different fields from the same bytes — before the
 change lands, in the same commit.
+
+Output version history:
+
+| Parser | Version | Change |
+|---|---|---|
+| `claudecode` | 1 | Output when the marker was introduced |
+| `codex` | 1 | Output when the marker was introduced |
+| `pi` | 1 | Output when the marker was introduced |
+| `pi` | 2 | Adds `Record.EntryID`, the usage-row key when a provider emits no `responseId` (verified 2026-11-14: `openai-completions` records never carry one) |
+
+Add a row in the same commit that bumps a constant.
 
 Because `raw_json` preserves every original record, a bumped parser re-derives
 stored rows inside the hub with no source-file access and no resync from

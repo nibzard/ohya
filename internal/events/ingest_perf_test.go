@@ -1,10 +1,3 @@
-// Performance regression test for ingestion. Unlike the benchmarks, this
-// runs in every `go test` pass: it fails only on order-of-magnitude
-// regressions — an accidentally unindexed lookup or superlinear aggregate
-// work — not on machine-speed drift, so the ceiling sits far above the
-// measured time. The benchmarks (ingest_bench_test.go) carry the precise
-// numbers; docs/performance.md records them.
-
 package events
 
 import (
@@ -19,11 +12,6 @@ import (
 	"github.com/nibzard/ohya/internal/store"
 )
 
-// TestIngestPerformanceFloor imports a 24 MiB corpus through the full
-// parse-and-commit path. Measured 2026-11-14 (12th-gen laptop CPU, WAL,
-// synchronous FULL): about 3 s. The 30 s ceiling is roughly ten times that,
-// so a healthy build never flakes while a superlinear write path (an
-// unindexed per-record lookup over ~7,000 events) blows past it.
 func TestIngestPerformanceFloor(t *testing.T) {
 	files := fixgen.Generate(fixgen.Corpus{
 		Sessions:            8,
