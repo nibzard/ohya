@@ -1,0 +1,19 @@
+T041 (round 5, from the 2026-11-13 agentsview study: their
+"make memory-e2e" release gate).
+
+Verified end to end on this machine (claude 2.1.280, codex-cli
+0.169.0): 6/6 cases passed via make memory-e2e; report and traces
+in the run's output directory. Facts pinned in NOTES.md:
+
+- codex 0.169 needs `codex login --with-api-key` inside the
+  isolated CODEX_HOME (OPENAI_API_KEY env alone is ignored);
+  config.toml must live inside CODEX_HOME;
+  `codex mcp list` proves registration.
+- `codex exec --trust` writes only inside CODEX_HOME.
+- A mise-shimmed codex busy-spins when HOME is redirected; the
+  gate keeps the real HOME for codex and redirects claude's.
+
+Rejected alternatives: running the clients against the operator's
+real archives (violates isolation); opening the hub database
+directly for citation checks (the gate resolves cited ids through
+a second ohya mcp sql session instead, proving the surface).
