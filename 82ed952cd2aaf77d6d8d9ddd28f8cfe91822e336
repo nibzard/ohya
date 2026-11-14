@@ -1,1 +1,3 @@
 Document the requested cleanup plan. Preserve migration bytes and required directives, move useful knowledge into existing documentation, and propose parser-based enforcement. Checked whitespace and all 12 local links. Implementation and runtime checks are deferred to the planned work.
+
+Correction: the link check verified 10 local links, not 12; all targets exist.
