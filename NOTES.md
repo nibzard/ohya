@@ -769,3 +769,12 @@ How to use this file:
     b.Fatalf on exhaustion; re-prime or regenerate instead. The bench job's
     artifact upload is now `if: always()` so a failed run still ships its
     partial perf/bench.txt for diagnosis.
+
+- Open finding, memory gate (2026-11-14, found during the comment cleanup):
+  `parseCodexTrace` in `cmd/memory-e2e/clients.go` records Codex `error`
+  items as problems, and its former comment called them "not fatal"
+  because Codex emits benign WebSocket fallback errors on successful runs.
+  `runCodexCase` stores those problems in the run result, and `checkCase`
+  appends every run problem to the case failures, so one benign error item
+  fails the case. Decide whether benign error items should be report-only,
+  then add a regression test for `checkCase` with such an item.

@@ -1,5 +1,3 @@
-// Hub mode: bring up the transport, publish the dialable address, and serve
-// batch/acknowledgment exchanges until stopped.
 package main
 
 import (
@@ -14,7 +12,6 @@ import (
 	"github.com/nibzard/ohya/internal/transport"
 )
 
-// hubResult is the hub-side record of a spike run.
 type hubResult struct {
 	Transport      string    `json:"transport"`
 	ListenMs       int64     `json:"listen_ms"`
@@ -30,8 +27,6 @@ type hubResult struct {
 	LastError      string    `json:"last_error,omitempty"`
 }
 
-// identify reports the authenticated peer of a connection, or a placeholder
-// when the transport has no peer identity (the TCP baseline).
 func identify(ctx context.Context, conn net.Conn, hub transport.Hub) string {
 	type whoiser interface {
 		WhoIs(ctx context.Context, conn net.Conn) (login, hostname string, err error)
@@ -71,8 +66,6 @@ func runHub(f flags) {
 	}
 	log.Printf("hub listening on %s (up in %d ms)", res.Addr, res.ListenMs)
 
-	// Accept does not observe ctx cancellation; close the listener to
-	// unblock it and let the results be written on shutdown.
 	go func() {
 		<-ctx.Done()
 		ln.Close()

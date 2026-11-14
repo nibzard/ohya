@@ -1,5 +1,3 @@
-// Transport construction for the spike: the embedded Tailcat adapter behind
-// the interfaces, and a plain TCP baseline for comparison on the same path.
 package main
 
 import (
@@ -11,10 +9,6 @@ import (
 	"github.com/nibzard/ohya/internal/transport/tailcat"
 )
 
-// tailcatOptions validates and maps spike flags to adapter options for the
-// given role. The hostname defaults to the role's spike name. Devices are
-// durable by default: --ephemeral opts into server-side expiry at
-// disconnect, which orphans the local state (recorded in ADR 0002).
 func tailcatOptions(f flags, hub bool) (tailcat.Options, error) {
 	hostname := f.Hostname
 	if hostname == "" {
@@ -37,7 +31,6 @@ func tailcatOptions(f flags, hub bool) (tailcat.Options, error) {
 	}, nil
 }
 
-// newHubTransport builds the hub side of the selected transport.
 func newHubTransport(f flags) (transport.Hub, error) {
 	switch f.Transport {
 	case "tailcat":
@@ -53,7 +46,6 @@ func newHubTransport(f flags) (transport.Hub, error) {
 	}
 }
 
-// newDeviceTransport builds the device side of the selected transport.
 func newDeviceTransport(f flags) (transport.Device, error) {
 	switch f.Transport {
 	case "tailcat":
@@ -69,7 +61,6 @@ func newDeviceTransport(f flags) (transport.Device, error) {
 	}
 }
 
-// tcpHub is the baseline hub: a loopback TCP listener.
 type tcpHub struct {
 	ln net.Listener
 }
@@ -88,7 +79,6 @@ func (h *tcpHub) Addr() string { return h.ln.Addr().String() }
 
 func (h *tcpHub) Close() error { return h.ln.Close() }
 
-// tcpDevice is the baseline device dialer.
 type tcpDevice struct{}
 
 func (tcpDevice) Dial(ctx context.Context, addr string) (net.Conn, error) {

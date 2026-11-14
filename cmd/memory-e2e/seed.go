@@ -12,31 +12,19 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// Synthetic recorded decisions. Every value is invented; the fixtures carry
-// no real transcript data. The markers are the exact substrings the seeded
-// events must contain, and each must match exactly one event.
 const (
 	claudeSessionID = "1e2e1111-1111-4111-8111-1111111111e1"
 	codexThreadID   = "2e2e2222-2222-4222-8222-2222222222e2"
 
-	// backoffMarker: only the Claude Code session's decision event.
 	backoffMarker = "backoff cap is 30 seconds"
-	// staleMarker: only the Codex session's original (superseded) decision.
-	staleMarker = "bounded at 4 MiB"
-	// batchMarker: only the Codex session's correction event.
-	batchMarker = "batch byte bound is 8 MiB"
+	staleMarker   = "bounded at 4 MiB"
+	batchMarker   = "batch byte bound is 8 MiB"
 
-	// releaseCodename is the fact the current-context case supplies in the
-	// prompt itself; it appears nowhere in the seeded history.
 	releaseCodename = "Marlow-Feather"
 )
 
 var seedMarkers = []string{backoffMarker, staleMarker, batchMarker}
 
-// gateCases are the verification cases every client must pass. The
-// explicit-decision evidence lives in the Claude Code fixture and the
-// later-correction evidence in the Codex fixture, so each client must read a
-// decision recorded by the other agent.
 var gateCases = []caseDef{
 	{
 		key: "explicit-decision",
@@ -74,21 +62,15 @@ var gateCases = []caseDef{
 	},
 }
 
-// caseDef is one verification case.
 type caseDef struct {
 	key            string
 	prompt         string
 	answerContains []string
-	// evidenceMarker: when set, the answer must cite one event id and the
-	// cited event's text must contain this marker.
 	evidenceMarker string
 	requireSQL     bool
 	forbidSQL      bool
 }
 
-// claudeFixture returns one synthetic Claude Code main-session file in the
-// verified format (testdata/claude-code/README.md): a prompt, the recorded
-// backoff decision, and one later exchange.
 func claudeFixture() string {
 	var b strings.Builder
 	p := func(uuid, parent, format string, args ...any) {
@@ -107,9 +89,6 @@ func claudeFixture() string {
 	return b.String()
 }
 
-// codexFixture returns one synthetic Codex rollout file in the verified
-// format (testdata/codex/README.md): meta, the original 4 MiB decision, and
-// the later correction to 8 MiB.
 func codexFixture() string {
 	var b strings.Builder
 	line := func(format string, args ...any) {
@@ -125,10 +104,6 @@ func codexFixture() string {
 	return b.String()
 }
 
-// writeSeedFixtures writes the synthetic session files into the roots ohya
-// ingest will watch. The directory layouts mirror the verified agent
-// formats: encoded-cwd directories for Claude Code, dated directories with
-// rollout file names for Codex.
 func writeSeedFixtures(claudeRoot, codexRoot string) error {
 	claudeDir := filepath.Join(claudeRoot, "-home-dev-ohya-e2e")
 	if err := os.MkdirAll(claudeDir, 0o700); err != nil {
@@ -153,9 +128,6 @@ func writeJSON(path string, v any) error {
 	return os.WriteFile(path, data, 0o600)
 }
 
-// resolver is the gate's own MCP session against the seeded hub: it checks
-// the seed and resolves cited event IDs through the same read-only sql
-// surface the clients use.
 type resolver struct {
 	session *mcp.ClientSession
 }
@@ -174,7 +146,6 @@ func openResolver(ctx context.Context, ohya, dbPath, stateDir string) (*resolver
 
 func (r *resolver) close() error { return r.session.Close() }
 
-// query runs one statement through the sql tool and returns its rows.
 func (r *resolver) query(ctx context.Context, query string) ([][]any, error) {
 	result, err := r.session.CallTool(ctx, &mcp.CallToolParams{
 		Name:      "sql",
@@ -209,7 +180,6 @@ func textOf(result *mcp.CallToolResult) string {
 	return b.String()
 }
 
-// countEventsWithText proves a marker reached the hub.
 func (r *resolver) countEventsWithText(ctx context.Context, marker string) (int, error) {
 	rows, err := r.query(ctx, fmt.Sprintf(
 		"SELECT count(*) FROM events WHERE text LIKE '%%%s%%'", marker))
@@ -226,7 +196,6 @@ func (r *resolver) countEventsWithText(ctx context.Context, marker string) (int,
 	return int(n), nil
 }
 
-// eventText resolves one cited event id through the sql surface.
 func (r *resolver) eventText(ctx context.Context, id int64) (string, bool, error) {
 	rows, err := r.query(ctx, fmt.Sprintf(
 		"SELECT id, text FROM events WHERE id = %d", id))

@@ -74,7 +74,7 @@ func TestReadRequestTruncatedFrameIsError(t *testing.T) {
 	binary.BigEndian.PutUint64(head[9:17], 16)
 	var buf bytes.Buffer
 	buf.Write(head[:])
-	buf.Write(make([]byte, 5)) // payload cut short
+	buf.Write(make([]byte, 5))
 	if _, _, err := readRequest(&buf); errors.Is(err, errClosed) || err == nil {
 		t.Fatalf("truncated frame must be an error, got %v", err)
 	}
@@ -89,8 +89,6 @@ func TestReadRequestCleanCloseBetweenFrames(t *testing.T) {
 	}
 }
 
-// TestHubConnServesExchanges drives the hub side over an in-memory pipe and
-// checks cursor advancement and digests from the device side.
 func TestHubConnServesExchanges(t *testing.T) {
 	dev, hubEnd := net.Pipe()
 	defer dev.Close()

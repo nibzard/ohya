@@ -7,12 +7,6 @@ import (
 	"testing"
 )
 
-// TestTCPBaselineExchange runs the whole spike protocol end to end through
-// the adapter interfaces on the TCP baseline: a hub accepts one device
-// connection, and verified batch/acknowledgment exchanges advance the
-// cursor. The Tailcat transport runs the same protocol; its end-to-end run
-// needs a coordination server and is driven by the recorded spike instead
-// (ADR 0002).
 func TestTCPBaselineExchange(t *testing.T) {
 	hub, err := newTCPHub()
 	if err != nil {

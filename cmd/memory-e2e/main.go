@@ -1,21 +1,3 @@
-// Command memory-e2e is ohya's memory verification gate: it proves the
-// memory surface end to end with real agent clients before any release
-// claim.
-//
-// The gate seeds an isolated hub database with synthetic recorded decisions
-// through the real `ohya ingest` path, then drives a real Claude Code and a
-// real Codex client headlessly against the `ohya mcp` sql tool. Each client
-// must retrieve the seeded evidence and cite an event ID that resolves in
-// the hub, and a current-context case must be answered without querying
-// memory at all.
-//
-// Isolation: everything the gate and the clients write stays under the
-// output directory. CLAUDE_CONFIG_DIR and CODEX_HOME redirect both clients'
-// state, archives, and credentials there, so the gate never reads the
-// operator's real ~/.claude or ~/.codex trees. The clients authenticate
-// from ambient environment variables only: ANTHROPIC_* for Claude Code, and
-// OPENAI_API_KEY for a one-time `codex login` inside the isolated home.
-// Traces stay local under the output directory.
 package main
 
 import (
@@ -132,7 +114,6 @@ func run(args []string) error {
 	return nil
 }
 
-// gate holds one prepared run's paths and the report writer.
 type gate struct {
 	out     string
 	ohya    string
@@ -149,15 +130,11 @@ type gate struct {
 	codexHome    string
 	tracesDir    string
 
-	log report
-	// resolver is the gate's own MCP session against the seeded hub, used
-	// to verify seed markers and resolve cited event IDs through the same
-	// sql surface the clients use.
+	log      report
 	resolver *resolver
 	close    func()
 }
 
-// report writes each line to stdout and the run's report.txt.
 type report struct{ w io.Writer }
 
 func (r report) line(format string, args ...any) {
@@ -211,9 +188,6 @@ func newGate(out, ohya, claude, codex string, timeout time.Duration) (*gate, err
 	return g, nil
 }
 
-// prepare writes the client configurations: the Claude Code MCP config and
-// the Codex config.toml, each registering exactly one ohya mcp server, and
-// performs the one-time codex login inside the isolated CODEX_HOME.
 func (g *gate) prepare(ctx context.Context) error {
 	mcpConfig := map[string]any{
 		"mcpServers": map[string]any{
@@ -234,14 +208,9 @@ func (g *gate) prepare(ctx context.Context) error {
 	if err := g.codexLogin(ctx); err != nil {
 		return err
 	}
-	// `codex login` rewrites config.toml from its parsed model; prove the
-	// ohya server survived the round trip instead of trusting it.
 	return g.verifyCodexServer(ctx)
 }
 
-// codexLogin feeds OPENAI_API_KEY to `codex login --with-api-key` inside the
-// isolated CODEX_HOME. Codex 0.169 no longer reads the environment variable
-// by itself. The key travels over the pipe only; it is never logged.
 func (g *gate) codexLogin(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, g.codex, "login", "--with-api-key")
 	cmd.Env = g.codexEnv()
@@ -260,10 +229,6 @@ func (g *gate) codexLogin(ctx context.Context) error {
 	return nil
 }
 
-// verifyCodexServer proves the ohya MCP server is registered in the isolated
-// CODEX_HOME, so a miswritten or clobbered config fails the gate before any
-// agent run with an explicit message instead of a confusing "tool
-// unavailable" answer.
 func (g *gate) verifyCodexServer(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, g.codex, "mcp", "list")
 	cmd.Env = g.codexEnv()
@@ -281,9 +246,6 @@ func (g *gate) verifyCodexServer(ctx context.Context) error {
 		filepath.Join(g.codexHome, "config.toml"), out)
 }
 
-// seedAndVerify writes the synthetic fixtures, ingests them through the real
-// ohya binary, opens the gate's own MCP session, and proves every marker
-// landed exactly once.
 func (g *gate) seedAndVerify(ctx context.Context) error {
 	if err := writeSeedFixtures(g.claudeRoot, g.codexRoot); err != nil {
 		return err
@@ -321,8 +283,6 @@ func (g *gate) seedAndVerify(ctx context.Context) error {
 	return nil
 }
 
-// resolveExecutable returns the absolute path of an executable, resolving
-// PATH lookups.
 func resolveExecutable(name string) (string, error) {
 	if strings.ContainsRune(name, filepath.Separator) {
 		abs, err := filepath.Abs(name)
@@ -337,8 +297,6 @@ func resolveExecutable(name string) (string, error) {
 	return exec.LookPath(name)
 }
 
-// checkCredentials verifies the ambient environment carries what the two
-// clients need. The gate itself never reads credential files.
 func checkCredentials() error {
 	var missing []string
 	if os.Getenv("ANTHROPIC_AUTH_TOKEN") == "" && os.Getenv("ANTHROPIC_API_KEY") == "" {

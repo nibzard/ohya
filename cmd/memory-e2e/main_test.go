@@ -101,7 +101,6 @@ func TestParseCodexTrace(t *testing.T) {
 	if len(calls) != 1 || calls[0] != "ohya.sql" {
 		t.Fatalf("calls: %v", calls)
 	}
-	// The websocket-fallback error item is recorded, not fatal.
 	if len(problems) != 1 || !strings.Contains(problems[0], "WebSockets") {
 		t.Fatalf("problems: %v", problems)
 	}
@@ -119,7 +118,6 @@ func TestParseCodexTraceNoTurn(t *testing.T) {
 	}
 }
 
-// fakeResolve returns canned event text for the checkCase tests.
 func fakeResolve(text string, found bool) resolveFunc {
 	return func(context.Context, int64) (string, bool, error) { return text, found, nil }
 }
@@ -206,9 +204,6 @@ func TestSeedFixtures(t *testing.T) {
 		}
 	}
 
-	// The correction marker must not appear in the stale decision text and
-	// the stale marker must not appear in the correction text, so the
-	// evidence check can tell them apart.
 	codex := codexFixture()
 	lines := strings.Split(strings.TrimRight(codex, "\n"), "\n")
 	var stale, correction string
@@ -224,8 +219,6 @@ func TestSeedFixtures(t *testing.T) {
 		t.Fatal("stale decision and correction markers are not disjoint")
 	}
 
-	// The release codename must appear nowhere in the seeded history; the
-	// current-context case must be answerable only from the prompt.
 	for _, fixture := range []string{claudeFixture(), codexFixture()} {
 		if strings.Contains(fixture, releaseCodename) {
 			t.Fatal("release codename leaked into a seeded fixture")

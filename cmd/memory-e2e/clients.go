@@ -14,9 +14,6 @@ import (
 	"time"
 )
 
-// runResult is one client run's outcome: the final answer, every tool call
-// the client made (ohya calls carry "ohya" in their name), and any problems
-// observed while running or parsing.
 type runResult struct {
 	ok        bool
 	answer    string
@@ -25,12 +22,6 @@ type runResult struct {
 	traceDir  string
 }
 
-// runClaudeCase runs one case with a real Claude Code client, headless. The
-// child gets an isolated config directory (all its state, credentials, and
-// session archive stay under the gate's output directory), a scratch HOME,
-// and an environment allowlist: PATH plus the ambient ANTHROPIC_* variables
-// that carry its authentication. Nothing from the operator's ~/.claude is
-// read or written.
 func (g *gate) runClaudeCase(ctx context.Context, c caseDef) *runResult {
 	dir := filepath.Join(g.tracesDir, "claude-code-"+c.key)
 	res := &runResult{traceDir: dir}
@@ -79,10 +70,6 @@ func (g *gate) runClaudeCase(ctx context.Context, c caseDef) *runResult {
 	return res
 }
 
-// runCodexCase runs one case with a real Codex client, headless. CODEX_HOME
-// redirects all Codex state, sessions, and credentials into the gate's
-// output directory; the harness verified that Codex never touches ~/.codex
-// when CODEX_HOME is set (testdata/codex/README.md).
 func (g *gate) runCodexCase(ctx context.Context, c caseDef) *runResult {
 	dir := filepath.Join(g.tracesDir, "codex-"+c.key)
 	res := &runResult{traceDir: dir}
@@ -110,11 +97,6 @@ func (g *gate) runCodexCase(ctx context.Context, c caseDef) *runResult {
 	cmd := exec.CommandContext(ctx, g.codex, "exec",
 		"--skip-git-repo-check",
 		"--ephemeral",
-		// Codex gates project-local configuration and MCP servers behind
-		// project trust in untrusted directories; trusting this case's
-		// scratch directory is harmless and the trust record stays inside
-		// the isolated CODEX_HOME (verified 2026-11-14: nothing is written
-		// to the real ~/.codex).
 		"--trust",
 		"--json",
 		"-o", lastPath,
@@ -146,9 +128,6 @@ func (g *gate) runCodexCase(ctx context.Context, c caseDef) *runResult {
 	return res
 }
 
-// claudeEnv builds the Claude Code child environment: an explicit allowlist,
-// not the gate's own environment, so nothing from the parent session leaks
-// into the client. Authentication is the ambient ANTHROPIC_* variables.
 func (g *gate) claudeEnv() []string {
 	env := []string{
 		"PATH=" + os.Getenv("PATH"),
@@ -166,10 +145,6 @@ func (g *gate) claudeEnv() []string {
 	return env
 }
 
-// codexEnv builds the Codex child environment. HOME stays the operator's:
-// the codex launcher may be a mise shim, and a redirected HOME makes the
-// shim busy-spin resolving its install (verified 2026-11-14). CODEX_HOME
-// still isolates every file Codex reads or writes.
 func (g *gate) codexEnv() []string {
 	home := os.Getenv("HOME")
 	if home == "" {
@@ -184,9 +159,6 @@ func (g *gate) codexEnv() []string {
 	}
 }
 
-// parseClaudeTrace reads a `claude -p --output-format stream-json` stream.
-// The final "result" event carries the answer; assistant tool_use blocks
-// carry the tool calls.
 func parseClaudeTrace(path string) (answer string, ok bool, calls []string, problems []string) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -237,11 +209,6 @@ func parseClaudeTrace(path string) (answer string, ok bool, calls []string, prob
 	return answer, ok, calls, problems
 }
 
-// parseCodexTrace reads a `codex exec --json` event stream. The final agent
-// message comes from agent_message items (the caller prefers the -o file);
-// item.completed mcp_tool_call items carry the tool calls. Error items are
-// recorded but not fatal: Codex emits benign websocket-fallback errors even
-// on successful runs.
 func parseCodexTrace(path string) (lastMessage string, turnDone bool, calls []string, problems []string) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -288,12 +255,8 @@ func parseCodexTrace(path string) (lastMessage string, turnDone bool, calls []st
 	return lastMessage, turnDone, calls, problems
 }
 
-// evidenceRe matches the required citation form "evidence: <event-id>".
 var evidenceRe = regexp.MustCompile(`(?i)evidence"?:?\s*#?\s*(\d+)`)
 
-// citedEventID returns the last cited event id in an answer; the last match
-// wins because models sometimes echo the instruction before the real
-// citation.
 func citedEventID(answer string) (int64, bool) {
 	matches := evidenceRe.FindAllStringSubmatch(answer, -1)
 	if len(matches) == 0 {
@@ -306,8 +269,6 @@ func citedEventID(answer string) (int64, bool) {
 	return id, true
 }
 
-// checkCase verifies one run against its case definition. resolve resolves a
-// cited event id through the hub's sql surface.
 func checkCase(c caseDef, r *runResult, resolve resolveFunc) (problems []string) {
 	problems = append(problems, r.problems...)
 	for _, want := range c.answerContains {

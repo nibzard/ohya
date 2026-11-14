@@ -55,6 +55,35 @@ clients authenticate from ambient environment variables (`ANTHROPIC_*`, and
 all traces stay under `memory-e2e/` (gitignored). It is not part of
 `make check`: it needs both CLIs on `PATH`, network access, and credentials.
 
+The gate (`cmd/memory-e2e`) works as follows:
+
+- The Claude Code fixture holds the explicit decision, and the Codex
+  fixture holds the original decision and its later correction. Each
+  client must therefore read a decision that the other agent recorded.
+  Every marker must match exactly one seeded event, and the stale and
+  corrected markers never appear in each other's events.
+- The current-context case supplies a release codename in the prompt. The
+  codename appears nowhere in the seeded history.
+- An answer cites evidence as `evidence: <event-id>`. The last citation
+  wins, because models sometimes repeat the instruction first. The gate
+  resolves the cited ID through its own session on the `sql` tool.
+- Claude Code gets an environment allowlist (`PATH` and `ANTHROPIC_*`), a
+  scratch `HOME`, and an isolated `CLAUDE_CONFIG_DIR`.
+- Codex keeps the operator's `HOME`, because a mise shim launcher
+  busy-spins when `HOME` is redirected (verified 2026-11-14).
+  `CODEX_HOME` still isolates every file that Codex reads or writes.
+- Codex 0.169 does not read `OPENAI_API_KEY` by itself. The gate pipes the
+  key to `codex login --with-api-key` and never logs it. The login
+  rewrites `config.toml`, so the gate then verifies that the `ohya` MCP
+  server is still registered.
+- Codex runs with `--trust` for the scratch case directory, because it
+  gates project MCP servers behind project trust. The trust record stays
+  inside the isolated `CODEX_HOME` (verified 2026-11-14).
+- Codex emits WebSocket fallback error items even on successful runs. The
+  trace parser records each error item and keeps reading. `checkCase`
+  currently counts every recorded problem as a case failure; see the open
+  item in NOTES.md.
+
 ## Code comments
 
 Never write explanatory comments in code. Use clear names and simple

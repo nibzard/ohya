@@ -1,7 +1,3 @@
-// The exchange protocol: one request frame per batch, one response frame per
-// acknowledgment. It is a miniature of the sync contract in ARCHITECTURE.md —
-// a batch carries bytes and their boundaries; the hub commits them and
-// answers with a cursor that only advances over durable receipt.
 package main
 
 import (
@@ -13,15 +9,10 @@ import (
 	"io"
 )
 
-// maxPayloadBytes bounds one batch payload, like the ingestion batch bound.
 const maxPayloadBytes = 8 << 20
 
-// Frame layout. All integers are big-endian.
-//
-//	request  = 'B' batchID(8) payloadLen(8) payload
-//	ack      = 'A' batchID(8) cursor(8) digest(32)
 const (
-	headerLen  = 17 // marker + batchID + payloadLen
+	headerLen  = 1 + 8 + 8
 	ackLen     = 1 + 8 + 8 + sha256.Size
 	digestSize = sha256.Size
 )
@@ -30,27 +21,20 @@ var (
 	errMarker    = errors.New("spike: bad frame marker")
 	errPayload   = fmt.Errorf("spike: payload exceeds the %d byte bound", maxPayloadBytes)
 	errShortRead = errors.New("spike: short read")
-	// errClosed reports a peer that closed the connection between frames,
-	// the normal end of a device run.
-	errClosed = errors.New("spike: connection closed by peer")
+	errClosed    = errors.New("spike: connection closed by peer")
 )
 
-// readFull reads exactly len(buf) bytes. A peer that closed between frames
-// yields errClosed; anything else, including a truncated frame, is an error.
 func readFull(r io.Reader, buf []byte) error {
 	_, err := io.ReadFull(r, buf)
 	if err == nil {
 		return nil
 	}
 	if errors.Is(err, io.EOF) && len(buf) > 0 {
-		// io.ReadFull returns io.EOF only when nothing was read: the
-		// peer closed cleanly at a frame boundary.
 		return errClosed
 	}
 	return fmt.Errorf("%w: %v", errShortRead, err)
 }
 
-// writeRequest frames and writes one batch. payload must be within the bound.
 func writeRequest(w io.Writer, batchID uint64, payload []byte) error {
 	if len(payload) > maxPayloadBytes {
 		return errPayload
@@ -70,8 +54,6 @@ func writeRequest(w io.Writer, batchID uint64, payload []byte) error {
 	return nil
 }
 
-// readRequest reads one framed batch. The payload is allocated only after
-// the length bound is checked.
 func readRequest(r io.Reader) (batchID uint64, payload []byte, err error) {
 	var head [headerLen]byte
 	if err := readFull(r, head[:]); err != nil {
@@ -92,8 +74,6 @@ func readRequest(r io.Reader) (batchID uint64, payload []byte, err error) {
 	return batchID, payload, nil
 }
 
-// writeAck frames and writes the acknowledgment for batchID: the cursor the
-// hub has committed through, and the digest of the received payload.
 func writeAck(w io.Writer, batchID, cursor uint64, digest [digestSize]byte) error {
 	var ack [ackLen]byte
 	ack[0] = 'A'
@@ -104,7 +84,6 @@ func writeAck(w io.Writer, batchID, cursor uint64, digest [digestSize]byte) erro
 	return err
 }
 
-// readAck reads and validates one acknowledgment frame.
 func readAck(r io.Reader) (batchID, cursor uint64, digest [digestSize]byte, err error) {
 	var ack [ackLen]byte
 	if err := readFull(r, ack[:]); err != nil {
@@ -119,9 +98,6 @@ func readAck(r io.Reader) (batchID, cursor uint64, digest [digestSize]byte, err 
 	return batchID, cursor, digest, nil
 }
 
-// hubConn serves one device connection: every well-formed batch advances the
-// connection cursor by its payload length and is acknowledged with the
-// payload digest. A malformed frame stops the connection with an error.
 type hubConn struct {
 	r      io.Reader
 	w      io.Writer
@@ -129,7 +105,6 @@ type hubConn struct {
 	digest hash.Hash
 }
 
-// serve exchanges frames until EOF or error. It returns the committed cursor.
 func (c *hubConn) serve() (uint64, error) {
 	for {
 		batchID, payload, err := readRequest(c.r)

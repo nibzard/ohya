@@ -1,5 +1,3 @@
-// Operational-limit probes for the spike: resident memory of this process,
-// the size of the node state directory, and how a peer connection is routed.
 package main
 
 import (
@@ -12,8 +10,6 @@ import (
 	"time"
 )
 
-// readRSS returns the resident set size of this process in bytes, or 0 when
-// it cannot be read (non-Linux).
 func readRSS() uint64 {
 	data, err := os.ReadFile("/proc/self/status")
 	if err != nil {
@@ -36,8 +32,6 @@ func readRSS() uint64 {
 	return 0
 }
 
-// dirSize sums the byte size of every regular file under dir. A missing
-// directory is an empty state, not an error.
 func dirSize(dir string) int64 {
 	if dir == "" {
 		return 0
@@ -60,27 +54,16 @@ func dirSize(dir string) int64 {
 	return total
 }
 
-// peerPath records how a peer connection is routed at one moment: relay is
-// the DERP region carrying the traffic, curAddr the direct endpoint in use.
-// An empty curAddr with a non-empty relay is a relay-only path; a probe
-// failure is recorded instead of hidden so results stay truthful.
 type peerPath struct {
 	Relay   string `json:"relay,omitempty"`
 	CurAddr string `json:"cur_addr,omitempty"`
 	Error   string `json:"error,omitempty"`
 }
 
-// pathProber is the optional transport capability behind peerPath, mirroring
-// the whoiser pattern in hub.go. The Tailcat node implements it; the TCP
-// baseline does not (there is no relay concept to report).
 type pathProber interface {
 	PeerPath(ctx context.Context, conn net.Conn) (relay, curAddr string, err error)
 }
 
-// probePath reports how conn's peer is currently routed when the transport
-// implements pathProber, and nil when it does not. The caller holds the
-// transport value through the transport.Hub or transport.Device interface,
-// so the capability is discovered by type assertion.
 func probePath(ctx context.Context, t any, conn net.Conn) *peerPath {
 	p, ok := t.(pathProber)
 	if !ok {

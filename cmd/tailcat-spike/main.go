@@ -1,19 +1,3 @@
-// Command tailcat-spike is the T014 feasibility prototype: two processes, a
-// hub and a device, exchanging framed batches and acknowledgments over the
-// embedded Tailcat transport (ADR 0002). A plain TCP mode provides a
-// loopback baseline through the same adapter interfaces.
-//
-// The spike talks to a coordination server reachable at --control; the
-// recorded run used a local Headscale instance. See docs/adr/0002 for the
-// measured results and operational limits.
-//
-// Usage:
-//
-//	tailcat-spike hub --state DIR --control URL --authkey KEY [--port 9027] [--out FILE]
-//	tailcat-spike device --state DIR --control URL --authkey KEY --hub HOST:PORT [--out FILE]
-//	tailcat-spike pairtest --state DIR --control URL --authkey USED-KEY
-//
-// Both hub and device accept --transport tailcat (default) or tcp.
 package main
 
 import (
@@ -27,7 +11,6 @@ import (
 	"time"
 )
 
-// defaultListenPort is the tailnet port the hub listens on.
 const defaultListenPort = 9027
 
 func main() {
@@ -71,9 +54,8 @@ func main() {
 	}
 }
 
-// flags are the options shared by every mode.
 type flags struct {
-	Transport string // tailcat or tcp
+	Transport string
 	StateDir  string
 	Control   string
 	AuthKey   string
@@ -107,7 +89,6 @@ func must(err error) {
 	}
 }
 
-// writeResults writes v as indented JSON to path when path is set.
 func writeResults(path string, v any) {
 	if path == "" {
 		return
@@ -122,7 +103,6 @@ func writeResults(path string, v any) {
 	}
 }
 
-// stopOnSignal returns a context cancelled on SIGINT or SIGTERM.
 func stopOnSignal() (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ch := make(chan os.Signal, 1)

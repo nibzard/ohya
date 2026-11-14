@@ -1,7 +1,3 @@
-// Pairtest mode: a node tries to enroll with an already-consumed pairing
-// key. The coordination server must reject it and the adapter must surface
-// that rejection as a dial error rather than blocking until the timeout.
-// PRODUCT.md requires pairing semantics to be validated before release.
 package main
 
 import (
@@ -10,9 +6,6 @@ import (
 	"time"
 )
 
-// runPairTest reports whether enrollment with a consumed key is rejected
-// quickly and with the server's reason. It dials a hub address that exists:
-// rejection must come from pairing, not from an unreachable peer.
 func runPairTest(f flags) bool {
 	device, err := newDeviceTransport(f)
 	if err != nil {

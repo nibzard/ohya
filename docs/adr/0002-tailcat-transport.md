@@ -111,6 +111,46 @@ T014 single-host peers never used DERP to find each other: they discovered
 endpoints through the control-plane map exchange and went straight to a
 local direct path, so DERP had carried no data before this validation.
 
+### Spike harness
+
+`cmd/tailcat-spike` has three modes:
+
+```sh
+tailcat-spike hub --state DIR --control URL --authkey KEY [--port 9027] [--out FILE]
+tailcat-spike device --state DIR --control URL --authkey KEY --hub HOST:PORT [--out FILE]
+tailcat-spike pairtest --state DIR --control URL --authkey USED-KEY --hub HOST:PORT
+```
+
+- `hub` serves exchanges and writes the hub-side results on shutdown.
+- `device` sends one warm-up exchange to absorb connection setup. Then it
+  measures `--count` round trips for each size in `--payloads`. Each round
+  trip lasts from the first byte written to the acknowledgment read.
+- `pairtest` enrolls with a consumed key against a hub that exists. It
+  passes only when the coordination server rejects the key and the adapter
+  returns the rejection as a dial error before the timeout.
+
+`--transport tcp` runs the same protocol over loopback TCP through the
+same adapter interfaces, as the baseline. Nodes are durable unless
+`--ephemeral` is set. The device also records process RSS (Linux only),
+the size of the node state directory, and the peer path: the DERP region
+and the direct endpoint in use. An empty direct endpoint with a relay
+region is a relay-only path. A failed path probe is recorded, not hidden.
+
+The spike protocol is a miniature of the sync contract. All integers are
+big-endian:
+
+```text
+request = 'B' batchID(8) payloadLen(8) payload
+ack     = 'A' batchID(8) cursor(8) digest(32)
+```
+
+The hub checks the payload length against the 8 MiB bound before it
+allocates. It advances the connection cursor by each payload length and
+acknowledges with the SHA-256 digest of the payload. The device checks
+the batch ID, the digest, and the cursor of every acknowledgment. A
+malformed or truncated frame stops the connection. A peer that closes at
+a frame boundary ends the run normally.
+
 ## Tradeoffs against alternatives
 
 - Plain TLS over TCP: fastest and dependency-free, but solves neither

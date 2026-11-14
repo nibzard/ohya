@@ -1,5 +1,3 @@
-// Device mode: dial the hub, exchange framed batches, and record round-trip
-// latency per payload size plus the operational limits of the run.
 package main
 
 import (
@@ -14,7 +12,6 @@ import (
 	"time"
 )
 
-// sizeResult holds the latency distribution for one payload size.
 type sizeResult struct {
 	PayloadBytes int     `json:"payload_bytes"`
 	Count        int     `json:"count"`
@@ -26,7 +23,6 @@ type sizeResult struct {
 	ThroughputMB float64 `json:"throughput_mb_s"`
 }
 
-// deviceResult is the device-side record of a spike run.
 type deviceResult struct {
 	Transport       string       `json:"transport"`
 	Hub             string       `json:"hub"`
@@ -67,7 +63,6 @@ func runDevice(f flags) {
 	log.Printf("device connected to %s in %d ms", f.Hub, res.DialMs)
 
 	batch := newBatcher()
-	// One warmup exchange absorbs connection setup, then the measured loops.
 	if _, _, err := batch.exchange(conn, 1024); err != nil {
 		log.Fatalf("device warmup: %v", err)
 	}
@@ -100,7 +95,6 @@ func runDevice(f flags) {
 		res.TotalBytes, res.TotalMs, res.RSSBytes>>20, res.StateDirBytes>>10)
 }
 
-// measureSize runs count exchanges at one payload size and summarizes them.
 func measureSize(conn net.Conn, batch *batcher, size, count int) (sizeResult, error) {
 	rtts := make([]int64, 0, count)
 	for i := 0; i < count; i++ {
@@ -128,7 +122,6 @@ func measureSize(conn net.Conn, batch *batcher, size, count int) (sizeResult, er
 	}, nil
 }
 
-// parseSizes parses the comma-separated payload size list.
 func parseSizes(s string) ([]int, error) {
 	var sizes []int
 	for _, part := range strings.Split(s, ",") {
@@ -144,18 +137,13 @@ func parseSizes(s string) ([]int, error) {
 	return sizes, nil
 }
 
-// batcher sends verified request/acknowledgment exchanges on one connection.
 type batcher struct {
 	nextID    uint64
 	committed uint64
 }
 
-// newBatcher returns a batcher whose first batch has ID 0.
 func newBatcher() *batcher { return &batcher{} }
 
-// exchange sends one batch of size bytes and waits for its acknowledgment.
-// The round trip spans the first byte written to the acknowledgment read;
-// every acknowledgment is checked for identity, digest and cursor.
 func (b *batcher) exchange(conn net.Conn, size int) (time.Duration, uint64, error) {
 	payload := make([]byte, size)
 	for i := range payload {
