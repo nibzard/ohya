@@ -1,0 +1,1 @@
+Live tests use the built binary with isolated synthetic sessions. Local ingestion, query protection, annotations, recovery, pairing, remote queries, and revocation pass. Concurrent join and remote MCP stall an append for 90 seconds; closing MCP and restarting join uploads it. make check passes. Only the finding in NOTES.md changes; no behavior fix is applied.
