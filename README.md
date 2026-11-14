@@ -152,6 +152,11 @@ the encrypted tailnet. Flags override the addresses: `--control-listen`
 URL devices reach the coordination plane at. The defaults bind loopback for
 the single-machine deployment; binding every interface requires
 `--control-url`, because serve cannot guess the address devices should use.
+`--tls-cert` and `--tls-key` serve the coordination plane and its embedded
+DERP over TLS; the default `--control-url` becomes https, and every device
+must trust the certificate's CA. Cross-machine hubs need this for the
+relay path: the tailscale client never falls back to a plain-HTTP DERP
+relay ([ADR 0002](docs/adr/0002-tailcat-transport.md)).
 
 `ohya join CODE` pairs a device and uploads its sessions. The code comes
 from `ohya devices invite` on the hub and carries two halves: the one-time

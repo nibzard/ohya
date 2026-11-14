@@ -46,7 +46,7 @@ var serveSpec = commandSpec{
 		"Devices join with ohya join and one code from ohya devices invite.",
 	argsTitle: "Arguments",
 	args:      "(none)",
-	examples:  []string{"ohya serve", "ohya serve --control-url http://192.0.2.10:8080"},
+	examples:  []string{"ohya serve", "ohya serve --control-url http://192.0.2.10:8080", "ohya serve --tls-cert cert.pem --tls-key key.pem --control-url https://192.0.2.10:9417"},
 }
 
 // runServeCommand parses the serve flags and serves devices until the
@@ -64,7 +64,11 @@ func runServeCommand(args []string, stdout, stderr io.Writer) error {
 	controlListen := c.fs.String("control-listen", control.DefaultListenAddr,
 		"listen `address` of the coordination plane and its embedded DERP relay")
 	controlURL := c.fs.String("control-url", "",
-		"coordination `URL` devices reach the hub at; defaults to http:// plus --control-listen (pass it when the hub is reachable from other machines)")
+		"coordination `URL` devices reach the hub at; defaults to the scheme of --tls-cert/--tls-key plus --control-listen (pass it when the hub is reachable from other machines)")
+	tlsCert := c.fs.String("tls-cert", "",
+		"TLS certificate `path` for the coordination plane and its embedded DERP relay; requires --tls-key, makes the default --control-url https, and devices must trust the certificate's CA")
+	tlsKey := c.fs.String("tls-key", "",
+		"TLS key `path` for the coordination plane; requires --tls-cert")
 	stunListen := c.fs.String("stun-listen", control.DefaultSTUNAddr,
 		"UDP listen `address` of the coordination plane's STUN helper for devices behind NAT")
 	controlLogLevel := c.fs.String("control-log-level", "warn",
@@ -86,7 +90,11 @@ func runServeCommand(args []string, stdout, stderr io.Writer) error {
 		if host == "0.0.0.0" || host == "::" || strings.Contains(host, ":") {
 			return c.usageErrorf("--control-listen binds every interface; pass --control-url with the address devices use")
 		}
-		url = "http://" + *controlListen
+		scheme := "http"
+		if *tlsCert != "" || *tlsKey != "" {
+			scheme = "https"
+		}
+		url = scheme + "://" + *controlListen
 	}
 	stateDir := *state
 	if stateDir == "" {
@@ -101,6 +109,8 @@ func runServeCommand(args []string, stdout, stderr io.Writer) error {
 		controlURL:      url,
 		stunListen:      *stunListen,
 		controlLogLevel: *controlLogLevel,
+		tlsCertPath:     *tlsCert,
+		tlsKeyPath:      *tlsKey,
 		tailnetPort:     *tailnetPort,
 		stdout:          stdout,
 	})
@@ -114,6 +124,8 @@ type serveOptions struct {
 	controlURL      string
 	stunListen      string
 	controlLogLevel string
+	tlsCertPath     string
+	tlsKeyPath      string
 	tailnetPort     int
 	stdout          io.Writer
 }
@@ -133,12 +145,14 @@ func runServe(ctx context.Context, o serveOptions) error {
 	// can. A second serve on the same state fails here, when its listeners
 	// cannot bind.
 	ctl, err := control.Provision(control.Options{
-		Dir:        filepath.Join(o.stateDir, control.DirName),
-		ServerURL:  o.controlURL,
-		ListenAddr: o.controlListen,
-		STUNAddr:   o.stunListen,
-		BaseDomain: tailcat.DefaultBaseDomain,
-		LogLevel:   o.controlLogLevel,
+		Dir:         filepath.Join(o.stateDir, control.DirName),
+		ServerURL:   o.controlURL,
+		ListenAddr:  o.controlListen,
+		STUNAddr:    o.stunListen,
+		BaseDomain:  tailcat.DefaultBaseDomain,
+		LogLevel:    o.controlLogLevel,
+		TLSCertPath: o.tlsCertPath,
+		TLSKeyPath:  o.tlsKeyPath,
 	})
 	if err != nil {
 		return err

@@ -165,16 +165,18 @@ are kilobytes to low megabytes and the sync contract already bounds them at
   embedded DERP to loopback by default, which serves the single-machine
   deployment. A hub reachable from other machines overrides
   `-control-listen` (and passes `-control-url` with the address devices
-  use), `-stun-listen`, and `-tailnet-port`. TLS for the coordination
-  endpoint is not wired into serve's flags yet; the plane speaks plain HTTP
-  on the operator-provided address, so cross-machine deployments should
-  front it accordingly until that gap closes. The T032 validation made the
-  consequence concrete: over plain HTTP the tsnet client never connects to
-  the embedded DERP (derphttp upgrades to TLS unconditionally), so a device
-  with no direct path to the hub has no fallback at all. The validation
-  itself needed the vendor debug switch `TS_DEBUG_USE_DERP_HTTP`, which is
-  not an acceptable production posture; cross-machine relay support
-  therefore rides on closing the TLS gap.
+  use), `-stun-listen`, and `-tailnet-port`. `--tls-cert` and `--tls-key`
+  serve the coordination endpoint and the embedded DERP over TLS with the
+  given certificate pair; the default `--control-url` becomes https, and
+  devices must trust the certificate's CA (the tsnet client uses system
+  roots for the control URL and the DERP endpoint). This also unlocks the
+  relay path: over plain HTTP the tsnet client never connects to the
+  embedded DERP (derphttp upgrades to TLS unconditionally), so a device
+  with no direct path to the hub has no fallback at all — the T032
+  validation needed the vendor debug switch `TS_DEBUG_USE_DERP_HTTP`,
+  which is not an acceptable production posture. Still open: re-measure
+  the relay leg over TLS in the two-host isolated-network setup, as the
+  T032 method did over the debug switch.
 - Relay requirements are validated (T032, the PRODUCT.md release gate):
   the forced-relay path between isolated peers carries the full verified
   workload with 1.8–2.1× p50 degradation at kilobyte payloads and about 4×
