@@ -16,13 +16,6 @@ jobs:
       - run: make build
       - run: make tla
 
-  # Development executes on Linux, so the macOS job above cannot see
-  # Linux-only breakage (CGO, file identity in internal/watch, path
-  # handling). Run the same checks on ubuntu-latest; its image ships gcc
-  # and make, so CGO needs no extra setup. TLC model checking stays on the
-  # macOS job only — it is platform-independent Java, so a second run adds
-  # no coverage. The bench job also stays on macOS: its baseline must come
-  # from one runner type to be comparable (docs/performance.md).
   check-linux:
     runs-on: ubuntu-latest
     steps:
@@ -33,10 +26,6 @@ jobs:
       - run: make check
       - run: make build
 
-  # Store one benchmark run per commit and diff it against the baseline the
-  # main branch last saved. Reports only: runner hardware differs from the
-  # reference machine, so a delta is a signal to reproduce locally, not a
-  # failing check (docs/performance.md, "Tracking across commits").
   bench:
     runs-on: macos-latest
     timeout-minutes: 45
@@ -66,8 +55,6 @@ jobs:
           else
             echo "No saved baseline yet; this run only becomes the new baseline."
           fi
-      # Upload even when a benchmark fails: bench-save redirects go test's
-      # output to perf/bench.txt, so the failure detail is otherwise lost.
       - uses: actions/upload-artifact@v4
         if: always()
         with:

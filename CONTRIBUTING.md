@@ -31,6 +31,13 @@ without it the SQLite build lacks FTS5. CI runs these checks on macOS and
 on Linux (`ubuntu-latest`), the platform development executes on; the
 benchmark job runs on macOS only so its numbers always compare against the
 same runner hardware.
+The Linux job exists because the macOS job cannot see Linux-only breakage
+(CGO, file identity in `internal/watch`, path handling); the Ubuntu image
+ships gcc and make, so CGO needs no setup. `make tla` runs only on the macOS
+job, because TLC is platform-independent Java and a second run adds no
+coverage. The benchmark job reports and never fails on a regression. It
+uploads its raw run even when a benchmark fails, because `make bench-save`
+redirects the test output into that file.
 Migrations are versioned SQL files under `internal/store/migrations/NNN_name.sql`;
 the runner applies them in order and records checksums in `schema_migrations`.
 Never rewrite or delete an applied migration — add a new file instead, and keep
@@ -122,9 +129,9 @@ under `testdata/`, and `tla/README.md`. Preserve required machine
 directives, legal notices, and immutable historical files. Preserve
 comment text when it is input data, including test fixtures.
 
-`go run ./cmd/commentcheck` parses every Go file in the repository with the
-standard Go parser and reports each comment that is not an approved
-directive. It covers test files and files for other platforms. It skips
+`make check` runs `go run ./cmd/commentcheck`, which parses every Go file in
+the repository with the standard Go parser and fails on each comment that is
+not an approved directive. It covers test files and files for other platforms. It skips
 `testdata`, `vendor`, and directories whose names start with `.` or `_`,
 as the Go tool does. Add `-inventory` to list every comment with its
 package and classification instead of failing.
