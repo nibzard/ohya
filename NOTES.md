@@ -463,6 +463,18 @@ How to use this file:
     remote dial costs ~10 s (tsnet path discovery). Skips on darwin CI —
     macOS runtime behavior of the pinned library is unverified (T046);
     Linux is the development and CI platform (T043).
+  - darwin check-job facts (2026-11-14, T057, internal/control): headscale
+    serves its gRPC API on a unix socket at <dir>/headscale.sock, and
+    darwin's sun_path holds 104 bytes (Linux 108) — t.TempDir() on the
+    macOS runner (/var/folders/<xx>/<per-user id>/T/) pushes
+    TestControlStartServeAndMint's socket to ~100–105 bytes, so Serve died
+    at "setting up gRPC socket: bind: invalid argument". The test now hosts
+    the plane under a flat os.MkdirTemp (socket ≤ ~97 bytes on every
+    supported platform); reproduce the old failure on Linux by pointing
+    TMPDIR at a ~90-char path. Same test also reserved the STUN port via a
+    TCP bind, but the STUN listener binds UDP and a failed bind is fatal
+    inside headscale (log.Fatal exits the test binary) — it now reserves a
+    UDP port, like freeUDPPort in the serve e2e test.
 
 - Parser output version and re-derivation choices (2026-11-13,
   internal/store + internal/events, T025): `events.parser_version` versions
