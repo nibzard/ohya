@@ -1,1 +1,3 @@
 Documentation-only follow-up: CI run 43649897641 passed check-linux, check (macOS), and bench for 8cf95b7.
+
+Correction: this commit also swept in an unrelated, uncommitted edit to internal/transport/tailcat/tailcat.go (Node.Dial waits up to 30 s for the tsnet backend state Running before dialing). It did not come from the comment cleanup. The user chose to keep it on main.
