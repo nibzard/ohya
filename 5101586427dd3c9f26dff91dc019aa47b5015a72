@@ -1,0 +1,1 @@
+Add the requested rules against code comments and quick fixes. Require decisions that support long-term correctness and maintainability. Documentation only; verified with git diff --check.
