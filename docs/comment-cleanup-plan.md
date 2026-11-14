@@ -1,6 +1,6 @@
 # Plan for removing code comments
 
-Status: in progress on branch `comment-cleanup`. This document plans the cleanup; it does not authorize behavior changes.
+Status: complete on branch `comment-cleanup`; not yet published. This document plans the cleanup; it does not authorize behavior changes.
 
 ## Objective
 
@@ -242,3 +242,18 @@ Comment markers inside raw and quoted strings are not comments and are not count
 | 6 | `internal/hubsync`, `internal/uploader` | 879 | New `docs/sync-protocol.md`, linked from `ARCHITECTURE.md`; fuzz targets in `CONTRIBUTING.md` |
 | 7 | `cmd/ohya` | 814 | `README.md`, doctor checks and session discovery; `CONTRIBUTING.md`, "Command implementation" |
 | 7 | `Makefile`, `.github/workflows/ci.yml` | 30 lines | `CONTRIBUTING.md`, CI rationale; `make check` now runs `cmd/commentcheck` |
+| 8 | `tla/` specifications, configurations, and `run-tlc.sh` | 326 lines (net) | `tla/README.md`: constants, sentinels, history variables, configuration bounds |
+
+### Final validation
+
+Recorded 2026-11-14 at revision `551d07f`:
+
+- `make check` passed. It includes `gofmt`, `go test`, `go vet`, and `go run ./cmd/commentcheck`.
+- `make build` passed.
+- `make tla` passed. Every model reached the same distinct-state count as before the cleanup: 53,824, 2,057, 12,100, 46,289, and 126,933.
+- The fresh inventory holds one entry: the approved `//go:embed` directive.
+- Migration SHA-256 checksums are unchanged. Generated corpora are byte-identical.
+- Token comparison against the baseline matched for every batch, apart from the intended edits: the `isoMS` rewrite in `internal/fixgen`, two field renames, and one named constant in `cmd/tailcat-spike`.
+
+The `.gitignore` comments stay. The file is not executable and is outside the scope of this plan.
+Local checks ran on Linux only. The Linux and macOS continuous integration jobs have not run on this branch yet.
