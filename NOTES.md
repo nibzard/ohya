@@ -433,6 +433,18 @@ How to use this file:
     vendor debug switch `TS_DEBUG_USE_DERP_HTTP=1` forces plain-HTTP DERP
     and is the only way to exercise the relay on an HTTP plane — cross-
     machine relay in production rides on the serve TLS gap.
+  - Live TLS smoke (2026-11-14, after T054, self-signed ECDSA cert,
+    SAN 127.0.0.1): `ohya serve --tls-cert/--tls-key` serves coordination
+    and health over TLS (curl --cacert 200; untrusted client refused).
+    The tsnet client honors Go's system-roots knobs — `SSL_CERT_FILE` with
+    the plane's certificate is enough for a device to trust it ("passed
+    x509 validation"), no OS trust-store edit needed on Linux. Pairing and
+    auth complete over TLS, but the first `ohya-hub.tail.ohya:9027` dial
+    then resolved through the system resolver (127.0.0.53) instead of
+    MagicDNS and join exited 1; the same-host plain-HTTP join resolves and
+    uploads fine. Reproduced twice. Unresolved: warmup/netmap race or a
+    DNS-config difference on the TLS path — chase during T065's two-host
+    measurement before calling cross-machine TLS join done.
   - The T014 claim that peers "found each other through the embedded DERP"
     is disproven: T014's single-host nodes show no /derp traffic at all;
     discovery ran through the control-plane map exchange, then direct.
