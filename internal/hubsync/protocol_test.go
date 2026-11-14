@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/nibzard/ohya/internal/store"
 )
 
 const (
@@ -369,4 +371,103 @@ func FuzzReadAuthFrame(f *testing.F) {
 			t.Fatal("a decoded frame carries neither hello nor pairing request")
 		}
 	})
+}
+
+func TestQueryAnnotateFrameRoundTrip(t *testing.T) {
+	var buf bytes.Buffer
+	if err := WriteQuery(&buf, "SELECT count(*) FROM events"); err != nil {
+		t.Fatal(err)
+	}
+	frame, err := ReadFrame(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame.Query == nil || frame.Query.SQL != "SELECT count(*) FROM events" {
+		t.Fatalf("query round trip = %+v", frame.Query)
+	}
+
+	request := []byte(`{"operations":[{"op":"delete","event_id":1,"namespace":"t","key":"k"}]}`)
+	if err := WriteAnnotate(&buf, request); err != nil {
+		t.Fatal(err)
+	}
+	frame, err = ReadFrame(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame.Annotate == nil || !bytes.Equal(frame.Annotate.Request, request) {
+		t.Fatalf("annotate round trip = %+v", frame.Annotate)
+	}
+
+	// Replies do not cross: an ack is not a query reply, an error frame is.
+	if err := WriteAck(&buf, Ack{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, perr, err := ReadQueryReply(&buf); err == nil ||
+		!strings.Contains(err.Error(), "bad query reply marker") || perr != nil {
+		t.Fatalf("ack as query reply = %+v, %v", perr, err)
+	}
+	buf.Reset()
+	if err := WriteError(&buf, CodeRejected, "no"); err != nil {
+		t.Fatal(err)
+	}
+	if _, perr, err := ReadAnnotateReply(&buf); err != nil || perr == nil || perr.Code != CodeRejected {
+		t.Fatalf("error as annotate reply = %+v, %+v, %v", store.AnnotateResult{}, perr, err)
+	}
+
+	// Writer-side bounds: empty and oversized requests never reach the wire.
+	if err := WriteQuery(&buf, ""); err == nil || !strings.Contains(err.Error(), "no SQL text") {
+		t.Fatalf("empty query error = %v", err)
+	}
+	if err := WriteQuery(&buf, strings.Repeat("a", MaxQueryBytes+1)); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("oversized query error = %v", err)
+	}
+	if err := WriteAnnotate(&buf, nil); err == nil {
+		t.Fatal("empty annotate request was written")
+	}
+	if err := WriteAnnotate(&buf, make([]byte, MaxAnnotateRequestBytes+1)); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("oversized annotate error = %v", err)
+	}
+
+	// Read-side bounds: a declared length past the bound is refused before
+	// allocation, and an empty payload is refused after it.
+	declared := func(marker byte, n uint32) *bytes.Buffer {
+		var b bytes.Buffer
+		b.Write([]byte{marker, ProtocolVersion})
+		var l [4]byte
+		binary.BigEndian.PutUint32(l[:], n)
+		b.Write(l[:])
+		return &b
+	}
+	if _, err := ReadFrame(declared('Q', MaxQueryBytes+1)); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("oversized query frame error = %v", err)
+	}
+	if _, err := ReadFrame(declared('N', MaxAnnotateRequestBytes+1)); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("oversized annotate frame error = %v", err)
+	}
+	if _, err := ReadFrame(declared('Q', 0)); err == nil || !strings.Contains(err.Error(), "no SQL text") {
+		t.Fatalf("empty query frame error = %v", err)
+	}
+	if _, err := ReadFrame(declared('N', 0)); err == nil || !strings.Contains(err.Error(), "no request JSON") {
+		t.Fatalf("empty annotate frame error = %v", err)
+	}
+
+	// A result frame declaring past its bound is refused before allocation.
+	big := bytes.NewBuffer([]byte{markerQueryResult, ProtocolVersion})
+	var l [4]byte
+	binary.BigEndian.PutUint32(l[:], uint32(MaxQueryResultBytes+1))
+	big.Write(l[:])
+	if _, _, err := ReadQueryReply(big); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("oversized result error = %v", err)
+	}
+
+	// Annotate result counts are sanity-checked: a hostile count is refused.
+	hostile := bytes.NewBuffer([]byte{markerAnnotateRes, ProtocolVersion})
+	var wide [8]byte
+	binary.BigEndian.PutUint64(wide[:], 1<<40)
+	hostile.Write(wide[:])
+	binary.BigEndian.PutUint64(wide[:], 0)
+	hostile.Write(wide[:])
+	if _, _, err := ReadAnnotateReply(hostile); err == nil || !strings.Contains(err.Error(), "out of range") {
+		t.Fatalf("hostile annotate counts error = %v", err)
+	}
 }

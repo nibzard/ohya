@@ -3,7 +3,11 @@
 [001_initial.sql](internal/store/migrations/001_initial.sql) is the authoritative initial DDL. It defines
 the ingestion, annotation and FTS5 tables; [002_session_token_usage.sql](internal/store/migrations/002_session_token_usage.sql)
 adds the per-response token totals; [003_event_ordinal.sql](internal/store/migrations/003_event_ordinal.sql)
-adds `events.ordinal` and `events.duplicate_of` for replay deduplication across source files.
+adds `events.ordinal` and `events.duplicate_of` for replay deduplication across source files;
+[004_parser_output_version.sql](internal/store/migrations/004_parser_output_version.sql)
+adds `events.parser_version`, the parser output version marker (see "Re-derivation");
+[005_ordinal_dedup_by_content.sql](internal/store/migrations/005_ordinal_dedup_by_content.sql)
+rekeys that deduplication by content (see the invariant below).
 Do not duplicate the DDL here.
 There is no released database yet, so migrations 001 and 002 are the pre-release baseline; every later
 schema change arrives as a new migration file.
@@ -61,14 +65,29 @@ offsets in the original file, including framing when calculating the next cursor
   identity; a native ID may contain colons (synthetic IDs do).
 - Source IDs survive restarts; replacement/truncation creates a new incarnation.
 - `(source_id, source_offset)` deduplicates retransmission, not copied history.
-- `(session_id, ordinal)` deduplicates records that another file of the same session
-  replays (Codex resumed pages; see testdata/codex/README.md). The first stored copy
-  has `duplicate_of` NULL; a later copy is still inserted, so retry validation and
-  original text stay intact, but it names the first copy in `duplicate_of`, has NULL
-  `text` (so FTS indexes the record once), and adds nothing to the session aggregates
-  or token totals. A partial unique index enforces one original per `(session_id,
-  ordinal)`. Arrival order decides which copy is the original. Records without an
-  ordinal (Claude Code, Codex before 0.147.0) are never deduplicated this way.
+- `(session_id, ordinal, raw content)` deduplicates records that another file
+  of the same session replays byte-identically (Codex pages; see
+  testdata/codex/README.md). The first stored copy has `duplicate_of` NULL; a
+  byte-identical later copy is still inserted, so retry validation and
+  original text stay intact, but it names the first copy in `duplicate_of`,
+  has NULL `text` (so FTS indexes the record once), and adds nothing to the
+  session aggregates or token totals. A copy with different bytes at the same
+  `(session_id, ordinal)` re-enumerates the ordinal — a Codex page after a
+  rollback holds a different record there — and is stored as another
+  original: searchable, counted once, its per-response usage included, so one
+  ordinal can name several distinct records. The partial index
+  `events_session_ordinal` (migration 005) serves the lookup; the
+  single-writer transaction and the re-derivation walk, which compare
+  `raw_json`, keep one original per `(session_id, ordinal, content)`.
+  Migration 003 enforced one original per `(session_id, ordinal)` alone and
+  its header assumed pages byte-replay the original; verified 2026-11-14
+  (T044), that assumption is wrong — at every colliding ordinal the two files
+  hold different records, and the 003 rule suppressed real records (11
+  per-response usage records were lost from token totals across the 7 corpus
+  thread pairs), which is why 005 rekeys the rule by content. Duplicate marks
+  written under 003 stay as stored until the hub is re-ingested; no released
+  database exists. Records without an ordinal (Claude Code, Codex before
+  0.147.0) are never deduplicated this way.
 - A batch names the device that owns its source (`store.Batch.DeviceID`); the
   write path rejects a batch claiming another device, because ownership is
   fixed at registration. The sync endpoint passes the authenticated identity,
@@ -92,12 +111,27 @@ offsets in the original file, including framing when calculating the next cursor
   `response_id` (the message ID here); `input_tokens` includes `cached_input_tokens`,
   so the adapter stores the difference as input and the cached part as cache reads.
   `cache_write_input_tokens` stays out until its relation to `input_tokens` is
-  verified. The first usage observed for a
+  verified: it is 0 in every record of the full real corpus (checked
+  2026-11-14 over all 22,209 usage records, versions 0.153.4 through
+  0.169.0), so no sample confirms whether it is part of `input_tokens`; map
+  it only after a non-zero sample appears. Pi assistant messages carry one
+  usage object per response; the message ID is the `responseId`, or the
+  entry id when the provider emits none (verified 2026-11-14 over 74 real
+  sessions: `openai-completions` records never carry a responseId, and 4 of
+  7 `anthropic-messages` records lack one). `input` excludes `cacheRead` and
+  `cacheWrite` — in every verified record `input + cacheRead + cacheWrite +
+  output = totalTokens`, with `cacheWrite` non-zero and strictly additive in
+  7 anthropic-messages records — so the counts map directly, cache writes to
+  the cache-creation count, and a usage whose parts do not sum to
+  `totalTokens` counts nothing; `reasoning` (no non-zero sample) and
+  `cacheWrite1h` (0 in the 3 records carrying it) stay out until their
+  subset relations are verified. The first usage observed for a
   message ID wins; a later differing usage for the same message ID is ignored,
   never summed. Usage without a message ID is ambiguous and contributes
   nothing. Tool aggregates stay deferred until a query need justifies them.
-- Events and normalized text are immutable in MVP. Future reprocessing needs an
-  explicit migration and FTS rebuild; no implicit updates behind insert/delete triggers.
+- Events and normalized text change only through the explicit re-derivation
+  operation below; no implicit updates hide behind the insert/delete triggers,
+  and ingestion itself never updates a stored row.
 - Foreign keys are enabled on every relevant connection. WAL and FULL synchronous
   durability apply to the writer. Verify these settings and FTS consistency in tests.
 
@@ -109,6 +143,35 @@ only as SHA-256 digests — so this database's schema and its `sql` MCP tool
 never see credentials. This schema covers transcript data and annotations, not
 credentials or device-local checkpoints. See ARCHITECTURE.md for ownership and
 sync semantics.
+
+## Re-derivation
+
+The parser output version (`events.parser_version`) is independent of the schema
+version. It versions the parser behavior that derived a row's normalized fields —
+`text`, `kind`, `role`, `tool_name`, `time_ms`, `metadata`, `ordinal` and the
+session assignment — not the shape of the tables. Each parser owns an
+`OutputVersion` constant (`internal/claudecode`, `internal/codex`,
+`internal/pi`); ingestion
+stamps it per row and refuses records that name no version. Bump the constant
+whenever a parser derives different fields from the same bytes — before the
+change lands, in the same commit.
+
+Because `raw_json` preserves every original record, a bumped parser re-derives
+stored rows inside the hub with no source-file access and no resync from
+devices: `store.ReDerive` (the `ohya rederive` command) re-parses each row of
+the stale agent from `raw_json` in one transaction. It rewrites normalized
+fields in place, so event IDs, annotations, raw records and `sources.cursor_bytes`
+are untouched; it recomputes session aggregates and token totals, reassigns
+byte-identical replay duplicates in deterministic `(source_id, source_offset)`
+order instead of arrival order, keeps distinct records that share an ordinal as
+separate originals, drops sessions that lost all events, and rebuilds `events_fts`
+from the content table with the external-content `rebuild` command. Re-derived
+text is stored once in `events.text`; the FTS index references it as external
+content, duplicates keep NULL text, and the aggregates recomputed in the same
+transaction are the only derived copies. A failed pass rolls back completely,
+and a hub with no stale rows commits nothing — running the command is always
+safe. Rows carrying a version above this build's parser are refused: upgrade
+first, then re-derive.
 
 ## Search example
 

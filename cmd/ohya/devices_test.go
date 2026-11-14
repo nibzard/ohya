@@ -7,8 +7,30 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nibzard/ohya/internal/control"
 	"github.com/nibzard/ohya/internal/registry"
+	"github.com/nibzard/ohya/internal/transport/tailcat"
 )
+
+// provisionControl provisions a coordination plane under a state directory,
+// as `ohya serve` does on its first start, so invite can mint join codes.
+// Free loopback ports: the server is never started here.
+func provisionControl(t *testing.T, stateDir string) {
+	t.Helper()
+	ctl, err := control.Provision(control.Options{
+		Dir:        filepath.Join(stateDir, control.DirName),
+		ServerURL:  control.DefaultURL(),
+		ListenAddr: control.DefaultListenAddr,
+		STUNAddr:   control.DefaultSTUNAddr,
+		BaseDomain: tailcat.DefaultBaseDomain,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ctl.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // runDevices runs one devices subcommand against a temporary state
 // directory and returns stdout plus the error. The flags follow the
@@ -23,6 +45,7 @@ func runDevices(t *testing.T, stateDir string, args ...string) (string, error) {
 
 func TestDevicesLifecycle(t *testing.T) {
 	state := t.TempDir()
+	provisionControl(t, state)
 
 	// An empty registry lists nothing.
 	out, err := runDevices(t, state, "list")
@@ -30,25 +53,37 @@ func TestDevicesLifecycle(t *testing.T) {
 		t.Fatalf("empty list = %q, %v", out, err)
 	}
 
-	// Issue an invitation; its code is the first stdout line.
+	// Invite before serve ever ran reports the remedy instead of a traceback.
+	fresh := t.TempDir()
+	if _, err := runDevices(t, fresh, "invite"); err == nil ||
+		!strings.Contains(err.Error(), "run ohya serve once") {
+		t.Fatalf("invite without a coordination plane err = %v; want the serve remedy", err)
+	}
+
+	// Issue a join code; it is the first stdout line, one opaque string
+	// carrying the invitation and the preauth key.
 	out, err = runDevices(t, state, "invite", "--ttl", "1h")
 	if err != nil {
 		t.Fatal(err)
 	}
 	code := strings.SplitN(strings.TrimSpace(out), "\n", 2)[0]
-	if len(code) < 16 || strings.ContainsAny(code, " \t") {
-		t.Fatalf("invitation code = %q; want opaque single-line secret", code)
+	invitation, authKey, err := control.SplitJoinCode(code)
+	if err != nil {
+		t.Fatalf("join code %q: %v", code, err)
+	}
+	if len(invitation) < 16 || len(authKey) < 16 || strings.ContainsAny(code, " \t") {
+		t.Fatalf("join code = %q; want opaque single-line secret halves", code)
 	}
 
-	// A device consumes it through the registry — the same transaction the
-	// endpoint's pairing frame drives.
+	// A device consumes the invitation through the registry — the same
+	// transaction the endpoint's pairing frame drives.
 	reg, err := registry.Open(filepath.Join(state, registry.FileName))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer reg.Close()
 	deviceID := "0123456789abcdef0123456789abcdef"
-	if _, err := reg.Consume(context.Background(), code, deviceID); err != nil {
+	if _, err := reg.Consume(context.Background(), invitation, deviceID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -88,6 +123,7 @@ func TestDevicesLifecycle(t *testing.T) {
 // the transcript database: the registry file is its own database.
 func TestDevicesRegistryIsSeparate(t *testing.T) {
 	state := t.TempDir()
+	provisionControl(t, state)
 	if _, err := runDevices(t, state, "invite"); err != nil {
 		t.Fatal(err)
 	}

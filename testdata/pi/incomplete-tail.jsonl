@@ -1,0 +1,4 @@
+{"type":"session","version":3,"id":"00000000-0000-7000-8000-0000000000b3","timestamp":"2026-11-13T09:30:00.000Z","cwd":"/home/dev/pi-project"}
+{"type":"model_change","id":"cc000001","parentId":null,"timestamp":"2026-11-13T09:30:00.100Z","provider":"openai","modelId":"gpt-5.4-nano"}
+{"type":"message","id":"cc000002","parentId":"cc000001","timestamp":"2026-11-13T09:30:00.200Z","message":{"role":"user","content":[{"type":"text","text":"Name the files in this directory."}],"timestamp":1794562200200}}
+{"type":"message","id":"cc000003","parentId":"cc000002","timestamp":"2026-11-13T09:30:02.000Z","message":{"role":"assistant","content":[{"type":"text","text":"The directory cont

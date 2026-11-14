@@ -6,3 +6,7 @@
 /tla/.tools/
 /tla/states/
 /tla/*_TTrace_*.tla
+# benchmark runs (make bench-save), profiles
+/perf/
+# memory-e2e gate output: isolated database, client state, traces
+/memory-e2e/

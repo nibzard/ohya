@@ -10,12 +10,15 @@ package hubsync
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 
 	"github.com/nibzard/ohya/internal/claudecode"
+	"github.com/nibzard/ohya/internal/mcpserver"
+	"github.com/nibzard/ohya/internal/store"
 )
 
 // ProtocolVersion is the wire protocol version every frame carries. A frame
@@ -56,6 +59,23 @@ const (
 	// real batch reaches — the 8 MiB batch bound with typical records holds
 	// far fewer.
 	MaxRecords = 65536
+
+	// MaxQueryBytes bounds one query's SQL text, matching the sql tool's
+	// input limit (mcpserver.DefaultMaxQueryBytes). The engine may be
+	// configured tighter, never looser, than the wire.
+	MaxQueryBytes = 64 << 10
+
+	// MaxQueryResultBytes bounds the JSON payload of one query result frame,
+	// so a device allocates bounded memory for any reply. The engine's
+	// default output bound (256 KiB) fits sixteen times over; a hub whose
+	// engine is configured past this frame bound has its results refused
+	// with an internal error instead of an undeliverable frame.
+	MaxQueryResultBytes = 4 << 20
+
+	// MaxAnnotateRequestBytes bounds one annotate request's JSON text,
+	// matching the annotate tool's request limit
+	// (mcpserver.DefaultMaxAnnotateRequestBytes).
+	MaxAnnotateRequestBytes = 1 << 20
 )
 
 // Frame layout. All integers are big-endian.
@@ -68,6 +88,10 @@ const (
 //	hello        = 'H' ver(1) credLen(2) cred
 //	pair         = 'P' ver(1) invLen(2) inv devLen(2) dev
 //	credential   = 'C' ver(1) devLen(2) dev credLen(2) cred
+//	query        = 'Q' ver(1) sqlLen(4) sql
+//	queryResult  = 'S' ver(1) jsonLen(4) json
+//	annotate     = 'N' ver(1) reqLen(4) json
+//	annotateRes  = 'K' ver(1) applied(8) unchanged(8)
 const (
 	markerRegistration = 'R'
 	markerBatch        = 'B'
@@ -76,6 +100,10 @@ const (
 	markerHello        = 'H'
 	markerPair         = 'P'
 	markerCredential   = 'C'
+	markerQuery        = 'Q'
+	markerQueryResult  = 'S'
+	markerAnnotate     = 'N'
+	markerAnnotateRes  = 'K'
 )
 
 // ErrTooLarge marks a frame whose declared lengths exceed the protocol
@@ -117,6 +145,10 @@ const (
 	// CodeInternal reports a hub-side failure that survived retries; a later
 	// retry may succeed.
 	CodeInternal
+	// CodeNoRemote reports a query or annotate frame on an endpoint serving
+	// the upload protocol only. The connection stays open; retrying the
+	// frame on this hub can never succeed.
+	CodeNoRemote
 )
 
 // String names the code for diagnostics.
@@ -142,6 +174,8 @@ func (c ErrorCode) String() string {
 		return "busy"
 	case CodeInternal:
 		return "internal"
+	case CodeNoRemote:
+		return "no-remote"
 	default:
 		return fmt.Sprintf("code(%d)", uint8(c))
 	}
@@ -206,11 +240,29 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("hubsync: %s: %s", e.Code, e.Message)
 }
 
-// Frame is one decoded device-to-hub frame: exactly one of Registration or
-// Batch is set.
+// Query is one read-only SQL statement a paired device asks the hub to run
+// against the shared history. The hub executes it under the same bounds and
+// the same read-only policy as the local sql tool; all paired devices may
+// read all history (the MVP rule of ARCHITECTURE.md).
+type Query struct {
+	SQL string
+}
+
+// Annotate is one annotation batch request: the JSON arguments of the
+// annotate tool ({"operations":[...]}) verbatim, under its request limit.
+// No writer identity travels in the request; the hub derives it from the
+// authenticated device.
+type Annotate struct {
+	Request []byte
+}
+
+// Frame is one decoded device-to-hub frame: exactly one of Registration,
+// Batch, Query or Annotate is set.
 type Frame struct {
 	Registration *Registration
 	Batch        *Batch
+	Query        *Query
+	Annotate     *Annotate
 }
 
 // frameReader reads the protocol's primitives. Every length is checked
@@ -317,6 +369,18 @@ func ReadFrame(r io.Reader) (Frame, error) {
 			return Frame{}, err
 		}
 		return Frame{Batch: b}, nil
+	case markerQuery:
+		q, err := readQuery(fr)
+		if err != nil {
+			return Frame{}, err
+		}
+		return Frame{Query: q}, nil
+	case markerAnnotate:
+		a, err := readAnnotate(fr)
+		if err != nil {
+			return Frame{}, err
+		}
+		return Frame{Annotate: a}, nil
 	default:
 		return Frame{}, fmt.Errorf("hubsync: bad frame marker %q", marker)
 	}
@@ -409,22 +473,85 @@ func readBatch(fr *frameReader) (*Batch, error) {
 	return &b, nil
 }
 
-// ReadReply reads one hub reply: an acknowledgment, or an error frame. A
-// non-nil *Error is a protocol-level rejection; a non-nil error is a broken
-// or closed connection.
-func ReadReply(r io.Reader) (Ack, *Error, error) {
-	fr := &frameReader{r: r}
+// readQuery reads one query frame's SQL text within the byte bound.
+func readQuery(fr *frameReader) (*Query, error) {
+	n, err := fr.u32()
+	if err != nil {
+		return nil, err
+	}
+	sql, err := fr.bytes(n, MaxQueryBytes, "query")
+	if err != nil {
+		return nil, err
+	}
+	if len(sql) == 0 {
+		return nil, fmt.Errorf("hubsync: query frame has no SQL text")
+	}
+	return &Query{SQL: string(sql)}, nil
+}
+
+// readAnnotate reads one annotate request's JSON within the byte bound.
+func readAnnotate(fr *frameReader) (*Annotate, error) {
+	n, err := fr.u32()
+	if err != nil {
+		return nil, err
+	}
+	request, err := fr.bytes(n, MaxAnnotateRequestBytes, "annotate request")
+	if err != nil {
+		return nil, err
+	}
+	if len(request) == 0 {
+		return nil, fmt.Errorf("hubsync: annotate frame has no request JSON")
+	}
+	return &Annotate{Request: request}, nil
+}
+
+// replyHead reads one reply's marker and version, refusing an unsupported
+// version.
+func replyHead(fr *frameReader) (byte, error) {
 	marker, err := fr.u8()
 	if err != nil {
-		return Ack{}, nil, err
+		return 0, err
 	}
 	version, err := fr.u8()
 	if err != nil {
-		return Ack{}, nil, err
+		return 0, err
 	}
 	if version != ProtocolVersion {
-		return Ack{}, nil, fmt.Errorf("%w: reply carries version %d, want %d",
+		return 0, fmt.Errorf("%w: reply carries version %d, want %d",
 			ErrVersion, version, ProtocolVersion)
+	}
+	return marker, nil
+}
+
+// readErrorFrame reads the body of one error frame — code and message —
+// after its marker and version were read.
+func readErrorFrame(fr *frameReader) (*Error, error) {
+	code, err := fr.u8()
+	if err != nil {
+		return nil, err
+	}
+	msgLen, err := fr.u16()
+	if err != nil {
+		return nil, err
+	}
+	msg, err := fr.bytes(uint32(msgLen), maxMessageLen, "error message")
+	if err != nil {
+		return nil, err
+	}
+	if code == 0 {
+		return nil, fmt.Errorf("hubsync: error frame carries no code")
+	}
+	return &Error{Code: ErrorCode(code), Message: string(msg)}, nil
+}
+
+// ReadReply reads one hub reply to a registration or batch: an
+// acknowledgment, or an error frame. A non-nil *Error is a protocol-level
+// rejection; a non-nil error is a broken or closed connection.
+func ReadReply(r io.Reader) (Ack, *Error, error) {
+	fr := &frameReader{r: r}
+	marker, err := replyHead(fr)
+	if err != nil {
+		return Ack{}, nil, err
 	}
 	switch marker {
 	case markerAck:
@@ -454,24 +581,85 @@ func ReadReply(r io.Reader) (Ack, *Error, error) {
 		a.Stop = string(stop)
 		return a, nil, nil
 	case markerError:
-		code, err := fr.u8()
+		perr, err := readErrorFrame(fr)
 		if err != nil {
 			return Ack{}, nil, err
 		}
-		msgLen, err := fr.u16()
-		if err != nil {
-			return Ack{}, nil, err
-		}
-		msg, err := fr.bytes(uint32(msgLen), maxMessageLen, "error message")
-		if err != nil {
-			return Ack{}, nil, err
-		}
-		if code == 0 {
-			return Ack{}, nil, fmt.Errorf("hubsync: error frame carries no code")
-		}
-		return Ack{}, &Error{Code: ErrorCode(code), Message: string(msg)}, nil
+		return Ack{}, perr, nil
 	default:
 		return Ack{}, nil, fmt.Errorf("hubsync: bad reply marker %q", marker)
+	}
+}
+
+// ReadQueryReply reads the hub's answer to one query: the bounded result as
+// the sql tool shapes it, or a protocol-level rejection. A non-nil error is
+// a broken or closed connection.
+func ReadQueryReply(r io.Reader) (mcpserver.Result, *Error, error) {
+	fr := &frameReader{r: r}
+	marker, err := replyHead(fr)
+	if err != nil {
+		return mcpserver.Result{}, nil, err
+	}
+	switch marker {
+	case markerQueryResult:
+		n, err := fr.u32()
+		if err != nil {
+			return mcpserver.Result{}, nil, err
+		}
+		payload, err := fr.bytes(n, MaxQueryResultBytes, "query result")
+		if err != nil {
+			return mcpserver.Result{}, nil, err
+		}
+		var result mcpserver.Result
+		if err := json.Unmarshal(payload, &result); err != nil {
+			return mcpserver.Result{}, nil, fmt.Errorf("hubsync: decode query result: %w", err)
+		}
+		return result, nil, nil
+	case markerError:
+		perr, err := readErrorFrame(fr)
+		if err != nil {
+			return mcpserver.Result{}, nil, err
+		}
+		return mcpserver.Result{}, perr, nil
+	default:
+		return mcpserver.Result{}, nil, fmt.Errorf("hubsync: bad query reply marker %q", marker)
+	}
+}
+
+// ReadAnnotateReply reads the hub's answer to one annotate batch: the
+// committed counts, or a protocol-level rejection. A non-nil error is a
+// broken or closed connection.
+func ReadAnnotateReply(r io.Reader) (store.AnnotateResult, *Error, error) {
+	fr := &frameReader{r: r}
+	marker, err := replyHead(fr)
+	if err != nil {
+		return store.AnnotateResult{}, nil, err
+	}
+	switch marker {
+	case markerAnnotateRes:
+		var r store.AnnotateResult
+		applied, err := fr.i64()
+		if err != nil {
+			return store.AnnotateResult{}, nil, err
+		}
+		unchanged, err := fr.i64()
+		if err != nil {
+			return store.AnnotateResult{}, nil, err
+		}
+		if applied < 0 || unchanged < 0 || applied > 1<<31 || unchanged > 1<<31 {
+			return store.AnnotateResult{}, nil, fmt.Errorf(
+				"hubsync: annotate result counts %d, %d are out of range", applied, unchanged)
+		}
+		r.Applied, r.Unchanged = int(applied), int(unchanged)
+		return r, nil, nil
+	case markerError:
+		perr, err := readErrorFrame(fr)
+		if err != nil {
+			return store.AnnotateResult{}, nil, err
+		}
+		return store.AnnotateResult{}, perr, nil
+	default:
+		return store.AnnotateResult{}, nil, fmt.Errorf("hubsync: bad annotate reply marker %q", marker)
 	}
 }
 
@@ -602,6 +790,86 @@ func WriteError(w io.Writer, code ErrorCode, msg string) error {
 	head = append(head, msg...)
 	if _, err := w.Write(head); err != nil {
 		return fmt.Errorf("hubsync: write error frame: %w", err)
+	}
+	return nil
+}
+
+// WriteQuery frames one query. It refuses empty or oversized SQL text, so a
+// sender never produces a frame the hub must reject.
+func WriteQuery(w io.Writer, sql string) error {
+	if sql == "" {
+		return fmt.Errorf("hubsync: query has no SQL text")
+	}
+	if len(sql) > MaxQueryBytes {
+		return fmt.Errorf("%w: query holds %d bytes, want at most %d",
+			ErrTooLarge, len(sql), MaxQueryBytes)
+	}
+	head := []byte{markerQuery, ProtocolVersion}
+	var l [4]byte
+	binary.BigEndian.PutUint32(l[:], uint32(len(sql)))
+	head = append(head, l[:]...)
+	head = append(head, sql...)
+	if _, err := w.Write(head); err != nil {
+		return fmt.Errorf("hubsync: write query: %w", err)
+	}
+	return nil
+}
+
+// WriteAnnotate frames one annotate request's JSON arguments. It refuses
+// empty or oversized requests, matching the read-side bound.
+func WriteAnnotate(w io.Writer, request []byte) error {
+	if len(request) == 0 {
+		return fmt.Errorf("hubsync: annotate request has no JSON")
+	}
+	if len(request) > MaxAnnotateRequestBytes {
+		return fmt.Errorf("%w: annotate request holds %d bytes, want at most %d",
+			ErrTooLarge, len(request), MaxAnnotateRequestBytes)
+	}
+	head := []byte{markerAnnotate, ProtocolVersion}
+	var l [4]byte
+	binary.BigEndian.PutUint32(l[:], uint32(len(request)))
+	head = append(head, l[:]...)
+	head = append(head, request...)
+	if _, err := w.Write(head); err != nil {
+		return fmt.Errorf("hubsync: write annotate request: %w", err)
+	}
+	return nil
+}
+
+// WriteQueryResult frames one query's answer: the bounded result exactly as
+// the sql tool shapes it, as JSON. The engine's output limits are the only
+// truncation point; a result past the frame bound is refused, never cut
+// silently.
+func WriteQueryResult(w io.Writer, r mcpserver.Result) error {
+	payload, err := json.Marshal(r)
+	if err != nil {
+		return fmt.Errorf("hubsync: encode query result: %w", err)
+	}
+	if len(payload) > MaxQueryResultBytes {
+		return fmt.Errorf("%w: query result holds %d bytes, want at most %d; lower the engine's output limit",
+			ErrTooLarge, len(payload), MaxQueryResultBytes)
+	}
+	head := []byte{markerQueryResult, ProtocolVersion}
+	var l [4]byte
+	binary.BigEndian.PutUint32(l[:], uint32(len(payload)))
+	head = append(head, l[:]...)
+	head = append(head, payload...)
+	if _, err := w.Write(head); err != nil {
+		return fmt.Errorf("hubsync: write query result: %w", err)
+	}
+	return nil
+}
+
+// WriteAnnotateResult frames one committed annotate batch's counts.
+func WriteAnnotateResult(w io.Writer, r store.AnnotateResult) error {
+	head := []byte{markerAnnotateRes, ProtocolVersion}
+	var wide [8]byte
+	binary.BigEndian.PutUint64(wide[:], uint64(r.Applied))
+	head = append(head, wide[:]...)
+	binary.BigEndian.PutUint64(wide[:], uint64(r.Unchanged))
+	head = append(head, wide[:]...)
+	if _, err := w.Write(head); err != nil {
+		return fmt.Errorf("hubsync: write annotate result: %w", err)
 	}
 	return nil
 }
@@ -746,17 +1014,9 @@ func WriteCredentialReply(w io.Writer, r CredentialReply) error {
 // minted credential, or a protocol-level rejection.
 func ReadCredentialReply(r io.Reader) (CredentialReply, *Error, error) {
 	fr := &frameReader{r: r}
-	marker, err := fr.u8()
+	marker, err := replyHead(fr)
 	if err != nil {
 		return CredentialReply{}, nil, err
-	}
-	version, err := fr.u8()
-	if err != nil {
-		return CredentialReply{}, nil, err
-	}
-	if version != ProtocolVersion {
-		return CredentialReply{}, nil, fmt.Errorf("%w: reply carries version %d, want %d",
-			ErrVersion, version, ProtocolVersion)
 	}
 	switch marker {
 	case markerCredential:
@@ -769,22 +1029,11 @@ func ReadCredentialReply(r io.Reader) (CredentialReply, *Error, error) {
 		}
 		return reply, nil, nil
 	case markerError:
-		code, err := fr.u8()
+		perr, err := readErrorFrame(fr)
 		if err != nil {
 			return CredentialReply{}, nil, err
 		}
-		msgLen, err := fr.u16()
-		if err != nil {
-			return CredentialReply{}, nil, err
-		}
-		msg, err := fr.bytes(uint32(msgLen), maxMessageLen, "error message")
-		if err != nil {
-			return CredentialReply{}, nil, err
-		}
-		if code == 0 {
-			return CredentialReply{}, nil, fmt.Errorf("hubsync: error frame carries no code")
-		}
-		return CredentialReply{}, &Error{Code: ErrorCode(code), Message: string(msg)}, nil
+		return CredentialReply{}, perr, nil
 	default:
 		return CredentialReply{}, nil, fmt.Errorf("hubsync: bad pairing reply marker %q", marker)
 	}

@@ -10,6 +10,7 @@ package registry
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -22,6 +23,7 @@ import (
 	"github.com/nibzard/ohya/internal/claudecode"
 	"github.com/nibzard/ohya/internal/device"
 	"github.com/nibzard/ohya/internal/hubsync"
+	"github.com/nibzard/ohya/internal/mcpserver"
 	"github.com/nibzard/ohya/internal/store"
 )
 
@@ -57,8 +59,10 @@ func (h *testHub) stop() {
 
 // startHub serves the endpoint on a free local port. poll configures how
 // quickly the endpoint learns of revocations committed elsewhere; opts carries
-// the endpoint options, with Retry reset to the given value.
-func startHub(t *testing.T, poll time.Duration, opts hubsync.Options) *testHub {
+// the endpoint options, with Retry reset to the given value. A non-nil engine
+// wires the remote query path through a real mcpserver engine; nil keeps the
+// endpoint upload-only.
+func startHub(t *testing.T, poll time.Duration, opts hubsync.Options, engine *mcpserver.EngineOptions) *testHub {
 	t.Helper()
 	retry := opts.Retry
 	hubDB, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "hub.db"))
@@ -68,6 +72,14 @@ func startHub(t *testing.T, poll time.Duration, opts hubsync.Options) *testHub {
 	reg, err := Open(filepath.Join(t.TempDir(), FileName))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if engine != nil {
+		readers, err := hubDB.Reader()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { readers.Close() })
+		opts.Remote = mcpserver.NewEngine(readers, hubDB.Writer(), *engine)
 	}
 	auth := &Authenticator{DB: reg, PollInterval: poll}
 	opts.Retry = retry
@@ -223,7 +235,7 @@ func helloOnHub(t *testing.T, h *testHub, credential string) *deviceClient {
 // protected credential file, uploads its own source on the pairing
 // connection, and reconnects later through a credential hello.
 func TestPairingEnrollsAndServes(t *testing.T) {
-	h := startHub(t, inertPoll, hubsync.Options{Retry: hubsync.RetryPolicy{Base: time.Millisecond}})
+	h := startHub(t, inertPoll, hubsync.Options{Retry: hubsync.RetryPolicy{Base: time.Millisecond}}, nil)
 
 	// The device's stable identity exists before pairing; the credential
 	// authenticates it.
@@ -286,7 +298,7 @@ func TestPairingEnrollsAndServes(t *testing.T) {
 // frames claim. A spoofed registration and a spoofed batch both end the
 // connection; pairing under an already-active identity is refused too.
 func TestSpoofedDeviceRejected(t *testing.T) {
-	h := startHub(t, inertPoll, hubsync.Options{Retry: hubsync.RetryPolicy{Base: time.Millisecond}})
+	h := startHub(t, inertPoll, hubsync.Options{Retry: hubsync.RetryPolicy{Base: time.Millisecond}}, nil)
 	other := "ffffffffffffffffffffffffffffffff"
 
 	a, cred := pairOnHub(t, h, "0123456789abcdef0123456789abcdef")
@@ -340,7 +352,7 @@ func TestSpoofedDeviceRejected(t *testing.T) {
 // live connection is refused, and the revoked credential cannot open a new
 // session.
 func TestRevocationCheckedOnEveryRequest(t *testing.T) {
-	h := startHub(t, inertPoll, hubsync.Options{Retry: hubsync.RetryPolicy{Base: time.Millisecond}})
+	h := startHub(t, inertPoll, hubsync.Options{Retry: hubsync.RetryPolicy{Base: time.Millisecond}}, nil)
 	deviceID := "0123456789abcdef0123456789abcdef"
 
 	d, cred := pairOnHub(t, h, deviceID)
@@ -380,7 +392,7 @@ func TestRevocationCheckedOnEveryRequest(t *testing.T) {
 // other devices.
 func TestRevocationCancelsInFlightRequest(t *testing.T) {
 	h := startHub(t, 10*time.Millisecond, hubsync.Options{
-		Retry: hubsync.RetryPolicy{Base: 50 * time.Millisecond, Cap: 500 * time.Millisecond, Attempts: 200}})
+		Retry: hubsync.RetryPolicy{Base: 50 * time.Millisecond, Cap: 500 * time.Millisecond, Attempts: 200}}, nil)
 	deviceID := "0123456789abcdef0123456789abcdef"
 
 	d, cred := pairOnHub(t, h, deviceID)
@@ -455,7 +467,7 @@ func TestRevocationCancelsInFlightRequest(t *testing.T) {
 // presents a pairing request or credential holds its slot only for the
 // configured window, then the endpoint closes it.
 func TestSilentStrangerTimesOut(t *testing.T) {
-	h := startHub(t, inertPoll, hubsync.Options{AuthTimeout: 100 * time.Millisecond})
+	h := startHub(t, inertPoll, hubsync.Options{AuthTimeout: 100 * time.Millisecond}, nil)
 	d := dialHub(t, h.addr)
 	// No first frame. The endpoint must close the connection; a later frame
 	// arrives at a closed peer.
@@ -468,5 +480,139 @@ func TestSilentStrangerTimesOut(t *testing.T) {
 			t.Fatal("a silent stranger held its connection past the auth timeout")
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// remoteClientOnHub dials the hub and presents a stored credential through
+// the remote client, the way a joined device's MCP bridge connects.
+func remoteClientOnHub(t *testing.T, h *testHub, credential string) *hubsync.RemoteClient {
+	t.Helper()
+	conn, err := net.Dial("tcp", h.addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := hubsync.WriteHello(conn, credential); err != nil {
+		t.Fatal(err)
+	}
+	client := hubsync.NewRemoteClient(conn)
+	t.Cleanup(func() { client.Close() })
+	return client
+}
+
+// TestRemoteQueriesThroughPairing walks the remote read and annotate path
+// with real pairing: one device's upload becomes readable and annotatable by
+// another paired device, the annotation writer is the authenticated device,
+// and revocation ends that device's remote access at its next frame.
+func TestRemoteQueriesThroughPairing(t *testing.T) {
+	h := startHub(t, inertPoll, hubsync.Options{Retry: hubsync.RetryPolicy{Base: time.Millisecond}},
+		&mcpserver.EngineOptions{})
+	deviceA := "0123456789abcdef0123456789abcdef"
+	deviceB := "abababababababababababababababab"
+
+	a, credA := pairOnHub(t, h, deviceA)
+	a.register(deviceA, "src-1", "/a.jsonl")
+	a.mustAck(hubsync.Ack{})
+	line := rawLine("00000000-0000-4000-8000-0000000000a1", "shared history")
+	a.send(oneRecordBatch(deviceA, "src-1", line))
+	a.mustAck(hubsync.Ack{Cursor: int64(len(line)) + 1, Inserted: 1})
+
+	// A second paired device reads the first device's history — the MVP
+	// read rule — and annotates it as itself.
+	_, credB := pairOnHub(t, h, deviceB)
+	b := remoteClientOnHub(t, h, credB.Secret)
+	ctx := context.Background()
+	res, err := b.Query(ctx, `SELECT count(*) FROM events`)
+	if err != nil || res.RowCount != 1 || fmt.Sprint(res.Rows) != "[[1]]" {
+		t.Fatalf("remote query = %+v, %v", res, err)
+	}
+	if res, err := b.Annotate(ctx, []byte(
+		`{"operations":[{"op":"upsert","event_id":1,"namespace":"security","key":"review","value":{"status":"reviewed"}}]}`)); err != nil ||
+		res.Applied != 1 {
+		t.Fatalf("remote annotate = %+v, %v", res, err)
+	}
+	res, err = b.Query(ctx, `SELECT writer_id FROM event_annotations`)
+	if err != nil || res.RowCount != 1 || res.Rows[0][0] != deviceB {
+		t.Fatalf("annotation writer = %+v, %v; want %s", res, err, deviceB)
+	}
+
+	// A request naming a writer is rejected by the strict decode, and the
+	// connection stays usable.
+	if _, err := b.Annotate(ctx, []byte(
+		`{"operations":[{"op":"upsert","event_id":1,"namespace":"x","key":"y","value":1,"writer_id":"attacker"}]}`)); err == nil {
+		t.Fatal("spoofed writer annotate succeeded")
+	}
+
+	// Revocation ends deviceB's remote access: the per-frame registry check
+	// refuses its next frame and the connection closes.
+	if err := h.reg.Revoke(context.Background(), deviceB); err != nil {
+		t.Fatal(err)
+	}
+	_, err = b.Query(ctx, `SELECT count(*) FROM events`)
+	var perr *hubsync.Error
+	if !errors.As(err, &perr) || perr.Code != hubsync.CodeAuth {
+		t.Fatalf("query after revocation = %v; want CodeAuth", err)
+	}
+
+	// The other device keeps reading and writing, and deviceB's annotation
+	// written before revocation stays.
+	other := remoteClientOnHub(t, h, credA.Secret)
+	if res, err := other.Query(ctx, `SELECT count(*) FROM event_annotations`); err != nil || res.RowCount != 1 {
+		t.Fatalf("deviceA after deviceB revocation = %+v, %v", res, err)
+	}
+}
+
+// TestRevocationCancelsInFlightQuery pins the teardown half for the remote
+// path: a revocation that lands while a query is executing closes the
+// revoked device's connection, interrupts the statement, and delivers no
+// result; the endpoint keeps serving other devices' queries.
+func TestRevocationCancelsInFlightQuery(t *testing.T) {
+	h := startHub(t, 10*time.Millisecond, hubsync.Options{Retry: hubsync.RetryPolicy{Base: time.Millisecond}},
+		&mcpserver.EngineOptions{Deadline: 30 * time.Second})
+	deviceA := "0123456789abcdef0123456789abcdef"
+	deviceB := "abababababababababababababababab"
+
+	_, credA := pairOnHub(t, h, deviceA)
+	_, credB := pairOnHub(t, h, deviceB)
+	idle := remoteClientOnHub(t, h, credA.Secret)
+
+	// The endless recursive count runs until the engine deadline — 30 s —
+	// unless revocation interrupts it first.
+	busy := remoteClientOnHub(t, h, credB.Secret)
+	type outcome struct {
+		result mcpserver.Result
+		err    error
+	}
+	replies := make(chan outcome, 1)
+	go func() {
+		result, err := busy.Query(context.Background(),
+			`WITH RECURSIVE c(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM c) SELECT count(*) FROM c`)
+		replies <- outcome{result: result, err: err}
+	}()
+
+	// The query is now executing. Revoke mid-query.
+	time.Sleep(250 * time.Millisecond)
+	if err := h.reg.Revoke(context.Background(), deviceB); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case got := <-replies:
+		if got.err == nil {
+			t.Fatalf("the in-flight query delivered a result after revocation: %+v", got.result)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the revoked device's query was not interrupted")
+	}
+
+	// The revoked credential is dead at the next connection.
+	again := remoteClientOnHub(t, h, credB.Secret)
+	if _, err := again.Query(context.Background(), `SELECT 1`); err == nil {
+		t.Fatal("revoked credential still queries")
+	}
+
+	// The endpoint keeps serving other devices, and nothing was written for
+	// the revoked device to recall: a query is read-only.
+	if res, err := idle.Query(context.Background(), `SELECT count(*) FROM events`); err != nil || res.RowCount != 1 {
+		t.Fatalf("other device after revocation = %+v, %v", res, err)
 	}
 }

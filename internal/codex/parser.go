@@ -35,6 +35,14 @@ const AgentName = "codex"
 // UUIDs and contain no colon, so they never collide with a synthetic ID.
 const SyntheticNativeIDPrefix = "ohya-synthetic:"
 
+// OutputVersion versions this parser's normalized output — what the Record
+// fields hold for a given raw record — not the file format and not the
+// database schema. Any change to what Parse derives from the same bytes must
+// bump it; ingestion stores it per event row (events.parser_version), and
+// store.ReDerive rebuilds rows carrying a smaller version from raw_json.
+// 1 is the output of the parser as of the marker's introduction.
+const OutputVersion = 1
+
 // DefaultMaxRecordBytes bounds one record's JSON text, excluding the line
 // terminator, when Options.MaxRecordBytes is unset. Codex world_state and
 // compacted records are large, so the bound matches the sync protocol's
@@ -100,10 +108,11 @@ type Record struct {
 	HasTime bool
 	TimeMS  int64 // Unix milliseconds from the timestamp field
 	// HasOrdinal reports that the record carries a per-thread ordinal that
-	// identifies it across rollout files: (Native, Ordinal) names one record
-	// of the thread, and a resumed page replays some of them. session_meta
-	// records never have one, because a page's opening meta shares the
-	// ordinal of the first replayed record.
+	// names it within the thread across rollout files: a resumed page's
+	// records continue the original file's ordinal sequence. session_meta
+	// records never have one, because a page's opening meta carries the
+	// ordinal one below its first record — an ordinal the original file
+	// already owns.
 	HasOrdinal bool
 	Ordinal    int64
 	Cwd        string // working directory observation
@@ -133,6 +142,10 @@ type Result struct {
 type ParseError struct {
 	Offset int64
 	Reason string
+	// RecordTooLarge reports that the record size limit caused this stop, so
+	// a larger Options.MaxRecordBytes remedies it; every other stop needs
+	// the source file repaired.
+	RecordTooLarge bool
 }
 
 func (e *ParseError) Error() string {
@@ -164,8 +177,9 @@ func Parse(data []byte, base int64, o Options) (Result, error) {
 			// so a tail already above the limit can never become valid.
 			if int64(len(data)-rel) > limit {
 				return res, &ParseError{
-					Offset: base + int64(rel),
-					Reason: fmt.Sprintf("incomplete record already exceeds the %d-byte record size limit", limit),
+					Offset:         base + int64(rel),
+					Reason:         fmt.Sprintf("incomplete record already exceeds the %d-byte record size limit", limit),
+					RecordTooLarge: true,
 				}
 			}
 			return res, nil
@@ -174,8 +188,9 @@ func Parse(data []byte, base int64, o Options) (Result, error) {
 		offset := base + int64(rel)
 		if int64(len(line)) > limit {
 			return res, &ParseError{
-				Offset: offset,
-				Reason: fmt.Sprintf("record exceeds the %d-byte record size limit", limit),
+				Offset:         offset,
+				Reason:         fmt.Sprintf("record exceeds the %d-byte record size limit", limit),
+				RecordTooLarge: true,
 			}
 		}
 		rec, err := parseRecord(line, offset, res.Native, o.SourceScope)

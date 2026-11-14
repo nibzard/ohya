@@ -263,6 +263,55 @@ func TestParseResumedPage(t *testing.T) {
 	}
 }
 
+// TestParseReenumeratedPage covers the real resumed-page shape (verified
+// 2026-11-14; see testdata/codex/README.md): the page re-enumerates the
+// ordinals past its history_base rollback point with different records, so
+// every colliding ordinal names a different record than the original file.
+func TestParseReenumeratedPage(t *testing.T) {
+	data := fixture(t, "reenumerated-page.jsonl")
+	res, err := Parse(data, 0, Options{SourceScope: "src-reenum"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkInvariants(t, data, 0, res)
+	checkTable(t, res, []want{
+		// The opening meta repeats ordinal 12 in its envelope; it never
+		// takes part in the (thread, ordinal) identity.
+		{0, 568, "session_meta", "", "", "", -1, ms(10, 40, 0, 0)},
+		{568, 771, "event_msg", "", "", "", 12, ms(10, 40, 1, 0)},
+		{771, 1484, "token_usage_record", "", "", "", 13, ms(10, 40, 2, 0)},
+		{1484, 1819, "response_item", "assistant", "", "Added the Codex section to the README; the first attempt was rolled back.", 14, ms(10, 40, 3, 0)},
+		{1819, 2073, "event_msg", "", "", "", 15, ms(10, 40, 4, 0)},
+	})
+	if res.Native != mainThread {
+		t.Fatalf("native = %q, want %q", res.Native, mainThread)
+	}
+	if md := metadataOf(t, res.Records[0]); md["history_mode"] != "paginated" || md["embedded"] != nil {
+		t.Errorf("page meta metadata = %v", md)
+	}
+	if r := res.Records[2]; r.ResponseID != "resp_fixture_0003" || len(r.Usage) == 0 {
+		t.Errorf("re-enumerated usage record = %q/%s", r.ResponseID, r.Usage)
+	}
+
+	// Every ordinal the page shares with the original file holds a different
+	// record — the property that makes content-keyed deduplication necessary.
+	main, err := Parse(fixture(t, "main-session.jsonl"), 0, Options{SourceScope: "src-main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byOrdinal := map[int64]Record{}
+	for _, r := range main.Records {
+		if r.HasOrdinal {
+			byOrdinal[r.Ordinal] = r
+		}
+	}
+	for _, r := range res.Records[1:] {
+		if o, ok := byOrdinal[r.Ordinal]; ok && r.Raw == o.Raw {
+			t.Errorf("page record at ordinal %d byte-replays the original", r.Ordinal)
+		}
+	}
+}
+
 func TestParseIncompleteTail(t *testing.T) {
 	data := fixture(t, "incomplete-tail.jsonl")
 	res, err := Parse(data, 0, Options{SourceScope: "src-tail"})
@@ -482,12 +531,12 @@ func TestParseRecordSizeLimit(t *testing.T) {
 	var perr *ParseError
 	// One byte more stops the source at the record.
 	_, err := Parse([]byte(rec+"\n"), 7, Options{Native: "t", MaxRecordBytes: limit - 1})
-	if !errors.As(err, &perr) || perr.Offset != 7 {
+	if !errors.As(err, &perr) || perr.Offset != 7 || !perr.RecordTooLarge {
 		t.Fatalf("oversized record error = %v", err)
 	}
 	// An incomplete tail already above the limit stops the source too.
 	res, err := Parse([]byte(rec+"\n"+rec), 7, Options{Native: "t", MaxRecordBytes: limit - 1})
-	if !errors.As(err, &perr) || perr.Offset != 7 || len(res.Records) != 0 {
+	if !errors.As(err, &perr) || perr.Offset != 7 || len(res.Records) != 0 || !perr.RecordTooLarge {
 		t.Fatalf("tail error = %v", err)
 	}
 	res, err = Parse([]byte(rec+"\n"+rec), 7, Options{Native: "t", MaxRecordBytes: limit})
@@ -538,7 +587,7 @@ func TestParseSplitAtEveryOffset(t *testing.T) {
 }
 
 func TestParseIsDeterministic(t *testing.T) {
-	for _, name := range []string{"main-session.jsonl", "subagent-session.jsonl", "resumed-page.jsonl"} {
+	for _, name := range []string{"main-session.jsonl", "subagent-session.jsonl", "resumed-page.jsonl", "reenumerated-page.jsonl"} {
 		data := fixture(t, name)
 		a, errA := Parse(data, 0, Options{SourceScope: "s"})
 		b, errB := Parse(data, 0, Options{SourceScope: "s"})

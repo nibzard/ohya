@@ -1,0 +1,20 @@
+-- Parser output version marker (T025).
+--
+-- The parser output version is independent of the schema version. It versions
+-- the parser behavior that produced a row's normalized fields — text, kind,
+-- role, tool_name, time_ms, metadata, ordinal and the session assignment —
+-- not the shape of the tables. Every parser owns an OutputVersion constant
+-- (internal/claudecode, internal/codex); a change to what a parser derives
+-- from one record bumps it, and ingestion stamps the deriving version here.
+--
+-- Because raw_json preserves the original record, a bumped parser re-derives
+-- stored rows inside the hub (store.ReDerive): one transaction re-parses every
+-- row of the parser's agent from raw_json, rewrites the normalized fields,
+-- recomputes session aggregates, token totals and replay duplicates, and
+-- rebuilds events_fts from the content table. No source-file access and no
+-- resync from devices is involved. Rows already at the current version make
+-- the operation a no-op.
+--
+-- 1 is the output of the parsers as of this migration; existing rows were
+-- derived by exactly that behavior.
+ALTER TABLE events ADD COLUMN parser_version INTEGER NOT NULL DEFAULT 1 CHECK (parser_version >= 1);

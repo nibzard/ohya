@@ -81,10 +81,11 @@ func replaceFile(t *testing.T, path, content string) {
 // sliceEnv is one local hub facing a synthetic Claude Code projects
 // directory.
 type sliceEnv struct {
-	root     string
-	dbPath   string
-	stateDir string
-	agent    string // the watched agent; newSliceEnv picks Claude Code
+	root           string
+	dbPath         string
+	stateDir       string
+	agent          string // the watched agent; newSliceEnv picks Claude Code
+	maxRecordBytes int64  // per-record bound for the runner; 0 selects the default
 }
 
 func newSliceEnv(t *testing.T) *sliceEnv {
@@ -136,7 +137,7 @@ func (e *sliceEnv) newRunner(t *testing.T, stderr io.Writer) (*ingestor, func())
 		hub.Close()
 		t.Fatal(err)
 	}
-	return newIngestor(hub, w, e.agent, deviceID, stderr), func() { hub.Close() }
+	return newIngestor(hub, w, e.agent, deviceID, e.maxRecordBytes, stderr), func() { hub.Close() }
 }
 
 // runPass runs exactly one polling pass against a fresh runner, like one
@@ -434,6 +435,9 @@ func TestIngestMalformedLineStopsSourceAndOthersContinue(t *testing.T) {
 	if !strings.Contains(stderr, "offset 1094") {
 		t.Fatalf("diagnostic misses the stop offset:\n%s", stderr)
 	}
+	if !strings.Contains(stderr, "repair the record at this offset") {
+		t.Fatalf("diagnostic misses the repair remedy (ADR 0004):\n%s", stderr)
+	}
 	if strings.Contains(stderr, "unterminated") {
 		t.Fatalf("diagnostic leaks transcript content:\n%s", stderr)
 	}
@@ -474,6 +478,90 @@ func TestIngestReportsPersistentDiagnosticOncePerRun(t *testing.T) {
 	}
 	if n := strings.Count(stderr.String(), "offset 1094"); n != 1 {
 		t.Fatalf("diagnostic reported %d times in one run, want 1:\n%s", n, stderr.String())
+	}
+}
+
+// TestIngestOversizedRecordStopRecoversWithLargerLimit covers the remedy
+// ADR 0004 owns for a record above the size limit: the stop diagnostic names
+// --max-record-bytes, and rerunning with a larger limit resumes the same
+// source at the stop offset — nothing re-imports, nothing skips, and the
+// source reaches the end of the file.
+func TestIngestOversizedRecordStopRecoversWithLargerLimit(t *testing.T) {
+	e := newSliceEnv(t)
+	session := e.session("oversized.jsonl")
+	line := func(content string) string {
+		return fmt.Sprintf(`{"type":"user","sessionId":%q,"message":{"role":"user","content":%q}}`+"\n",
+			fixtureNativeID, content)
+	}
+	before := line("before")
+	oversized := line(strings.Repeat("x", claudecode.DefaultMaxRecordBytes+512))
+	after := line("after")
+	writeFile(t, session, before+oversized+after)
+
+	// Default limit: the source stops at the oversized record with the
+	// flag named as the remedy.
+	stats, stderr := e.runPass(t)
+	if stats.inserted != 1 {
+		t.Fatalf("pass = %+v, want 1 event before the stop", stats)
+	}
+	if !strings.Contains(stderr, "record size limit") ||
+		!strings.Contains(stderr, "--max-record-bytes") ||
+		!strings.Contains(stderr, "docs/adr/0004") {
+		t.Fatalf("diagnostic misses the remedy:\n%s", stderr)
+	}
+	if _, cursor := soleCheckpoint(t, e.stateDir); cursor != int64(len(before)) {
+		t.Fatalf("checkpoint cursor = %d, want the stop offset %d", cursor, len(before))
+	}
+
+	// Rerun with a larger limit, like a restarted process: the source keeps
+	// its checkpoint, ingests past the stop, and reports nothing.
+	e.maxRecordBytes = claudecode.DefaultMaxRecordBytes + 4096
+	stats, stderr = e.runPass(t)
+	if stats.inserted != 2 {
+		t.Fatalf("recovery pass = %+v, want 2 events past the stop", stats)
+	}
+	if stderr != "" {
+		t.Fatalf("recovery pass diagnostics: %s", stderr)
+	}
+	hub := openHub(t, e.dbPath)
+	if n := countRows(t, hub.Writer(), `SELECT count(*) FROM events`); n != 3 {
+		t.Fatalf("events = %d, want 3", n)
+	}
+	if _, cursor := soleCheckpoint(t, e.stateDir); cursor != int64(len(before+oversized+after)) {
+		t.Fatalf("checkpoint cursor = %d, want the file size", cursor)
+	}
+}
+
+// TestIngestRecordAboveBatchBoundStillIngests covers the read path behind the
+// flag: a batch never splits a record, so one record larger than the batch
+// bound is read whole — up to the configured record size limit — instead of
+// stalling the source below it.
+func TestIngestRecordAboveBatchBoundStillIngests(t *testing.T) {
+	e := newSliceEnv(t)
+	e.maxRecordBytes = maxBatchBytes + 2<<20
+	session := e.session("huge.jsonl")
+	line := func(content string) string {
+		return fmt.Sprintf(`{"type":"user","sessionId":%q,"message":{"role":"user","content":%q}}`+"\n",
+			fixtureNativeID, content)
+	}
+	content := line("before") +
+		line(strings.Repeat("x", int(maxBatchBytes)+1<<20)) + // one record above the batch bound
+		line("after")
+	writeFile(t, session, content)
+
+	stats, stderr := e.runPass(t)
+	if stats.inserted != 3 {
+		t.Fatalf("pass = %+v, want 3 events including the huge record", stats)
+	}
+	if stderr != "" {
+		t.Fatalf("diagnostics: %s", stderr)
+	}
+	hub := openHub(t, e.dbPath)
+	if n := countRows(t, hub.Writer(), `SELECT count(*) FROM events`); n != 3 {
+		t.Fatalf("events = %d, want 3", n)
+	}
+	if _, cursor := soleCheckpoint(t, e.stateDir); cursor != int64(len(content)) {
+		t.Fatalf("checkpoint cursor = %d, want the file size", cursor)
 	}
 }
 
@@ -616,7 +704,7 @@ func TestIngestCrashHelper(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	r := newIngestor(hub, w, agent, deviceID, io.Discard)
+	r := newIngestor(hub, w, agent, deviceID, 0, io.Discard)
 	candidates, err := discoverSessionFiles(root)
 	if err != nil {
 		panic(err)

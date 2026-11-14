@@ -32,7 +32,9 @@ type deviceResult struct {
 	Hub             string       `json:"hub"`
 	DialMs          int64        `json:"dial_ms"`
 	FirstExchangeMs int64        `json:"first_exchange_ms"`
+	PathAfterWarmup *peerPath    `json:"path_after_warmup,omitempty"`
 	Sizes           []sizeResult `json:"sizes"`
+	PathFinal       *peerPath    `json:"path_final,omitempty"`
 	TotalBytes      uint64       `json:"total_bytes"`
 	TotalMs         int64        `json:"total_ms"`
 	RSSBytes        uint64       `json:"rss_bytes"`
@@ -70,6 +72,10 @@ func runDevice(f flags) {
 		log.Fatalf("device warmup: %v", err)
 	}
 	res.FirstExchangeMs = time.Since(start).Milliseconds()
+	res.PathAfterWarmup = probePath(ctx, device, conn)
+	if res.PathAfterWarmup != nil {
+		log.Printf("hub path after warmup: relay %q direct %q", res.PathAfterWarmup.Relay, res.PathAfterWarmup.CurAddr)
+	}
 
 	totalStart := time.Now()
 	for _, size := range sizes {
@@ -81,6 +87,10 @@ func runDevice(f flags) {
 		res.TotalBytes += uint64(size) * uint64(f.Count)
 		log.Printf("%7d B x %3d: p50 %6d us  p95 %6d us  max %6d us  %7.1f MiB/s",
 			size, s.Count, s.P50Us, s.P95Us, s.MaxUs, s.ThroughputMB)
+	}
+	res.PathFinal = probePath(ctx, device, conn)
+	if res.PathFinal != nil {
+		log.Printf("hub path at end: relay %q direct %q", res.PathFinal.Relay, res.PathFinal.CurAddr)
 	}
 	res.TotalMs = time.Since(totalStart).Milliseconds()
 	res.RSSBytes = readRSS()

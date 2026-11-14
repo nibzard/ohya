@@ -109,6 +109,50 @@ func TestIngestCodexThreadAcrossRolloutFiles(t *testing.T) {
 	}
 }
 
+// TestIngestCodexReenumeratedPage drives the slice over a main file and a
+// page that re-enumerates the ordinals past its history_base rollback point
+// with different records: nothing is suppressed, and both the rolled-back
+// turn's and the re-enumerated turn's records stay searchable with their own
+// per-response usage rows.
+func TestIngestCodexReenumeratedPage(t *testing.T) {
+	e := newCodexEnv(t)
+	copyCodexFixture(t, e.rollout("rollout-2026-11-13T09-00-00-"+codexMainThread+".jsonl"), "main-session.jsonl")
+	copyCodexFixture(t, e.rollout("rollout-2026-11-13T10-40-00-"+codexMainThread+"_00000000-0000-7000-8000-0000000000e2.jsonl"), "reenumerated-page.jsonl")
+
+	stats, stderr := e.runPass(t)
+	if stats.sources != 2 || stats.inserted != 19 || stderr != "" {
+		t.Fatalf("first pass = %+v, stderr %q; want 19 rows from 2 sources", stats, stderr)
+	}
+	hub := openHub(t, e.dbPath)
+	db := hub.Writer()
+	mainSID := store.SessionID(e.deviceID(t), codex.AgentName, codexMainThread)
+	if n := countRows(t, db, `SELECT event_count FROM sessions WHERE id = ?`, mainSID); n != 19 {
+		t.Fatalf("main thread event_count = %d, want 19 (no re-enumerated record suppressed)", n)
+	}
+	if n := countRows(t, db, `SELECT count(*) FROM events WHERE duplicate_of IS NOT NULL`); n != 0 {
+		t.Fatalf("duplicates = %d, want 0", n)
+	}
+	// The re-enumerated turn's response counts beside the original's two
+	// (raw input totals: 1200 + 1300 + 1400).
+	if n := countRows(t, db, `SELECT count(*) FROM session_token_usage WHERE message_id = 'resp_fixture_0003'`); n != 1 {
+		t.Fatalf("re-enumerated usage rows = %d, want 1", n)
+	}
+	var input int64
+	if err := db.QueryRow(`SELECT sum(input_tokens + cache_read_input_tokens) FROM session_token_usage`).Scan(&input); err != nil || input != 3900 {
+		t.Fatalf("input totals = %d, %v; want 3900 across all three responses", input, err)
+	}
+	for _, phrase := range []string{"no Codex section yet", "rolled back"} {
+		if n := countRows(t, db, fmt.Sprintf(`SELECT count(*) FROM events_fts WHERE events_fts MATCH '"%s"'`, phrase)); n != 1 {
+			t.Fatalf("search %q = %d hits, want 1", phrase, n)
+		}
+	}
+
+	// An idle pass inserts nothing.
+	if stats, _ := e.runPass(t); stats.inserted != 0 {
+		t.Fatalf("idle pass = %+v", stats)
+	}
+}
+
 // TestIngestCodexIncompleteTail covers a crash during a rollout write: the
 // partial record stays pending, and once the writer completes the line, the
 // next pass ingests it whole into the same thread.

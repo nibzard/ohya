@@ -85,11 +85,20 @@ type Event struct {
 	Prompt string
 
 	// HasOrdinal marks a record that the agent numbers within its native
-	// session (Codex ordinal). (session, Ordinal) names one record across
-	// all of the session's source files: a later copy is stored as a
-	// duplicate of the first.
+	// session (Codex ordinal). (session, Ordinal) plus the record's bytes
+	// name one record across all of the session's source files: a later
+	// byte-identical copy is stored as a duplicate of the first, while a
+	// copy with different bytes re-enumerates the ordinal (a Codex page
+	// after a rollback) and is stored as another original.
 	HasOrdinal bool
 	Ordinal    int64
+
+	// ParserVersion is the output version of the parser that derived this
+	// record's normalized fields (the parser packages' OutputVersion). It is
+	// independent of the schema version: a parser behavior change bumps it,
+	// ingestion stores it per row, and ReDerive re-derives rows that carry a
+	// smaller version. Must be at least 1.
+	ParserVersion int
 }
 
 // Batch is one source's contiguous records, in source order.
@@ -106,7 +115,8 @@ type Batch struct {
 type IngestResult struct {
 	// Inserted counts only newly inserted events. Records that replayed
 	// already-stored bytes do not count. A record stored as the duplicate of
-	// another file's copy (same session and ordinal) is a new row and counts.
+	// another file's byte-identical copy (same session and ordinal) is a new
+	// row and counts.
 	Inserted int
 	// Cursor is the source's committed byte cursor after the commit. It is
 	// the offset the caller may acknowledge durably.
@@ -313,6 +323,10 @@ func validateBatch(events []Event) error {
 		if e.HasOrdinal && e.Ordinal < 0 {
 			return fmt.Errorf("store: batch record %d at offset %d has negative ordinal %d: %w", i, e.Offset, e.Ordinal, ErrBatchRejected)
 		}
+		if e.ParserVersion < 1 {
+			return fmt.Errorf("store: batch record %d at offset %d carries parser output version %d; every record must name the version of the parser that derived it: %w",
+				i, e.Offset, e.ParserVersion, ErrBatchRejected)
+		}
 		if want := e.Offset + int64(len(e.RawJSON)) + 1; e.End != want {
 			return fmt.Errorf("store: batch record %d at offset %d ends at %d, but its %d JSON bytes plus one terminator end at %d: %w",
 				i, e.Offset, e.End, len(e.RawJSON), want, ErrBatchRejected)
@@ -419,16 +433,20 @@ func insertEvents(ctx context.Context, tx *sql.Tx, b Batch, cursor int64, device
 		if e.HasTime {
 			timeMS = e.TimeMS
 		}
-		// A record whose (session, ordinal) is already stored replays it
-		// from another file (or repeats it within one). It is stored for
-		// retention and retry validation, without search text, and adds
-		// nothing to the aggregates.
+		// A record whose (session, ordinal) is already stored with the same
+		// bytes replays it from another file (or repeats it within one). It
+		// is stored for retention and retry validation, without search text,
+		// and adds nothing to the aggregates. A record with different bytes
+		// at the same (session, ordinal) re-enumerates the ordinal — a Codex
+		// page after a rollback — and is a distinct record and an original
+		// of its own.
 		var duplicateOf sql.NullInt64
 		if e.HasOrdinal {
 			ordinal = e.Ordinal
 			err := tx.QueryRowContext(ctx,
-				`SELECT id FROM events WHERE session_id = ? AND ordinal = ? AND duplicate_of IS NULL`,
-				sid, e.Ordinal).Scan(&duplicateOf)
+				`SELECT id FROM events
+				 WHERE session_id = ? AND ordinal = ? AND raw_json = ? AND duplicate_of IS NULL`,
+				sid, e.Ordinal, e.RawJSON).Scan(&duplicateOf)
 			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return 0, nil, fmt.Errorf("store: ingest source %s: look up ordinal at offset %d: %w", b.SourceID, e.Offset, err)
 			}
@@ -438,11 +456,11 @@ func insertEvents(ctx context.Context, tx *sql.Tx, b Batch, cursor int64, device
 			text = nil
 		}
 		res, err := tx.ExecContext(ctx,
-			`INSERT INTO events (session_id, source_id, source_offset, time_ms, kind, role, tool_name, text, raw_json, metadata, ordinal, duplicate_of)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`INSERT INTO events (session_id, source_id, source_offset, time_ms, kind, role, tool_name, text, raw_json, metadata, ordinal, duplicate_of, parser_version)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT (source_id, source_offset) DO NOTHING`,
 			sid, b.SourceID, e.Offset, timeMS, e.Kind, nullString(e.Role),
-			nullString(e.ToolName), text, e.RawJSON, metadata, ordinal, duplicateOf)
+			nullString(e.ToolName), text, e.RawJSON, metadata, ordinal, duplicateOf, e.ParserVersion)
 		if err != nil {
 			return 0, nil, fmt.Errorf("store: ingest source %s: insert record at offset %d: %w", b.SourceID, e.Offset, err)
 		}

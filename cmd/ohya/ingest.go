@@ -1,11 +1,11 @@
 // Local ingestion: the vertical slice that wires the source watcher, the
 // deterministic agent parsers and the transactional write path into one run.
-// Each agent (Claude Code, Codex) has its own session directory, watcher and
-// checkpoint file. One pass discovers every agent's session files, reads only
-// the unacknowledged bytes, commits them through the single writer, and
-// acknowledges the committed cursor in the local checkpoint. A crash between commit and
-// acknowledgment replays safely: the write path validates replayed bytes and
-// counts only new records.
+// Each agent (Claude Code, Codex, Pi) has its own session directory, watcher
+// and checkpoint file. One pass discovers every agent's session files, reads
+// only the unacknowledged bytes, commits them through the single writer, and
+// acknowledges the committed cursor in the local checkpoint. A crash between
+// commit and acknowledgment replays safely: the write path validates
+// replayed bytes and counts only new records.
 package main
 
 import (
@@ -27,8 +27,9 @@ import (
 
 // maxBatchBytes bounds the bytes of one ingestion batch, so importing a large
 // history file stays within a predictable memory budget. A batch never splits
-// a record: parsing retains an incomplete tail, and the next batch resumes at
-// the committed cursor.
+// a record: parsing retains an incomplete tail, the next batch resumes at the
+// committed cursor, and one read may extend past this bound to the end of a
+// single record above it (never past the configured record size limit).
 const maxBatchBytes int64 = 8 << 20
 
 // agentRoot is one agent's session directory to watch.
@@ -45,13 +46,14 @@ type agentRoot struct {
 
 // ingestOptions configures one ingest run.
 type ingestOptions struct {
-	dbPath   string        // hub database; created with its parent directory
-	stateDir string        // device identity and source checkpoints
-	roots    []agentRoot   // session directories to watch, one per agent
-	interval time.Duration // polling interval in continuous mode
-	once     bool          // run exactly one pass
-	stdout   io.Writer     // progress summaries
-	stderr   io.Writer     // diagnostics
+	dbPath         string        // hub database; created with its parent directory
+	stateDir       string        // device identity and source checkpoints
+	roots          []agentRoot   // session directories to watch, one per agent
+	interval       time.Duration // polling interval in continuous mode
+	once           bool          // run exactly one pass
+	maxRecordBytes int64         // per-record bound for every parser; <= 0 selects their default
+	stdout         io.Writer     // progress summaries
+	stderr         io.Writer     // diagnostics
 }
 
 // runIngest imports the existing history of every agent once, then polls
@@ -109,7 +111,7 @@ func runIngest(ctx context.Context, o ingestOptions) error {
 		if err != nil {
 			return err // includes watch.ErrStateLost: recovery, not a silent restart
 		}
-		runners[i] = newIngestor(hub, w, root.agent, deviceID, o.stderr)
+		runners[i] = newIngestor(hub, w, root.agent, deviceID, o.maxRecordBytes, o.stderr)
 	}
 
 	for pass := 1; ; pass++ {
@@ -140,19 +142,23 @@ func runIngest(ctx context.Context, o ingestOptions) error {
 // ingestor drives one agent's local ingestion. It is not safe for concurrent
 // use; one goroutine drives it, like the database writer.
 type ingestor struct {
-	hub      *store.DB
-	watcher  *watch.Watcher
-	agent    string
-	deviceID string
-	stderr   io.Writer
+	hub            *store.DB
+	watcher        *watch.Watcher
+	agent          string
+	deviceID       string
+	maxRecordBytes int64 // per-record bound; <= 0 selects the parser default
+	stderr         io.Writer
 	// reported remembers the stop offset of every diagnostic already written,
 	// so continuous polling prints a persistent diagnostic once per offset
 	// instead of once per poll.
 	reported map[string]int64
 }
 
-func newIngestor(hub *store.DB, w *watch.Watcher, agent, deviceID string, stderr io.Writer) *ingestor {
-	return &ingestor{hub: hub, watcher: w, agent: agent, deviceID: deviceID, stderr: stderr, reported: map[string]int64{}}
+func newIngestor(hub *store.DB, w *watch.Watcher, agent, deviceID string, maxRecordBytes int64, stderr io.Writer) *ingestor {
+	return &ingestor{
+		hub: hub, watcher: w, agent: agent, deviceID: deviceID,
+		maxRecordBytes: maxRecordBytes, stderr: stderr, reported: map[string]int64{},
+	}
 }
 
 // passStats summarizes one polling pass.
@@ -217,14 +223,20 @@ func (r *ingestor) poll(ctx context.Context, root string, optional bool) (passSt
 // the same bytes safely on the next pass.
 func (r *ingestor) ingestSource(ctx context.Context, o watch.Outcome) (int, int64, error) {
 	inserted := 0
+	// readEnd bounds the bytes of one read. A batch never splits a record,
+	// so when the pending bytes hold one record larger than the batch bound,
+	// the read extends to that record's end instead of stalling below it.
+	// The growth is still bounded: the parser stops the source as soon as
+	// the incomplete record exceeds the configured size limit.
+	readEnd := min(o.End, o.Cursor+maxBatchBytes)
 	for o.Cursor < o.End {
 		chunk := o
-		chunk.End = min(o.End, o.Cursor+maxBatchBytes)
+		chunk.End = readEnd
 		data, err := r.watcher.ReadPending(chunk)
 		if err != nil {
 			return inserted, o.Cursor, err
 		}
-		opts := events.Options{SourceScope: o.SourceID}
+		opts := events.Options{SourceScope: o.SourceID, MaxRecordBytes: r.maxRecordBytes}
 		if chunk.Cursor > 0 {
 			// Records past offset 0 may not name their session (Codex):
 			// the committed first record does.
@@ -246,12 +258,14 @@ func (r *ingestor) ingestSource(ctx context.Context, o watch.Outcome) (int, int6
 			}
 			inserted += result.Inserted
 			o.Cursor = result.Cursor
+			readEnd = min(o.End, o.Cursor+maxBatchBytes)
 		}
 		var stop *events.StopError
 		if errors.As(perr, &stop) {
 			// The valid prefix before the offending offset is committed; the
-			// source stops there until the file is repaired. Bytes are never
-			// skipped, so this pass must not read past the stop.
+			// source stops there until the remedy on the diagnostic is
+			// applied. Bytes are never skipped, so this pass must not read
+			// past the stop.
 			r.reportStop(o, stop)
 			return inserted, o.Cursor, nil
 		}
@@ -259,7 +273,12 @@ func (r *ingestor) ingestSource(ctx context.Context, o watch.Outcome) (int, int6
 			return inserted, o.Cursor, perr
 		}
 		if len(res.Events) == 0 {
-			return inserted, o.Cursor, nil // the pending bytes are one incomplete record
+			if chunk.End >= o.End {
+				return inserted, o.Cursor, nil // one incomplete record still growing
+			}
+			// No complete record within a full read: one record exceeds the
+			// batch bound. Extend the read to the record's end.
+			readEnd = min(o.End, readEnd+maxBatchBytes)
 		}
 	}
 	return inserted, o.Cursor, nil
@@ -272,19 +291,26 @@ func (r *ingestor) reportSource(path string, err error) {
 }
 
 // reportStop writes a source's stopping diagnostic once per offset. The text
-// carries offsets and reasons only, never transcript content.
+// carries offsets, reasons and the remedy only, never transcript content.
+// The remedy is the decision ADR 0004 owns: a size stop clears by rerunning
+// with a larger --max-record-bytes, every other stop by repairing the file.
 func (r *ingestor) reportStop(o watch.Outcome, stop *events.StopError) {
 	if off, ok := r.reported[o.SourceID]; ok && off == stop.Offset {
 		return
 	}
 	r.reported[o.SourceID] = stop.Offset
-	fmt.Fprintf(r.stderr, "ohya: %s: %v\n", o.Path, stop)
+	remedy := "; remedy: repair the record at this offset in the source file; ohya never skips bytes"
+	if stop.RecordTooLarge {
+		remedy = "; remedy: rerun with --max-record-bytes above the record to ingest past this offset"
+	}
+	fmt.Fprintf(r.stderr, "ohya: %s: %v%s (docs/adr/0004-stopped-source-recovery.md)\n", o.Path, stop, remedy)
 }
 
 // discoverSessionFiles walks one agent's session directory and returns every
 // session file. Claude Code main sessions and subagent transcripts are
 // *.jsonl, while spilled tool output and memory files carry other
-// extensions; Codex rollouts are rollout-*.jsonl under dated directories. A
+// extensions; Codex rollouts are rollout-*.jsonl under dated directories;
+// Pi sessions are <timestamp>_<uuid>.jsonl under encoded-cwd directories. A
 // missing root wraps fs.ErrNotExist.
 func discoverSessionFiles(root string) ([]string, error) {
 	var files []string

@@ -17,9 +17,33 @@ import (
 	"strings"
 
 	"tailscale.com/tsnet"
+	"tailscale.com/types/key"
 
 	"github.com/nibzard/ohya/internal/transport"
 )
+
+// Default tailnet naming of the ohya hub. The hub node registers under a
+// stable hostname inside the tailnet's MagicDNS domain, and devices dial it
+// at that name on the fixed tailnet port; both sides of a deployment share
+// these defaults, so a join command reaches a default hub with no extra
+// configuration.
+const (
+	// DefaultHubPort is the tailnet port the hub's sync endpoint listens on.
+	// It binds inside the node's userspace network stack only, never on the
+	// host, so it cannot conflict with host services or parallel hubs.
+	DefaultHubPort = 9027
+	// DefaultBaseDomain is the tailnet's MagicDNS domain. It matches the
+	// base_domain of the coordination plane ohya serve provisions.
+	DefaultBaseDomain = "tail.ohya"
+	// HubHostname is the hub node's tailnet hostname.
+	HubHostname = "ohya-hub"
+)
+
+// DefaultHubAddr reports the hub's dialable address under the default
+// naming: devices reach a default-configured hub with no extra flags.
+func DefaultHubAddr() string {
+	return net.JoinHostPort(HubHostname+"."+DefaultBaseDomain, fmt.Sprintf("%d", DefaultHubPort))
+}
 
 // Options configures one embedded node. Every field is required for both
 // roles unless its comment says otherwise.
@@ -168,6 +192,31 @@ func (n *Node) WhoIs(ctx context.Context, conn net.Conn) (login, hostname string
 	login = who.UserProfile.LoginName
 	hostname = who.Node.Name
 	return login, hostname, nil
+}
+
+// PeerPath reports how the peer of conn is currently reached. relay names
+// the DERP region carrying the traffic when it flows through a relay, and
+// curAddr is the peer's direct endpoint when a direct path is in use. An
+// empty curAddr means no direct path exists, so the peer is reachable only
+// through the relay.
+func (n *Node) PeerPath(ctx context.Context, conn net.Conn) (relay, curAddr string, err error) {
+	lc, err := n.srv.LocalClient()
+	if err != nil {
+		return "", "", fmt.Errorf("tailcat: local client: %w", err)
+	}
+	who, err := lc.WhoIs(ctx, conn.RemoteAddr().String())
+	if err != nil {
+		return "", "", fmt.Errorf("tailcat: whois %s: %w", conn.RemoteAddr(), err)
+	}
+	st, err := lc.Status(ctx)
+	if err != nil {
+		return "", "", fmt.Errorf("tailcat: status: %w", err)
+	}
+	ps, ok := st.Peer[key.NodePublic(who.Node.Key)]
+	if !ok {
+		return "", "", fmt.Errorf("tailcat: peer %s missing from status", who.Node.Key)
+	}
+	return ps.Relay, ps.CurAddr, nil
 }
 
 // Close stops the node.

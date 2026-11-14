@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -334,5 +335,53 @@ func TestAnnotateWithoutWriterID(t *testing.T) {
 	var count int
 	if err := hub.Writer().QueryRow(`SELECT count(*) FROM event_annotations`).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("annotations = %d, want only the seeded row", count)
+	}
+}
+
+// TestAnnotateAsDerivesWriterFromCaller pins the remote path's writer rule
+// at the engine level: the caller supplies the authenticated identity — the
+// sync endpoint passes the device — and content rejections carry
+// ErrAnnotateRejected or the store's sentinel so a serving endpoint can
+// classify them as deterministic.
+func TestAnnotateAsDerivesWriterFromCaller(t *testing.T) {
+	hub, readers := openSeededHub(t)
+	engine := NewEngine(readers, hub.Writer(), EngineOptions{WriterID: "local"})
+	ctx := context.Background()
+
+	op := json.RawMessage(`{"operations":[{"op":"upsert","event_id":2,"namespace":"writers","key":"k","value":"v"}]}`)
+	if res, err := engine.AnnotateAs(ctx, "device-b", op); err != nil || res.Applied != 1 {
+		t.Fatalf("annotate as device-b = %+v, %v", res, err)
+	}
+	// The engine's configured writer keeps its own identity on the same
+	// annotation identity: two rows, one per writer.
+	if res, err := engine.Annotate(ctx, op); err != nil || res.Applied != 1 {
+		t.Fatalf("annotate as local = %+v, %v", res, err)
+	}
+	r, err := engine.Query(ctx, `SELECT writer_id FROM event_annotations WHERE namespace='writers' ORDER BY writer_id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(r.Rows) != "[[device-b] [local]]" {
+		t.Fatalf("writers = %v", r.Rows)
+	}
+
+	// A content rejection wraps this package's sentinel.
+	_, err = engine.AnnotateAs(ctx, "device-b", json.RawMessage(
+		`{"operations":[{"op":"delete","event_id":2,"namespace":"t","key":"k","value":1}]}`))
+	if !errors.Is(err, ErrAnnotateRejected) {
+		t.Fatalf("delete-with-value error = %v; want ErrAnnotateRejected", err)
+	}
+	// A store validation rejection — a missing event — wraps the store's
+	// sentinel.
+	_, err = engine.AnnotateAs(ctx, "device-b", json.RawMessage(
+		`{"operations":[{"op":"delete","event_id":999,"namespace":"t","key":"k"}]}`))
+	if !errors.Is(err, store.ErrAnnotationRejected) {
+		t.Fatalf("missing event error = %v; want store.ErrAnnotationRejected", err)
+	}
+	// An empty writer identity is refused rather than written.
+	_, err = engine.AnnotateAs(ctx, "", json.RawMessage(
+		`{"operations":[{"op":"delete","event_id":2,"namespace":"t","key":"k"}]}`))
+	if !errors.Is(err, store.ErrAnnotationRejected) || !strings.Contains(err.Error(), "writer ID") {
+		t.Fatalf("empty writer error = %v", err)
 	}
 }

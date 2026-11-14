@@ -18,7 +18,7 @@ func connect(t *testing.T, o EngineOptions) *mcp.ClientSession {
 	t.Helper()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 	hub, readers := openSeededHub(t)
-	server := New(readers, hub.Writer(), o)
+	server := New(NewEngine(readers, hub.Writer(), o), o)
 	serverSession, err := server.Connect(context.Background(), serverTransport, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -156,7 +156,7 @@ func TestServerProtocolCompatibility(t *testing.T) {
 		}
 		serverTransport, clientTransport := mcp.NewInMemoryTransports()
 		hub, readers := openSeededHub(t)
-		server := New(readers, hub.Writer(), EngineOptions{WriterID: "dev1"})
+		server := New(NewEngine(readers, hub.Writer(), EngineOptions{WriterID: "dev1"}), EngineOptions{WriterID: "dev1"})
 		serverSession, err := server.Connect(context.Background(), serverTransport, nil)
 		if err != nil {
 			t.Fatal(err)

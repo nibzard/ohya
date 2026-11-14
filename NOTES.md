@@ -20,8 +20,8 @@ How to use this file:
 
 - Verify agent session storage findings before phase 1 parser spikes (researched 2026-11-13, partly from third-party writeups — recheck against installed versions):
   - Claude Code: verified 2026-11-13 against installed 2.1.280 (895 main sessions, 2,646 JSONL files). Format, record kinds, identity fields, compound records and usage semantics are documented in `testdata/claude-code/README.md`, with synthetic fixtures. Points that shape ingestion: `sessionId` is the main file name and never spans files; subagent files under `<session-uuid>/subagents/` reuse the parent `sessionId` with `isSidechain: true` plus `agentId`; one API response is several records sharing `message.id` and repeating the same per-request `usage` (not cumulative — dedupe by `message.id` before summing); `cwd`/`gitBranch` live on message records; the project directory name encodes `cwd` lossily (`/ . _` → `-`), so never decode it; timestamps are ISO-8601 UTC ms but not strictly monotonic; malformed complete lines do occur in real files, with valid lines after them.
-  - Codex: verified 2026-11-13 against installed codex-cli 0.166.0 (2,488 files, 3.0 GB under `~/.codex/sessions/`, written by versions 0.104–0.167; envelope unchanged). Format, record kinds, identity fields and fixtures are documented in `testdata/codex/README.md`. Points that shape ingestion: the native session id is `session_meta.payload.id` (equals the first file-name UUID) and **one thread spans several rollout files** — resumed/paginated pages are named `rollout-…-<thread-id>_<resume-id>.jsonl` (second UUID never appears in content), carry `history_mode: "paginated"` plus `history_base {thread_id, end_ordinal_exclusive, end_byte_offset}`, and replay tail records (corpus pair: original ordinals 0–984, page 978–1019), so dedupe must key on `(thread id, ordinal)` across files, not byte offsets; `ordinal` exists only from 0.147.0. `event_msg` mirrors `response_item` text (`user_message`/`agent_message`) — parse `response_item` as the transcript or dedupe. Usage: each `token_usage_record.usage` is per `response_id` (not cumulative); `turn_token_usage`/`thread_token_usage` are running totals — sum `usage` only. `session_meta.git` (`branch`, `commit_hash`, `repository_url`) is a direct input for the sessions.repo derivation (T029). Subagent rollouts open with their own meta (`source.subagent.thread_spawn.parent_thread_id`) and then embed the parent's `session_meta` as line 2. `CODEX_HOME` redirects everything (verified: 0.166.0 created `<dir>/tmp` and read `auth.json` there); no compressed session files exist (all plain JSONL). The old `~/.codex/sqlite/codex-dev.db` (`local_thread_catalog`) layout is gone in 0.166.0: schema-numbered DBs sit directly under the Codex home, and the earlier "metadata only" claim fails for `thread_history_1.sqlite`, whose `thread_items.item_json` holds full message/command bodies (projection cache over 511 of 2,488 threads, with byte offsets back into the rollouts) — ingest rollout files only. `session_index.jsonl` is thread-name metadata; `history.jsonl` duplicates user prompts. Wild files occasionally lack the trailing newline or contain malformed complete lines (both covered by fixtures).
-  - Pi agent: verified 2026-11-13 (T012) against installed 0.84.2 (already present globally as `@earendil-works/pi-coding-agent`) and latest 1.5.2 from a scratch npm prefix. The writeup claim "project-local `.pi/`" is wrong for sessions: sessions are global, one append-only JSONL per session, at `~/.pi/agent/sessions/<encoded-cwd>/<timestamp>_<session-uuid>.jsonl` (agent dir overridable by `PI_CODING_AGENT_DIR`; session dir by `--session-dir` > `PI_CODING_AGENT_SESSION_DIR` > `sessionDir`; `--no-session` is ephemeral). `<encoded-cwd>` = cwd minus one leading `/`, every `/` `\` `:` replaced by `-`, wrapped in `--`…`--` (source: `dist/core/session-manager.js`, identical in both versions); lossy (`/a/b` and `/a-b` collide), so never decode it — the `session` header's `cwd` is authoritative. File name = session-start `toISOString()` with `:`/`.` → `-`, then `_` + session UUID (time-ordered, `01a1…`). Session format v3: line 0 is a `session` header (`version`, `id`, `timestamp`, `cwd`); every other entry has `type`, `id` (8-hex), `parentId` (tree, `null` = root), ISO `timestamp`. Kinds seen: `model_change`, `thinking_level_change`, `message` (roles `system`/`user`/`assistant`/`toolResult`). Assistant messages carry `provider`, `model`, `api`, `stopReason`, `responseId`, `rawStopReason`, and one usage+cost object per response (`input`, `output`, `cacheRead`, `cacheWrite`, `reasoning`, `totalTokens`) — per-response, not repeated across records, so token totals sum straight over assistant messages (no Claude-Code-style dedupe); 1.5.2 adds `durationMs` and `thinkingLevel` and persists a `system` entry (`sections`, `toolsAdded`, empty `content`). `toolResult` carries `toolCallId`, `toolName`, `content[]`, `isError`. Entries flush incrementally: a first model call that fails still persists header + `model_change` + `thinking_level_change` + user + assistant with `stopReason: "error"`, `errorMessage`, zero usage. Headless runs in an untrusted cwd hang on a trust prompt — pass `-a`/`--approve`; runs from the pre-trusted `/home/agent` did not need it. The agent dir also holds `auth.json` (credentials), `settings.json`, `models.json` (provider catalog, keys referenced by env-var name), `trust.json`, `bin/` (`rg`, `fd`), and `~/.pi/skills/`. Real sample sessions and the captured layout (0.84.2 and 1.5.2) are preserved outside the repo at `/home/agent/.looper/ohya-3d80aa08/runtime/task-b55552405a41f18c/work-00-session-15667963bc0501b8/pi-sample-session/` for the T013 fixtures; `.pi/` may still exist inside projects for config/packages, but no session writes there were observed.
+  - Codex: verified 2026-11-13 against installed codex-cli 0.166.0 (2,488 files, 3.0 GB under `~/.codex/sessions/`, written by versions 0.104–0.167; envelope unchanged). Format, record kinds, identity fields and fixtures are documented in `testdata/codex/README.md`. Points that shape ingestion: the native session id is `session_meta.payload.id` (equals the first file-name UUID) and **one thread spans several rollout files** — resumed/paginated pages are named `rollout-…-<thread-id>_<resume-id>.jsonl` (second UUID never appears in content), set `history_mode: "paginated"`, and re-enumerate prior records after a rollback — 4 of the 7 corpus pairs carry `history_base {thread_id, end_ordinal_exclusive, end_byte_offset}` and overlap the original's ordinal tail (pair: original ordinals 1–984, page 979–1019, but with different content at every shared ordinal); the other 3 re-enumerate from ordinal 1 with no `history_base` — so grouping must key on the thread id across files, never byte offsets, and ordinal collisions need care (see the T044 finding below); `ordinal` exists only from 0.147.0. `event_msg` mirrors `response_item` text (`user_message`/`agent_message`) — parse `response_item` as the transcript or dedupe. Usage: each `token_usage_record.usage` is per `response_id` (not cumulative); `turn_token_usage`/`thread_token_usage` are running totals — sum `usage` only. `session_meta.git` (`branch`, `commit_hash`, `repository_url`) is a direct input for the sessions.repo derivation (T029). Subagent rollouts open with their own meta (`source.subagent.thread_spawn.parent_thread_id`) and then embed the parent's `session_meta` as line 2. `CODEX_HOME` redirects everything (verified: 0.166.0 created `<dir>/tmp` and read `auth.json` there); no compressed session files exist (all plain JSONL). The old `~/.codex/sqlite/codex-dev.db` (`local_thread_catalog`) layout is gone in 0.166.0: schema-numbered DBs sit directly under the Codex home, and the earlier "metadata only" claim fails for `thread_history_1.sqlite`, whose `thread_items.item_json` holds full message/command bodies (projection cache over 511 of 2,488 threads, with byte offsets back into the rollouts) — ingest rollout files only. `session_index.jsonl` is thread-name metadata; `history.jsonl` duplicates user prompts. Wild files occasionally lack the trailing newline or contain malformed complete lines (both covered by fixtures).
+  - Pi agent: verified 2026-11-13 (T012) against installed 0.84.2 (already present globally as `@earendil-works/pi-coding-agent`) and latest 1.5.2 from a scratch npm prefix. The writeup claim "project-local `.pi/`" is wrong for sessions: sessions are global, one append-only JSONL per session, at `~/.pi/agent/sessions/<encoded-cwd>/<timestamp>_<session-uuid>.jsonl` (agent dir overridable by `PI_CODING_AGENT_DIR`; session dir by `--session-dir` > `PI_CODING_AGENT_SESSION_DIR` > `sessionDir`; `--no-session` is ephemeral). `<encoded-cwd>` = cwd minus one leading `/`, every `/` `\` `:` replaced by `-`, wrapped in `--`…`--` (source: `dist/core/session-manager.js`, identical in both versions); lossy (`/a/b` and `/a-b` collide), so never decode it — the `session` header's `cwd` is authoritative. File name = session-start `toISOString()` with `:`/`.` → `-`, then `_` + session UUID (time-ordered, `01a1…`). Session format v3: line 0 is a `session` header (`version`, `id`, `timestamp`, `cwd`); every other entry has `type`, `id` (8-hex), `parentId` (tree, `null` = root), ISO `timestamp`. Kinds seen: `model_change`, `thinking_level_change`, `message` (roles `system`/`user`/`assistant`/`toolResult`). Assistant messages carry `provider`, `model`, `api`, `stopReason`, `responseId`, `rawStopReason`, and one usage+cost object per response (`input`, `output`, `cacheRead`, `cacheWrite`, `reasoning`, `totalTokens`) — per-response, not repeated across records, so token totals sum straight over assistant messages (no Claude-Code-style dedupe); 1.5.2 adds `durationMs` and `thinkingLevel` and persists a `system` entry (`sections`, `toolsAdded`, empty `content`). `toolResult` carries `toolCallId`, `toolName`, `content[]`, `isError`. Entries flush incrementally: a first model call that fails still persists header + `model_change` + `thinking_level_change` + user + assistant with `stopReason: "error"`, `errorMessage`, zero usage. Headless runs in an untrusted cwd hang on a trust prompt — pass `-a`/`--approve`; runs from the pre-trusted `/home/agent` did not need it. The agent dir also holds `auth.json` (credentials), `settings.json`, `models.json` (provider catalog, keys referenced by env-var name), `trust.json`, `bin/` (`rg`, `fd`), and `~/.pi/skills/`. Real sample sessions and the captured layout (0.84.2 and 1.5.2) are preserved outside the repo at `/home/agent/.looper/ohya-3d80aa08/runtime/task-b55552405a41f18c/work-00-session-15667963bc0501b8/pi-sample-session/` for authoring the fixtures — the T037 fixtures in `testdata/pi/` derive from them; `.pi/` may still exist inside projects for config/packages, but no session writes there were observed.
   - OpenCode (phase 2): `~/.local/share/opencode/storage/`, one JSON file per message/part — enumerated storage, not append-only; breaks the byte-cursor model.
   - Claude Desktop regular chats: server-side, not file-watchable; potentially pollable via unofficial authenticated API (see Claude Explorer / rpeck/claude-explorer) or official export. Would need a new poll-based source type — deferred.
   - ChatGPT desktop: no reliable local transcripts; official export only — deferred.
@@ -50,23 +50,76 @@ How to use this file:
   (`codex.ErrNoNative`, reported, never guessed). Text comes from
   `response_item` only; `event_msg/user_message` sets `Prompt` (first_prompt)
   because Codex also sends AGENTS.md and `<environment_context>` blocks as
-  `user` messages. Replays dedupe on `(session, ordinal)` in the write path
-  (migration 003); `session_meta` never takes an ordinal, because a page's
-  opening meta shares the ordinal of its first replayed record. Open:
-  - `cache_write_input_tokens` is 0 in every fixture; its relation to
-    `input_tokens` is unverified, so it is not stored. Check real usage
-    records where it is non-zero before mapping it to cache creation.
-  - Files before 0.147.0 carry no ordinal, so a pre-0.147 resumed page (if
-    any exists) would double its replayed records. Unverified whether such
-    pages exist; check the corpus for `history_base` without `ordinal`.
-  - The duplicate copy is chosen by arrival order, not by file order. Text is
-    identical in the verified pair; if replays ever differ, the stored
-    original depends on ingestion order.
+  `user` messages. Replays dedupe on `(session, ordinal)` plus content in the
+  write path (migrations 003 and 005); `session_meta` never takes an ordinal,
+  because a page's opening meta carries the ordinal one below its first
+  record — an ordinal the original file already owns.
+  Verified 2026-11-14 (T044, whole corpus): `cache_write_input_tokens` is 0
+  in all 310,936 occurrences, so its subset relation stays unverified and it
+  stays unmapped; no pre-0.147 resumed page exists (all 7 paginated pairs are
+  0.157.1+ and every page record carries an ordinal). Also disproven: a real
+  page never byte-replays the original — at all 140 colliding ordinals the
+  two files hold different records, because the page re-enumerates after a
+  rollback (`history_base.end_ordinal_exclusive` names the durable prefix;
+  the aborted turn's records sit in the original only). End-to-end ingest of
+  the 7 pairs: 140 suppressed "duplicates" that pair unrelated records and
+  11 per-response usage records lost from token totals (3 threads). Facts
+  and numbers live in `testdata/codex/README.md`; map cache-write to cache
+  creation only after a non-zero sample appears.
+  Resolved 2026-11-14 (T051): the dedup is keyed by content (migration 005)
+  — a byte-identical copy of a stored original is a duplicate; a differing
+  record at the same (session, ordinal) is another original, counted with
+  its usage. Rollback-aware winner selection through `history_base` was
+  rejected: it must demote stored originals whenever the original file is
+  ingested before its page (the write path never updates stored rows), and
+  it has no signal for the 3 pages that re-enumerate from ordinal 1 with no
+  `history_base`. Migration 003's header still describes the disproven
+  byte-replay assumption and must not be edited (applied-migration checksums
+  are verified); migration 005 carries the correcting note.
+
+- Pi parser choices (2026-11-14, internal/pi, T037): the `session` header at
+  offset 0 names the session — same header-first rule as Codex
+  (`pi.ErrNoNative`, FirstNativeID from `store.SourceState`), because no
+  later entry repeats the session id. The usage-row key is the assistant
+  `responseId`, falling back to the entry id (`Record.EntryID`, parser
+  output version 2); an error response reports zeros under its entry id —
+  exactly the verified per-response sum. Every user message marks a prompt
+  (Pi persists no injected context as user messages; the 1.5.2 `system`
+  entry is the preamble and contributes no search text). A toolCall block
+  contributes `name + compact sorted-key JSON of arguments` (Claude Code
+  tool_use convention). The entry-level ISO timestamp sets time_ms; the
+  message-level Unix-ms mirror is not parsed.
+  Verified 2026-11-14 (T038) against the 74 real files under
+  `~/.pi/agent/sessions` (524 usage records: 517 zai via
+  openai-completions, 7 anthropic via anthropic-messages):
+  - `cacheWrite` is non-zero in 7 anthropic-messages records and strictly
+    additive: `input + cacheRead + cacheWrite + output = totalTokens` in
+    every verified record, and the sum without cacheWrite fails in all 7.
+    Mapped to the cache-creation count since parser output version 2.
+  - Non-zero usage without a `responseId` is the common case, not an edge:
+    openai-completions records never carry one (503 successful responses),
+    and 4 of 7 anthropic-messages records (the older 2026-04-20
+    claude-opus-4-6 runs) lack it — 507 of 524 records would have silently
+    counted nothing without the entry-id fallback (entry ids are unique per
+    file, verified across the corpus). Errors still report all-zero usage.
+  Open:
+  - `reasoning` still has no non-zero sample — absent from every
+    real-corpus usage object, 0 in the captured openai-responses records —
+    so its subset relation (hypothesized: part of output) stays unverified
+    and unmapped.
+  - `cacheWrite1h` (the 1-hour cache write, on 3 claude-opus-4-8 records)
+    is 0 everywhere; whether it is part of `totalTokens` or of `cacheWrite`
+    is unverified, so it stays unmapped — recheck both open items if a
+    non-zero sample appears.
 
 - FTS5 verification gotcha (verified 2026-11-13, internal/store/open_test.go):
   `SELECT count(*)` on an external-content FTS5 table reads the content table, not
   the index. Assert index consistency with the `integrity-check` command and MATCH
   enumeration. Relevant wherever the write path maintains `events_fts` (T006+).
+  Also (2026-11-14, internal/events tests): a bound MATCH parameter takes the
+  bare query — `'"phrase words"'` as a parameter is a syntax error, because the
+  single quotes are SQL string delimiters, not FTS syntax; pass `"phrase words"`
+  and keep the single-quote form only for inline literals.
 
 - Source watcher choices (2026-11-13, internal/watch, T005): change detection
   applies three signals in order — platform identity (dev/ino on Unix), size
@@ -79,7 +132,13 @@ How to use this file:
   which is retry-safe but not semantic dedup. State keys resolve symlinks in
   parent directories (macOS /tmp → /private/tmp) so one file keeps one key
   whether or not it currently exists; tests must compare against normalized
-  paths. Lost state is reported, never silently restarted: an unreadable
+  paths. That includes the expected value: t.TempDir() on macOS sits behind
+  /var → /private/var, so a literal temp-dir string never matches (T052,
+  fixed 2026-11-14 by computing the expectation through filepath.EvalSymlinks);
+  reproduce the condition on Linux by pointing TMPDIR through a symlink (keep
+  that TMPDIR short — a long one trips the 108-byte unix-socket path limit in
+  the serve e2e tests). Lost state is reported, never silently restarted: an
+  unreadable
   device.json or sources/<agent>.json is a recovery error.
 - Hardlinks and the watcher (2026-11-13, internal/watch, T028): two live paths
   can share one platform identity (hardlinking backup tool inside the watched
@@ -111,9 +170,12 @@ How to use this file:
   commit and watch.Acknowledge closes by replay on restart (slice test kills
   a helper process there; replay validates stored bytes and inserts nothing).
   Ingestion batches are bounded at 8 MiB so importing a large history file
-  stays predictable in memory; a batch never splits a record. A stopped
-  (malformed) source prints its diagnostic once per stop offset per run,
-  then stays quiet until the offset moves; fresh sources from replacement or
+  stays predictable in memory; a batch never splits a record — one read may
+  extend past the 8 MiB bound to the end of a single larger record, never
+  past the configured record size limit (T042, ADR 0004). A stopped source
+  prints its diagnostic once per stop offset per run, then stays quiet until
+  the offset moves; each diagnostic names its remedy (`--max-record-bytes`
+  for a size stop, file repair otherwise). Fresh sources from replacement or
   truncation are reported because they re-import history, new files are not
   (a first import of thousands of files must not print a line per file).
 
@@ -237,9 +299,7 @@ How to use this file:
     RAISE(ABORT, …) fires inside the write-path transaction — the endpoint
     tests use one to break a commit mid-transaction and prove rollback
     leaves the cursor unchanged.
-  - The endpoint has no CLI yet: serving needs a transport config and the
-    production control plane (T033→T034); the credential-registry
-    authenticator (T018) and the uploader (T019) now exist.
+  - Serving is wired since T034 (`ohya serve`, see the wiring facts below).
 
 - Device pairing choices (2026-11-13, internal/registry + internal/hubsync + internal/device, T018):
   - The registry is its own SQLite database (registry.db in the owner-only
@@ -296,11 +356,69 @@ How to use this file:
     numeric user IDs (`preauthkeys create -u 1`), and its `server_url`
     must be reachable from every node process.
 
+- Forced-relay validation facts (2026-11-14, cmd/tailcat-spike + ADR 0002,
+  T032; raw artifacts with the T032 run):
+  - tsnet's derphttp upgrades the DERP connection to TLS unconditionally
+    (no loopback exception); against a plain-HTTP control plane the client
+    never even probes /derp, so isolated peers with no direct path never
+    connect (observed: 2-minute dial timeout, zero relay traffic). The
+    vendor debug switch `TS_DEBUG_USE_DERP_HTTP=1` forces plain-HTTP DERP
+    and is the only way to exercise the relay on an HTTP plane — cross-
+    machine relay in production rides on the serve TLS gap.
+  - The T014 claim that peers "found each other through the embedded DERP"
+    is disproven: T014's single-host nodes show no /derp traffic at all;
+    discovery ran through the control-plane map exchange, then direct.
+  - The spike harness now records the peer path on both sides
+    (tailcat.Node.PeerPath: relay name + direct endpoint from
+    ipnstate.PeerStatus; empty CurAddr = relay-only). Key conversion is
+    key.NodePublic(who.Node.Key) against Status.Peer — note the field is
+    Peer, not Peers, in v1.104.4.
+  - Reproduction topology: two user-defined docker bridges with the nodes
+    on separate networks and Headscale dual-attached (network alias
+    `headscale`, so server_url resolves per network); docker's nftables
+    forward rules drop all cross-bridge traffic (counters prove it).
+    Same-day direct reference: both node containers on one bridge.
+    Host-process runs cannot resolve the DERP hostname (server_url's host
+    is baked into the DERP map), so keep validation runs in containers.
+  - Numbers: relay-only p50 260 µs @1 KiB / 1,244 µs @64 KiB / 14,215 µs
+    @1 MiB (69.5 MiB/s) vs direct 124 / 676 / 3,561 µs (251.3 MiB/s) —
+    1.8–2.1× at kilobyte sizes, ~4× at 1 MiB; warm dial ~4 s either way.
+    busybox `nc -u -z` is not a UDP reachability check (always "open").
+
+- Remote query/annotate path choices (2026-11-13, internal/hubsync +
+  internal/mcpserver + internal/store, T036; ADR 0003):
+  - Query ('Q') and annotate ('N') frames ride the sync connection; the
+    endpoint serves them through hubsync.RemoteEngine, implemented by the
+    mcpserver engine, so bounds and read-only policy live in one place.
+    The import direction hubsync → mcpserver is deliberate: the sync
+    protocol carries the remote MCP surface, and mcpserver stays free of
+    sync concerns (no cycle; registry already imported hubsync).
+  - Writer derivation is structural: the annotate frame has no writer
+    field at all, so nothing can be spoofed.
+  - Deterministic annotate rejections needed sentinels for truthful wire
+    codes: mcpserver.ErrAnnotateRejected and store.ErrAnnotationRejected.
+    Their text equals the historic error prefix ("annotate tool",
+    "store: annotate"), so every error message stayed byte-identical while
+    errors.Is now classifies CodeRejected vs CodeInternal at the endpoint.
+  - The query result wire bound is 4 MiB (16x the engine's 256 KiB default
+    output); an engine configured past it answers CodeInternal with the
+    bound named — pinned by test. lpad does not exist in the bundled
+    SQLite; use hex(zeroblob(n)) to generate wide deterministic rows.
+  - RemoteClient.exchange sets conn deadlines per exchange and relies on
+    the next exchange resetting them (uploader pattern); no deadline is
+    left dangling between exchanges.
+  - Deployment wiring landed (T034): serve attaches the engine as the
+    RemoteEngine, and the stdio bridge is `hubsync.RemoteSession`
+    (internal/hubsync/session.go) behind `mcpserver`'s `Backend`
+    interface. On a non-protocol error the session drops the connection,
+    reconnects, and retries once; a CodeAuth answer maps to
+    ErrRemoteUnauthorized instead of looping with a refused credential.
+
 - Device uploader choices (2026-11-13, internal/uploader, T019):
   - The uploader reuses internal/watch as its checkpoint store: the cursors
     are hub acknowledgments. A state directory shared with local `ohya
     ingest` would mix two acknowledgment sources and skip bytes, so the
-    future join/upload command (T034) must use a dedicated state directory.
+    join command (T034) uses a dedicated one (`--state`, default ~/.ohya/join).
   - A pass with nothing pending makes no exchange, so a hub that restarted
     from a restored backup went unnoticed on an idle connection (found by
     test). Each pass now checks the open connection with a 1 ms read
@@ -313,3 +431,170 @@ How to use this file:
     to read the hub's error frame before reporting a plain disconnect.
   - A parse stop is not resent until the file grows (in-memory mark per
     process); a restart resends the stopped bytes once.
+
+- Serve/join wiring facts (2026-11-14, internal/control + cmd/ohya, T034;
+  ADR 0002 records the control-plane decision):
+  - Embedded headscale v0.29.7 goes through internal/control only, the way
+    tailcat isolates tsnet. Facts: `types.LoadConfig(path, true)` is
+    viper-global, so one process holds one plane; config paths must be
+    absolute (headscale joins relative paths against the config directory,
+    doubling them); `app.Serve` installs its own SIGTERM/SIGINT handlers,
+    so the plane stops with the process (verified by the e2e clean exits).
+    State surface used: GetUserByName/CreateUser,
+    CreatePreAuthKey(&types.UserID, reusable=false, ephemeral=false,
+    &exp, nil) → *types.PreAuthKeyNew, GetPreAuthKey (spent?), ResolveNode
+    (hub enrolled?).
+  - The join code is `invitation:preauthkey` — each half single-use within
+    the invitation's lifetime. `devices invite` opens the control plane
+    before the registry, so a missing plane issues nothing. The plane's
+    SQLite (glebarez driver, busy timeout 10 s) tolerates a concurrent
+    `devices invite` process while serve runs.
+  - Serve derives `-control-url` from `-control-listen` and refuses a
+    wildcard listen without an explicit URL (it cannot guess the address
+    devices use). The hub node mints its own single-use key only while
+    `ResolveNode("ohya-hub")` finds no node; restarts with existing node
+    state consume none.
+  - Join enrolls with the preauth half, then pairs over the tailnet (node
+    dial → 'P' frame → 'C' credential). `ohya mcp --remote` reuses the
+    join state directory; `--remote` is boolean and `--hub-addr` (same
+    flag and default ohya-hub.tail.ohya:9027 as join) carries the address.
+  - e2e (cmd/ohya/serve_e2e_test.go, fork-child pattern): serve ready in
+    ~1 s, the 16-record fixture lands within ~10–20 s of join, the first
+    remote dial costs ~10 s (tsnet path discovery). Skips on darwin CI —
+    macOS runtime behavior of the pinned library is unverified (T046);
+    Linux is the development and CI platform (T043).
+
+- Parser output version and re-derivation choices (2026-11-13,
+  internal/store + internal/events, T025): `events.parser_version` versions
+  what a parser derives from one record, deliberately separate from the
+  schema version (agentsview's `dataVersion` lesson). Rules: bump the
+  parser's `OutputVersion` in the same commit as the behavior change;
+  version 1 is the pre-marker output; a build refuses rows stamped above
+  its own parser (upgrade first, then re-derive). `store.ReDerive` walks an
+  agent's sources in `(source_id, source_offset)` order and each source's
+  records in offset order, so re-derivation needs no arrival-order
+  accidentals; the deriver binding (`events.Derivers`) re-parses one stored
+  record with `SourceScope = source ID` (synthetic native IDs stay stable)
+  and `FirstNativeID` fed by the preceding record, which is what Codex needs
+  past offset 0. Open:
+  - Duplicate reassignment switches from arrival order to walk order: a
+    hub that ingested a resumed page before the original file changes
+    which byte-identical copy is the original after a rebuild (only the
+    row id in `duplicate_of` moves). Distinct records that share an
+    ordinal stay separate originals in every order (T051).
+  - `events_fts` has insert/delete triggers but no update trigger
+    (ingestion never updates rows); re-derivation relies on the
+    external-content `rebuild` command in the same transaction to restore
+    index consistency — verify with `integrity-check`, never `count(*)`.
+
+- Performance measurement choices (2026-11-14, internal/fixgen +
+  internal/events + internal/mcpserver + docs/performance.md, T039):
+  - `internal/fixgen` generates deterministic synthetic Claude Code corpora
+    (seeded PCG; same seed, same bytes) shaped by the verified format notes:
+    ~3.2 KB mean record, 2 MiB main sessions plus subagent files, skewed
+    word distribution with rare marker terms so FTS benchmarks have both
+    wide and selective queries. `cmd/genfixture` writes it to disk for
+    runs of the real binary.
+  - Per-agent corpora (T048): `GenerateCodex`/`GeneratePi` mirror the
+    verified rollout and session shapes (subagent rollouts open with their
+    own meta and embed the parent's; Pi uses the 1.5.2 shape with the
+    system entry). All three generators share one text distribution
+    (`textGen`), so parse benchmarks compare envelopes, not text volume —
+    and the Claude Code bytes are pinned by the earlier measurements:
+    refactor without changing the rng call order and verify byte-identity
+    against a pre-change snapshot (done for the textGen extraction).
+    Measured parse rates: Claude Code 127–132, Codex 173–178, Pi 156–159
+    MB/s — same order, JSON decode dominating, so per-agent write-path
+    benchmarks stay unnecessary (the path behind the parser is shared and
+    fsync-bound). `genfixture -agent codex|pi` writes the per-agent trees
+    the CLI discovers. The generators must keep the verified usage
+    identities (Codex cached within input; Pi parts summing to totalTokens)
+    — pinned by TestCodexCorpusParsesCompletely and TestPiCorpusParsesCompletely
+    counting HasUsage against the records that carry usage.
+  - The write path is fsync-bound, not CPU-bound: with synchronous FULL,
+    the import rate swings 4–20 MB/s with disk contention on the shared
+    reference VM, while parse-only stays 126–130 MB/s and replay validation
+    ~1 GB/s. CPU profile: 67% of samples in CGO (SQLite inserts/commit),
+    8–15% encoding/json; no hot ohya Go function — no Go-side optimization
+    is justified (the levers are durability and batch size, both deliberate).
+  - Database multiplier is structural, ~2.4x input bytes (raw JSON + text +
+    metadata + FTS index); measured 351.6 MB for a 138.7 MiB corpus.
+    Peak import RSS ~28 MB (streamed 8 MiB batches); no-op poll over 461
+    sources 0.02 s; one live append pass 0.13 s; wide FTS MATCH ~0.5–1 ms
+    per 1,000 matching events, everything else flat in volume.
+  - The mcpserver query benchmark shares one seeded hub across benchmarks
+    via sync.Once and closes it in TestMain; a per-benchmark cleanup would
+    close the DB while later benchmarks still use it, and the temp dir must
+    be removed by that TestMain (an os.MkdirTemp leak there once filled the
+    disk on this machine).
+  - Measured limits live in docs/performance.md, not docs/operations.md:
+    the operations guide is T040's parked work (install/backup/recovery,
+    blocked on macOS verification) and creating the same path here would
+    collide when that work integrates; link performance.md from it then.
+  - Regression guards run in make check with order-of-magnitude ceilings
+    (ingest 24 MiB < 30 s, queries < 2 s) — they catch superlinear
+    regressions, not machine drift; precise tracking is benchstat work,
+    not automated.
+
+- Memory verification gate choices (2026-11-14, cmd/memory-e2e, T041):
+  - Claude Code 2.1.280 headless: `claude -p <prompt> --mcp-config <file>
+    --strict-mcp-config --allowed-tools mcp__ohya__sql,... --output-format
+    stream-json --verbose` runs with CLAUDE_CONFIG_DIR (plus HOME) redirected
+    into the gate's output directory and authenticates from the ambient
+    ANTHROPIC_* env alone — no credential files are read. The final stream
+    event `{"type":"result","subtype":"success","result":...}` carries the
+    answer; assistant `tool_use` blocks carry the tool calls. Give the child
+    stdin /dev/null or it waits 3 s for piped input.
+  - Codex 0.169 headless: OPENAI_API_KEY is no longer picked up implicitly
+    (`preferred_auth_method` is ignored); run `printenv OPENAI_API_KEY |
+    codex login --with-api-key` once inside the isolated CODEX_HOME. The
+    config.toml naming the ohya server must sit INSIDE CODEX_HOME — a config
+    written next to it is silently never read, and the model then answers
+    that the sql tool is unavailable (a misleading "Untrusted project-local
+    configuration" warning can point the wrong way; the router error is
+    "unknown MCP server 'ohya'"). `codex mcp list` under the isolated
+    CODEX_HOME proves registration before any agent run. `codex exec --trust`
+    is passed defensively (codex gates MCP servers behind project trust in
+    untrusted directories) and writes only inside CODEX_HOME — verified
+    nothing lands in the real ~/.codex. `codex exec --ephemeral --json -o
+    <file>` emits `item.completed` events (mcp_tool_call with server+tool,
+    agent_message) plus `turn.completed`; websocket-fallback error items
+    appear even on successful runs and are benign.
+  - Do not redirect HOME for a mise-shimmed `codex`: the shim busy-spins
+    resolving its install when HOME is foreign (verified: shim at 110% CPU,
+    zero output; the direct install binary under the mise tree works). The
+    gate keeps the real HOME for codex and relies on CODEX_HOME alone for
+    isolation; claude gets a scratch HOME plus an env allowlist
+    (PATH/HOME/TERM/LANG/CLAUDE_* + ANTHROPIC_* passthrough).
+  - The gate's own citation check resolves cited event IDs through a second
+    `ohya mcp` session (the same sql surface), so "resolvable evidence" is
+    proven against the tool contract, not by opening the database directly.
+
+- Benchstat tracking choices (2026-11-14, Makefile + .github/workflows/ci.yml, T047):
+  - benchstat is a pinned tool install
+    (golang.org/x/perf/cmd/benchstat@v0.0.0-20261009192801-be2c69fb417e),
+    deliberately not a go.mod dependency — nothing in the project imports
+    it. x/perf has no tagged releases, so the pin is a pseudo-version;
+    bump it consciously.
+  - `make bench-save` writes raw runs under perf/ (gitignored, like
+    profiles); CI uploads each run as the `bench-<sha>` artifact and the
+    baseline reaches PRs through the actions-cache (`bench-baseline-<sha>`
+    keys, saved only on main pushes — caches are immutable per key, hence
+    the sha in the key and the prefix restore).
+  - The CI bench job reports and never fails on a delta: GitHub's shared
+    macOS runners are not the reference machine, and their fsync-bound
+    rows swing with disk contention. Only same-hardware comparisons count;
+    CI deltas are a prompt to reproduce with bench-save on both commits.
+  - bench-save captures stdout with `>` (not `tee`): a pipeline would hide
+    a failed `go test` behind tee's exit 0.
+  - BenchmarkIngestAppend must serve any b.N the framework asks for
+    (fixed 2026-11-14, T053): its 16 MiB corpus holds only ~470 eight-record
+    append windows, and on fast storage (the CI runner) the default 1 s
+    benchtime drives b.N past that cap — the old b.Fatalf made the whole
+    bench job fail (go test exit 1, make exit 2, output lost inside
+    perf/bench.txt). The benchmark now wraps the window index and re-primes
+    a fresh database (prefix committed, timer stopped) at each lap start.
+    Same trap for any future benchmark over a bounded corpus: never
+    b.Fatalf on exhaustion; re-prime or regenerate instead. The bench job's
+    artifact upload is now `if: always()` so a failed run still ships its
+    partial perf/bench.txt for diagnosis.

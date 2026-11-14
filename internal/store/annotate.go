@@ -27,6 +27,13 @@ const (
 	AnnotationDelete AnnotationOpKind = "delete"
 )
 
+// ErrAnnotationRejected reports an annotation batch refused on its content:
+// writer identity, batch rules, name syntax, values, duplicate identities,
+// or a referenced event that does not exist. Retrying the same batch can
+// never succeed. Errors of the SQL execution path — lock contention, a
+// failed commit — do not wrap it; a later retry may clear them.
+var ErrAnnotationRejected = errors.New("store: annotate")
+
 // Annotation limits, shared by this write path and the MCP tool.
 const (
 	// MaxAnnotationOperations bounds one batch.
@@ -114,52 +121,53 @@ func Annotate(ctx context.Context, writer *sql.DB, writerID string, ops []Annota
 
 // validateAnnotationBatch checks every batch rule before any database work:
 // writer identity, batch size, operation shape, name syntax, value size and
-// validity, and duplicate identities.
+// validity, and duplicate identities. Every rejection wraps
+// ErrAnnotationRejected.
 func validateAnnotationBatch(writerID string, ops []AnnotationOp) error {
 	if writerID == "" {
-		return fmt.Errorf("store: annotate: no writer ID; the hub assigns it from the device identity")
+		return fmt.Errorf("%w: no writer ID; the hub assigns it from the device identity", ErrAnnotationRejected)
 	}
 	if len(ops) > MaxAnnotationOperations {
-		return fmt.Errorf("store: annotate: %d operations exceed the limit of %d", len(ops), MaxAnnotationOperations)
+		return fmt.Errorf("%w: %d operations exceed the limit of %d", ErrAnnotationRejected, len(ops), MaxAnnotationOperations)
 	}
 	first := make(map[annotationID]int, len(ops))
 	for i := range ops {
 		op := &ops[i]
-		where := fmt.Sprintf("store: annotate: operation %d", i)
 		switch op.Op {
 		case AnnotationUpsert, AnnotationDelete:
 		default:
-			return fmt.Errorf("%s: unknown op %q, want %q or %q", where, op.Op, AnnotationUpsert, AnnotationDelete)
+			return fmt.Errorf("%w: operation %d: unknown op %q, want %q or %q",
+				ErrAnnotationRejected, i, op.Op, AnnotationUpsert, AnnotationDelete)
 		}
 		if op.EventID < 1 {
-			return fmt.Errorf("%s: event_id %d is not a positive integer", where, op.EventID)
+			return fmt.Errorf("%w: operation %d: event_id %d is not a positive integer", ErrAnnotationRejected, i, op.EventID)
 		}
 		if !annotationNameRE.MatchString(op.Namespace) {
-			return fmt.Errorf("%s: namespace %q must hold 1 to 128 ASCII characters from letters, digits and _ - . /",
-				where, op.Namespace)
+			return fmt.Errorf("%w: operation %d: namespace %q must hold 1 to 128 ASCII characters from letters, digits and _ - . /",
+				ErrAnnotationRejected, i, op.Namespace)
 		}
 		if !annotationNameRE.MatchString(op.Key) {
-			return fmt.Errorf("%s: key %q must hold 1 to 128 ASCII characters from letters, digits and _ - . /",
-				where, op.Key)
+			return fmt.Errorf("%w: operation %d: key %q must hold 1 to 128 ASCII characters from letters, digits and _ - . /",
+				ErrAnnotationRejected, i, op.Key)
 		}
 		if op.Op == AnnotationUpsert {
 			if op.Value == "" {
-				return fmt.Errorf("%s: upsert requires a JSON value", where)
+				return fmt.Errorf("%w: operation %d: upsert requires a JSON value", ErrAnnotationRejected, i)
 			}
 			if !json.Valid([]byte(op.Value)) {
-				return fmt.Errorf("%s: value is not valid JSON", where)
+				return fmt.Errorf("%w: operation %d: value is not valid JSON", ErrAnnotationRejected, i)
 			}
 			if len(op.Value) > MaxAnnotationValueBytes {
-				return fmt.Errorf("%s: value holds %d bytes, above the %d byte limit",
-					where, len(op.Value), MaxAnnotationValueBytes)
+				return fmt.Errorf("%w: operation %d: value holds %d bytes, above the %d byte limit",
+					ErrAnnotationRejected, i, len(op.Value), MaxAnnotationValueBytes)
 			}
 		} else if op.Value != "" {
-			return fmt.Errorf("%s: delete takes no value; omit it", where)
+			return fmt.Errorf("%w: operation %d: delete takes no value; omit it", ErrAnnotationRejected, i)
 		}
 		id := annotationID{op.EventID, op.Namespace, op.Key}
 		if j, dup := first[id]; dup {
-			return fmt.Errorf("%s: duplicate identity: operations %d and %d both annotate event %d, namespace %q, key %q",
-				where, j, i, op.EventID, op.Namespace, op.Key)
+			return fmt.Errorf("%w: operation %d: duplicate identity: operations %d and %d both annotate event %d, namespace %q, key %q",
+				ErrAnnotationRejected, i, j, i, op.EventID, op.Namespace, op.Key)
 		}
 		first[id] = i
 	}
@@ -201,8 +209,8 @@ func requireAnnotationEvents(ctx context.Context, tx *sql.Tx, ops []AnnotationOp
 			missing = append(missing, fmt.Sprint(id))
 		}
 		slices.Sort(missing)
-		return fmt.Errorf("store: annotate: no event with id %s; annotations attach to existing events",
-			strings.Join(missing, ", "))
+		return fmt.Errorf("%w: no event with id %s; annotations attach to existing events",
+			ErrAnnotationRejected, strings.Join(missing, ", "))
 	}
 	return nil
 }

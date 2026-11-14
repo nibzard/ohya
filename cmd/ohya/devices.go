@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/nibzard/ohya/internal/control"
 	"github.com/nibzard/ohya/internal/registry"
 )
 
@@ -22,7 +23,8 @@ const devicesUsage = `ohya devices — manage paired devices
 
 Usage:
 
-  ohya devices invite [--ttl 15m]   Issue a one-time pairing invitation
+  ohya devices invite [--ttl 15m]   Issue a one-time join code (pairing
+                                    invitation plus coordinator admission)
   ohya devices list                 List devices and invitations
   ohya devices revoke <device-id>   Revoke a device, final for its identity
 `
@@ -72,15 +74,19 @@ func (f *registryFlags) openRegistry() (*registry.DB, error) {
 	return registry.Open(filepath.Join(*f.state, registry.FileName))
 }
 
-// runDevicesInvite issues one invitation and prints its code on the first
-// stdout line, so it can be piped to the joining device.
+// runDevicesInvite issues one join code and prints it on the first stdout
+// line, so it can be piped to the joining device. The code carries the T018
+// pairing invitation plus the single-use coordinator preauth key minted with
+// it — the bridge from the registry's admission to tailnet admission — so
+// one code hands one device everything `ohya join` needs, and each half is
+// consumable exactly once within the same lifetime.
 func runDevicesInvite(args []string, stdout, stderr io.Writer) error {
 	flags, err := newRegistryFlags("ohya devices invite", stderr)
 	if err != nil {
 		return err
 	}
 	ttl := flags.fs.Duration("ttl", registry.DefaultInvitationTTL,
-		"how long the invitation stays consumable")
+		"how long the join code stays consumable")
 	if err := flags.fs.Parse(args); err != nil {
 		return err
 	}
@@ -88,6 +94,25 @@ func runDevicesInvite(args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("unexpected argument %q", flags.fs.Arg(0))
 	}
 
+	// The coordination plane first: without it there is no admission to
+	// bridge the invitation to, and no half a code should be issued.
+	ctl, err := control.Open(filepath.Join(*flags.state, control.DirName))
+	if err != nil {
+		return err
+	}
+	defer ctl.Close()
+	st, err := ctl.State()
+	if err != nil {
+		return err
+	}
+	user, err := control.EnsureUser(st)
+	if err != nil {
+		return err
+	}
+	authKey, err := control.MintAuthKey(st, user, *ttl)
+	if err != nil {
+		return err
+	}
 	reg, err := flags.openRegistry()
 	if err != nil {
 		return err
@@ -97,8 +122,9 @@ func runDevicesInvite(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, inv.Secret)
-	fmt.Fprintf(stderr, "expires %s (one device may use it once)\n", msTime(inv.ExpiresAtMS))
+	fmt.Fprintln(stdout, inv.Secret+":"+authKey)
+	fmt.Fprintf(stderr, "expires %s (one device may use each half once); join with: ohya join <code>\n",
+		msTime(inv.ExpiresAtMS))
 	return nil
 }
 

@@ -6,16 +6,17 @@ One Go executable, one hub-owned SQLite WAL transcript database, two MCP tools: 
 `sql(query)` and bounded `annotate(operations)`. Keep parsing, normalization, persistence, synchronization, transport
 and MCP at clear boundaries; introduce interfaces only where consumed.
 
-Start locally on macOS with Claude Code and polling. Add Codex and the Pi agent
-next; both write append-only JSONL session logs that fit the cursor model.
+Start locally on macOS with Claude Code and polling. Codex and the Pi agent
+are next; both write append-only JSONL session logs that fit the cursor model.
 OpenCode is a planned phase 2 source, pending a parser spike for its
 per-message JSON storage. Networking
 uses an isolated Tailcat adapter: the T014 feasibility spike validated two
 processes exchanging encrypted batches against a self-hosted Headscale
 coordination server (ADR 0002, `cmd/tailcat-spike`), and all transport code
 stays behind the `internal/transport` interfaces consumed by the sync layer.
-The production control-plane choice and forced-relay behavior remain open
-items in that ADR. See README.md for implementation order.
+The production control plane is decided and ships embedded in `ohya serve`
+(ADR 0002); forced-relay behavior remains an open item there. See README.md
+for implementation order.
 
 The hub also ingests its own files through the same transactional write path.
 All writes use one writer. Readers use separate restricted connections.
@@ -73,8 +74,11 @@ If native session identity is missing, use a source-scoped synthetic native ID
 in a reserved namespace; do not guess or later merge sessions automatically.
 Malformed complete lines and records above the configured size limit stop that
 source at the offending offset and expose a diagnostic without transcript content.
-Do not silently skip bytes. Other sources continue. Recovery requires repairing
-the source or an explicit future recovery operation; automatic skipping is not MVP.
+Do not silently skip bytes. Other sources continue. Recovery is user-owned and
+the diagnostic states its remedy ([ADR 0004](docs/adr/0004-stopped-source-recovery.md)):
+`ohya ingest --max-record-bytes` (default 1 MiB) raises the per-record bound, so a
+size stop clears on the next pass from the checkpointed offset, and every other
+stop needs the source file repaired at that offset; automatic skipping is rejected.
 
 Implemented (T011): `internal/codex` parses Codex rollout files, and
 `internal/events.Parse` selects the parser from the source's agent for both
@@ -84,15 +88,47 @@ the source belongs to it (a first record without a thread id gives the
 source a synthetic ID). A parse that starts past offset 0 takes the native
 ID of the source's committed first record (`store.SourceState`), so a
 restart, a split batch or a hub-side batch names the same session. A thread
-spans several rollout files, and a resumed page replays tail records under
-the same per-thread `ordinal`. The write path stores such a record as a
-duplicate of the first stored copy of `(session, ordinal)`: retained for
-retry validation, without search text, and outside the aggregates. Arrival
-order decides which copy is first. `event_msg` records mirror the
+spans several rollout files, and a resumed page re-enumerates ordinals after
+a rollback instead of byte-replaying the earlier file's records: at a shared
+ordinal the two files hold different records. Deduplication is keyed by
+`(session, ordinal)` plus content — a byte-identical copy of a stored
+original is stored as its duplicate: retained for retry validation, without
+search text, and outside the aggregates — while a differing record at a
+known ordinal is a distinct record and an original of its own, so nothing
+the thread really wrote is suppressed. `event_msg` records mirror the
 transcript and add no search text; `event_msg/user_message` marks the human
 prompt for `sessions.first_prompt`, because Codex also sends injected
 context as `user` messages. `ohya ingest` runs one watcher and checkpoint
 file per agent.
+
+Implemented (T037): `internal/pi` parses Pi agent session files, which are
+global — one append-only JSONL per session under
+`~/.pi/agent/sessions/<encoded-cwd>/` — never project-local `.pi/`. The
+`session` header at offset 0 names the session (the same header-first rule
+as Codex: parses past offset 0 take the id from the committed first record),
+and the `<encoded-cwd>` directory encoding is lossy, so working-directory
+identity comes from the header's `cwd` alone. Every user message is a fresh
+prompt (the harness preamble is a separate `system` entry, which contributes
+no search text). Assistant messages carry one usage object per response —
+`input` excludes both `cacheRead` and `cacheWrite` — so token totals sum
+directly with no message-id dedupe; a usage whose parts do not sum to
+`totalTokens` counts nothing. The usage-row key is the `responseId`, or the
+entry id when the provider emits none (verified 2026-11-14:
+`openai-completions` records never carry one). Entries flush incrementally,
+so partial files from failed model calls are ordinary input, not corruption:
+the error assistant carries zero usage and no response id.
+
+Each parser also carries an output version (`OutputVersion`), stamped per row
+in `events.parser_version` and independent of the schema version: it versions
+what the parser derives from one record, and any change to that output bumps
+it in the same commit. Because the hub preserves every raw record, a bumped
+parser re-derives stored rows inside the hub (`store.ReDerive`, the
+`ohya rederive` command) in one transaction — normalized fields are rewritten
+in place from `raw_json`, session aggregates, token totals and replay
+duplicates are recomputed deterministically, and `events_fts` is rebuilt from
+the content table — with no source-file access and no resync from devices.
+Rows written by a newer parser than the running build are refused until the
+binary is upgraded. See DB.md, "Re-derivation".
 
 ## Sync contract
 
@@ -129,9 +165,9 @@ allocation: 1 MiB per record, 8 MiB per batch, 65,536 records per batch. The
 endpoint authenticates each connection through an `Authenticator` interface
 and rejects any frame naming another device; the credential registry backs
 the interface (T018, `internal/registry`), with a per-frame registry check
-and revocation teardown through its `SessionAuthorizer` extension. Tailcat
-WhoIs can back the same interfaces for transport-level identity when the
-serving command ships (T033, T034). Normalization runs
+and revocation teardown through its `SessionAuthorizer` extension. `ohya
+serve` (T034) plugs the endpoint into the Tailcat hub listener behind
+exactly that authenticator. Normalization runs
 the source agent's local parser and adapter (`internal/events.Parse`), so
 hub-side normalization is byte-identical to local ingestion, and a record the
 parser refuses commits its valid prefix and reports the stop, mirroring local
@@ -159,8 +195,48 @@ the retained file, or reported as an unrecoverable gap when the file is gone
 or changed. Each pass first checks, without blocking, that an idle
 connection is still open, so a hub restart is noticed even when nothing is
 pending. The uploader's checkpoint state must be dedicated to one hub: its
-cursors are that hub's acknowledgments. No command runs it yet; the serving
-and joining commands wait on the production control plane (T033, T034).
+cursors are that hub's acknowledgments. `ohya join` (T034) runs it, one
+instance per agent over the Tailcat device node.
+
+Implemented (T036): the same connection carries the device-facing read and
+annotate path ([ADR 0003](docs/adr/0003-remote-query-annotate.md)). Two
+request frames — a query (one SQL statement within the sql tool's 64 KiB
+input bound) and an annotate batch (the tool's JSON arguments within its
+1 MiB request bound) — are served through the endpoint's optional
+`RemoteEngine`, which the `internal/mcpserver` engine implements, so the
+remote path runs under the same read-only policy, the same row, byte,
+deadline and concurrency bounds, and the same strict annotate decoding as
+the stdio tools. Replies frame the bounded result exactly as the sql tool
+shapes it (a 4 MiB wire bound; an engine configured past it produces an
+explicit internal error, never a silently cut payload) or the committed
+applied/unchanged counts. The annotation writer is the authenticated
+device: the annotate frame carries no writer field at all, and the
+per-frame registry check and revocation teardown of T018 gate queries and
+annotate batches exactly as they gate registrations and batches — a
+revocation that lands mid-query cancels the statement and closes the
+connection before any result is delivered. Reads carry no ownership state
+(`tla/Auth.tla`): every paired device reads all history. An endpoint built
+without a `RemoteEngine` stays upload-only and answers these frames with an
+explicit `CodeNoRemote`.
+
+Implemented (T034): the deployment commands. `ohya serve` runs the hub: it
+provisions the self-hosted coordination plane in-process (ADR 0002 — own
+SQLite database under `control/` in the state directory, a generated
+configuration regenerated from its flags on every start, an embedded DERP
+relay; no external service and no second admin surface), enrolls the hub's
+own durable transport node — a single-use coordinator key on first start
+only — and serves the endpoint on the encrypted tailnet behind the registry
+authenticator, with the bounded engine attached as the `RemoteEngine`.
+`ohya devices invite` mints the registry invitation and a single-use
+coordinator preauth key together and prints them as one join code;
+`ohya join` spends both halves, pairs its identity over the tailnet, and
+runs one uploader per agent from a state directory dedicated to the hub.
+`ohya mcp --remote` speaks the same MCP stdio surface through
+`hubsync.RemoteSession` (`internal/hubsync/session.go`): one authenticated
+connection, the writer derived from the paired credential, reconnect and
+one retry on transport failure, and a terminal error on a refused
+credential. The end-to-end test (`cmd/ohya/serve_e2e_test.go`) drives real
+serve, join and remote-MCP child processes over free loopback ports.
 
 Offline replay relies on retained source files. Replacement or deletion before
 upload can lose uncommitted history; surface this limitation. There is no outgoing
@@ -218,9 +294,9 @@ per-request rules: `Authorize` gates every request frame after it is read,
 and `WatchRevocations` closes the revoked device's live connections and
 cancels their in-flight request contexts (revocations from another process
 reach the endpoint within the poll interval; a request that already
-returned its data cannot be recalled). A Tailcat WhoIs-based authenticator
-can implement the same interfaces once the serving command exists (T033,
-T034); the registry still decides admission and revocation.
+returned its data cannot be recalled). `ohya serve` (T034) runs the
+endpoint behind exactly this authenticator; the registry decides admission
+and revocation, and the coordination plane only carries transport.
 
 SQL runs with a read-only connection, SQLite authorizer, one statement, execution
 deadline, row/byte limits and bounded concurrency. Deny attachment, extension
@@ -240,7 +316,13 @@ own protected database (T018, `internal/registry`), so the tool's connection
 cannot reach it and no deny-list entry is needed.
 Defaults: 5 s deadline,
 500 rows, 256 KiB of row JSON, 4 concurrent queries, 64 KiB query text; a
-caller past the concurrency bound fails fast instead of queueing.
+caller past the concurrency bound fails fast instead of queueing. The same
+engine also serves paired devices remotely, through the endpoint's query
+and annotate frames (T036, see the sync contract); the annotation writer
+there is the authenticated device, never caller input. `mcpserver.New`
+consumes this surface as a `Backend` interface (query plus writer-derived
+annotate), so the local engine and the device-side `hubsync.RemoteSession`
+(`ohya mcp --remote`, T034) attach to the same MCP tool handlers.
 
 ## Deferred
 

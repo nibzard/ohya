@@ -822,11 +822,18 @@ func TestNormalizePathResolvesSymlinkedDirectories(t *testing.T) {
 	if err := os.Symlink(real, link); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	if got, want := normalizePath(filepath.Join(link, "s.jsonl")), filepath.Join(real, "s.jsonl"); got != want {
+	// The temp dir itself can sit behind a symlink — macOS places it under
+	// /var, which resolves to /private/var. The expectation must therefore
+	// resolve the same parent symlinks that normalizePath resolves.
+	resolved, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := normalizePath(filepath.Join(link, "s.jsonl")), filepath.Join(resolved, "s.jsonl"); got != want {
 		t.Fatalf("normalizePath = %q, want %q", got, want)
 	}
 	// A file that does not exist still normalizes to the same key.
-	if got, want := normalizePath(filepath.Join(link, "absent.jsonl")), filepath.Join(real, "absent.jsonl"); got != want {
+	if got, want := normalizePath(filepath.Join(link, "absent.jsonl")), filepath.Join(resolved, "absent.jsonl"); got != want {
 		t.Fatalf("normalizePath for an absent file = %q, want %q", got, want)
 	}
 }

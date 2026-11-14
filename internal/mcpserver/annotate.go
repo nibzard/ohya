@@ -10,14 +10,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/nibzard/ohya/internal/store"
 )
 
 // AnnotateToolName is the annotation tool's name.
 const AnnotateToolName = "annotate"
+
+// ErrAnnotateRejected reports an annotate request refused on its content
+// before anything touched the database: strict decoding, request limits, or
+// a rule an operation violates. Retrying the same bytes can never succeed.
+var ErrAnnotateRejected = errors.New("annotate tool")
 
 // boolPtr returns a pointer to b, for the tool annotation hints that are
 // pointers so an explicit false reaches clients.
@@ -55,36 +60,35 @@ type annotateOperationJSON struct {
 	Value     json.RawMessage `json:"value,omitempty"`
 }
 
-// handleAnnotate adapts the engine to the MCP tool contract. Errors become
-// tool errors the calling agent can read and correct, not protocol failures.
-func (e *Engine) handleAnnotate(ctx context.Context, req *mcp.CallToolRequest, _ annotateArgs) (*mcp.CallToolResult, store.AnnotateResult, error) {
-	result, err := e.Annotate(ctx, req.Params.Arguments)
-	if err != nil {
-		return nil, store.AnnotateResult{}, fmt.Errorf("annotate tool: %w", err)
-	}
-	return nil, result, nil
+// Annotate applies one annotate request attributed to this engine's writer
+// identity: the local Device ID of the stdio tool.
+func (e *Engine) Annotate(ctx context.Context, raw json.RawMessage) (store.AnnotateResult, error) {
+	return e.AnnotateAs(ctx, e.options.WriterID, raw)
 }
 
-// Annotate applies one annotate request: raw holds the tool call's JSON
-// arguments. Every rejection below fires before the batch touches the
-// database, so a rejected request applies nothing.
-func (e *Engine) Annotate(ctx context.Context, raw json.RawMessage) (store.AnnotateResult, error) {
+// AnnotateAs applies one annotate request attributed to writerID, which the
+// caller derives from an authenticated identity, never from request
+// content. The sync endpoint passes the authenticated device; a request can
+// never name a writer, because writer_id fails the strict decode. Every
+// content rejection fires before the batch touches the database, so a
+// rejected request applies nothing.
+func (e *Engine) AnnotateAs(ctx context.Context, writerID string, raw json.RawMessage) (store.AnnotateResult, error) {
 	if len(raw) == 0 {
-		return store.AnnotateResult{}, fmt.Errorf("annotate tool: missing arguments")
+		return store.AnnotateResult{}, fmt.Errorf("%w: missing arguments", ErrAnnotateRejected)
 	}
 	if len(raw) > e.options.MaxAnnotateRequestBytes {
-		return store.AnnotateResult{}, fmt.Errorf("annotate tool: request holds %d bytes, above the %d byte limit",
-			len(raw), e.options.MaxAnnotateRequestBytes)
+		return store.AnnotateResult{}, fmt.Errorf("%w: request holds %d bytes, above the %d byte limit",
+			ErrAnnotateRejected, len(raw), e.options.MaxAnnotateRequestBytes)
 	}
 	if e.writer == nil {
-		return store.AnnotateResult{}, fmt.Errorf("annotate tool: no hub writer configured")
+		return store.AnnotateResult{}, fmt.Errorf("%w: no hub writer configured", ErrAnnotateRejected)
 	}
 	var request annotateRequestJSON
 	if err := decodeStrict(raw, &request); err != nil {
-		return store.AnnotateResult{}, fmt.Errorf("annotate tool: arguments: %w", err)
+		return store.AnnotateResult{}, fmt.Errorf("%w: arguments: %w", ErrAnnotateRejected, err)
 	}
 	if request.Operations == nil {
-		return store.AnnotateResult{}, fmt.Errorf("annotate tool: arguments: missing operations")
+		return store.AnnotateResult{}, fmt.Errorf("%w: arguments: missing operations", ErrAnnotateRejected)
 	}
 	ops := make([]store.AnnotationOp, 0, len(request.Operations))
 	for i, rawOp := range request.Operations {
@@ -94,7 +98,7 @@ func (e *Engine) Annotate(ctx context.Context, raw json.RawMessage) (store.Annot
 		}
 		ops = append(ops, op)
 	}
-	return store.Annotate(ctx, e.writer, e.options.WriterID, ops)
+	return store.Annotate(ctx, e.writer, writerID, ops)
 }
 
 // decodeOperation turns one raw operation into a validated store operation.
@@ -103,10 +107,10 @@ func (e *Engine) Annotate(ctx context.Context, raw json.RawMessage) (store.Annot
 func (e *Engine) decodeOperation(index int, raw json.RawMessage) (store.AnnotationOp, error) {
 	var op annotateOperationJSON
 	if err := decodeStrict(raw, &op); err != nil {
-		return store.AnnotationOp{}, fmt.Errorf("annotate tool: operation %d: %w", index, err)
+		return store.AnnotationOp{}, fmt.Errorf("%w: operation %d: %w", ErrAnnotateRejected, index, err)
 	}
 	missing := func(field string) error {
-		return fmt.Errorf("annotate tool: operation %d: missing %s", index, field)
+		return fmt.Errorf("%w: operation %d: missing %s", ErrAnnotateRejected, index, field)
 	}
 	switch {
 	case op.Op == nil:
@@ -127,20 +131,20 @@ func (e *Engine) decodeOperation(index int, raw json.RawMessage) (store.Annotati
 	switch result.Op {
 	case store.AnnotationUpsert:
 		if op.Value == nil {
-			return store.AnnotationOp{}, fmt.Errorf("annotate tool: operation %d: upsert requires a JSON value", index)
+			return store.AnnotationOp{}, fmt.Errorf("%w: operation %d: upsert requires a JSON value", ErrAnnotateRejected, index)
 		}
 		var compact bytes.Buffer
 		if err := json.Compact(&compact, op.Value); err != nil {
-			return store.AnnotationOp{}, fmt.Errorf("annotate tool: operation %d: value is not valid JSON: %w", index, err)
+			return store.AnnotationOp{}, fmt.Errorf("%w: operation %d: value is not valid JSON: %w", ErrAnnotateRejected, index, err)
 		}
 		result.Value = compact.String()
 	case store.AnnotationDelete:
 		if op.Value != nil {
-			return store.AnnotationOp{}, fmt.Errorf("annotate tool: operation %d: delete takes no value; omit it", index)
+			return store.AnnotationOp{}, fmt.Errorf("%w: operation %d: delete takes no value; omit it", ErrAnnotateRejected, index)
 		}
 	default:
-		return store.AnnotationOp{}, fmt.Errorf("annotate tool: operation %d: unknown op %q, want %q or %q",
-			index, *op.Op, store.AnnotationUpsert, store.AnnotationDelete)
+		return store.AnnotationOp{}, fmt.Errorf("%w: operation %d: unknown op %q, want %q or %q",
+			ErrAnnotateRejected, index, *op.Op, store.AnnotationUpsert, store.AnnotationDelete)
 	}
 	return result, nil
 }

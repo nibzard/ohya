@@ -1,0 +1,4 @@
+{"type":"session","version":3,"id":"00000000-0000-7000-8000-0000000000b4","timestamp":"2026-11-13T09:40:00.000Z","cwd":"/home/dev/pi-project"}
+{"type":"model_change","id":"dd000001","parentId":null,"timestamp":"2026-11-13T09:40:00.100Z","provider":"openai","modelId":"gpt-5.4-nano"}
+{"type":"message","id":"dd000002","parentId":"dd000001","timestamp":"2026-11-13T09:40:00.200Z","message":{"role":"assistant","content":[{"type":"text","text":"br"eak"}],"api":"openai-responses","provider":"openai","model":"gpt-5.4-nano","usage":{"input":10,"output":2,"cacheRead":0,"cacheWrite":0,"reasoning":0,"totalTokens":12},"stopReason":"stop","responseId":"resp_fixture_bad1"}}
+{"type":"message","id":"dd000003","parentId":"dd000002","timestamp":"2026-11-13T09:40:02.000Z","message":{"role":"toolResult","toolCallId":"call_fixture_bad1","toolName":"bash","content":[{"type":"text","text":"main.py\n"}],"isError":false,"timestamp":1794562800200}}

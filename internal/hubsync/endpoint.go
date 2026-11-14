@@ -10,6 +10,7 @@ package hubsync
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/nibzard/ohya/internal/events"
+	"github.com/nibzard/ohya/internal/mcpserver"
 	"github.com/nibzard/ohya/internal/store"
 )
 
@@ -65,6 +67,21 @@ func (a StaticAuthenticator) Authenticate(context.Context, net.Conn) (string, er
 	return string(a), nil
 }
 
+// RemoteEngine is the hub-side read and annotation surface paired devices
+// reach through query and annotate frames on the sync connection. The query
+// engine of internal/mcpserver implements it, so the remote path runs under
+// the same bounds and the same read-only policy as the stdio tools. The
+// endpoint supplies the annotation writer from the authenticated device; a
+// request can never name one.
+type RemoteEngine interface {
+	// Query runs exactly one bounded read-only statement and returns its
+	// truncated-to-limits result.
+	Query(ctx context.Context, query string) (mcpserver.Result, error)
+	// AnnotateAs applies one annotate request's JSON arguments, attributing
+	// every operation of the batch to writerID.
+	AnnotateAs(ctx context.Context, writerID string, raw json.RawMessage) (store.AnnotateResult, error)
+}
+
 // Options configures one Endpoint. The zero value is usable: every field has
 // a default.
 type Options struct {
@@ -78,6 +95,11 @@ type Options struct {
 	// AuthTimeout bounds the authentication exchange of one connection.
 	// Values <= 0 select DefaultAuthTimeout.
 	AuthTimeout time.Duration
+	// Remote serves the device-facing query and annotate frames through one
+	// RemoteEngine, usually an mcpserver.Engine over this hub's database.
+	// Nil keeps the endpoint upload-only: query and annotate frames are
+	// answered with CodeNoRemote, and the connection stays usable.
+	Remote RemoteEngine
 }
 
 // Endpoint serves the sync protocol to devices. Serve it on the listener of
@@ -86,6 +108,7 @@ type Endpoint struct {
 	db     *store.DB
 	auth   Authenticator
 	authz  SessionAuthorizer
+	remote RemoteEngine
 	opts   Options
 	slots  chan struct{}
 	gates  sourceGates
@@ -123,13 +146,14 @@ func NewEndpoint(db *store.DB, auth Authenticator, opts Options) (*Endpoint, err
 	}
 	authz, _ := auth.(SessionAuthorizer)
 	return &Endpoint{
-		db:    db,
-		auth:  auth,
-		authz: authz,
-		opts:  opts,
-		slots: make(chan struct{}, maxConns),
-		conns: map[*connSession]struct{}{},
-		byDev: map[string]map[*connSession]struct{}{},
+		db:     db,
+		auth:   auth,
+		authz:  authz,
+		remote: opts.Remote,
+		opts:   opts,
+		slots:  make(chan struct{}, maxConns),
+		conns:  map[*connSession]struct{}{},
+		byDev:  map[string]map[*connSession]struct{}{},
 	}, nil
 }
 
@@ -227,6 +251,10 @@ func (e *Endpoint) serveConn(ctx context.Context, session *connSession) {
 			closeConn = e.handleRegistration(ctx, conn, deviceID, *frame.Registration)
 		case frame.Batch != nil:
 			closeConn = e.handleBatch(ctx, conn, deviceID, *frame.Batch)
+		case frame.Query != nil:
+			closeConn = e.handleQuery(ctx, conn, *frame.Query)
+		case frame.Annotate != nil:
+			closeConn = e.handleAnnotate(ctx, conn, deviceID, *frame.Annotate)
 		}
 		if closeConn {
 			return
@@ -329,6 +357,84 @@ func (e *Endpoint) handleBatch(ctx context.Context, conn net.Conn, deviceID stri
 	return false
 }
 
+// handleQuery runs one bounded read-only statement for a paired device.
+// Reads carry no ownership state to check (tla/Auth.tla): every paired
+// device may read all history, gated by the same per-frame registry check
+// as uploads and cancelled the same way on revocation. Every query outcome
+// is answerable in band, so the connection never closes here.
+func (e *Endpoint) handleQuery(ctx context.Context, conn net.Conn, q Query) bool {
+	if e.remote == nil {
+		_ = WriteError(conn, CodeNoRemote,
+			"this endpoint serves the upload protocol only; query and annotate frames are not enabled")
+		return false
+	}
+	result, err := e.remote.Query(ctx, q.SQL)
+	if err != nil {
+		_ = WriteError(conn, queryErrorCode(err), err.Error())
+		return false
+	}
+	if err := WriteQueryResult(conn, result); err != nil {
+		// The result outran the frame bound or the connection broke. The
+		// engine's limits already truncated the result; a bigger frame is a
+		// hub configuration error, reported instead of silently cut bytes.
+		_ = WriteError(conn, CodeInternal, err.Error())
+		return false
+	}
+	return false
+}
+
+// handleAnnotate applies one annotation batch. The writer identity is the
+// authenticated device — the request frame carries no writer at all — and
+// the batch commits atomically under the annotate tool's limits. A rejected
+// request applies nothing, and every outcome is answerable in band, so the
+// connection never closes here.
+func (e *Endpoint) handleAnnotate(ctx context.Context, conn net.Conn, deviceID string, a Annotate) bool {
+	if e.remote == nil {
+		_ = WriteError(conn, CodeNoRemote,
+			"this endpoint serves the upload protocol only; query and annotate frames are not enabled")
+		return false
+	}
+	result, err := e.remote.AnnotateAs(ctx, deviceID, a.Request)
+	if err != nil {
+		_ = WriteError(conn, annotateErrorCode(err), err.Error())
+		return false
+	}
+	_ = WriteAnnotateResult(conn, result)
+	return false
+}
+
+// queryErrorCode maps an engine rejection onto its protocol class: policy
+// and caller-input rejections are deterministic (CodeRejected), hub-level
+// contention is CodeBusy, and everything else is a hub-side failure a later
+// retry may clear.
+func queryErrorCode(err error) ErrorCode {
+	switch {
+	case errors.Is(err, mcpserver.ErrBusy):
+		return CodeBusy
+	case errors.Is(err, mcpserver.ErrDenied),
+		errors.Is(err, mcpserver.ErrMultipleStatements),
+		errors.Is(err, mcpserver.ErrEmptyQuery),
+		errors.Is(err, mcpserver.ErrDeadline),
+		errors.Is(err, context.Canceled),
+		errors.Is(err, context.DeadlineExceeded):
+		return CodeRejected
+	default:
+		return CodeInternal
+	}
+}
+
+// annotateErrorCode maps an annotate failure onto its protocol class: a
+// request the tool or the write path rejected on its content (unknown
+// fields, limits, missing events) is deterministic, everything else —
+// lock contention, a failed commit — is a hub-side failure a later retry
+// of the same batch may clear; an identical retry converges to a no-op.
+func annotateErrorCode(err error) ErrorCode {
+	if errors.Is(err, mcpserver.ErrAnnotateRejected) || errors.Is(err, store.ErrAnnotationRejected) {
+		return CodeRejected
+	}
+	return CodeInternal
+}
+
 // validateBoundaries proves the batch's own shape before any parsing: the
 // records are contiguous, they start at the batch start, and the last record
 // ends exactly at the batch end. An empty batch must be a cursor probe.
@@ -361,7 +467,11 @@ func validateBoundaries(b Batch) error {
 // is reported to the device, mirroring the local source-stop semantics: the
 // valid prefix commits, and the source stops at the offending offset.
 func normalize(b Batch, st store.SourceState) (prefix []store.Event, stop *events.StopError, err error) {
-	opts := events.Options{SourceScope: b.SourceID, FirstNative: st.FirstNativeID}
+	// The wire bound is passed explicitly, so normalization cannot drift from
+	// it even if a parser default changes; the protocol already refused any
+	// record above it before this code runs.
+	opts := events.Options{
+		SourceScope: b.SourceID, FirstNative: st.FirstNativeID, MaxRecordBytes: MaxRecordBytes}
 	prefix = make([]store.Event, 0, len(b.Records))
 	for i, r := range b.Records {
 		line := make([]byte, 0, len(r.JSON)+1)

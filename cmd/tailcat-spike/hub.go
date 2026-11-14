@@ -16,17 +16,18 @@ import (
 
 // hubResult is the hub-side record of a spike run.
 type hubResult struct {
-	Transport      string `json:"transport"`
-	ListenMs       int64  `json:"listen_ms"`
-	Addr           string `json:"addr"`
-	Connections    int    `json:"connections"`
-	LastPeer       string `json:"last_peer,omitempty"`
-	CommittedBytes uint64 `json:"committed_bytes"`
-	FinalCursor    uint64 `json:"final_cursor"`
-	RSSBytes       uint64 `json:"rss_bytes"`
-	StateDirBytes  int64  `json:"state_dir_bytes"`
-	Errors         int    `json:"errors"`
-	LastError      string `json:"last_error,omitempty"`
+	Transport      string    `json:"transport"`
+	ListenMs       int64     `json:"listen_ms"`
+	Addr           string    `json:"addr"`
+	Connections    int       `json:"connections"`
+	LastPeer       string    `json:"last_peer,omitempty"`
+	PeerPath       *peerPath `json:"peer_path,omitempty"`
+	CommittedBytes uint64    `json:"committed_bytes"`
+	FinalCursor    uint64    `json:"final_cursor"`
+	RSSBytes       uint64    `json:"rss_bytes"`
+	StateDirBytes  int64     `json:"state_dir_bytes"`
+	Errors         int       `json:"errors"`
+	LastError      string    `json:"last_error,omitempty"`
 }
 
 // identify reports the authenticated peer of a connection, or a placeholder
@@ -91,7 +92,11 @@ func runHub(f flags) {
 		res.Connections++
 		peer := identify(ctx, conn, hub)
 		res.LastPeer = peer
+		res.PeerPath = probePath(ctx, hub, conn)
 		log.Printf("connection %d from %s", res.Connections, peer)
+		if res.PeerPath != nil {
+			log.Printf("connection %d peer path: relay %q direct %q", res.Connections, res.PeerPath.Relay, res.PeerPath.CurAddr)
+		}
 		c := &hubConn{r: conn, w: conn, digest: sha256.New()}
 		cursor, err := c.serve()
 		res.CommittedBytes += cursor

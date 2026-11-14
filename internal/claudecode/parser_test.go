@@ -358,6 +358,9 @@ func TestParseRecordSizeLimit(t *testing.T) {
 	if !errors.As(err, &perr) || perr.Offset != int64(len(small)+1) {
 		t.Fatalf("want oversized error at %d, got %v", len(small)+1, err)
 	}
+	if !perr.RecordTooLarge {
+		t.Errorf("a size stop must classify itself: %s", perr.Error())
+	}
 	if !strings.Contains(perr.Reason, "64") || strings.Contains(perr.Error(), "xxxx") {
 		t.Errorf("reason must cite the limit without content: %s", perr.Error())
 	}

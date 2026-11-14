@@ -124,6 +124,72 @@ func TestIngestDeduplicatesOrdinalsAcrossSources(t *testing.T) {
 	}
 }
 
+// TestIngestKeepsDistinctRecordsAtOneOrdinal covers a page that re-enumerates
+// an ordinal after a rollback — the real resumed-page behavior, where the
+// colliding copies hold different records (see testdata/codex/README.md,
+// "Native session identity"). Both copies stay originals: text searchable,
+// aggregates and per-response usage counted. Arrival order changes nothing.
+func TestIngestKeepsDistinctRecordsAtOneOrdinal(t *testing.T) {
+	batches := func() (orig, page Batch) {
+		// The original's turn at ordinals 1–2 was rolled back; its ordinal 2
+		// carries one usage record.
+		o0 := ordinalEvent(0, 0, rawUser("zero"))
+		o1 := ordinalEvent(o0.End, 1, rawUser("aborted turn"))
+		o2 := ordinalEvent(o1.End, 2, rawUser("aborted end"))
+		o2.Text = "aborted end"
+		o2.HasUsage, o2.MessageID = true, "resp-1"
+		o2.Usage = Usage{InputTokens: 10, OutputTokens: 4}
+
+		// The page re-enumerates ordinal 2 with a regenerated record whose
+		// usage the original never had, then continues the thread.
+		p0 := mkEvent(0, rawUser("page meta"))
+		p2 := ordinalEvent(p0.End, 2, rawUser("regenerated answer"))
+		p2.Text = "regenerated answer"
+		p2.HasUsage, p2.MessageID = true, "resp-2"
+		p2.Usage = Usage{InputTokens: 7, OutputTokens: 3}
+		p3 := ordinalEvent(p2.End, 3, rawUser("after the page"))
+		return Batch{SourceID: "orig", Events: []Event{o0, o1, o2}},
+			Batch{SourceID: "page", Events: []Event{p0, p2, p3}}
+	}
+
+	for _, pageFirst := range []bool{false, true} {
+		hub := ingestHub(t)
+		mustRegister(t, hub, "orig", "/orig.jsonl")
+		mustRegister(t, hub, "page", "/page.jsonl")
+		orig, page := batches()
+		if pageFirst {
+			mustIngest(t, hub, page)
+			mustIngest(t, hub, orig)
+		} else {
+			mustIngest(t, hub, orig)
+			mustIngest(t, hub, page)
+		}
+
+		// Both copies at ordinal 2 are text-bearing originals.
+		oRow := eventAt(t, hub, "orig", orig.Events[2].Offset)
+		pRow := eventAt(t, hub, "page", page.Events[1].Offset)
+		if oRow.DuplicateOf.Valid || pRow.DuplicateOf.Valid || !oRow.Text.Valid || !pRow.Text.Valid {
+			t.Fatalf("pageFirst=%v: ordinal 2 = orig %+v, page %+v; want two text-bearing originals",
+				pageFirst, oRow, pRow)
+		}
+		sid := SessionID(deviceHex, "claude-code", "sess-1")
+		if row := sessionRowFor(t, hub, sid); row.EventCount != 6 {
+			t.Fatalf("pageFirst=%v: event_count = %d, want 6", pageFirst, row.EventCount)
+		}
+		if u := tokenTotals(t, hub, sid); u.InputTokens != 17 || u.OutputTokens != 7 {
+			t.Fatalf("pageFirst=%v: token totals = %+v; want both responses counted", pageFirst, u)
+		}
+		for _, term := range []string{"aborted", "regenerated"} {
+			if n := matchCount(t, hub, term); n != 1 {
+				t.Fatalf("pageFirst=%v: MATCH %s = %d, want 1", pageFirst, term, n)
+			}
+		}
+		if _, err := hub.Writer().Exec(`INSERT INTO events_fts(events_fts) VALUES ('integrity-check')`); err != nil {
+			t.Fatalf("FTS integrity: %v", err)
+		}
+	}
+}
+
 func TestIngestOrdinalsAreScopedBySession(t *testing.T) {
 	hub := ingestHub(t)
 	mustRegister(t, hub, "a", "/a.jsonl")

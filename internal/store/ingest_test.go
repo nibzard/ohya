@@ -66,13 +66,14 @@ func rawUser(content string) string {
 // terminator byte.
 func mkEvent(offset int64, raw string) Event {
 	return Event{
-		Offset:   offset,
-		End:      offset + int64(len(raw)) + 1,
-		NativeID: "sess-1",
-		Kind:     "user",
-		Role:     "user",
-		Text:     "text of the record at " + fmt.Sprint(offset),
-		RawJSON:  raw,
+		Offset:        offset,
+		End:           offset + int64(len(raw)) + 1,
+		NativeID:      "sess-1",
+		Kind:          "user",
+		Role:          "user",
+		Text:          "text of the record at " + fmt.Sprint(offset),
+		RawJSON:       raw,
+		ParserVersion: claudecode.OutputVersion,
 	}
 }
 
@@ -103,7 +104,7 @@ func eventFromRecord(r claudecode.Record) Event {
 		RawJSON: r.Raw, Metadata: r.Metadata,
 		HasTime: r.HasTime, TimeMS: r.TimeMS,
 		Cwd: r.Cwd, GitBranch: r.GitBranch, Model: r.Model,
-		MessageID: r.MessageID,
+		MessageID: r.MessageID, ParserVersion: claudecode.OutputVersion,
 	}
 	var md struct {
 		ContentForm string `json:"contentForm"`

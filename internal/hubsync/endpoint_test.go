@@ -18,6 +18,7 @@ import (
 	"github.com/nibzard/ohya/internal/claudecode"
 	"github.com/nibzard/ohya/internal/codex"
 	"github.com/nibzard/ohya/internal/events"
+	"github.com/nibzard/ohya/internal/pi"
 	"github.com/nibzard/ohya/internal/store"
 )
 
@@ -1098,4 +1099,69 @@ func TestEmptyBatchOnUnregisteredSource(t *testing.T) {
 	d := dial(t, s.addr)
 	d.send(Batch{DeviceID: deviceA, SourceID: "ghost", Start: 0, End: 0})
 	d.wantError(CodeUnknownSource, "not registered")
+}
+
+// TestEndpointCommitsPiLikeLocalIngestion uploads a Pi session the way the
+// uploader does — the header batch first, then the rest past offset 0 — and
+// compares the hub's rows with local ingestion of the same bytes. The second
+// batch has no session field of its own, so the hub must take the session
+// from the source's committed first record.
+func TestEndpointCommitsPiLikeLocalIngestion(t *testing.T) {
+	db := newTestDB(t)
+	s := startEndpoint(t, db, nil, Options{Retry: RetryPolicy{Base: time.Millisecond}})
+	d := dial(t, s.addr)
+	d.register(Registration{DeviceID: deviceA, SourceID: "src-pi", Agent: pi.AgentName, Path: "/session.jsonl"})
+	d.mustAck(Ack{})
+
+	recs := framedFixture(t, "pi", "main-session.jsonl")
+	d.send(fixtureBatch(deviceA, "src-pi", recs[:4]))
+	d.mustAck(Ack{Cursor: recs[3].End(), Inserted: 4})
+	d.send(fixtureBatch(deviceA, "src-pi", recs[4:]))
+	d.mustAck(Ack{Cursor: 2953, Inserted: 4})
+
+	// Reference run: the same bytes through the local write path.
+	local := newTestDB(t)
+	ctx := context.Background()
+	if err := local.RegisterSource(ctx, "src-pi", deviceA, pi.AgentName, "/session.jsonl"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "pi", "main-session.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := events.Parse(pi.AgentName, data, 0, events.Options{SourceScope: "src-pi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := local.Ingest(ctx, store.Batch{SourceID: "src-pi", DeviceID: deviceA, Events: parsed.Events}); err != nil {
+		t.Fatal(err)
+	}
+	gotEvents, wantEvents := dumpEvents(t, db), dumpEvents(t, local)
+	if len(gotEvents) != len(wantEvents) || len(gotEvents) != 8 {
+		t.Fatalf("events via endpoint = %d rows; local = %d; want 8", len(gotEvents), len(wantEvents))
+	}
+	for i := range gotEvents {
+		if gotEvents[i] != wantEvents[i] {
+			t.Fatalf("events row %d differs:\n endpoint: %s\n local:    %s", i, gotEvents[i], wantEvents[i])
+		}
+	}
+	gotSessions, wantSessions := dumpSessions(t, db), dumpSessions(t, local)
+	if len(gotSessions) != 1 || len(wantSessions) != 1 || gotSessions[0] != wantSessions[0] {
+		t.Fatalf("sessions differ:\n endpoint: %v\n local:    %v", gotSessions, wantSessions)
+	}
+	var input, output int64
+	if err := db.Writer().QueryRow(`SELECT sum(input_tokens), sum(output_tokens) FROM session_token_usage`).
+		Scan(&input, &output); err != nil || input != 1840+345 || output != 24+41 {
+		t.Fatalf("tokens = %d/%d, %v; want %d/%d", input, output, err, 1840+345, 24+41)
+	}
+
+	// A malformed Pi entry commits the valid prefix and stops there.
+	d.register(Registration{DeviceID: deviceA, SourceID: "src-bad", Agent: pi.AgentName, Path: "/bad.jsonl"})
+	d.mustAck(Ack{})
+	bad := framedFixture(t, "pi", "malformed-line.jsonl")
+	d.send(fixtureBatch(deviceA, "src-bad", bad))
+	ack, _ := d.reply()
+	if !ack.Stopped || ack.StopOffset != 283 || ack.Cursor != 283 || ack.Inserted != 2 {
+		t.Fatalf("malformed ack = %+v", ack)
+	}
 }
