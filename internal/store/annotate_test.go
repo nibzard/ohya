@@ -10,7 +10,6 @@ import (
 	"testing"
 )
 
-// annotateRow reads one annotation row, failing the test when it is absent.
 func annotateRow(t *testing.T, db *sql.DB, event int64, namespace, key, writerID string) (value string, created, updated int64) {
 	t.Helper()
 	err := db.QueryRow(
@@ -23,7 +22,6 @@ func annotateRow(t *testing.T, db *sql.DB, event int64, namespace, key, writerID
 	return value, created, updated
 }
 
-// annotationCount counts annotation rows matching the where fragment.
 func annotationCount(t *testing.T, db *sql.DB, where string, args ...any) int {
 	t.Helper()
 	var count int
@@ -47,7 +45,6 @@ func TestAnnotateUpsertLifecycle(t *testing.T) {
 		return result
 	}
 
-	// Insert: one row, creation and update set together.
 	if got := upsert(`{"status":"open"}`); got != (AnnotateResult{Applied: 1}) {
 		t.Fatalf("first upsert = %+v", got)
 	}
@@ -56,8 +53,6 @@ func TestAnnotateUpsertLifecycle(t *testing.T) {
 		t.Fatalf("row = (%q, %d, %d)", value, created, updated)
 	}
 
-	// Identical retry: a full no-op, timestamps included. Move both stamps
-	// back so a rewrite in the same millisecond cannot fake the result.
 	if _, err := db.Exec(
 		`UPDATE event_annotations SET created_at_ms = created_at_ms - 60000, updated_at_ms = updated_at_ms - 60000`); err != nil {
 		t.Fatal(err)
@@ -70,7 +65,6 @@ func TestAnnotateUpsertLifecycle(t *testing.T) {
 		t.Fatalf("identical retry rewrote timestamps: (%d, %d), want (%d, %d)", c, u, created, updated)
 	}
 
-	// Changed value: complete replacement, creation preserved, update bumped.
 	if got := upsert(`{"status":"done"}`); got != (AnnotateResult{Applied: 1}) {
 		t.Fatalf("changed upsert = %+v", got)
 	}
@@ -80,7 +74,6 @@ func TestAnnotateUpsertLifecycle(t *testing.T) {
 			v, c, u, created, updated)
 	}
 
-	// Delete, then delete of the absent annotation.
 	result, err := Annotate(ctx, db, "dev1", []AnnotationOp{
 		{Op: AnnotationDelete, EventID: 1, Namespace: "tags", Key: "needs-review"},
 	})
@@ -97,7 +90,6 @@ func TestAnnotateUpsertLifecycle(t *testing.T) {
 		t.Fatalf("annotations after delete = %d", got)
 	}
 
-	// An empty batch is accepted and commits nothing.
 	if result, err := Annotate(ctx, db, "dev1", nil); err != nil || result != (AnnotateResult{}) {
 		t.Fatalf("empty batch = %+v, %v", result, err)
 	}
@@ -107,8 +99,6 @@ func TestAnnotateBatchIsAtomic(t *testing.T) {
 	db := setup(t)
 	ctx := context.Background()
 
-	// The valid operations surround the missing-event operation; none of the
-	// batch may survive it.
 	_, err := Annotate(ctx, db, "dev1", []AnnotationOp{
 		{Op: AnnotationUpsert, EventID: 1, Namespace: "tags", Key: "a", Value: "1"},
 		{Op: AnnotationUpsert, EventID: 42, Namespace: "tags", Key: "b", Value: "2"},
@@ -121,7 +111,6 @@ func TestAnnotateBatchIsAtomic(t *testing.T) {
 		t.Fatalf("partial batch committed %d rows", got)
 	}
 
-	// A duplicate identity rejects the batch before any statement runs.
 	_, err = Annotate(ctx, db, "dev1", []AnnotationOp{
 		{Op: AnnotationUpsert, EventID: 1, Namespace: "tags", Key: "a", Value: "1"},
 		{Op: AnnotationDelete, EventID: 1, Namespace: "tags", Key: "a"},
@@ -133,7 +122,6 @@ func TestAnnotateBatchIsAtomic(t *testing.T) {
 		t.Fatalf("duplicate batch committed %d rows", got)
 	}
 
-	// One valid batch of mixed operations reports both counts.
 	result, err := Annotate(ctx, db, "dev1", []AnnotationOp{
 		{Op: AnnotationUpsert, EventID: 1, Namespace: "tags", Key: "a", Value: `[1,2]`},
 		{Op: AnnotationUpsert, EventID: 1, Namespace: "tags", Key: "b", Value: `{"ok":true}`},
@@ -148,7 +136,7 @@ func TestAnnotateRejectsInvalidBatches(t *testing.T) {
 	db := setup(t)
 	ctx := context.Background()
 	tooLong := strings.Repeat("a", 129)
-	bigValue := `"` + strings.Repeat("a", MaxAnnotationValueBytes) + `"` // one byte over once quoted
+	bigValue := `"` + strings.Repeat("a", MaxAnnotationValueBytes) + `"`
 
 	cases := []struct {
 		name string
@@ -173,7 +161,6 @@ func TestAnnotateRejectsInvalidBatches(t *testing.T) {
 		}
 	}
 
-	// Batch too large: one over the limit fails, exactly at the limit works.
 	var ops []AnnotationOp
 	for i := 0; i <= MaxAnnotationOperations; i++ {
 		ops = append(ops, AnnotationOp{Op: AnnotationDelete, EventID: 1, Namespace: "n", Key: fmt.Sprint(i)})
@@ -186,16 +173,12 @@ func TestAnnotateRejectsInvalidBatches(t *testing.T) {
 		t.Fatalf("batch at the limit = %+v, %v", result, err)
 	}
 
-	// No writer identity: the hub cannot accept one from caller input.
 	if _, err := Annotate(ctx, db, "", []AnnotationOp{
 		{Op: AnnotationDelete, EventID: 1, Namespace: "n", Key: "k"},
 	}); err == nil || !strings.Contains(err.Error(), "writer ID") {
 		t.Fatalf("empty writer error = %v", err)
 	}
 
-	// A value SQLite itself refuses to validate — its JSON depth limit is
-	// lower than Go's — rejects the whole batch through the table check,
-	// atomically, with nothing applied.
 	deep := strings.Repeat("[", 1100) + strings.Repeat("]", 1100)
 	_, err := Annotate(ctx, db, "dev1", []AnnotationOp{
 		{Op: AnnotationUpsert, EventID: 1, Namespace: "tags", Key: "deep", Value: deep},
@@ -208,7 +191,6 @@ func TestAnnotateRejectsInvalidBatches(t *testing.T) {
 		t.Fatalf("batch with a storable-value failure committed %d rows", got)
 	}
 
-	// Nothing above wrote anything.
 	if got := annotationCount(t, db, "1=1"); got != 0 {
 		t.Fatalf("rejected batches committed %d rows", got)
 	}
@@ -218,7 +200,6 @@ func TestAnnotateWriterIsolationAndConcurrentWrites(t *testing.T) {
 	db := setup(t)
 	ctx := context.Background()
 
-	// Two writers on one (event, namespace, key) hold two independent rows.
 	for _, w := range []string{"dev1", "dev2"} {
 		result, err := Annotate(ctx, db, w, []AnnotationOp{
 			{Op: AnnotationUpsert, EventID: 1, Namespace: "security", Key: "review", Value: `"one"`},
@@ -231,7 +212,6 @@ func TestAnnotateWriterIsolationAndConcurrentWrites(t *testing.T) {
 		t.Fatalf("rows for two writers = %d, want 2", got)
 	}
 
-	// A writer deletes only its own annotation; the other row survives.
 	result, err := Annotate(ctx, db, "dev2", []AnnotationOp{
 		{Op: AnnotationDelete, EventID: 1, Namespace: "security", Key: "review"},
 	})
@@ -242,8 +222,6 @@ func TestAnnotateWriterIsolationAndConcurrentWrites(t *testing.T) {
 		t.Fatalf("dev1 row after dev2 delete = %q", value)
 	}
 
-	// Concurrent upserts to one identity serialize on the single writer; the
-	// last committed value wins and exactly one row exists.
 	const writers = 8
 	var wg sync.WaitGroup
 	errs := make([]error, writers)
@@ -290,8 +268,6 @@ func TestAnnotateLeavesSourceDataUntouched(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Snapshot before: events, sessions, sources, the other writer's
-	// annotation, and the FTS index.
 	snapshot := func() (events, sessions, sources, foreign string, fts int) {
 		t.Helper()
 		row := func(query string) string {
@@ -313,19 +289,17 @@ func TestAnnotateLeavesSourceDataUntouched(t *testing.T) {
 	}
 	e1, s1, c1, f1, t1 := snapshot()
 
-	// Annotate hard: upserts, deletes, retries, another writer's identity.
 	for _, batch := range [][]AnnotationOp{
 		{{Op: AnnotationUpsert, EventID: 2, Namespace: "tags", Key: "keep", Value: "true"}},
-		{{Op: AnnotationUpsert, EventID: 2, Namespace: "tags", Key: "keep", Value: "true"}}, // identical retry
+		{{Op: AnnotationUpsert, EventID: 2, Namespace: "tags", Key: "keep", Value: "true"}},
 		{{Op: AnnotationUpsert, EventID: 2, Namespace: "tags", Key: "keep", Value: "false"}},
-		{{Op: AnnotationDelete, EventID: 1, Namespace: "old", Key: "note"}}, // dev9 owns it: absent for dev1
+		{{Op: AnnotationDelete, EventID: 1, Namespace: "old", Key: "note"}},
 	} {
 		if _, err := Annotate(ctx, db, "dev1", batch); err != nil {
 			t.Fatalf("batch: %v", err)
 		}
 	}
 
-	// The FTS index stays consistent with its content table.
 	if _, err := db.Exec(`INSERT INTO events_fts(events_fts) VALUES('integrity-check')`); err != nil {
 		t.Fatalf("FTS integrity check: %v", err)
 	}

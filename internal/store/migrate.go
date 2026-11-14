@@ -16,18 +16,11 @@ import (
 	"time"
 )
 
-// migrationsFS embeds the versioned SQL migrations shipped with the binary.
-// Files are named NNN_description.sql with a three-digit version.
-//
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
 var migrationNameRE = regexp.MustCompile(`^([0-9]{3})_([a-z0-9]+(?:_[a-z0-9]+)*)\.sql$`)
 
-// schemaMigrationsDDL is the runner's own bookkeeping table. Migrations hold
-// schema and data changes only; connection configuration is code in this
-// package (SQLite cannot switch journal mode inside a transaction, and
-// PRAGMA foreign_keys is a silent no-op there).
 const schemaMigrationsDDL = `CREATE TABLE IF NOT EXISTS schema_migrations (
   version       INTEGER PRIMARY KEY,
   name          TEXT NOT NULL,
@@ -42,8 +35,6 @@ type migration struct {
 	script   string
 }
 
-// loadMigrations reads and validates the migration set and returns it in
-// version order. Names must match NNN_name.sql and versions must be unique.
 func loadMigrations(fsys fs.FS) ([]migration, error) {
 	files, err := fs.Glob(fsys, "migrations/*.sql")
 	if err != nil {
@@ -85,9 +76,6 @@ func loadMigrations(fsys fs.FS) ([]migration, error) {
 	return ms, nil
 }
 
-// SchemaVersion returns the version of the newest embedded migration: the
-// schema a freshly opened database is brought to. It reads the embedded
-// migration set only and opens no database.
 func SchemaVersion() (int, error) {
 	ms, err := loadMigrations(migrationsFS)
 	if err != nil {
@@ -96,12 +84,6 @@ func SchemaVersion() (int, error) {
 	return ms[len(ms)-1].version, nil
 }
 
-// migrate brings the database up to the newest migration in fsys. Applied
-// migrations never run again: their recorded checksums must match the
-// embedded files, and only files numbered above every applied version may be
-// new. Each pending migration and its schema_migrations row commit in one
-// transaction, so a failed migration rolls back completely and a rerun
-// resumes at the first pending file.
 func migrate(ctx context.Context, db *sql.DB, fsys fs.FS) error {
 	ms, err := loadMigrations(fsys)
 	if err != nil {

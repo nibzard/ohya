@@ -237,3 +237,4 @@ Comment markers inside raw and quoted strings are not comments and are not count
 | 1 | `cmd/tailcat-spike`, `cmd/memory-e2e` | 228 | ADR 0002, "Spike harness"; `CONTRIBUTING.md`, memory gate list; open gate finding in `NOTES.md` |
 | 2 | `internal/claudecode`, `internal/codex`, `internal/pi`, `internal/events` | 730 | `ARCHITECTURE.md`, parser contract; "Parser normalization" in each `testdata/<agent>/README.md`; `DB.md`, output version history; `docs/performance.md`, benchmark set |
 | 3 | `internal/device`, `internal/durablefile`, `internal/watch` | 298 | `ARCHITECTURE.md`, "Local state files" and "Watcher rules" |
+| 4 | `internal/store` (migrations excluded) | 602 | `DB.md`: "Write path", "Inspection", connection settings, migration names, re-derivation walk |

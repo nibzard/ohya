@@ -29,9 +29,11 @@ Upgrade policy:
    rolls back completely; the next run resumes at the first pending version.
 3. Every open verifies applied history. A checksum mismatch, a migration missing from the binary, or a
    new file numbered below the newest applied version is an error, never a silent upgrade.
-4. Until a database ships, 001 is the only baseline. After a release exists, test every new migration
+4. Migration file names match `NNN_name.sql` with a unique three-digit version. `store.SchemaVersion`
+   reports the newest embedded version without opening a database.
+5. Until a database ships, 001 is the only baseline. After a release exists, test every new migration
    by upgrading a database from each released schema, not only by fresh creation.
-5. Keep this file in step with the migration list in the same change, so a review can diff policy
+6. Keep this file in step with the migration list in the same change, so a review can diff policy
    against DDL.
 
 ## Connections and durability
@@ -42,6 +44,12 @@ Readers get separate read-only connections (`mode=ro`) with foreign keys enabled
 to every pooled connection, and `store.Open` verifies them before use. Open the writer first and keep
 it open while readers run: a read-only connection cannot create the database or recover the
 write-ahead log.
+
+The busy timeout is 5 s, so a lock held by another process, such as a backup tool, fails a statement
+only after that wait. Driver parameters with a leading underscore apply to every pooled connection;
+`mode=ro` reaches SQLite when it opens the file. `store.OpenReadOnly` serves `ohya doctor`: it opens
+an existing hub database in WAL mode with one read-only pool, applies no migrations, and has no
+writer.
 
 | Table | Meaning |
 |---|---|
@@ -146,6 +154,43 @@ never see credentials. This schema covers transcript data and annotations, not
 credentials or device-local checkpoints. See ARCHITECTURE.md for ownership and
 sync semantics.
 
+## Write path
+
+`store.Ingest` commits one `Batch` in one transaction. It checks, before any insert:
+
+- Each record spans exactly its JSON bytes plus one terminator byte, and the records are contiguous
+  and in source order. Each record names a native session ID and a parser output version of at least 1.
+- The batch starts at or behind the stored cursor. A batch that starts ahead of the cursor would skip
+  bytes and is rejected.
+- Records below the cursor replay the stored records byte for byte. Uniqueness alone does not prove
+  payload equality, so a conflicting retry stops the source instead of hiding changed history.
+- A stored record at or beyond the cursor contradicts the hub's own acknowledgments, so the batch
+  stops instead of adding to it.
+
+A rejected batch changes nothing, and its error carries offsets and lengths, never transcript
+content. Other sources are unaffected. `IngestResult.Inserted` counts new rows only; a replay
+duplicate of another file's record is a new row and counts. `IngestResult.Cursor` is the offset the
+caller may acknowledge.
+
+Error classes let the sync endpoint tell permanent rejections from transient failures:
+
+- `ErrBatchRejected`: a deterministic refusal; the same bytes can never succeed.
+- `ErrSourceOwnership`: the batch names another device, or a re-registration names another device or
+  agent. Ownership is fixed at registration.
+- `ErrSourceNotRegistered`: call `RegisterSource` before the first batch. Re-registering the same
+  source is a no-op that only follows a path move. Agent names follow the watcher rule
+  (`^[a-z0-9][a-z0-9._-]{0,63}$`), which keeps them free of colons for the session ID encoding.
+
+`store.SourceState` returns the source's agent, cursor, and `FirstNativeID`, the native ID of the
+record at offset 0, which the Codex and Pi parsers need past offset 0.
+
+`store.Annotate` validates the whole batch (writer, size, operation shape, names, values, duplicate
+identities) and then checks that every referenced event exists, before the first write statement.
+Content refusals wrap `ErrAnnotationRejected` and can never succeed on retry. Errors of the SQL
+execution path, such as lock contention or a failed commit, do not wrap it, and a retry may clear
+them. A value nested deeper than SQLite's JSON depth limit, which is lower than Go's, fails the
+table check and rolls back the whole batch.
+
 ## Re-derivation
 
 The parser output version (`events.parser_version`) is independent of the schema
@@ -185,6 +230,35 @@ transaction are the only derived copies. A failed pass rolls back completely,
 and a hub with no stale rows commits nothing — running the command is always
 safe. Rows carrying a version above this build's parser are refused: upgrade
 first, then re-derive.
+
+The walk reads one agent's sources in source ID order and each source's records in offset order, in
+chunks of 128 records with keyset pagination on the offset. Each chunk closes before any update, so
+the scan never observes the rows it changes, and memory stays bounded even for gigabyte rollouts.
+The record at offset 0 establishes the native session, and each later record receives the native ID
+of the record before it, exactly like a fresh parse. A deriver must return an event that frames
+exactly the stored record (offset, end, and raw JSON), names a session, and carries the version it
+was bound with. The pass clears replay-original marks and token totals before the walk, so the
+first usage of a message ID is the one a fresh ingest in walk order keeps. Sessions belong to one
+agent, because the session ID embeds the agent. The `repo` column and unknown metadata keys are
+preserved; only `firstPromptRef` is managed, as in the write path. The result counts rewritten
+events and rebuilt sessions, including removed empty sessions.
+
+## Inspection
+
+`ohya doctor` runs read-only checks through `store.OpenReadOnly`: the applied schema version
+against the embedded migrations (`ErrNoSchemaMigrations` marks a file that is not a hub database),
+the highest stored parser version per agent against this build, and FTS consistency.
+
+The FTS check runs the FTS5 `integrity-check` command with the `rank` argument, which compares the
+index with the external content. SQLite refuses that command on a `mode=ro` connection, because it
+is a write statement. The check therefore copies the database into a private in-memory database with
+the backup API, which writes nothing to the hub. The `rank` comparison expects an index entry for
+every content row, and this schema leaves text-less events unindexed, so the check first drops the
+delete trigger on the copy and removes the text-less rows. It runs on one connection, because each
+pooled connection would get its own in-memory database.
+
+`count(*)` on the external-content `events_fts` table reads the content table, not the index. To
+enumerate indexed documents, query through `MATCH`.
 
 ## Search example
 

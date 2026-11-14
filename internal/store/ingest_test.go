@@ -15,7 +15,6 @@ import (
 	"github.com/nibzard/ohya/internal/claudecode"
 )
 
-// deviceHex is a well-formed local Device ID (see internal/device).
 const deviceHex = "0123456789abcdef0123456789abcdef"
 
 func ingestHub(t *testing.T) *DB {
@@ -45,7 +44,6 @@ func mustIngest(t *testing.T, hub *DB, b Batch) IngestResult {
 	return res
 }
 
-// mustIngestAs submits a batch under a chosen device identity.
 func mustIngestAs(t *testing.T, hub *DB, device string, b Batch) IngestResult {
 	t.Helper()
 	b.DeviceID = device
@@ -56,14 +54,10 @@ func mustIngestAs(t *testing.T, hub *DB, device string, b Batch) IngestResult {
 	return res
 }
 
-// rawUser builds one minimal user record; its JSON length is all the write
-// path needs, and its content never reaches an error message.
 func rawUser(content string) string {
 	return fmt.Sprintf(`{"type":"user","sessionId":"sess-1","message":{"role":"user","content":%q}}`, content)
 }
 
-// mkEvent builds one synthetic event at offset spanning raw plus one
-// terminator byte.
 func mkEvent(offset int64, raw string) Event {
 	return Event{
 		Offset:        offset,
@@ -77,9 +71,6 @@ func mkEvent(offset int64, raw string) Event {
 	}
 }
 
-// parseFixture parses a Claude Code fixture with the real parser and maps
-// the records onto Events, the way the ingestion wiring will. It returns the
-// mapped events and the parser's stopping diagnostic, if any.
 func parseFixture(t *testing.T, name, scope string) ([]Event, error) {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "claude-code", name))
@@ -94,9 +85,6 @@ func parseFixture(t *testing.T, name, scope string) ([]Event, error) {
 	return events, perr
 }
 
-// eventFromRecord maps one parsed Claude Code record onto an Event: string
-// user content is a prompt, and message.usage carries the four unambiguous
-// token counts keyed by message.id.
 func eventFromRecord(r claudecode.Record) Event {
 	e := Event{
 		Offset: r.Offset, End: r.End, NativeID: r.Native,
@@ -133,7 +121,6 @@ func eventFromRecord(r claudecode.Record) Event {
 	return e
 }
 
-// sessionRow reads one sessions row for aggregate assertions.
 type sessionRow struct {
 	EventCount                      int
 	Started, Last                   sql.NullInt64
@@ -155,7 +142,6 @@ func sessionRowFor(t *testing.T, hub *DB, id string) sessionRow {
 	return row
 }
 
-// tokenTotals sums one session's counted usage.
 func tokenTotals(t *testing.T, hub *DB, sid string) Usage {
 	t.Helper()
 	var u Usage
@@ -208,7 +194,6 @@ func TestRegisterSource(t *testing.T) {
 	}
 	mustRegister(t, hub, "s1", "/a.jsonl")
 
-	// Re-registration is idempotent and only follows a path move.
 	if err := hub.RegisterSource(ctx, "s1", deviceHex, "claude-code", "/moved.jsonl"); err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +202,6 @@ func TestRegisterSource(t *testing.T) {
 		t.Fatalf("path after move = %q, %v; want /moved.jsonl", path, err)
 	}
 
-	// Ownership never moves.
 	err := hub.RegisterSource(ctx, "s1", "ffffffffffffffffffffffffffffffff", "claude-code", "/a.jsonl")
 	wantError(t, err, "ownership cannot change")
 	if !errors.Is(err, ErrSourceOwnership) {
@@ -230,10 +214,6 @@ func TestRegisterSource(t *testing.T) {
 	}
 }
 
-// TestIngestBindsBatchToDevice pins the sync contract's ownership rule at the
-// write path: a batch naming another device is rejected with
-// ErrSourceOwnership before anything is written, and rejection classes are
-// distinguishable from internal failures through their sentinels.
 func TestIngestBindsBatchToDevice(t *testing.T) {
 	hub := ingestHub(t)
 	mustRegister(t, hub, "s1", "/a.jsonl")
@@ -248,8 +228,6 @@ func TestIngestBindsBatchToDevice(t *testing.T) {
 	if n := countEvents(t, hub, `SELECT count(*) FROM events`); n != 0 {
 		t.Fatalf("events after foreign batch = %d, want 0", n)
 	}
-	// An unregistered source is its own rejection class, not an internal
-	// failure: the uploader must register the source before its first batch.
 	_, err = hub.Ingest(context.Background(), Batch{SourceID: "ghost", DeviceID: other})
 	if !errors.Is(err, ErrSourceNotRegistered) {
 		t.Fatalf("unregistered error = %v; want ErrSourceNotRegistered", err)
@@ -260,15 +238,11 @@ func TestIngestBindsBatchToDevice(t *testing.T) {
 	if !errors.Is(err, ErrSourceOwnership) {
 		t.Fatalf("gap under foreign device = %v; want ErrSourceOwnership (identity first)", err)
 	}
-	// The owning device still commits after the rejected foreign attempts.
 	if res := mustIngest(t, hub, Batch{SourceID: "s1", Events: []Event{mkEvent(0, rawUser("owner upload"))}}); res.Inserted != 1 {
 		t.Fatalf("owner batch = %+v; want 1 insert", res)
 	}
 }
 
-// TestIngestFixtureMainSession drives the write path with the real fixture:
-// raw text is preserved verbatim, aggregates and token totals land in one
-// commit, FTS follows the trigger, and readers see the commit.
 func TestIngestFixtureMainSession(t *testing.T) {
 	hub := ingestHub(t)
 	mustRegister(t, hub, "aaa-main", "/main-session.jsonl")
@@ -299,7 +273,6 @@ func TestIngestFixtureMainSession(t *testing.T) {
 		t.Fatalf("events = %d, want 16", n)
 	}
 
-	// The original record text survives byte for byte (line 5, offset 1086).
 	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "claude-code", "main-session.jsonl"))
 	if err != nil {
 		t.Fatal(err)
@@ -317,8 +290,6 @@ func TestIngestFixtureMainSession(t *testing.T) {
 	if row.EventCount != 16 {
 		t.Fatalf("event_count = %d, want 16", row.EventCount)
 	}
-	// Bounds are observed min/max over timestamps that are not strictly
-	// monotonic (09:00:03.1 and 09:00:03.2 arrive before 09:00:04).
 	if !row.Started.Valid || row.Started.Int64 != 1794560400000 {
 		t.Fatalf("started_at_ms = %+v, want 1794560400000 (09:00:00.000Z)", row.Started)
 	}
@@ -338,8 +309,6 @@ func TestIngestFixtureMainSession(t *testing.T) {
 		t.Fatalf("first_prompt = %+v, want the fixture prompt", row.FirstPrompt)
 	}
 
-	// msg_fixture_0001 repeats one usage over three records and
-	// msg_fixture_0002 contributes its own: each response counts once.
 	if want := (Usage{InputTokens: 180, CacheReadInputTokens: 428, OutputTokens: 47}); tokenTotals(t, hub, fixtureSessionID()) != want {
 		t.Fatalf("token totals = %+v, want %+v", tokenTotals(t, hub, fixtureSessionID()), want)
 	}
@@ -348,8 +317,6 @@ func TestIngestFixtureMainSession(t *testing.T) {
 		t.Fatalf("usage rows = %d, want 2 (one per message id)", n)
 	}
 
-	// FTS carries the indexed text and stays consistent with the events
-	// table: MATCH finds exactly the events whose text holds the term.
 	if _, err := hub.Writer().Exec(`INSERT INTO events_fts(events_fts) VALUES ('integrity-check')`); err != nil {
 		t.Fatalf("FTS integrity-check failed: %v", err)
 	}
@@ -372,9 +339,6 @@ func TestIngestFixtureMainSession(t *testing.T) {
 	}
 }
 
-// TestIngestCountsUsageOncePerMessageID pins the fixture-verified usage
-// semantics: usage repeats identically on every record sharing message.id,
-// splits across batches, and a later conflicting usage is ignored.
 func TestIngestCountsUsageOncePerMessageID(t *testing.T) {
 	hub := ingestHub(t)
 	mustRegister(t, hub, "s1", "/a.jsonl")
@@ -382,9 +346,6 @@ func TestIngestCountsUsageOncePerMessageID(t *testing.T) {
 	if perr != nil {
 		t.Fatal(perr)
 	}
-	// Lines 1-4 carry no usage; line 5 is the first record of
-	// msg_fixture_0001. Incremental polling splits one response's records
-	// across batches while it streams.
 	mustIngest(t, hub, Batch{SourceID: "s1", Events: events[:4]})
 	if got := tokenTotals(t, hub, fixtureSessionID()); got != (Usage{}) {
 		t.Fatalf("totals before any usage = %+v", got)
@@ -393,20 +354,16 @@ func TestIngestCountsUsageOncePerMessageID(t *testing.T) {
 	if got := tokenTotals(t, hub, fixtureSessionID()); got != (Usage{InputTokens: 120, CacheReadInputTokens: 48, OutputTokens: 35}) {
 		t.Fatalf("totals after the first record of the response = %+v", got)
 	}
-	// Lines 6 and 7 repeat the same usage under the same message id.
 	mustIngest(t, hub, Batch{SourceID: "s1", Events: events[5:6]})
 	mustIngest(t, hub, Batch{SourceID: "s1", Events: events[6:7]})
 	if got := tokenTotals(t, hub, fixtureSessionID()); got != (Usage{InputTokens: 120, CacheReadInputTokens: 48, OutputTokens: 35}) {
 		t.Fatalf("repeated usage was counted twice: %+v", got)
 	}
-	// The rest of the file contributes msg_fixture_0002.
 	mustIngest(t, hub, Batch{SourceID: "s1", Events: events[7:]})
 	if want := (Usage{InputTokens: 180, CacheReadInputTokens: 428, OutputTokens: 47}); tokenTotals(t, hub, fixtureSessionID()) != want {
 		t.Fatalf("totals = %+v, want %+v", tokenTotals(t, hub, fixtureSessionID()), want)
 	}
 
-	// A later record claiming the same message id with inflated usage is
-	// ignored: the first usage observed for a message id wins.
 	conflict := mkEvent(6528, rawUser("repeated response"))
 	conflict.NativeID = fixtureNativeID
 	conflict.MessageID = "msg_fixture_0001"
@@ -419,7 +376,6 @@ func TestIngestCountsUsageOncePerMessageID(t *testing.T) {
 		t.Fatalf("conflicting usage changed the totals: %+v", tokenTotals(t, hub, fixtureSessionID()))
 	}
 
-	// Usage without a message id is ambiguous and contributes nothing.
 	anonymous := mkEvent(conflict.End, rawUser("anonymous usage"))
 	anonymous.NativeID = fixtureNativeID
 	anonymous.HasUsage = true
@@ -430,9 +386,6 @@ func TestIngestCountsUsageOncePerMessageID(t *testing.T) {
 	}
 }
 
-// TestIngestReplayAndOverlap covers lost acknowledgments: a fully repeated
-// batch changes nothing, a partially repeated batch inserts only its new
-// suffix, and a conflicting retry is rejected before anything is written.
 func TestIngestReplayAndOverlap(t *testing.T) {
 	hub := ingestHub(t)
 	mustRegister(t, hub, "s1", "/a.jsonl")
@@ -443,13 +396,10 @@ func TestIngestReplayAndOverlap(t *testing.T) {
 	if res := mustIngest(t, hub, batch); res.Inserted != 2 || res.Cursor != e1.End {
 		t.Fatalf("first ingest = %+v", res)
 	}
-	// An empty batch reports the cursor and writes nothing.
 	if res := mustIngest(t, hub, Batch{SourceID: "s1"}); res.Inserted != 0 || res.Cursor != e1.End {
 		t.Fatalf("empty batch = %+v; want {0, %d}", res, e1.End)
 	}
 
-	// Full replay after a lost acknowledgment: no new records, no aggregate
-	// change, same cursor.
 	if res := mustIngest(t, hub, batch); res.Inserted != 0 || res.Cursor != e1.End {
 		t.Fatalf("replay = %+v; want {0, %d}", res, e1.End)
 	}
@@ -458,7 +408,6 @@ func TestIngestReplayAndOverlap(t *testing.T) {
 		t.Fatalf("event_count after replay = %d, want 2", row.EventCount)
 	}
 
-	// Overlapping retry carries the old bytes plus one new record.
 	overlap := Batch{SourceID: "s1", Events: []Event{e0, e1, e2}}
 	if res := mustIngest(t, hub, overlap); res.Inserted != 1 || res.Cursor != e2.End {
 		t.Fatalf("overlapping retry = %+v; want {1, %d}", res, e2.End)
@@ -467,8 +416,6 @@ func TestIngestReplayAndOverlap(t *testing.T) {
 		t.Fatalf("event_count after overlap = %d, want 3", row.EventCount)
 	}
 
-	// Retries whose replayed bytes differ are rejected and leave everything
-	// untouched: same length with different bytes, and a different length.
 	conflicts := []Batch{
 		{SourceID: "s1", Events: []Event{
 			mkEvent(0, rawUser("jello")), mkEvent(e0.End, rawUser("world")),
@@ -493,9 +440,6 @@ func TestIngestReplayAndOverlap(t *testing.T) {
 	}
 }
 
-// TestIngestRejectsGapsAndBadShape proves bytes are never skipped silently:
-// after a source stops at a malformed offset, a batch that starts past that
-// offset is rejected. malformed-line.jsonl stops at 1094 with a diagnostic.
 func TestIngestRejectsGapsAndBadShape(t *testing.T) {
 	hub := ingestHub(t)
 	mustRegister(t, hub, "s1", "/malformed-line.jsonl")
@@ -512,8 +456,6 @@ func TestIngestRejectsGapsAndBadShape(t *testing.T) {
 		t.Fatalf("cursor after valid prefix = %d, want 1094 (the offending offset)", res.Cursor)
 	}
 
-	// The valid record after the malformed line starts at 1507. Ingesting it
-	// would skip the malformed bytes; the write path must refuse.
 	valid := mkEvent(1507, rawUser("valid after the malformed line"))
 	_, err := hub.Ingest(context.Background(), Batch{SourceID: "s1", DeviceID: deviceHex, Events: []Event{valid}})
 	wantError(t, err, "bytes would be skipped")
@@ -521,9 +463,6 @@ func TestIngestRejectsGapsAndBadShape(t *testing.T) {
 		t.Fatalf("events after gap rejection = %d, want 2", n)
 	}
 
-	// Shape validation: non-contiguous delivery, wrong byte boundaries,
-	// empty JSON text and a missing native identity all fail before any
-	// write.
 	good := mkEvent(1094, rawUser("fine"))
 	for _, tc := range []struct {
 		name  string
@@ -556,13 +495,10 @@ func TestIngestRejectsGapsAndBadShape(t *testing.T) {
 		}
 	}
 
-	// An unregistered source is an error, not an implicit registration.
 	_, err = hub.Ingest(context.Background(), Batch{SourceID: "ghost", DeviceID: deviceHex})
 	wantError(t, err, "not registered")
 }
 
-// TestIngestOtherSourcesContinue checks that one stopped source's rejection
-// never blocks another source's commit.
 func TestIngestOtherSourcesContinue(t *testing.T) {
 	hub := ingestHub(t)
 	mustRegister(t, hub, "a", "/a.jsonl")
@@ -588,8 +524,6 @@ func TestIngestTimestampBounds(t *testing.T) {
 		e.HasTime, e.TimeMS = hasTime, ms
 		return e
 	}
-	// Batch 1: no timestamp, then 200, then 100 — bounds are min/max, not
-	// first/last.
 	e0 := at(0, rawUser("one"), 0, false)
 	e1 := at(e0.End, rawUser("two"), 200, true)
 	e2 := at(e1.End, rawUser("three"), 100, true)
@@ -600,7 +534,6 @@ func TestIngestTimestampBounds(t *testing.T) {
 		t.Fatalf("bounds = [%+v, %+v]; want [100, 200]", row.Started, row.Last)
 	}
 
-	// Batch 2: records without timestamps never touch known bounds.
 	e3 := at(e2.End, rawUser("four"), 0, false)
 	mustIngest(t, hub, Batch{SourceID: "s1", Events: []Event{e3}})
 	row = sessionRowFor(t, hub, sid)
@@ -608,7 +541,6 @@ func TestIngestTimestampBounds(t *testing.T) {
 		t.Fatalf("bounds after missing timestamps = [%+v, %+v]; want unchanged [100, 200]", row.Started, row.Last)
 	}
 
-	// Batch 3: wider observations widen the bounds.
 	e4 := at(e3.End, rawUser("five"), 50, true)
 	e5 := at(e4.End, rawUser("six"), 400, true)
 	mustIngest(t, hub, Batch{SourceID: "s1", Events: []Event{e4, e5}})
@@ -617,7 +549,6 @@ func TestIngestTimestampBounds(t *testing.T) {
 		t.Fatalf("bounds after widening = [%+v, %+v]; want [50, 400]", row.Started, row.Last)
 	}
 
-	// A fresh session keeps NULL bounds until an observation arrives.
 	other := mkEvent(e5.End, rawUser("new session"))
 	other.NativeID = "sess-2"
 	mustIngest(t, hub, Batch{SourceID: "s1", Events: []Event{other}})
@@ -627,8 +558,6 @@ func TestIngestTimestampBounds(t *testing.T) {
 	}
 }
 
-// rawOfLen builds one valid JSON record of exactly n bytes, for placing a
-// record at a chosen offset.
 func rawOfLen(n int) string {
 	pad := n - len(`{"pad":""}`)
 	if pad < 0 {
@@ -637,13 +566,7 @@ func rawOfLen(n int) string {
 	return `{"pad":"` + strings.Repeat("x", pad) + `"}`
 }
 
-// TestIngestFirstPromptTieBreak pins the deterministic selection: the prompt
-// with the smallest (source_id, source_offset) wins, whatever the arrival
-// order, and only marked prompts compete.
 func TestIngestFirstPromptTieBreak(t *testing.T) {
-	// Source aaa's prompt sits at a larger offset than source bbb's, but aaa
-	// orders first by source ID — a subagent file's earlier prompt must not
-	// steal the main session's first prompt by arriving first.
 	aaaFiller := mkEvent(0, rawOfLen(300))
 	mainPrompt := mkEvent(aaaFiller.End, rawUser("prompt from source aaa"))
 	mainPrompt.Prompt = mainPrompt.Text
@@ -677,7 +600,6 @@ func TestIngestFirstPromptTieBreak(t *testing.T) {
 		}
 		return row.FirstPrompt.String
 	}
-	// aaa orders before bbb, so its prompt wins regardless of arrival order.
 	if got := run(bbb, aaa); got != mainPrompt.Text {
 		t.Fatalf("subagent-first order picked %q", got)
 	}
@@ -685,7 +607,6 @@ func TestIngestFirstPromptTieBreak(t *testing.T) {
 		t.Fatalf("main-first order picked %q", got)
 	}
 
-	// Within one source, offsets only grow, so the first prompt stays.
 	hub := ingestHub(t)
 	mustRegister(t, hub, "aaa", "/main.jsonl")
 	first := mkEvent(0, rawUser("the first prompt"))
@@ -699,7 +620,6 @@ func TestIngestFirstPromptTieBreak(t *testing.T) {
 		t.Fatalf("first_prompt = %+v; want the first prompt", row.FirstPrompt)
 	}
 
-	// Non-prompt records never set it.
 	hub2 := ingestHub(t)
 	mustRegister(t, hub2, "ccc", "/c.jsonl")
 	toolResult := mkEvent(0, rawUser("a tool result, not a prompt"))
@@ -710,9 +630,6 @@ func TestIngestFirstPromptTieBreak(t *testing.T) {
 	}
 }
 
-// TestIngestInterruptedCommitRollsBack breaks a batch mid-transaction: the
-// second event violates the metadata JSON check after the first inserted
-// cleanly, so nothing may survive.
 func TestIngestInterruptedCommitRollsBack(t *testing.T) {
 	hub := ingestHub(t)
 	mustRegister(t, hub, "s1", "/a.jsonl")
@@ -734,7 +651,6 @@ func TestIngestInterruptedCommitRollsBack(t *testing.T) {
 		t.Fatal("a session kept an aggregate from a failed commit")
 	}
 
-	// A canceled context is the same interruption from outside.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := hub.Ingest(ctx, Batch{SourceID: "s1", DeviceID: deviceHex, Events: []Event{good}}); err == nil {
@@ -744,16 +660,12 @@ func TestIngestInterruptedCommitRollsBack(t *testing.T) {
 		t.Fatalf("events after canceled ingest = %d, want 0", n)
 	}
 
-	// The same bytes then commit whole.
 	bad.Metadata = ""
 	if res := mustIngest(t, hub, Batch{SourceID: "s1", Events: []Event{good, bad}}); res.Inserted != 2 {
 		t.Fatalf("retry after interruption = %+v; want 2 inserts", res)
 	}
 }
 
-// TestIngestSurvivesCrashWithOpenTransaction kills a helper process holding
-// an open write transaction, then reopens: SQLite recovery discards the
-// uncommitted writes, and the same bytes ingest exactly once afterwards.
 func TestIngestSurvivesCrashWithOpenTransaction(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "crash.db")
@@ -786,7 +698,6 @@ func TestIngestSurvivesCrashWithOpenTransaction(t *testing.T) {
 		t.Fatalf("cursor after crash = %d, %v; want 0", cursor, err)
 	}
 
-	// The interrupted bytes commit exactly once on retry.
 	e0 := mkEvent(0, rawUser("crash one"))
 	e1 := mkEvent(e0.End, rawUser("crash two"))
 	res := mustIngest(t, hub, Batch{SourceID: "crash-src", Events: []Event{e0, e1}})
@@ -795,9 +706,6 @@ func TestIngestSurvivesCrashWithOpenTransaction(t *testing.T) {
 	}
 }
 
-// TestIngestCrashHelper is the helper process for the crash test above. It
-// writes rows inside an open transaction, proves they are visible locally,
-// then dies without committing.
 func TestIngestCrashHelper(t *testing.T) {
 	path := os.Getenv("OHYA_CRASH_DB")
 	if path == "" {
@@ -830,12 +738,9 @@ func TestIngestCrashHelper(t *testing.T) {
 	if err := tx.QueryRow(`SELECT count(*) FROM events`).Scan(&n); err != nil || n != 2 {
 		panic(fmt.Sprintf("helper transaction sees %d events, %v", n, err))
 	}
-	os.Exit(3) // die with the transaction open
+	os.Exit(3)
 }
 
-// TestIngestIncompleteTailCommitsWholeRecords ties parser and write path
-// together on the crash-during-write fixture: the incomplete tail is left
-// for the next poll, and only complete records commit.
 func TestIngestIncompleteTailCommitsWholeRecords(t *testing.T) {
 	hub := ingestHub(t)
 	mustRegister(t, hub, "s1", "/incomplete-tail.jsonl")

@@ -1,9 +1,3 @@
-// Read-only inspection queries for ohya doctor: checks that compare the hub
-// database against this binary — the applied schema against the embedded
-// migrations, stored parser output versions against the parsers in this
-// build, and the FTS index against the content rows. They run on the
-// read-only pool of a DB opened with OpenReadOnly and never write.
-
 package store
 
 import (
@@ -15,12 +9,8 @@ import (
 	"github.com/mattn/go-sqlite3"
 )
 
-// ErrNoSchemaMigrations reports a database that holds no schema_migrations
-// table: not a database this store's writer created or migrated.
 var ErrNoSchemaMigrations = errors.New("store: no schema_migrations table; the database is not an ohya hub database")
 
-// AppliedSchemaVersion returns the highest migration version the database
-// records as applied. found is false when the table holds no row.
 func (d *DB) AppliedSchemaVersion(ctx context.Context) (version int, found bool, err error) {
 	var name string
 	err = d.readers.QueryRowContext(ctx,
@@ -43,9 +33,6 @@ func (d *DB) AppliedSchemaVersion(ctx context.Context) (version int, found bool,
 	return int(max.Int64), true, nil
 }
 
-// MaxParserVersions returns, for every agent with stored events, the highest
-// parser output version stamped on its rows — the numbers store.ReDerive
-// compares a build's parsers against.
 func (d *DB) MaxParserVersions(ctx context.Context) (map[string]int, error) {
 	rows, err := d.readers.QueryContext(ctx,
 		`SELECT s.agent, max(e.parser_version)
@@ -70,35 +57,16 @@ func (d *DB) MaxParserVersions(ctx context.Context) (map[string]int, error) {
 	return out, nil
 }
 
-// ReadOnlySourceState is SourceState over the read-only pool, for inspection
-// of sources without a writer. Valid only on a DB opened with OpenReadOnly.
 func (d *DB) ReadOnlySourceState(ctx context.Context, id string) (SourceState, error) {
 	return sourceState(ctx, d.readers, id)
 }
 
-// FTSIndexConsistent reports whether the events_fts index agrees with the
-// stored events.text rows, by running the FTS5 integrity-check command.
-// Two properties of SQLite force the indirection through a private
-// in-memory snapshot, taken with the backup API (which reads the source and
-// writes nothing; the hub database stays untouched):
-//
-//   - The command is an SQLite write statement, and SQLite refuses it on a
-//     mode=ro connection.
-//   - With the rank argument that turns on the external-content comparison,
-//     the command demands a docsize entry for every content row. This schema
-//     deliberately leaves text-less events unindexed, so on the snapshot the
-//     maintenance trigger is dropped and those rows removed first: the
-//     comparison then covers exactly the rows the index is supposed to hold.
-//     Without the rank argument the command checks the index structure alone
-//     and passes any content drift.
 func (d *DB) FTSIndexConsistent(ctx context.Context) error {
 	mem, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		return fmt.Errorf("store: open integrity snapshot: %w", err)
 	}
 	defer mem.Close()
-	// One connection keeps the snapshot and the check on the same in-memory
-	// database; a pool would give every connection its own.
 	mem.SetMaxOpenConns(1)
 	mem.SetMaxIdleConns(1)
 	dst, err := mem.Conn(ctx)
@@ -140,9 +108,6 @@ func (d *DB) FTSIndexConsistent(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
-	// Prepare the snapshot: without the delete trigger, removing text-less
-	// events leaves the index untouched, so the comparison sees exactly the
-	// rows the write path indexes.
 	for _, stmt := range []string{
 		`DROP TRIGGER events_fts_delete`,
 		`DELETE FROM events WHERE text IS NULL OR length(text) = 0`,
@@ -151,8 +116,6 @@ func (d *DB) FTSIndexConsistent(ctx context.Context) error {
 			return fmt.Errorf("store: prepare integrity snapshot: %q: %w", stmt, err)
 		}
 	}
-	// The check runs on the same checked-out connection: the single-connection
-	// pool holds it, so the snapshot is the database this statement sees.
 	if _, err := dst.ExecContext(ctx,
 		`INSERT INTO events_fts(events_fts, rank) VALUES ('integrity-check', 1)`); err != nil {
 		return fmt.Errorf("store: events_fts integrity-check: %w", err)

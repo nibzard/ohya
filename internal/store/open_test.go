@@ -9,7 +9,6 @@ import (
 	"testing"
 )
 
-// queryer is the read surface shared by pools and single connections.
 type queryer interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
@@ -24,7 +23,6 @@ func openTestDB(t *testing.T) (*DB, *sql.DB) {
 	return hub, hub.Writer()
 }
 
-// checkConnectionPragmas asserts the settings every connection must carry.
 func checkConnectionPragmas(t *testing.T, ctx context.Context, db queryer) {
 	t.Helper()
 	var journal string
@@ -61,8 +59,6 @@ func TestReaderConnectionsAreRestricted(t *testing.T) {
 	}
 	defer readers.Close()
 
-	// Hold three connections open at once (one per probe below); each must
-	// carry the settings and reject writes.
 	ctx := context.Background()
 	var conns []*sql.Conn
 	for range 3 {
@@ -123,8 +119,6 @@ func TestOpenAppliesRealMigrationsAndReopensCleanly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A later open finds the schema current, applies nothing, and sees the
-	// committed data (the restart path).
 	hub, err = Open(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)
@@ -176,7 +170,6 @@ func TestFTSConsistencyThroughReader(t *testing.T) {
 		t.Fatalf("MATCH token = %d, want 1", n)
 	}
 
-	// Deleting an event removes its index entry through the trigger.
 	if _, err := writer.Exec(`DELETE FROM events WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}
@@ -184,13 +177,9 @@ func TestFTSConsistencyThroughReader(t *testing.T) {
 		t.Fatalf("MATCH hello after delete = %d, want 0", n)
 	}
 
-	// The external-content index still matches the events table exactly.
 	if _, err := writer.Exec(`INSERT INTO events_fts(events_fts) VALUES ('integrity-check')`); err != nil {
 		t.Fatalf("FTS integrity-check failed: %v", err)
 	}
-	// Only events with non-empty text carry index entries. count(*) on an
-	// external-content table reads the content table, so enumerate through
-	// MATCH instead and expect exactly the surviving indexed documents.
 	rows, err := readers.Query(`SELECT rowid FROM events_fts WHERE events_fts MATCH 'hello OR world OR authentication OR refresh OR token' ORDER BY rowid`)
 	if err != nil {
 		t.Fatal(err)

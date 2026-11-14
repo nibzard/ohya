@@ -1,6 +1,3 @@
-// Package store owns the hub's SQLite database: versioned migrations, the
-// single durable writer connection, and separate restricted reader
-// connections.
 package store
 
 import (
@@ -14,26 +11,16 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// synchronousFull is the PRAGMA synchronous value for FULL durability.
 const synchronousFull = 2
 
-// busyTimeoutMs bounds how long a connection waits on a lock held by another
-// process (for example a backup tool) before failing.
 const busyTimeoutMs = 5000
 
-// DB is the hub-owned handle to the transcript database. All writes go
-// through its single writer connection; readers get separate read-only
-// connections. A DB built by OpenReadOnly has no writer and owns one
-// read-only pool instead; its read methods answer through that pool.
 type DB struct {
 	path    string
 	writer  *sql.DB
-	readers *sql.DB // set only by OpenReadOnly
+	readers *sql.DB
 }
 
-// Open opens (creating if needed) the database at path, configures the
-// single writer connection, and applies pending migrations. Only one ohya
-// process may hold the writer.
 func Open(ctx context.Context, path string) (*DB, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -43,8 +30,6 @@ func Open(ctx context.Context, path string) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("store: open writer %s: %w", abs, err)
 	}
-	// Exactly one writer connection: writes serialize on it and cannot
-	// interleave.
 	writer.SetMaxOpenConns(1)
 	writer.SetMaxIdleConns(1)
 	if err := verifyWriter(ctx, writer); err != nil {
@@ -58,10 +43,6 @@ func Open(ctx context.Context, path string) (*DB, error) {
 	return &DB{path: abs, writer: writer}, nil
 }
 
-// OpenReadOnly opens an existing hub database read-only, for inspection only
-// (ohya doctor): it applies no migrations and holds no writer, so nothing it
-// does can write. Writer() returns nil on the result. The database must
-// already exist, be a hub database in WAL mode, and be readable.
 func OpenReadOnly(path string) (*DB, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -78,15 +59,8 @@ func OpenReadOnly(path string) (*DB, error) {
 	return &DB{path: abs, readers: readers}, nil
 }
 
-// Writer returns the single connection that may write. Every write —
-// ingestion, annotations, migrations — must go through it. It returns nil on
-// a DB opened with OpenReadOnly.
 func (d *DB) Writer() *sql.DB { return d.writer }
 
-// Reader opens a pool of separate read-only connections. The database must
-// already exist and be migrated, so open the writer first; read-only
-// connections cannot create a database or recover a write-ahead log. Keep
-// the writer running while readers are open.
 func (d *DB) Reader() (*sql.DB, error) {
 	readers, err := sql.Open("sqlite3", readerDSN(d.path))
 	if err != nil {
@@ -99,8 +73,6 @@ func (d *DB) Reader() (*sql.DB, error) {
 	return readers, nil
 }
 
-// Close closes the writer connection, or the read-only pool of a DB opened
-// with OpenReadOnly.
 func (d *DB) Close() error {
 	if d.writer != nil {
 		return d.writer.Close()
@@ -108,18 +80,12 @@ func (d *DB) Close() error {
 	return d.readers.Close()
 }
 
-// dsn builds a SQLite URI for path. Parameters with a leading underscore
-// configure the driver on every pooled connection; others (mode=ro) reach
-// SQLite itself when it opens the file.
 func dsn(path string, params url.Values) string {
 	u := url.URL{Scheme: "file", Path: filepath.ToSlash(path)}
 	u.RawQuery = params.Encode()
 	return u.String()
 }
 
-// writerDSN configures the writer connection: WAL journaling, FULL
-// synchronous durability, foreign keys, and a busy timeout. The driver
-// applies these to every connection it opens for the pool.
 func writerDSN(path string) string {
 	return dsn(path, url.Values{
 		"_journal_mode": []string{"WAL"},
@@ -129,8 +95,6 @@ func writerDSN(path string) string {
 	})
 }
 
-// readerDSN configures reader connections: opened read-only at the SQLite
-// level (mode=ro) with foreign keys and the same busy timeout.
 func readerDSN(path string) string {
 	return dsn(path, url.Values{
 		"mode":          []string{"ro"},
@@ -139,8 +103,6 @@ func readerDSN(path string) string {
 	})
 }
 
-// verifyWriter fails fast when the durability settings are not active, so a
-// misconfigured connection surfaces at open instead of at first commit.
 func verifyWriter(ctx context.Context, db *sql.DB) error {
 	var journal string
 	if err := db.QueryRowContext(ctx, `PRAGMA journal_mode`).Scan(&journal); err != nil {
@@ -162,8 +124,6 @@ func verifyWriter(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-// verifyReader checks the settings on one reader connection, which also
-// proves the database exists and is readable in WAL mode.
 func verifyReader(db *sql.DB) error {
 	var journal string
 	if err := db.QueryRow(`PRAGMA journal_mode`).Scan(&journal); err != nil {

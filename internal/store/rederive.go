@@ -1,9 +1,3 @@
-// Re-derivation: rebuild every normalized field of stored records from the
-// preserved raw JSON, inside the hub, without source-file access. The parser
-// output version marker (events.parser_version) drives it: when a parser's
-// output behavior changes, its OutputVersion constant bumps, and this
-// operation rewrites the rows that predate the bump.
-
 package store
 
 import (
@@ -16,52 +10,27 @@ import (
 	"slices"
 )
 
-// DeriveInput carries one stored record to a parser for re-derivation. The
-// raw JSON is the stored original; the store checks that the parser's output
-// still frames exactly the stored bytes.
 type DeriveInput struct {
-	Agent string
-	// SourceID is the record's source. It scopes synthetic native IDs the
-	// same way ingestion does, so a synthetic session keeps its identity.
-	SourceID string
-	// SourceOffset is the record's first byte offset in its source file.
-	SourceOffset int64
-	// RawJSON is the stored original record text, without the terminator.
-	RawJSON string
-	// FirstNativeID is the native session ID the source's record at offset 0
-	// (or, during the walk, the preceding re-derived record) carries. Parsers
-	// whose records do not name their session (Codex) need it past offset 0;
-	// it is "" for a source's first record.
+	Agent         string
+	SourceID      string
+	SourceOffset  int64
+	RawJSON       string
 	FirstNativeID string
 }
 
-// Deriver re-derives one stored record with its parser's current output
-// behavior. The returned Event must frame exactly the stored record: Offset,
-// End and RawJSON are validated against the stored row. Everything else
-// replaces the row's normalized fields.
 type Deriver func(DeriveInput) (Event, error)
 
-// ParserDeriver binds one agent's parser to re-derivation. OutputVersion is
-// the parser's current output version; rows of that agent carrying a smaller
-// version are stale.
 type ParserDeriver struct {
 	Agent         string
 	OutputVersion int
 	Derive        Deriver
 }
 
-// ReDeriveResult reports one re-derivation pass.
 type ReDeriveResult struct {
-	// Events counts re-derived and rewritten event rows.
-	Events int
-	// Sessions counts rebuilt session rows: aggregates rewritten plus empty
-	// sessions removed.
+	Events   int
 	Sessions int
 }
 
-// rebuiltSession accumulates one session's recomputed aggregates during the
-// walk. Sessions are per agent by construction (the ID embeds the agent), so
-// a rebuild never mixes agents in one session.
 type rebuiltSession struct {
 	id     string
 	agent  string
@@ -72,26 +41,12 @@ type rebuiltSession struct {
 	minMS, maxMS   int64
 	hasMin, hasMax bool
 
-	// First non-empty observation in walk order, which is (source_id,
-	// source_offset) order — deterministic, unlike arrival order.
 	cwd, branch, model string
 
 	prompt    *Event
 	promptRef promptRef
 }
 
-// ReDerive rebuilds normalized rows from the stored raw records. When any row
-// of a bound parser's agent carries a smaller parser output version than the
-// parser reports, every row of that agent is re-derived in one transaction:
-// normalized fields are rewritten from raw_json, session aggregates and token
-// totals are recomputed, replay duplicates are reassigned in deterministic
-// (source, offset) order, and events_fts is rebuilt from the content table
-// with the external-content 'rebuild' command. Source cursors, raw records,
-// event IDs and annotations are untouched. A row derived by a newer parser
-// than a binding reports is refused: an older binary cannot reproduce it.
-//
-// With no stale rows the operation commits nothing and returns zero counts,
-// so an up-to-date hub can call it freely.
 func (d *DB) ReDerive(ctx context.Context, parsers []ParserDeriver) (ReDeriveResult, error) {
 	byAgent := make(map[string]ParserDeriver, len(parsers))
 	for _, p := range parsers {
@@ -116,7 +71,7 @@ func (d *DB) ReDerive(ctx context.Context, parsers []ParserDeriver) (ReDeriveRes
 	if err != nil {
 		return ReDeriveResult{}, fmt.Errorf("store: re-derive: begin: %w", err)
 	}
-	defer tx.Rollback() // no-op after commit
+	defer tx.Rollback()
 
 	var rebuild []string
 	for _, agent := range slices.Sorted(maps.Keys(byAgent)) {
@@ -129,7 +84,7 @@ func (d *DB) ReDerive(ctx context.Context, parsers []ParserDeriver) (ReDeriveRes
 			return ReDeriveResult{}, fmt.Errorf("store: re-derive agent %s: read versions: %w", agent, err)
 		}
 		if !maxV.Valid {
-			continue // the agent has no events
+			continue
 		}
 		if maxV.Int64 > int64(p.OutputVersion) {
 			return ReDeriveResult{}, fmt.Errorf("store: re-derive agent %s: stored rows carry parser output version %d above this build's %d; upgrade before re-deriving",
@@ -140,7 +95,7 @@ func (d *DB) ReDerive(ctx context.Context, parsers []ParserDeriver) (ReDeriveRes
 		}
 	}
 	if len(rebuild) == 0 {
-		return ReDeriveResult{}, nil // nothing stale; commit nothing
+		return ReDeriveResult{}, nil
 	}
 
 	for _, agent := range rebuild {
@@ -163,7 +118,6 @@ func (d *DB) ReDerive(ctx context.Context, parsers []ParserDeriver) (ReDeriveRes
 		}
 		result.Sessions++
 	}
-	// Sessions of rebuilt agents whose events all moved away hold nothing.
 	for _, agent := range rebuild {
 		res, err := tx.ExecContext(ctx,
 			`DELETE FROM sessions WHERE agent = ?
@@ -177,8 +131,6 @@ func (d *DB) ReDerive(ctx context.Context, parsers []ParserDeriver) (ReDeriveRes
 		}
 	}
 
-	// One pass over the content table reconstructs the whole index from the
-	// rewritten events.text; no derived text is stored anywhere else.
 	if _, err := tx.ExecContext(ctx, `INSERT INTO events_fts(events_fts) VALUES ('rebuild')`); err != nil {
 		return ReDeriveResult{}, fmt.Errorf("store: re-derive: rebuild events_fts: %w", err)
 	}
@@ -188,9 +140,6 @@ func (d *DB) ReDerive(ctx context.Context, parsers []ParserDeriver) (ReDeriveRes
 	return result, nil
 }
 
-// clearDerived empties the derived state the walk rebuilds from scratch:
-// replay-original marks (so duplicates can be reassigned in walk order
-// instead of arrival order) and per-session token totals.
 func clearDerived(ctx context.Context, tx *sql.Tx, agent string) error {
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE events SET duplicate_of = id
@@ -206,28 +155,19 @@ func clearDerived(ctx context.Context, tx *sql.Tx, agent string) error {
 	return nil
 }
 
-// rederiveSource is one source of an agent being rebuilt: its ID and owning
-// device, which fix the session identity of every record it stored.
 type rederiveSource struct {
 	id     string
 	device string
 }
 
-// storedEvent is one stored record awaiting re-derivation.
 type storedEvent struct {
 	id     int64
 	offset int64
 	raw    string
 }
 
-// rederiveChunk bounds how many stored records one read holds in memory, the
-// way ingestion bounds a batch: a chunk of records at the size limit stays
-// predictable where a whole source (Codex rollouts reach gigabytes) would not.
 const rederiveChunk = 128
 
-// rederiveAgent walks one agent's sources in source order and each source's
-// records in offset order, re-deriving every stored record and folding the
-// session aggregates of the final event set.
 func rederiveAgent(ctx context.Context, tx *sql.Tx, p ParserDeriver, states map[string]*rebuiltSession) (int, error) {
 	srcRows, err := tx.QueryContext(ctx,
 		`SELECT id, device_id FROM sources WHERE agent = ? ORDER BY id`, p.Agent)
@@ -251,14 +191,6 @@ func rederiveAgent(ctx context.Context, tx *sql.Tx, p ParserDeriver, states map[
 
 	walked := 0
 	for _, src := range sources {
-		// Records are read in bounded chunks, each closed before any update,
-		// so the scan never observes the table it is changing and memory
-		// stays proportional to the chunk. Keyset pagination on the offset is
-		// stable because re-derivation never moves a record's offset.
-		//
-		// The record at offset 0 establishes the source's native session; each
-		// later record sees the one before it, exactly like a fresh parse of
-		// the file, so native carries across chunks.
 		native := ""
 		lastOffset := int64(-1)
 		for {
@@ -313,8 +245,6 @@ func rederiveAgent(ctx context.Context, tx *sql.Tx, p ParserDeriver, states map[
 	return walked, nil
 }
 
-// checkDerived enforces the deriver contract: the output frames exactly the
-// stored record, names a session, and reports the version it was bound with.
 func checkDerived(p ParserDeriver, ev Event, id, offset int64, raw string) error {
 	switch {
 	case ev.Offset != offset:
@@ -337,14 +267,6 @@ func checkDerived(p ParserDeriver, ev Event, id, offset int64, raw string) error
 	return nil
 }
 
-// rewriteEvent stores one re-derived record and folds its session state. The
-// write mirrors ingestion: a byte-identical duplicate of an already assigned
-// (session, ordinal) original keeps NULL text and contributes nothing to
-// aggregates or token totals, so content-bearing text exists once and FTS
-// indexes it once. A record with different bytes at the same (session,
-// ordinal) re-enumerates the ordinal and is another original. storedID is the
-// row's immutable ID; re-derivation updates rows in place so
-// event_annotations keep their targets.
 func rewriteEvent(ctx context.Context, tx *sql.Tx, src rederiveSource, p ParserDeriver, storedID int64, ev Event, states map[string]*rebuiltSession) error {
 	sid := SessionID(src.device, p.Agent, ev.NativeID)
 	if _, err := tx.ExecContext(ctx,
@@ -424,9 +346,6 @@ func rewriteEvent(ctx context.Context, tx *sql.Tx, src rederiveSource, p ParserD
 		st.promptRef = ref
 	}
 	if ev.HasUsage && ev.MessageID != "" {
-		// Walk order is the deterministic order, so the first usage of a
-		// message ID is the same one a fresh ingest of the same records
-		// would keep.
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO session_token_usage
 			   (session_id, message_id, input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens)
@@ -440,9 +359,6 @@ func rewriteEvent(ctx context.Context, tx *sql.Tx, src rederiveSource, p ParserD
 	return nil
 }
 
-// finalizeSession writes one session's recomputed aggregates. The repo column
-// and unknown metadata keys are preserved; only firstPromptRef is managed
-// here, exactly like the write path does.
 func finalizeSession(ctx context.Context, tx *sql.Tx, st *rebuiltSession) error {
 	var metadata string
 	if err := tx.QueryRowContext(ctx,

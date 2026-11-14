@@ -12,9 +12,6 @@ import (
 	"github.com/nibzard/ohya/internal/claudecode"
 )
 
-// claudeDeriver binds the mirrored Claude Code adapter at a chosen parser
-// output version. mutate simulates a parser behavior change by rewriting the
-// derived event; nil reproduces the current output exactly.
 func claudeDeriver(version int, mutate func(*Event)) ParserDeriver {
 	return ParserDeriver{
 		Agent:         "claude-code",
@@ -38,8 +35,6 @@ func claudeDeriver(version int, mutate func(*Event)) ParserDeriver {
 	}
 }
 
-// ingestFixtureHub ingests the main Claude Code fixture through the real
-// parser (mirrored adapter) and returns the hub plus the ingested events.
 func ingestFixtureHub(t *testing.T) (*DB, []Event) {
 	t.Helper()
 	hub := ingestHub(t)
@@ -52,9 +47,6 @@ func ingestFixtureHub(t *testing.T) (*DB, []Event) {
 	return hub, events
 }
 
-// dumpHub renders every derived row the re-derivation owns: events, session
-// aggregates, token totals and the FTS document set. Two equal dumps mean an
-// operation left the derived state bit-identical.
 func dumpHub(t *testing.T, hub *DB) string {
 	t.Helper()
 	var b strings.Builder
@@ -130,9 +122,6 @@ func dumpHub(t *testing.T, hub *DB) string {
 	return b.String()
 }
 
-// ftsDocuments enumerates the index through MATCH — count(*) on an
-// external-content table reads the content table, not the index — and fails
-// on an inconsistent index.
 func ftsDocuments(t *testing.T, hub *DB) string {
 	t.Helper()
 	if _, err := hub.Writer().Exec(`INSERT INTO events_fts(events_fts) VALUES ('integrity-check')`); err != nil {
@@ -158,7 +147,6 @@ func ftsDocuments(t *testing.T, hub *DB) string {
 	return fmt.Sprintf("fts %v\n", ids)
 }
 
-// matchCount counts MATCH hits for one term.
 func matchCount(t *testing.T, hub *DB, term string) int {
 	t.Helper()
 	var n int
@@ -192,8 +180,6 @@ func TestReDeriveReproducesRowsAndIsIdempotent(t *testing.T) {
 	hub, _ := ingestFixtureHub(t)
 	before := dumpHub(t, hub)
 
-	// A bumped output version with unchanged behavior must rebuild every row
-	// byte-identically except the version stamp.
 	res, err := hub.ReDerive(context.Background(), []ParserDeriver{claudeDeriver(2, nil)})
 	if err != nil {
 		t.Fatal(err)
@@ -209,7 +195,6 @@ func TestReDeriveReproducesRowsAndIsIdempotent(t *testing.T) {
 		t.Fatalf("rebuild changed derived state beyond the version stamp:\n%s", diffSnip(before, rebuilt))
 	}
 
-	// A second pass over up-to-date rows commits nothing and changes nothing.
 	res2, err := hub.ReDerive(context.Background(), []ParserDeriver{claudeDeriver(2, nil)})
 	if err != nil {
 		t.Fatal(err)
@@ -226,8 +211,6 @@ func TestReDeriveRewritesTextSessionsAndFTS(t *testing.T) {
 	hub, _ := ingestFixtureHub(t)
 	ctx := context.Background()
 
-	// Annotate one event; re-derivation must keep the row (and so the
-	// annotation target) because it rewrites in place.
 	var eventID int64
 	if err := hub.Writer().QueryRow(`SELECT id FROM events WHERE kind = 'user' ORDER BY id LIMIT 1`).Scan(&eventID); err != nil {
 		t.Fatal(err)
@@ -251,7 +234,6 @@ func TestReDeriveRewritesTextSessionsAndFTS(t *testing.T) {
 	}
 	oldPrime := matchCount(t, hub, "prime")
 
-	// The behavior change rewrites every record's searchable text.
 	res, err := hub.ReDerive(ctx, []ParserDeriver{claudeDeriver(2, func(ev *Event) {
 		if ev.Text != "" {
 			ev.Text = ev.Text + " nineteen"
@@ -264,9 +246,6 @@ func TestReDeriveRewritesTextSessionsAndFTS(t *testing.T) {
 		t.Fatal("rebuild did no work")
 	}
 
-	// FTS serves the re-derived text, not the stale terms: every text-bearing
-	// row gained the new term, the old terms survive, and the index is
-	// consistent with the content table.
 	var textRows int
 	if err := hub.Writer().QueryRow(
 		`SELECT count(*) FROM events WHERE text IS NOT NULL AND length(text) > 0`).Scan(&textRows); err != nil {
@@ -282,8 +261,6 @@ func TestReDeriveRewritesTextSessionsAndFTS(t *testing.T) {
 		t.Fatalf("FTS integrity-check after rebuild: %v", err)
 	}
 
-	// Original records and acknowledgments are untouched; the annotation
-	// still targets the same row.
 	var rawAfter string
 	if err := hub.Writer().QueryRow(`SELECT raw_json FROM events WHERE id = ?`, eventID).Scan(&rawAfter); err != nil {
 		t.Fatal(err)
@@ -326,26 +303,19 @@ func TestReDeriveMovesSessions(t *testing.T) {
 		t.Fatalf("old session survives = %d, %v; want deleted", n, err)
 	}
 	row := sessionRowFor(t, hub, SessionID(deviceHex, "claude-code", "thread-renamed"))
-	// The fixture's 16 records all carry the same sessionId; its cwd, model,
-	// first prompt and counts move with them.
 	if row.EventCount != 16 || row.FirstPrompt.String != "Find the highest prime below 20." ||
 		row.Cwd.String != "/home/dev/fixture-project" || row.Model.String != "fixture-model-v1" {
 		t.Fatalf("moved session = %+v", row)
 	}
-	// Token totals follow the session id.
 	if u := tokenTotals(t, hub, SessionID(deviceHex, "claude-code", "thread-renamed")); u.InputTokens != 180 {
 		t.Fatalf("moved token totals = %+v", u)
 	}
 }
 
-// rawOrdinal builds one user record whose JSON carries a per-session ordinal,
-// the way a Codex rollout record does; the test deriver re-derives it.
 func rawOrdinal(content string, ordinal int64) string {
 	return fmt.Sprintf(`{"type":"user","sessionId":"sess-1","ordinal":%d,"message":{"role":"user","content":%q}}`, ordinal, content)
 }
 
-// ordinalDeriver re-derives records that carry their ordinal in the raw JSON,
-// mirroring how the Codex parser derives it from the record itself.
 func ordinalDeriver(version int) ParserDeriver {
 	inner := claudeDeriver(version, nil)
 	return ParserDeriver{
@@ -375,7 +345,6 @@ func TestReDeriveReassignsDuplicatesInWalkOrder(t *testing.T) {
 
 	o1 := ordinalEvent(0, 1, rawOrdinal("replayed text", 1))
 	p1 := ordinalEvent(0, 1, o1.RawJSON)
-	// Arrival order makes the page's copy the original.
 	mustIngest(t, hub, Batch{SourceID: "page", Events: []Event{p1}})
 	mustIngest(t, hub, Batch{SourceID: "orig", Events: []Event{o1}})
 	pageRow, origRow := eventAt(t, hub, "page", 0), eventAt(t, hub, "orig", 0)
@@ -383,8 +352,6 @@ func TestReDeriveReassignsDuplicatesInWalkOrder(t *testing.T) {
 		t.Fatalf("precondition: arrival made page %d the original of orig %d", pageRow.ID, origRow.ID)
 	}
 
-	// Re-derivation reassigns in (source, offset) walk order: "orig" sorts
-	// before "page", so the original file's copy becomes the original.
 	if _, err := hub.ReDerive(context.Background(), []ParserDeriver{ordinalDeriver(2)}); err != nil {
 		t.Fatal(err)
 	}
@@ -395,8 +362,6 @@ func TestReDeriveReassignsDuplicatesInWalkOrder(t *testing.T) {
 	if !origRow.Text.Valid || pageRow.Text.Valid {
 		t.Fatalf("text after reassignment: orig = %+v, page = %+v; want text once", origRow, pageRow)
 	}
-	// Content-bearing text exists once, so search still returns the record
-	// once and the index stays consistent.
 	if n := matchCount(t, hub, "replayed"); n != 1 {
 		t.Fatalf("MATCH replayed = %d, want 1", n)
 	}
@@ -409,10 +374,6 @@ func TestReDeriveReassignsDuplicatesInWalkOrder(t *testing.T) {
 	}
 }
 
-// TestReDeriveKeepsDistinctRecordsAtOneOrdinal pins the content-keyed rule
-// under re-derivation: two files that hold different records at one (session,
-// ordinal) — a rolled-back turn and its re-enumeration — keep both originals
-// after a rebuild, while a byte-identical copy still reassigns in walk order.
 func TestReDeriveKeepsDistinctRecordsAtOneOrdinal(t *testing.T) {
 	hub := ingestHub(t)
 	mustRegister(t, hub, "orig", "/orig.jsonl")
@@ -421,7 +382,7 @@ func TestReDeriveKeepsDistinctRecordsAtOneOrdinal(t *testing.T) {
 
 	o2 := ordinalEvent(0, 2, rawOrdinal("aborted end", 2))
 	p2 := ordinalEvent(0, 2, rawOrdinal("regenerated answer", 2))
-	r2 := ordinalEvent(0, 2, o2.RawJSON) // byte-identical replay of the original
+	r2 := ordinalEvent(0, 2, o2.RawJSON)
 	mustIngest(t, hub, Batch{SourceID: "page", Events: []Event{p2}})
 	mustIngest(t, hub, Batch{SourceID: "orig", Events: []Event{o2}})
 	mustIngest(t, hub, Batch{SourceID: "replay", Events: []Event{r2}})
@@ -470,8 +431,6 @@ func TestReDeriveRollsBackOnDeriveFailure(t *testing.T) {
 	hub, _ := ingestFixtureHub(t)
 	before := dumpHub(t, hub)
 
-	// The deriver fails on the second record; the whole pass — including the
-	// first record's rewrite and the FTS rebuild — must roll back.
 	_, err := hub.ReDerive(context.Background(), []ParserDeriver{claudeDeriver(2, func(ev *Event) {
 		if ev.Offset > 0 {
 			ev.Text = ""
@@ -502,8 +461,6 @@ func TestReDeriveRejectsBadBindings(t *testing.T) {
 	fails([]ParserDeriver{good, {Agent: "claude-code", OutputVersion: 2, Derive: good.Derive}})
 }
 
-// TestReDeriveWalksMoreThanOneChunk pins the chunked read: a source longer
-// than one chunk re-derives every record exactly once, across boundaries.
 func TestReDeriveWalksMoreThanOneChunk(t *testing.T) {
 	hub := ingestHub(t)
 	mustRegister(t, hub, "s1", "/big.jsonl")
@@ -532,15 +489,12 @@ func TestReDeriveWalksMoreThanOneChunk(t *testing.T) {
 	}
 }
 
-// stripVersions masks the parser version stamp from a dump so a rebuild
-// with unchanged behavior compares equal to the state before it.
 func stripVersions(dump string) string {
 	return parserVersionRE.ReplaceAllString(dump, "pv=*")
 }
 
 var parserVersionRE = regexp.MustCompile(`pv=\d+`)
 
-// diffSnip renders two dumps side by side up to their first difference.
 func diffSnip(want, got string) string {
 	wl, gl := strings.Split(want, "\n"), strings.Split(got, "\n")
 	for i := range wl {
@@ -551,8 +505,6 @@ func diffSnip(want, got string) string {
 	return fmt.Sprintf("got %d extra lines from %q", len(gl)-len(wl), strings.Join(gl[len(wl):], " | "))
 }
 
-// TestIngestRejectsMissingParserVersion pins the write-path half of the
-// marker: a record that names no parser output version is malformed.
 func TestIngestRejectsMissingParserVersion(t *testing.T) {
 	hub := ingestHub(t)
 	mustRegister(t, hub, "s1", "/m.jsonl")

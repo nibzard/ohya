@@ -8,14 +8,12 @@ import (
 	"testing"
 )
 
-// ordinalEvent builds one event that carries a per-session ordinal.
 func ordinalEvent(offset, ordinal int64, raw string) Event {
 	e := mkEvent(offset, raw)
 	e.Ordinal, e.HasOrdinal = ordinal, true
 	return e
 }
 
-// eventRow reads the dedupe columns of one stored record.
 type eventRow struct {
 	ID          int64
 	Ordinal     sql.NullInt64
@@ -34,10 +32,6 @@ func eventAt(t *testing.T, hub *DB, source string, offset int64) eventRow {
 	return r
 }
 
-// TestIngestDeduplicatesOrdinalsAcrossSources covers a resumed page that
-// replays the tail of an earlier file of the same session: the replayed
-// records are retained, marked as duplicates of the first copies, kept out of
-// search, and add nothing to the aggregates or token totals.
 func TestIngestDeduplicatesOrdinalsAcrossSources(t *testing.T) {
 	hub := ingestHub(t)
 	mustRegister(t, hub, "orig", "/orig.jsonl")
@@ -52,8 +46,6 @@ func TestIngestDeduplicatesOrdinalsAcrossSources(t *testing.T) {
 		t.Fatalf("original inserted %d, want 2", orig.Inserted)
 	}
 
-	// The page opens with a record without an ordinal, then replays
-	// ordinal 1 (identical bytes, later time) and adds ordinal 2.
 	p0 := mkEvent(0, rawUser("page meta"))
 	p1 := ordinalEvent(p0.End, 1, o1.RawJSON)
 	p1.Text = o1.Text
@@ -80,7 +72,6 @@ func TestIngestDeduplicatesOrdinalsAcrossSources(t *testing.T) {
 		t.Fatalf("new record = %+v; want an original with text", r)
 	}
 
-	// Search returns the replayed record once.
 	var hits int
 	if err := hub.Writer().QueryRow(
 		`SELECT count(*) FROM events_fts WHERE events_fts MATCH ?`,
@@ -94,8 +85,6 @@ func TestIngestDeduplicatesOrdinalsAcrossSources(t *testing.T) {
 		t.Fatalf("FTS integrity: %v", err)
 	}
 
-	// The duplicate counts nowhere: 2 + 2 originals, its later timestamp
-	// does not widen the bounds, and the usage counts once.
 	row := sessionRowFor(t, hub, SessionID(deviceHex, "claude-code", "sess-1"))
 	if row.EventCount != 4 || row.Last.Valid {
 		t.Fatalf("session = %+v; want 4 events and no timestamp", row)
@@ -105,15 +94,11 @@ func TestIngestDeduplicatesOrdinalsAcrossSources(t *testing.T) {
 		t.Fatalf("input tokens = %d, %v; want 10", input, err)
 	}
 
-	// A retry of the page replays its bytes; validation passes and nothing
-	// new is stored.
 	again := mustIngest(t, hub, Batch{SourceID: "page", Events: []Event{p0, p1, p2}})
 	if again.Inserted != 0 || again.Cursor != p2.End {
 		t.Fatalf("retry = %+v; want nothing new at cursor %d", again, p2.End)
 	}
 
-	// Arrival order decides which copy is the original: a fresh hub that
-	// sees the page first marks the original file's copy instead.
 	hub2 := ingestHub(t)
 	mustRegister(t, hub2, "orig", "/orig.jsonl")
 	mustRegister(t, hub2, "page", "/page.jsonl")
@@ -124,15 +109,8 @@ func TestIngestDeduplicatesOrdinalsAcrossSources(t *testing.T) {
 	}
 }
 
-// TestIngestKeepsDistinctRecordsAtOneOrdinal covers a page that re-enumerates
-// an ordinal after a rollback — the real resumed-page behavior, where the
-// colliding copies hold different records (see testdata/codex/README.md,
-// "Native session identity"). Both copies stay originals: text searchable,
-// aggregates and per-response usage counted. Arrival order changes nothing.
 func TestIngestKeepsDistinctRecordsAtOneOrdinal(t *testing.T) {
 	batches := func() (orig, page Batch) {
-		// The original's turn at ordinals 1–2 was rolled back; its ordinal 2
-		// carries one usage record.
 		o0 := ordinalEvent(0, 0, rawUser("zero"))
 		o1 := ordinalEvent(o0.End, 1, rawUser("aborted turn"))
 		o2 := ordinalEvent(o1.End, 2, rawUser("aborted end"))
@@ -140,8 +118,6 @@ func TestIngestKeepsDistinctRecordsAtOneOrdinal(t *testing.T) {
 		o2.HasUsage, o2.MessageID = true, "resp-1"
 		o2.Usage = Usage{InputTokens: 10, OutputTokens: 4}
 
-		// The page re-enumerates ordinal 2 with a regenerated record whose
-		// usage the original never had, then continues the thread.
 		p0 := mkEvent(0, rawUser("page meta"))
 		p2 := ordinalEvent(p0.End, 2, rawUser("regenerated answer"))
 		p2.Text = "regenerated answer"
@@ -165,7 +141,6 @@ func TestIngestKeepsDistinctRecordsAtOneOrdinal(t *testing.T) {
 			mustIngest(t, hub, page)
 		}
 
-		// Both copies at ordinal 2 are text-bearing originals.
 		oRow := eventAt(t, hub, "orig", orig.Events[2].Offset)
 		pRow := eventAt(t, hub, "page", page.Events[1].Offset)
 		if oRow.DuplicateOf.Valid || pRow.DuplicateOf.Valid || !oRow.Text.Valid || !pRow.Text.Valid {
@@ -203,8 +178,6 @@ func TestIngestOrdinalsAreScopedBySession(t *testing.T) {
 		t.Fatalf("same ordinal in another session = %+v; want an original", r)
 	}
 
-	// Within one batch, a repeated ordinal is a duplicate of the earlier
-	// record.
 	c1 := ordinalEvent(b.End, 8, rawUser("c"))
 	c1.NativeID = "sess-2"
 	c2 := ordinalEvent(c1.End, 8, rawUser("c"))
@@ -214,7 +187,6 @@ func TestIngestOrdinalsAreScopedBySession(t *testing.T) {
 		t.Fatalf("repeat within a batch = %+v", r)
 	}
 
-	// A negative ordinal is a malformed batch.
 	bad := ordinalEvent(c2.End, -1, rawUser("x"))
 	bad.NativeID = "sess-2"
 	_, err := hub.Ingest(context.Background(), Batch{SourceID: "b", DeviceID: deviceHex, Events: []Event{bad}})

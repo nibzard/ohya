@@ -22,8 +22,6 @@ func mapFS(files map[string]string) fstest.MapFS {
 	return m
 }
 
-// openBareWriter opens a writer-configured database without running
-// migrations, so runner tests control the migration set.
 func openBareWriter(t *testing.T) *sql.DB {
 	t.Helper()
 	db, err := sql.Open("sqlite3", writerDSN(filepath.Join(t.TempDir(), "migrate.db")))
@@ -68,8 +66,6 @@ func TestMigrateFreshApplyRecordsVersionsInOrder(t *testing.T) {
 	db := openBareWriter(t)
 	fsys := mapFS(map[string]string{
 		"migrations/001_one.sql": "CREATE TABLE a(x);",
-		// Inserts into 001's table: applying 002 before 001 would fail, so
-		// a clean run proves the ordering.
 		"migrations/002_two.sql": "CREATE TABLE b(x); INSERT INTO a(x) VALUES (1);",
 	})
 	if err := migrate(context.Background(), db, fsys); err != nil {
@@ -185,7 +181,6 @@ func TestMigrateFailedMigrationRollsBackCompletely(t *testing.T) {
 	if got := appliedVersions(t, db); len(got) != 1 || got[0] != 1 {
 		t.Fatalf("applied versions = %v, want [1]", got)
 	}
-	// 002 was never recorded, so fixing it is legal; rerunning resumes there.
 	err = migrate(context.Background(), db, mapFS(map[string]string{
 		"migrations/001_one.sql":   "CREATE TABLE a(x);",
 		"migrations/002_bad.sql":   "CREATE TABLE b(x); INSERT INTO missing VALUES (1);",
@@ -233,9 +228,6 @@ func TestMigrateRejectsInvalidMigrationSets(t *testing.T) {
 	}
 }
 
-// TestSchemaVersionIsNewestEmbeddedMigration pins the value the version
-// command reports (T061): the highest NNN of the embedded migration files,
-// read from the file names so the check stays independent of loadMigrations.
 func TestSchemaVersionIsNewestEmbeddedMigration(t *testing.T) {
 	files, err := fs.Glob(migrationsFS, "migrations/*.sql")
 	if err != nil {

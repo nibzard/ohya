@@ -1,10 +1,3 @@
-// Transactional ingestion write path. One Batch commits atomically: events
-// are inserted, session aggregates and token totals advance only for those
-// inserts, FTS is maintained by the insert trigger, and the source cursor
-// moves over contiguous committed bytes. Validation runs before any insert,
-// so a rejected batch changes nothing; uniqueness is a safety net, not the
-// proof of a safe retry.
-
 package store
 
 import (
@@ -19,30 +12,14 @@ import (
 	"time"
 )
 
-// agentNameRE bounds agent names on registered sources. It repeats the rule
-// from internal/watch (agent names also become state file names there), so
-// the hub rejects the same names local ingestion rejects. SessionID also
-// relies on colon-free agent names.
 var agentNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
-// ErrBatchRejected marks a batch the write path refused for a deterministic
-// reason: retrying the same bytes cannot succeed. The sync endpoint maps it
-// to a permanent rejection the device must not retry as-is.
 var ErrBatchRejected = errors.New("store: batch rejected")
 
-// ErrSourceOwnership marks an attempt to move a registered source to another
-// device or another agent. Ownership is fixed when the source is registered
-// and never changes.
 var ErrSourceOwnership = errors.New("store: source ownership cannot change")
 
-// ErrSourceNotRegistered marks a batch for a source the hub never registered.
-// The uploader must register the source before its first batch.
 var ErrSourceNotRegistered = errors.New("store: source is not registered")
 
-// Usage holds the unambiguous token counts of one API request. Agent parsers
-// map their native usage fields onto these; counts the native record omits
-// stay zero. Every other usage field (tiers, costs, details) is deliberately
-// absent: it has no defined sum.
 type Usage struct {
 	InputTokens              int64
 	CacheCreationInputTokens int64
@@ -50,90 +27,51 @@ type Usage struct {
 	OutputTokens             int64
 }
 
-// Event is one normalized record ready for the write path. The agent parser
-// produces it; the store derives the session from the source's device and
-// agent plus NativeID, validates byte boundaries, and preserves RawJSON
-// verbatim.
 type Event struct {
-	// Offset is the record's first byte offset in its source file. End is
-	// the offset just past the line terminator, so End = Offset plus the
-	// JSON length plus exactly one terminator byte.
 	Offset int64
 	End    int64
 
-	NativeID string // native session identity; may be a synthetic ID
+	NativeID string
 	Kind     string
-	Role     string // "" when the record has no role
-	ToolName string // "" when absent or ambiguous
-	Text     string // searchable text; "" contributes nothing to FTS
-	RawJSON  string // original record text, without the terminator
-	Metadata string // compact JSON object of deterministic observations
+	Role     string
+	ToolName string
+	Text     string
+	RawJSON  string
+	Metadata string
 
 	HasTime bool
-	TimeMS  int64 // Unix milliseconds; meaningful only when HasTime
+	TimeMS  int64
 
-	Cwd       string // working-directory observation
-	GitBranch string // branch observation
-	Model     string // model observation
-	MessageID string // groups the records of one API response
+	Cwd       string
+	GitBranch string
+	Model     string
+	MessageID string
 	Usage     Usage
 	HasUsage  bool
 
-	// Prompt is the user's prompt text when the record is a fresh user
-	// prompt — not a tool result or injected context — so the write path can
-	// select sessions.first_prompt. "" marks no prompt.
 	Prompt string
 
-	// HasOrdinal marks a record that the agent numbers within its native
-	// session (Codex ordinal). (session, Ordinal) plus the record's bytes
-	// name one record across all of the session's source files: a later
-	// byte-identical copy is stored as a duplicate of the first, while a
-	// copy with different bytes re-enumerates the ordinal (a Codex page
-	// after a rollback) and is stored as another original.
 	HasOrdinal bool
 	Ordinal    int64
 
-	// ParserVersion is the output version of the parser that derived this
-	// record's normalized fields (the parser packages' OutputVersion). It is
-	// independent of the schema version: a parser behavior change bumps it,
-	// ingestion stores it per row, and ReDerive re-derives rows that carry a
-	// smaller version. Must be at least 1.
 	ParserVersion int
 }
 
-// Batch is one source's contiguous records, in source order.
 type Batch struct {
 	SourceID string
-	// DeviceID is the identity submitting the batch. A source is bound to one
-	// device at registration, so a batch claiming another device is rejected
-	// instead of silently writing sessions under the wrong identity.
 	DeviceID string
 	Events   []Event
 }
 
-// IngestResult reports one committed batch.
 type IngestResult struct {
-	// Inserted counts only newly inserted events. Records that replayed
-	// already-stored bytes do not count. A record stored as the duplicate of
-	// another file's byte-identical copy (same session and ordinal) is a new
-	// row and counts.
 	Inserted int
-	// Cursor is the source's committed byte cursor after the commit. It is
-	// the offset the caller may acknowledge durably.
-	Cursor int64
+	Cursor   int64
 }
 
-// SessionID encodes (device_id, agent, native_id) unambiguously as
-// agent:device_id:native_id. Agent names and device IDs cannot contain a
-// colon, so the first two separators always split the identity.
 func SessionID(deviceID, agent, nativeID string) string {
 	return agent + ":" + deviceID + ":" + nativeID
 }
 
-// RegisterSource ensures the sources row for one file incarnation exists.
-// Call it before the source's first batch, as the local watcher does before
-// its first ingestion. Re-registering the same source is a no-op that only
-// follows a path move; a source never changes its device or agent.
 func (d *DB) RegisterSource(ctx context.Context, id, deviceID, agent, path string) error {
 	switch {
 	case id == "":
@@ -149,7 +87,7 @@ func (d *DB) RegisterSource(ctx context.Context, id, deviceID, agent, path strin
 	if err != nil {
 		return fmt.Errorf("store: register source %s: %w", id, err)
 	}
-	defer tx.Rollback() // no-op after commit
+	defer tx.Rollback()
 
 	var storedDevice, storedAgent, storedPath string
 	err = tx.QueryRowContext(ctx,
@@ -182,23 +120,16 @@ func (d *DB) RegisterSource(ctx context.Context, id, deviceID, agent, path strin
 	return nil
 }
 
-// SourceState describes a registered source for parsing its next bytes.
 type SourceState struct {
-	Agent  string
-	Cursor int64 // committed byte cursor
-	// FirstNativeID is the native session ID of the source's record at
-	// offset 0, or "" before that record commits. A parser whose records do
-	// not name their session (Codex) needs it to parse bytes past offset 0.
+	Agent         string
+	Cursor        int64
 	FirstNativeID string
 }
 
-// SourceState reads one registered source's agent, cursor and first native
-// session ID. An unknown source is ErrSourceNotRegistered.
 func (d *DB) SourceState(ctx context.Context, id string) (SourceState, error) {
 	return sourceState(ctx, d.writer, id)
 }
 
-// sourceState is the query behind SourceState and its read-only counterpart.
 func sourceState(ctx context.Context, db *sql.DB, id string) (SourceState, error) {
 	var st SourceState
 	var native sql.NullString
@@ -218,15 +149,6 @@ func sourceState(ctx context.Context, db *sql.DB, id string) (SourceState, error
 	return st, nil
 }
 
-// Ingest commits one batch atomically and returns what the commit added.
-//
-// Validation precedes every insert: records must be contiguous within the
-// batch, the batch must start at or behind the stored cursor, bytes already
-// below the cursor must replay identically, and a batch that starts ahead of
-// the cursor is rejected so no bytes are ever skipped silently. A rejected
-// batch leaves the cursor, the events, the aggregates and FTS untouched, and
-// its error carries offsets and lengths only — never transcript content.
-// Other sources are unaffected; ingest them separately.
 func (d *DB) Ingest(ctx context.Context, b Batch) (IngestResult, error) {
 	if b.SourceID == "" {
 		return IngestResult{}, fmt.Errorf("store: ingest: empty source ID: %w", ErrBatchRejected)
@@ -242,7 +164,7 @@ func (d *DB) Ingest(ctx context.Context, b Batch) (IngestResult, error) {
 	if err != nil {
 		return IngestResult{}, fmt.Errorf("store: ingest source %s: begin: %w", b.SourceID, err)
 	}
-	defer tx.Rollback() // no-op after commit
+	defer tx.Rollback()
 
 	var cursor int64
 	var deviceID, agent string
@@ -261,8 +183,6 @@ func (d *DB) Ingest(ctx context.Context, b Batch) (IngestResult, error) {
 			b.SourceID, deviceID, b.DeviceID, ErrSourceOwnership)
 	}
 
-	// Committed records never sit at or beyond the cursor. If they do, the
-	// database contradicts its own acknowledgments; stop instead of adding.
 	var ahead bool
 	if err := tx.QueryRowContext(ctx,
 		`SELECT EXISTS (SELECT 1 FROM events WHERE source_id = ? AND source_offset >= ?)`,
@@ -310,9 +230,6 @@ func (d *DB) Ingest(ctx context.Context, b Batch) (IngestResult, error) {
 	return IngestResult{Inserted: inserted, Cursor: newCursor}, nil
 }
 
-// validateBatch checks the batch's shape before any database work: every
-// record spans exactly its JSON bytes plus one terminator, and the records
-// are contiguous and in source order.
 func validateBatch(events []Event) error {
 	for i := range events {
 		e := &events[i]
@@ -344,10 +261,6 @@ func validateBatch(events []Event) error {
 	return nil
 }
 
-// validateOverlap proves that records replaying bytes below the committed
-// cursor match the stored records exactly. Uniqueness alone says nothing
-// about payload equality, so a conflicting retry stops the source instead of
-// hiding changed history.
 func validateOverlap(ctx context.Context, tx *sql.Tx, b Batch, cursor int64) error {
 	replayed := 0
 	for replayed < len(b.Events) && b.Events[replayed].Offset < cursor {
@@ -368,7 +281,7 @@ func validateOverlap(ctx context.Context, tx *sql.Tx, b Batch, cursor int64) err
 	stored := 0
 	for rows.Next() {
 		if stored == replayed {
-			break // stored bytes continue past the replayed prefix
+			break
 		}
 		var offset int64
 		var raw string
@@ -396,32 +309,25 @@ func validateOverlap(ctx context.Context, tx *sql.Tx, b Batch, cursor int64) err
 	return nil
 }
 
-// sessionDelta accumulates the aggregate changes of one session's newly
-// inserted events.
 type sessionDelta struct {
 	count  int
-	minMS  int64 // observed minimum; valid only when hasMin
-	maxMS  int64 // observed maximum; valid only when hasMax
+	minMS  int64
+	maxMS  int64
 	hasMin bool
 	hasMax bool
-	// First non-empty observation in batch order.
 	cwd    string
 	branch string
 	model  string
-	prompt *Event // first record with a Prompt
+	prompt *Event
 }
 
-// insertEvents inserts the batch's new records — those at or beyond the
-// cursor — and returns how many were new, plus the per-session aggregate
-// deltas of exactly those inserts. Records already stored (a retry the caller
-// replayed after a lost acknowledgment) are skipped without counting.
 func insertEvents(ctx context.Context, tx *sql.Tx, b Batch, cursor int64, deviceID, agent string) (int, map[string]*sessionDelta, error) {
 	deltas := make(map[string]*sessionDelta)
 	inserted := 0
 	for i := range b.Events {
 		e := &b.Events[i]
 		if e.Offset < cursor {
-			continue // replayed bytes; validated above, never re-inserted
+			continue
 		}
 		sid := SessionID(deviceID, agent, e.NativeID)
 		if _, err := tx.ExecContext(ctx,
@@ -438,13 +344,6 @@ func insertEvents(ctx context.Context, tx *sql.Tx, b Batch, cursor int64, device
 		if e.HasTime {
 			timeMS = e.TimeMS
 		}
-		// A record whose (session, ordinal) is already stored with the same
-		// bytes replays it from another file (or repeats it within one). It
-		// is stored for retention and retry validation, without search text,
-		// and adds nothing to the aggregates. A record with different bytes
-		// at the same (session, ordinal) re-enumerates the ordinal — a Codex
-		// page after a rollback — and is a distinct record and an original
-		// of its own.
 		var duplicateOf sql.NullInt64
 		if e.HasOrdinal {
 			ordinal = e.Ordinal
@@ -474,7 +373,7 @@ func insertEvents(ctx context.Context, tx *sql.Tx, b Batch, cursor int64, device
 			return 0, nil, fmt.Errorf("store: ingest source %s: count records: %w", b.SourceID, err)
 		}
 		if affected == 0 {
-			continue // already stored; not a newly inserted record
+			continue
 		}
 		inserted++
 		if duplicateOf.Valid {
@@ -508,8 +407,6 @@ func insertEvents(ctx context.Context, tx *sql.Tx, b Batch, cursor int64, device
 			d.prompt = e
 		}
 		if e.HasUsage && e.MessageID != "" {
-			// One row per response: the first usage of a message ID is
-			// counted, later repeats — even differing ones — are ignored.
 			if _, err := tx.ExecContext(ctx,
 				`INSERT INTO session_token_usage
 				   (session_id, message_id, input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens)
@@ -524,25 +421,16 @@ func insertEvents(ctx context.Context, tx *sql.Tx, b Batch, cursor int64, device
 	return inserted, deltas, nil
 }
 
-// promptRef records where the selected first prompt came from, so a later
-// candidate can be compared by (source_id, source_offset) rather than by
-// arrival order. It lives in sessions.metadata.
 type promptRef struct {
 	SourceID     string `json:"sourceId"`
 	SourceOffset int64  `json:"sourceOffset"`
 }
 
-// before reports whether ref picks an earlier record than other under the
-// deterministic source/order tie-break.
 func (ref promptRef) before(other promptRef) bool {
 	return ref.SourceID < other.SourceID ||
 		(ref.SourceID == other.SourceID && ref.SourceOffset < other.SourceOffset)
 }
 
-// applySessionDelta folds one session's new inserts into its aggregates.
-// Missing observations never overwrite known values: timestamp bounds widen
-// by observed min/max only, and cwd, branch and model keep the first
-// non-empty observation.
 func applySessionDelta(ctx context.Context, tx *sql.Tx, sid string, d *sessionDelta, sourceID string) error {
 	var (
 		count       int
@@ -578,8 +466,6 @@ func applySessionDelta(ctx context.Context, tx *sql.Tx, sid string, d *sessionDe
 		model = sql.NullString{String: d.model, Valid: true}
 	}
 
-	// metadata holds observations from other writers too; preserve unknown
-	// keys and only manage firstPromptRef.
 	md := map[string]json.RawMessage{}
 	if metadata != "" && metadata != "{}" {
 		if err := json.Unmarshal([]byte(metadata), &md); err != nil {
@@ -624,13 +510,10 @@ func applySessionDelta(ctx context.Context, tx *sql.Tx, sid string, d *sessionDe
 	return nil
 }
 
-// sortedSessionIDs returns the delta map's keys in a stable order, so map
-// iteration order never reaches the database.
 func sortedSessionIDs(deltas map[string]*sessionDelta) []string {
 	return slices.Sorted(maps.Keys(deltas))
 }
 
-// nullString maps an absent optional text field to SQL NULL.
 func nullString(s string) any {
 	if s == "" {
 		return nil

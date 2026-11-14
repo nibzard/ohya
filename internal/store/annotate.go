@@ -1,9 +1,3 @@
-// Bounded atomic annotation write path. One Annotate call commits one batch
-// of operations on event_annotations through the hub writer: validation and
-// the missing-event check precede every write statement, the whole batch
-// commits as one transaction, and counts are reported only after the durable
-// commit. Events, sessions, sources, cursors and FTS are never touched.
-
 package store
 
 import (
@@ -18,38 +12,22 @@ import (
 	"time"
 )
 
-// AnnotationOpKind selects one annotation operation.
 type AnnotationOpKind string
 
-// The two operations annotate accepts.
 const (
 	AnnotationUpsert AnnotationOpKind = "upsert"
 	AnnotationDelete AnnotationOpKind = "delete"
 )
 
-// ErrAnnotationRejected reports an annotation batch refused on its content:
-// writer identity, batch rules, name syntax, values, duplicate identities,
-// or a referenced event that does not exist. Retrying the same batch can
-// never succeed. Errors of the SQL execution path — lock contention, a
-// failed commit — do not wrap it; a later retry may clear them.
 var ErrAnnotationRejected = errors.New("store: annotate")
 
-// Annotation limits, shared by this write path and the MCP tool.
 const (
-	// MaxAnnotationOperations bounds one batch.
 	MaxAnnotationOperations = 100
-	// MaxAnnotationValueBytes bounds the stored UTF-8 JSON text of one value.
 	MaxAnnotationValueBytes = 64 << 10
 )
 
-// annotationNameRE bounds namespaces and keys: one to 128 ASCII characters
-// from letters, digits, underscore, hyphen, dot and slash. The class holds
-// ASCII only, so no non-ASCII name can match.
 var annotationNameRE = regexp.MustCompile(`^[A-Za-z0-9_\-./]{1,128}$`)
 
-// AnnotationOp is one operation of an annotate batch. Value holds compact
-// JSON text for upserts and is empty for deletes. The hub writer ID is a
-// parameter of the batch, never of an operation: one call writes as one writer.
 type AnnotationOp struct {
 	Op        AnnotationOpKind
 	EventID   int64
@@ -58,28 +36,17 @@ type AnnotationOp struct {
 	Value     string
 }
 
-// AnnotateResult reports one committed batch. Applied counts the operations
-// that changed a row (insert, value replacement, delete that removed a row);
-// Unchanged counts the ones that matched stored state exactly (identical
-// upsert, delete of an absent annotation).
 type AnnotateResult struct {
 	Applied   int `json:"applied"`
 	Unchanged int `json:"unchanged"`
 }
 
-// annotationID is the batch-level identity of one operation. The writer ID is
-// constant within a batch, so the duplicate check leaves it out.
 type annotationID struct {
 	eventID   int64
 	namespace string
 	key       string
 }
 
-// Annotate validates and commits one batch of annotation operations
-// atomically. writer must be the single hub writer from Open; writerID is the
-// authenticated device's ID, assigned by the hub and never taken from caller
-// input. A rejected batch applies nothing: every rule below is checked before
-// the first write statement, and any statement error rolls back the batch.
 func Annotate(ctx context.Context, writer *sql.DB, writerID string, ops []AnnotationOp) (AnnotateResult, error) {
 	if writer == nil {
 		return AnnotateResult{}, fmt.Errorf("store: annotate: no writer configured")
@@ -95,7 +62,7 @@ func Annotate(ctx context.Context, writer *sql.DB, writerID string, ops []Annota
 	if err != nil {
 		return AnnotateResult{}, fmt.Errorf("store: annotate: begin: %w", err)
 	}
-	defer tx.Rollback() // no-op after commit
+	defer tx.Rollback()
 
 	if err := requireAnnotationEvents(ctx, tx, ops); err != nil {
 		return AnnotateResult{}, err
@@ -119,10 +86,6 @@ func Annotate(ctx context.Context, writer *sql.DB, writerID string, ops []Annota
 	return result, nil
 }
 
-// validateAnnotationBatch checks every batch rule before any database work:
-// writer identity, batch size, operation shape, name syntax, value size and
-// validity, and duplicate identities. Every rejection wraps
-// ErrAnnotationRejected.
 func validateAnnotationBatch(writerID string, ops []AnnotationOp) error {
 	if writerID == "" {
 		return fmt.Errorf("%w: no writer ID; the hub assigns it from the device identity", ErrAnnotationRejected)
@@ -174,9 +137,6 @@ func validateAnnotationBatch(writerID string, ops []AnnotationOp) error {
 	return nil
 }
 
-// requireAnnotationEvents proves every referenced event exists before any
-// write runs, so a missing event rejects the batch with a precise error
-// instead of failing on the foreign key mid-transaction.
 func requireAnnotationEvents(ctx context.Context, tx *sql.Tx, ops []AnnotationOp) error {
 	wanted := make(map[int64]bool, len(ops))
 	for _, op := range ops {
@@ -215,10 +175,6 @@ func requireAnnotationEvents(ctx context.Context, tx *sql.Tx, ops []AnnotationOp
 	return nil
 }
 
-// applyAnnotation applies one operation inside the batch transaction and
-// reports whether it changed a row. Timestamps come from the hub clock, not
-// the caller; an update never moves updated_at_ms below created_at_ms, so a
-// hub clock step backwards cannot trip the table's check.
 func applyAnnotation(ctx context.Context, tx *sql.Tx, op *AnnotationOp, writerID string) (bool, error) {
 	where := fmt.Sprintf("store: annotate: event %d, namespace %q, key %q: ", op.EventID, op.Namespace, op.Key)
 	switch op.Op {
@@ -243,7 +199,6 @@ func applyAnnotation(ctx context.Context, tx *sql.Tx, op *AnnotationOp, writerID
 		case err != nil:
 			return false, fmt.Errorf("%sread annotation: %w", where, err)
 		case stored == op.Value:
-			// Identical retry: no write, so even timestamps stay untouched.
 			return false, nil
 		default:
 			updated := now
