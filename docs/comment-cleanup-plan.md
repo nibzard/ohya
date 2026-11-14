@@ -1,6 +1,6 @@
 # Plan for removing code comments
 
-Status: proposed. This document plans the cleanup; it does not authorize behavior changes.
+Status: in progress on branch `comment-cleanup`. This document plans the cleanup; it does not authorize behavior changes.
 
 ## Objective
 
@@ -212,3 +212,24 @@ This plan uses local repository evidence. Recheck it before implementation.
 - [Watcher implementation](../internal/watch/watch.go)
 - [SQL parser test inputs](../internal/mcpserver/statement_test.go)
 - [Formal model documentation](../tla/README.md)
+
+## Implementation record
+
+Baseline: revision `c0079bf`, recorded 2026-11-14.
+The work runs in a separate worktree on branch `comment-cleanup`.
+The main worktree had unrelated uncommitted edits to the Codex repository derivation; this branch does not include them.
+`make check` and `make build` passed at the baseline.
+The first attempt failed with "no space left on device"; clearing the Go build cache fixed it.
+
+`go run ./cmd/commentcheck -inventory` found 4,537 comment tokens in 110 Go files at the baseline:
+
+- 2,893 explanatory comments in source files.
+- 1,643 explanatory comments in test files.
+- 1 approved directive: `//go:embed migrations/*.sql` in `internal/store/migrate.go`.
+- No cgo preambles, build constraints, or other directive candidates.
+
+The inventory counts each line of a `//` comment group separately.
+Comment markers inside raw and quoted strings are not comments and are not counted.
+
+| Batch | Paths | Comments removed | Documentation destination |
+|---|---|---|---|

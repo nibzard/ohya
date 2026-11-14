@@ -54,3 +54,31 @@ clients authenticate from ambient environment variables (`ANTHROPIC_*`, and
 `OPENAI_API_KEY` for a one-time `codex login` inside the isolated home), and
 all traces stay under `memory-e2e/` (gitignored). It is not part of
 `make check`: it needs both CLIs on `PATH`, network access, and credentials.
+
+## Code comments
+
+Never write explanatory comments in code. Use clear names and simple
+structure. Keep contracts and design rationale in documentation:
+`ARCHITECTURE.md`, `DB.md`, the ADRs under `docs/adr/`, the format notes
+under `testdata/`, and `tla/README.md`. Preserve required machine
+directives, legal notices, and immutable historical files. Preserve
+comment text when it is input data, including test fixtures.
+
+`go run ./cmd/commentcheck` parses every Go file in the repository with the
+standard Go parser and reports each comment that is not an approved
+directive. It covers test files and files for other platforms. It skips
+`testdata`, `vendor`, and directories whose names start with `.` or `_`,
+as the Go tool does. Add `-inventory` to list every comment with its
+package and classification instead of failing.
+
+Approved exceptions:
+
+| Path | Comment | Reason |
+|---|---|---|
+| `internal/store/migrate.go` | `//go:embed migrations/*.sql` | Embeds the migration files in the binary |
+| `internal/store/migrations/*.sql` | SQL comments | Applied migrations are immutable, and their checksums cover the comment bytes |
+| `testdata/` | Comment text in fixtures | Fixtures are parser input |
+| `internal/mcpserver/*_test.go` | SQL comments inside string literals | Test input for the statement scanner |
+
+To approve a new directive, add its exact prefix to `approvedDirectives` in
+`cmd/commentcheck/main.go` and add a row to this table with the reason.

@@ -6,7 +6,8 @@
 - Architecture: one Go binary, modular monolith, one hub-owned SQLite WAL database, FTS5/BM25, read-only `sql(query)` and bounded `annotate(operations)` MCP tools.
 - Use domain-driven language: Device, Source, Session, Event, Cursor, Batch, Acknowledgment; make invariants explicit.
 - Follow KISS, DRY, and YAGNI: smallest correct change; no speculative layers, services, or dependencies.
-- Never write comments in code.
+- Never write explanatory comments in code. Use clear names and simple structure. Keep contracts and design rationale in documentation.
+- Preserve required machine directives, legal notices, and immutable historical files. Preserve comment text when it is input data, including test fixtures. `CONTRIBUTING.md` lists the approved exceptions.
 - Never make quick fixes. Address root causes and make decisions for long-term correctness and maintainability.
 - Keep parsing, domain logic, synchronization, SQLite, Tailcat transport, and MCP at clear boundaries.
 - Preserve original transcript records; normalize deterministically; never require LLMs for ingestion or search.
