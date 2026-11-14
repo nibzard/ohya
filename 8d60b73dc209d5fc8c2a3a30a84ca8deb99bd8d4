@@ -1,0 +1,31 @@
+# Design: boolean --remote plus --hub-addr on ohya mcp
+
+## Problem
+README.md printed `ohya mcp --remote` bare (Use block and the Claude
+Code registration) but --remote was a string flag with an empty
+default, so the bare form exited at "flag needs an argument: -remote".
+
+## Why This Way
+Go's flag package always requires a value for a string flag, even one
+with a non-empty default — giving --remote the documented default
+address alone could never make the bare form parse. Only a boolean
+flag parses without an argument, so --remote selects remote mode and
+the address moves to --hub-addr with the tailcat.DefaultHubAddr()
+default. --hub-addr deliberately reuses join's flag name, default,
+and usage text so both commands share one vocabulary for the same
+concept.
+
+## Alternatives Considered
+- **String --remote with default address**: cannot parse bare — the
+  failure the README printed; rejected.
+- **Custom flag.Value with IsBoolFlag() accepting both "true" and an
+  address**: the space-separated address form would become a
+  positional argument; surprising behavior for no gain; rejected.
+
+## Gotchas
+- `--remote <address>` (old form) now fails as "unexpected argument"
+  rather than parsing; pre-MVP, the README is the contract.
+
+## References
+- Task T055 evidence: bare invocation verified failing twice before,
+  and running against a live serve/join pair after this change.
