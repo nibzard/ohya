@@ -64,6 +64,71 @@ to ingestion, and `Acknowledge` advances the checkpoint only after a durable
 commit. An existing but unusable checkpoint file stops the watcher with a
 recovery error rather than a silent restart.
 
+Local state files:
+
+- `internal/durablefile.Write` replaces a file atomically. It writes a
+  temporary file in the same directory, flushes it, renames it over the
+  target, and then flushes the directory, so the completed rename survives
+  a crash. A crash leaves either the old file or the complete new one. The
+  target directory must exist, and the file is owner-only. Every local
+  state file uses it.
+- `device.json` (format version 1) holds the Device ID: 16 bytes from
+  `crypto/rand`, written as 32 lowercase hex characters. `device.Load` reads
+  it without creating anything, for `ohya doctor`. An unusable file is
+  `ErrUnusable`. The remedy is to restore the file, or to delete it and
+  deliberately start over as a new device. A silent replacement would fork
+  the identity and duplicate its sessions.
+- `credential.json` (format version 1) holds the hub credential, a secret of
+  at most 128 bytes (the wire bound in `internal/hubsync`), and the Device
+  ID it belongs to. It authenticates the identity; it does not create one.
+  A missing file means the device has not paired. An unusable file is
+  `ErrCredentialUnusable`. Never delete it to re-pair: the hub registry
+  already holds the identity as paired and refuses a new invitation for
+  it. Restore the file, or have the hub revoke the identity and pair a new
+  one.
+- `sources/<agent>.json` (format version 1) maps each watched path to its
+  checkpoint: source ID (32 lowercase hex characters from `crypto/rand`),
+  agent, platform file identity, acknowledged cursor, observed size, and
+  the fingerprint window and SHA-256 digest (both empty while the cursor is
+  0). Agent names match `^[a-z0-9][a-z0-9._-]{0,63}$`, because they become
+  file names. `watch.InspectSources` reads the file without polling or
+  writing, for `ohya doctor`. An unusable file is `ErrStateLost`: restore
+  it, or delete it to re-import every source under new source IDs. The
+  re-import is retry-safe but duplicates history, because deduplication
+  keys cannot merge two incarnations.
+
+Watcher rules (`internal/watch`):
+
+- The platform file identity is the device and inode numbers on Unix. An
+  empty identity means the platform has none; then size and fingerprint
+  are the only signals. Paths are normalized by resolving symlinks in the
+  parent directories (macOS links `/tmp` to `/private/tmp`), so a file
+  keeps one key whether or not it currently exists.
+- A tracked path starts a fresh source when its identity changed, when the
+  file is smaller than the acknowledged cursor, or when the fingerprint of
+  the window ending at the cursor no longer matches. The outcome carries the
+  reason and the replaced source with its cursor: bytes past that cursor
+  were never acknowledged, so an uploader that had not sent them lost them.
+  A fingerprint window that cannot be read right now keeps the checkpoint;
+  `ReadPending` surfaces a real read failure.
+- A tracked incarnation that is live under another candidate path is
+  rebound to that path. All moves are computed from the unchanged state and
+  applied together, so two files that swap paths both keep their sources.
+  A move whose target another staying or moving entry also claims is
+  refused, and the check repeats until no target is claimed twice. A
+  refused source stays missing with its checkpoint, and a later poll
+  rebinds it once the conflict is gone.
+- A path that is not observable is reported as missing, and its checkpoint
+  stays. A new path whose identity matches a source that is live at its own
+  path is a hardlink and is not registered.
+- `Rewind` moves a checkpoint back to an earlier cursor. It answers a hub
+  cursor regression, for example after the hub restored a backup. It is
+  refused unless the file still holds the same incarnation and the
+  fingerprinted bytes, because only unchanged retained bytes can replay the
+  lost history.
+- A `Watcher` is not safe for concurrent use. One goroutine drives it, like
+  the database writer.
+
 ## Record handling
 
 Parse complete newline-terminated records; retain an incomplete tail for the

@@ -19,7 +19,6 @@ func TestLoadOrCreateMakesStableID(t *testing.T) {
 		t.Fatalf("ID = %q, want 32 lowercase hex characters", id)
 	}
 
-	// The second load returns the same ID and leaves the file untouched.
 	before, err := os.ReadFile(filepath.Join(dir, FileName))
 	if err != nil {
 		t.Fatalf("read identity file: %v", err)
@@ -90,7 +89,6 @@ func TestLoadOrCreateRejectsUnusableIdentityFile(t *testing.T) {
 			if id != "" {
 				t.Fatalf("ID = %q, want none", id)
 			}
-			// The unusable file must stay untouched: no silent regeneration.
 			got, readErr := os.ReadFile(path)
 			if readErr != nil || string(got) != content {
 				t.Fatalf("identity file was modified: %v", readErr)

@@ -13,61 +13,32 @@ import (
 	"github.com/nibzard/ohya/internal/durablefile"
 )
 
-// stateVersion is the checkpoint file format version.
 const stateVersion = 1
 
-// agentRE bounds agent names. Agent names become state file names, so they
-// are lowercase slugs: "claude-code", "codex", "pi".
 var agentRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
-// ErrStateLost reports that the local source state exists but cannot be
-// used. The watcher refuses to poll: without the saved source IDs and
-// acknowledged offsets it cannot tell which bytes were already ingested, so
-// it must not silently restart and claim exactly-once ingestion. Restore the
-// state file, or delete it to re-import every source under new source IDs.
-// Re-import is retry-safe through deduplication, but it duplicates history:
-// deduplication keys cannot merge two incarnations.
 var ErrStateLost = errors.New("watch: local source state exists but cannot be read; recovery required")
 
-// sourceCheckpoint is the durable local view of one watched source: the
-// identity of its file incarnation and the acknowledged byte offset.
 type sourceCheckpoint struct {
-	// SourceID is the persisted random ID of this file incarnation.
-	SourceID string `json:"source_id"`
-	// Agent names the agent whose session logs this source holds.
-	Agent string `json:"agent"`
-	// Path is the watched path (also the key in the checkpoint file).
-	Path string `json:"path"`
-	// FileIdentity is the platform identity of the incarnation, or "" when
-	// the platform provides none.
-	FileIdentity string `json:"file_identity"`
-	// CursorBytes is the acknowledged byte offset: the hub durably
-	// committed everything before it.
-	CursorBytes int64 `json:"cursor_bytes"`
-	// SizeBytes is the file size observed at the last checkpoint.
-	SizeBytes int64 `json:"size_bytes"`
-	// FingerprintWindow is the length of the content fingerprint window
-	// ending at CursorBytes; 0 while the cursor is 0.
-	FingerprintWindow int64 `json:"fingerprint_window"`
-	// FingerprintSHA256 is the hex digest of the window bytes; "" while the
-	// cursor is 0.
+	SourceID          string `json:"source_id"`
+	Agent             string `json:"agent"`
+	Path              string `json:"path"`
+	FileIdentity      string `json:"file_identity"`
+	CursorBytes       int64  `json:"cursor_bytes"`
+	SizeBytes         int64  `json:"size_bytes"`
+	FingerprintWindow int64  `json:"fingerprint_window"`
 	FingerprintSHA256 string `json:"fingerprint_sha256"`
 }
 
-// checkpointFile is the on-disk shape of <stateDir>/sources/<agent>.json.
 type checkpointFile struct {
 	Version int                         `json:"version"`
 	Sources map[string]sourceCheckpoint `json:"sources"`
 }
 
-// statePath returns the checkpoint file holding one agent's sources.
 func statePath(stateDir, agent string) string {
 	return filepath.Join(stateDir, "sources", agent+".json")
 }
 
-// SourceSnapshot is one watched source's checkpoint, exposed for read-only
-// inspection (ohya doctor): enough to re-decide a stop at the acknowledged
-// cursor without polling or writing.
 type SourceSnapshot struct {
 	Agent       string
 	Path        string
@@ -75,10 +46,6 @@ type SourceSnapshot struct {
 	CursorBytes int64
 }
 
-// InspectSources reads one agent's checkpoint file without polling or
-// writing: a missing file means the agent has no watched sources; an existing
-// but unusable one wraps ErrStateLost, exactly like New. The snapshots are
-// sorted by path.
 func InspectSources(stateDir, agent string) ([]SourceSnapshot, error) {
 	state, err := loadState(stateDir, agent)
 	if err != nil {
@@ -97,10 +64,6 @@ func InspectSources(stateDir, agent string) ([]SourceSnapshot, error) {
 	return out, nil
 }
 
-// loadState reads the checkpoint file. A missing file is a fresh start with
-// no sources. Any existing-but-unusable file is ErrStateLost: the watcher
-// cannot tell what was already ingested, so it must report the recovery
-// need instead of restarting silently.
 func loadState(stateDir, agent string) (checkpointFile, error) {
 	path := statePath(stateDir, agent)
 	data, err := os.ReadFile(path)
@@ -135,7 +98,6 @@ func loadState(stateDir, agent string) (checkpointFile, error) {
 	return state, nil
 }
 
-// saveState durably replaces the checkpoint file.
 func saveState(stateDir, agent string, state checkpointFile) error {
 	path := statePath(stateDir, agent)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

@@ -17,7 +17,6 @@ func TestCredentialRoundTrip(t *testing.T) {
 	}
 	cred := Credential{DeviceID: id, Secret: "0123456789abcdef0123456789abcdef"}
 
-	// Before pairing, LoadCredential reports the missing file plainly.
 	if _, err := LoadCredential(dir); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("unpaired load err = %v; want fs.ErrNotExist", err)
 	}
@@ -30,7 +29,6 @@ func TestCredentialRoundTrip(t *testing.T) {
 		t.Fatalf("stored = %+v, %v; want %+v", stored, err, cred)
 	}
 
-	// The file is owner-only, like the identity file.
 	info, err := os.Stat(filepath.Join(dir, CredentialFileName))
 	if err != nil {
 		t.Fatal(err)
@@ -39,7 +37,6 @@ func TestCredentialRoundTrip(t *testing.T) {
 		t.Fatalf("credential perms = %o; want owner-only", perm)
 	}
 
-	// Saving again replaces atomically; the new secret wins.
 	next := Credential{DeviceID: id, Secret: "ffffffffffffffffffffffffffffffff"}
 	if err := SaveCredential(dir, next); err != nil {
 		t.Fatal(err)
@@ -64,10 +61,6 @@ func TestCredentialRefusesInvalidInput(t *testing.T) {
 	}
 }
 
-// TestCredentialUnusableNeverRepairs pins the recovery posture: a present
-// but broken credential file is an error, because re-pairing the same
-// identity would be refused by the hub anyway (its registry already holds
-// the identity as paired).
 func TestCredentialUnusableNeverRepairs(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, CredentialFileName)

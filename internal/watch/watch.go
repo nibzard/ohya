@@ -1,21 +1,3 @@
-// Package watch tracks session-log files by polling and owns the local
-// checkpoint state that gives each file incarnation a stable source ID and
-// records acknowledged byte offsets.
-//
-// A changed incarnation is detected with three signals: the platform file
-// identity (device and inode numbers on Unix), the file size against the
-// acknowledged cursor, and a content fingerprint of the bytes ending at the
-// checkpoint. A detected replacement, truncation or in-place rewrite starts
-// a new source ID. A rename that keeps the identity keeps the source.
-//
-// Hardlinks put two or more live paths on one file identity, for example a
-// hardlinking backup tool inside the watched tree. One incarnation is
-// watched once: the first path in path order claims it and the duplicate
-// paths are ignored. A rebind that would move a source onto a path another
-// source already claims is refused, so an acknowledged checkpoint is never
-// overwritten; the refused source stays missing and keeps its checkpoint.
-// Filesystem notifications are deferred (ARCHITECTURE.md); the caller drives
-// every poll with the paths it discovered.
 package watch
 
 import (
@@ -32,20 +14,12 @@ import (
 	"strings"
 )
 
-// DefaultFingerprintWindow is the number of bytes ending at each checkpoint
-// covered by the saved content fingerprint when Options leaves it unset.
 const DefaultFingerprintWindow int64 = 4096
 
-// Options configures a Watcher.
 type Options struct {
-	// FingerprintWindow bounds the bytes hashed for the checkpoint
-	// fingerprint. Values <= 0 select DefaultFingerprintWindow.
 	FingerprintWindow int64
 }
 
-// Watcher polls one agent's session files and keeps that agent's local
-// checkpoint state in <stateDir>/sources/<agent>.json. It is not safe for
-// concurrent use; one goroutine drives it, like the database writer.
 type Watcher struct {
 	stateDir string
 	agent    string
@@ -53,44 +27,19 @@ type Watcher struct {
 	state    checkpointFile
 }
 
-// Outcome describes one watched path after a poll.
 type Outcome struct {
-	// Path is the watched path after this poll: the file's new location
-	// when it was renamed.
-	Path string
-	// SourceID identifies the file incarnation. Replacement or truncation
-	// starts a new one.
-	SourceID string
-	// Cursor is the acknowledged byte offset: the hub durably committed
-	// everything before it.
-	Cursor int64
-	// End is the file size observed this poll. Bytes [Cursor, End) await
-	// ingestion; ReadPending returns them.
-	End int64
-	// Fresh reports that this poll registered the source. Its ID is
-	// durably persisted before Poll returns, so before any ingestion.
-	Fresh bool
-	// Reason explains why a fresh source started; empty otherwise.
-	Reason string
-	// ReplacedSourceID is the source this fresh one replaced at the same
-	// path after a replacement, truncation or in-place rewrite; empty
-	// otherwise. ReplacedCursor is that source's acknowledged cursor: its
-	// bytes after the cursor were never acknowledged and the checkpoint no
-	// longer tracks them, so an uploader that had not sent them lost them.
+	Path             string
+	SourceID         string
+	Cursor           int64
+	End              int64
+	Fresh            bool
+	Reason           string
 	ReplacedSourceID string
 	ReplacedCursor   int64
-	// RenamedFrom is the path this source was watched under before the
-	// file moved; empty when it did not move this poll.
-	RenamedFrom string
-	// Missing reports that the file was not observable this poll. The
-	// checkpoint is retained, so the source resumes when the file returns.
-	Missing bool
+	RenamedFrom      string
+	Missing          bool
 }
 
-// New loads, or starts, the local checkpoint state for agent in stateDir.
-// An existing but unusable state file makes New fail with an error that
-// wraps ErrStateLost: the watcher must report the recovery need instead of
-// silently restarting and claiming exactly-once ingestion.
 func New(stateDir, agent string, o Options) (*Watcher, error) {
 	if !agentRE.MatchString(agent) {
 		return nil, fmt.Errorf("watch: agent name %q is not a lowercase slug", agent)
@@ -106,25 +55,11 @@ func New(stateDir, agent string, o Options) (*Watcher, error) {
 	return &Watcher{stateDir: stateDir, agent: agent, window: window, state: state}, nil
 }
 
-// probe holds what one poll observed for a candidate path.
 type probe struct {
 	identity string
 	size     int64
 }
 
-// Poll observes the candidate paths, which the caller discovers — for
-// example by walking the agent's session directory. Paths that do not exist
-// or are not regular files are unobservable: tracked ones surface as Missing
-// outcomes, untracked ones are ignored. Several live paths can share one
-// platform file identity through hardlinks: only the first such path in
-// path order is watched, because the others hold the same file incarnation.
-//
-// Poll returns one Outcome per live source and one per missing tracked
-// path, sorted by path. Sources with Fresh set, including new files, are
-// durably persisted before Poll returns, so a crash right after Poll cannot
-// lose a new source ID. A rebind onto a path that another source claims —
-// including the shared-identity case — is refused: the source stays missing
-// with its checkpoint retained instead of overwriting the other source.
 func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 	probes := make(map[string]probe, len(candidates))
 	for _, p := range candidates {
@@ -142,10 +77,6 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 		probes[norm] = probe{identity: platformFileIdentity(info), size: info.Size()}
 	}
 
-	// Live incarnations by identity, for rename detection. Hardlinks put
-	// two or more live paths on one identity; the first path in path order
-	// claims the slot, so which path a rebind targets never depends on map
-	// iteration order. Duplicate paths are refused at registration below.
 	byIdentity := make(map[string]string, len(probes))
 	for _, p := range slices.Sorted(maps.Keys(probes)) {
 		if id := probes[p].identity; id != "" {
@@ -158,10 +89,6 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 	var outcomes []Outcome
 	changed := false
 
-	// A tracked incarnation that left its watched path but is live under
-	// another candidate path keeps its source: rebind it to the new path.
-	// All moves are computed from the unchanged map and applied together, so
-	// two files that swap paths both survive.
 	renamedFrom := map[string]string{}
 	moves := map[string]string{}
 	for _, key := range slices.Sorted(maps.Keys(w.state.Sources)) {
@@ -170,21 +97,13 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 			continue
 		}
 		if pr, ok := probes[key]; ok && pr.identity == entry.FileIdentity {
-			continue // the incarnation still sits at its watched path
+			continue
 		}
 		if newPath, ok := byIdentity[entry.FileIdentity]; ok && newPath != key {
 			moves[key] = newPath
 		}
 	}
 	if len(moves) > 0 {
-		// Refuse every ambiguous move before rebuilding, so the rebuild
-		// writes each state key at most once and never overwrites another
-		// source's checkpoint. A target is ambiguous while a second entry —
-		// one that stays put, or another move — also claims it; refusing a
-		// move returns its source to the staying set, so the check repeats
-		// until no target is over-claimed. A refused source stays at its
-		// watched path as missing with its checkpoint retained, and a later
-		// poll rebinds it once the ambiguity is gone.
 		for {
 			claims := make(map[string]int, len(w.state.Sources))
 			for key := range w.state.Sources {
@@ -221,7 +140,6 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 		changed = true
 	}
 
-	// Classify every tracked entry at its (possibly rebound) path.
 	for _, key := range slices.Sorted(maps.Keys(w.state.Sources)) {
 		entry := w.state.Sources[key]
 		pr, live := probes[key]
@@ -260,11 +178,6 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 		changed = true
 	}
 
-	// Candidate paths no entry claims are new files. A candidate whose file
-	// identity duplicates a tracked source that is live at its own path is
-	// the same incarnation under another name — a hardlink — and is refused:
-	// watching it again would only duplicate history under a second source
-	// ID. The first path in path order wins.
 	claimed := make(map[string]bool, len(w.state.Sources))
 	for key, entry := range w.state.Sources {
 		if pr, ok := probes[key]; ok && pr.identity != "" && pr.identity == entry.FileIdentity {
@@ -277,7 +190,7 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 		}
 		id := probes[key].identity
 		if id != "" && claimed[id] {
-			continue // the same incarnation is already watched through another path
+			continue
 		}
 		outcome, err := w.register(key, probes[key], "new file")
 		if err != nil {
@@ -299,14 +212,9 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 	return outcomes, nil
 }
 
-// verifyFingerprint compares the saved checkpoint fingerprint with the
-// current file content. It returns the fresh-source reason on a detected
-// change, or "" when the checkpoint still matches. A window that cannot be
-// read right now also returns "": the source keeps its checkpoint, and
-// ReadPending surfaces any real read failure.
 func (w *Watcher) verifyFingerprint(path string, entry sourceCheckpoint) string {
 	if entry.CursorBytes == 0 {
-		return "" // nothing ingested yet; identity and size are the only signals
+		return ""
 	}
 	sum, err := fingerprintFile(path, entry.CursorBytes, entry.FingerprintWindow)
 	switch {
@@ -315,11 +223,10 @@ func (w *Watcher) verifyFingerprint(path string, entry sourceCheckpoint) string 
 	case errors.Is(err, errShortRead):
 		return "the acknowledged prefix became unreadable during verification: the file shrank"
 	default:
-		return "" // matches, or unobservable now; a later poll re-verifies
+		return ""
 	}
 }
 
-// register starts a new source for a path and returns its outcome.
 func (w *Watcher) register(path string, pr probe, reason string) (Outcome, error) {
 	id, err := newSourceID()
 	if err != nil {
@@ -335,11 +242,6 @@ func (w *Watcher) register(path string, pr probe, reason string) (Outcome, error
 	return Outcome{Path: path, SourceID: id, End: pr.size, Fresh: true, Reason: reason}, nil
 }
 
-// ReadPending returns the unacknowledged bytes [o.Cursor, o.End) of the
-// source described by outcome o. It re-verifies the file incarnation first,
-// so a replaced or truncated file never feeds wrong bytes to ingestion. Call
-// Acknowledge once ingestion durably committed an offset; until then every
-// poll reports the same pending bytes again.
 func (w *Watcher) ReadPending(o Outcome) ([]byte, error) {
 	entry, ok := w.state.Sources[o.Path]
 	if !ok || entry.SourceID != o.SourceID {
@@ -367,10 +269,6 @@ func (w *Watcher) ReadPending(o Outcome) ([]byte, error) {
 	return buf, nil
 }
 
-// Acknowledge records that the hub durably committed the source's bytes
-// through offset end. It advances the local checkpoint and refreshes its
-// content fingerprint. Acknowledge only after a durable commit: a lost or
-// older checkpoint causes safe replay, never silent data loss.
 func (w *Watcher) Acknowledge(path, sourceID string, end int64) error {
 	p, entry, err := w.entry(path, sourceID)
 	if err != nil {
@@ -383,13 +281,6 @@ func (w *Watcher) Acknowledge(path, sourceID string, end int64) error {
 	return w.checkpoint(p, entry, end)
 }
 
-// Rewind moves the source's checkpoint back to cursor, so the bytes from
-// cursor on are pending again. It is the device's answer to a hub cursor
-// regression, for example after the hub restored a backup: the hub no
-// longer holds what it once acknowledged, and the retained file can replay
-// it. Rewind refuses unless the file still holds the incarnation and the
-// bytes the checkpoint fingerprinted, because only unchanged retained bytes
-// can replay the lost history.
 func (w *Watcher) Rewind(path, sourceID string, cursor int64) error {
 	p, entry, err := w.entry(path, sourceID)
 	if err != nil {
@@ -408,8 +299,6 @@ func (w *Watcher) Rewind(path, sourceID string, cursor int64) error {
 	return w.checkpoint(p, entry, cursor)
 }
 
-// entry returns the checkpoint of the watched path, which must belong to
-// sourceID.
 func (w *Watcher) entry(path, sourceID string) (string, sourceCheckpoint, error) {
 	p := normalizePath(path)
 	entry, ok := w.state.Sources[p]
@@ -422,8 +311,6 @@ func (w *Watcher) entry(path, sourceID string) (string, sourceCheckpoint, error)
 	return p, entry, nil
 }
 
-// checkpoint durably sets the source's cursor to end and refreshes the
-// content fingerprint of the window ending there.
 func (w *Watcher) checkpoint(p string, entry sourceCheckpoint, end int64) error {
 	f, info, err := observe(p, entry.FileIdentity)
 	if err != nil {
@@ -451,9 +338,6 @@ func (w *Watcher) checkpoint(p string, entry sourceCheckpoint, end int64) error 
 	return saveState(w.stateDir, w.agent, w.state)
 }
 
-// observe opens path and verifies it still holds the expected incarnation.
-// The caller closes the returned file. An empty identity skips the check;
-// only size and fingerprint then guard the content.
 func observe(path, identity string) (*os.File, fs.FileInfo, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -471,12 +355,8 @@ func observe(path, identity string) (*os.File, fs.FileInfo, error) {
 	return f, info, nil
 }
 
-// errShortRead reports a fingerprint window that could not be read whole.
 var errShortRead = errors.New("watch: short read")
 
-// fingerprintFile returns the SHA-256 hex digest of the window bytes ending
-// at cursor. The stored window never exceeds the cursor; a shrunk file
-// surfaces as errShortRead.
 func fingerprintFile(path string, cursor, window int64) (string, error) {
 	window = min(window, cursor)
 	if window <= 0 {
@@ -499,8 +379,6 @@ func fingerprintFile(path string, cursor, window int64) (string, error) {
 	return hex.EncodeToString(digest[:]), nil
 }
 
-// newSourceID returns a fresh random source ID: 32 lowercase hex characters
-// from crypto/rand.
 func newSourceID() (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -509,10 +387,6 @@ func newSourceID() (string, error) {
 	return hex.EncodeToString(b[:]), nil
 }
 
-// normalizePath canonicalizes a watched path for use as a state key. It
-// resolves symlinks in the parent directories, because temporary
-// directories are symlinked on macOS (for example /tmp → /private/tmp), so
-// one file keeps one key whether or not it currently exists.
 func normalizePath(p string) string {
 	abs, err := filepath.Abs(p)
 	if err != nil {

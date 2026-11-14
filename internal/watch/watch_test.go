@@ -42,8 +42,6 @@ func appendFile(t *testing.T, path, content string) {
 	}
 }
 
-// replaceFile puts new content at path through a distinct inode, so the path
-// ends up holding a genuinely new file incarnation.
 func replaceFile(t *testing.T, path, content string) {
 	t.Helper()
 	tmp := path + ".replacement"
@@ -71,8 +69,6 @@ func mustReadPending(t *testing.T, w *Watcher, o Outcome) string {
 	return string(data)
 }
 
-// ingestAll is the caller-side loop T007 will run: read the pending bytes,
-// hand them to ingestion, then acknowledge the durable offset.
 func ingestAll(t *testing.T, w *Watcher, outcomes []Outcome) {
 	t.Helper()
 	for _, o := range outcomes {
@@ -161,8 +157,6 @@ func TestPollRegistersNewSourceBeforeIngestion(t *testing.T) {
 		t.Fatalf("source ID = %q, want 32 hex characters", outcome.SourceID)
 	}
 
-	// The state file must already hold the new source ID, before any
-	// ingestion: a crash here cannot lose the identity.
 	state, err := os.ReadFile(stateFilePath(dir))
 	if err != nil {
 		t.Fatalf("read state: %v", err)
@@ -174,7 +168,6 @@ func TestPollRegistersNewSourceBeforeIngestion(t *testing.T) {
 		t.Fatalf("state does not persist the platform file identity:\n%s", state)
 	}
 
-	// Reopening without any ingestion keeps the same source.
 	reopened := mustNew(t, dir)
 	next := sole(t, poll(t, reopened, path))
 	if next.SourceID != outcome.SourceID || next.Fresh {
@@ -191,7 +184,6 @@ func TestPollThenAppendThenAcknowledge(t *testing.T) {
 	first := sole(t, poll(t, w, path))
 	ingestAll(t, w, []Outcome{first})
 
-	// Acknowledgment advanced the durable checkpoint.
 	state, err := os.ReadFile(stateFilePath(dir))
 	if err != nil {
 		t.Fatalf("read state: %v", err)
@@ -220,7 +212,6 @@ func TestPollThenAppendThenAcknowledge(t *testing.T) {
 		t.Fatalf("idle outcome = %+v, want cursor and end at 13", idle)
 	}
 
-	// The checkpoint survives a restart.
 	reopened := mustNew(t, dir)
 	resumed := sole(t, poll(t, reopened, path))
 	if resumed.Cursor != 13 || resumed.SourceID != first.SourceID {
@@ -250,8 +241,6 @@ func TestPollReportsMissingAndResumesWhenObservable(t *testing.T) {
 	first := sole(t, poll(t, w, path))
 	ingestAll(t, w, []Outcome{first})
 
-	// An empty candidate list: the discovery pass saw nothing, so the
-	// source is missing but its checkpoint is retained.
 	missing := sole(t, poll(t, w))
 	if !missing.Missing || missing.SourceID != first.SourceID || missing.Cursor != 8 {
 		t.Fatalf("missing outcome = %+v, want the retained source at cursor 8", missing)
@@ -297,7 +286,6 @@ func TestReplacementCreatesNewSource(t *testing.T) {
 		t.Fatalf("pending = %q, want the whole new file", got)
 	}
 
-	// The old incarnation is gone from the local state.
 	state, err := os.ReadFile(stateFilePath(dir))
 	if err != nil {
 		t.Fatal(err)
@@ -340,13 +328,10 @@ func TestTruncateAndRegrowDetectedByFingerprint(t *testing.T) {
 	first := sole(t, poll(t, w, path))
 	ingestAll(t, w, []Outcome{first})
 
-	// The file shrinks below the cursor and grows past it again between
-	// polls, keeping its inode: the identity and size checks cannot see it,
-	// the fingerprint can.
 	if err := os.Truncate(path, 4); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
-	appendFile(t, path, "XXXXXXX\n") // size 12, past the old cursor 11
+	appendFile(t, path, "XXXXXXX\n")
 	outcome := sole(t, poll(t, w, path))
 	if !outcome.Fresh || outcome.SourceID == first.SourceID {
 		t.Fatalf("outcome = %+v, want a fresh source after the rewrite", outcome)
@@ -366,8 +351,6 @@ func TestInPlaceRewriteDetectedByFingerprint(t *testing.T) {
 	first := sole(t, poll(t, w, path))
 	ingestAll(t, w, []Outcome{first})
 
-	// Same inode, same size, one changed byte inside the acknowledged
-	// prefix: only the checkpoint fingerprint can detect it.
 	f, err := os.OpenFile(path, os.O_WRONLY, 0o600)
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -415,7 +398,6 @@ func TestRenameKeepsSourceIdentity(t *testing.T) {
 		t.Fatalf("cursor = %d, want the retained checkpoint 11", outcome.Cursor)
 	}
 
-	// Acknowledgment works under the new path and the state forgets the old one.
 	appendFile(t, newPath, "record two\n")
 	grown := sole(t, poll(t, w, newPath))
 	if err := w.Acknowledge(newPath, first.SourceID, grown.End); err != nil {
@@ -443,7 +425,6 @@ func TestRenameWithReplacementAtOldPath(t *testing.T) {
 	first := sole(t, poll(t, w, oldPath))
 	ingestAll(t, w, []Outcome{first})
 
-	// The original file moves away and a new incarnation takes its place.
 	newPath := filepath.Join(dir, "session-moved.jsonl")
 	if err := os.Rename(oldPath, newPath); err != nil {
 		t.Fatalf("rename: %v", err)
@@ -455,7 +436,7 @@ func TestRenameWithReplacementAtOldPath(t *testing.T) {
 		t.Fatalf("outcomes = %+v, want two", outcomes)
 	}
 	moved, atOld := outcomes[0], outcomes[1]
-	if moved.Path == normalizePath(oldPath) { // outcomes are sorted by path
+	if moved.Path == normalizePath(oldPath) {
 		moved, atOld = atOld, moved
 	}
 	if moved.SourceID != first.SourceID || moved.RenamedFrom != normalizePath(oldPath) {
@@ -480,7 +461,6 @@ func TestReadPendingGuardsAgainstChangesSincePoll(t *testing.T) {
 		t.Fatalf("pending = %q", got)
 	}
 
-	// A replacement after the poll must not feed wrong bytes.
 	replaceFile(t, path, "other\n")
 	if _, err := w.ReadPending(outcome); err == nil {
 		t.Fatal("ReadPending after replacement succeeded, want an error")
@@ -529,8 +509,6 @@ func TestAcknowledgeRecordsFingerprintWindow(t *testing.T) {
 	if entry.CursorBytes != int64(len(content)) {
 		t.Fatalf("cursor = %d, want %d", entry.CursorBytes, len(content))
 	}
-	// The content is shorter than the default window, so the fingerprint
-	// covers the whole ingested prefix.
 	if entry.FingerprintWindow != int64(len(content)) {
 		t.Fatalf("window = %d, want %d", entry.FingerprintWindow, len(content))
 	}
@@ -549,9 +527,6 @@ func fingerprintOf(t *testing.T, path string, from, to int64) string {
 	return sum
 }
 
-// hardlink creates a second path for the file at path, so two live paths
-// share one platform file identity — what a hardlinking backup tool inside
-// the watched tree produces.
 func hardlink(t *testing.T, path, link string) {
 	t.Helper()
 	if err := os.Link(path, link); err != nil {
@@ -559,7 +534,6 @@ func hardlink(t *testing.T, path, link string) {
 	}
 }
 
-// fileIdentityOf returns the platform identity of the file at path.
 func fileIdentityOf(t *testing.T, path string) string {
 	t.Helper()
 	info, err := os.Stat(path)
@@ -569,10 +543,6 @@ func fileIdentityOf(t *testing.T, path string) string {
 	return platformFileIdentity(info)
 }
 
-// writeSharedIdentityState writes a checkpoint file that holds one source
-// per path, all on the same file identity and acknowledged through cursor —
-// the state a build without the duplicate-identity guards leaves behind.
-// It returns the source IDs in path order.
 func writeSharedIdentityState(t *testing.T, dir string, paths []string, identity string, cursor int64) []string {
 	t.Helper()
 	sources := map[string]sourceCheckpoint{}
@@ -607,7 +577,6 @@ func writeSharedIdentityState(t *testing.T, dir string, paths []string, identity
 	return ids
 }
 
-// readState returns the checkpoint file's raw text.
 func readState(t *testing.T, dir string) string {
 	t.Helper()
 	data, err := os.ReadFile(stateFilePath(dir))
@@ -626,9 +595,6 @@ func TestHardlinkedPathsWatchedOnce(t *testing.T) {
 
 	w := mustNew(t, dir)
 	outcomes := poll(t, w, a, b)
-	// Hardlinks put two live paths on one file incarnation. Only the first
-	// path in path order becomes a source; the duplicate is the same
-	// incarnation watched through another name.
 	if len(outcomes) != 1 {
 		t.Fatalf("outcomes = %+v, want exactly one for the shared identity", outcomes)
 	}
@@ -642,14 +608,11 @@ func TestHardlinkedPathsWatchedOnce(t *testing.T) {
 
 	ingestAll(t, w, outcomes)
 
-	// A later poll is stable: one source, no second registration.
 	again := sole(t, poll(t, w, a, b))
 	if again.Fresh || again.SourceID != first.SourceID {
 		t.Fatalf("outcome = %+v, want the continued source %s", again, first.SourceID)
 	}
 
-	// When the watched path disappears, the source rebinds to the surviving
-	// link and keeps its acknowledged cursor.
 	if err := os.Remove(a); err != nil {
 		t.Fatalf("remove %s: %v", a, err)
 	}
@@ -674,15 +637,11 @@ func TestSharedIdentityStateKeepsEveryCheckpoint(t *testing.T) {
 	ids := writeSharedIdentityState(t, dir, []string{a, b}, fileIdentityOf(t, a), 6)
 
 	w := mustNew(t, dir)
-	// Both live links keep their own sources: neither entry is dropped.
 	live := poll(t, w, a, b)
 	if len(live) != 2 {
 		t.Fatalf("outcomes = %+v, want one per live path", live)
 	}
 
-	// One link disappears. The survivor keeps its checkpoint, and the
-	// rebind that would move the missing source onto the survivor's key is
-	// refused instead of overwriting it.
 	if err := os.Remove(a); err != nil {
 		t.Fatalf("remove %s: %v", a, err)
 	}
@@ -690,7 +649,7 @@ func TestSharedIdentityStateKeepsEveryCheckpoint(t *testing.T) {
 	if len(after) != 2 {
 		t.Fatalf("outcomes = %+v, want a missing and a live outcome", after)
 	}
-	missing, survived := after[0], after[1] // sorted by path: a then b
+	missing, survived := after[0], after[1]
 	if missing.Path != normalizePath(a) || !missing.Missing {
 		t.Fatalf("outcome = %+v, want the removed path missing", missing)
 	}
@@ -707,8 +666,6 @@ func TestSharedIdentityStateKeepsEveryCheckpoint(t *testing.T) {
 		}
 	}
 
-	// The removed path returns as a new incarnation: the replacement is
-	// reported as a fresh source with a reason, not a silent restart.
 	replaceFile(t, a, "another file\n")
 	returned := poll(t, w, a, b)
 	if len(returned) != 2 {
@@ -736,9 +693,6 @@ func TestCompetingRebindsAreRefused(t *testing.T) {
 	hardlink(t, a, c)
 	ids := writeSharedIdentityState(t, dir, []string{a, b}, fileIdentityOf(t, a), 6)
 
-	// The two watched links vanish while the incarnation stays reachable
-	// under the third path: both missing sources would rebind onto c, so
-	// the ambiguous rebind is refused and both checkpoints stay retained.
 	if err := os.Remove(a); err != nil {
 		t.Fatalf("remove %s: %v", a, err)
 	}
@@ -750,7 +704,7 @@ func TestCompetingRebindsAreRefused(t *testing.T) {
 	if len(outcomes) != 3 {
 		t.Fatalf("outcomes = %+v, want two missing and one fresh", outcomes)
 	}
-	missingA, missingB, fresh := outcomes[0], outcomes[1], outcomes[2] // sorted by path
+	missingA, missingB, fresh := outcomes[0], outcomes[1], outcomes[2]
 	if missingA.Path != normalizePath(a) || !missingA.Missing || missingA.SourceID != ids[0] || missingA.Cursor != 6 {
 		t.Fatalf("outcome = %+v, want source %s missing with cursor 6", missingA, ids[0])
 	}
@@ -783,8 +737,6 @@ func TestSwappedPathsKeepBothSources(t *testing.T) {
 	ingestAll(t, w, first)
 	idAt := map[string]string{first[0].Path: first[0].SourceID, first[1].Path: first[1].SourceID}
 
-	// Swap both files through a third name: each path changes incarnation
-	// at once, and both sources must survive the swap.
 	tmp := filepath.Join(dir, "tmp.jsonl")
 	for _, step := range [][2]string{{a, tmp}, {b, a}, {tmp, b}} {
 		if err := os.Rename(step[0], step[1]); err != nil {
@@ -799,7 +751,7 @@ func TestSwappedPathsKeepBothSources(t *testing.T) {
 		if o.Fresh || o.Missing {
 			t.Fatalf("outcome = %+v, want a continued source", o)
 		}
-		want := idAt[normalizePath(b)] // the incarnation now at this path came from the other path
+		want := idAt[normalizePath(b)]
 		if o.Path == normalizePath(b) {
 			want = idAt[normalizePath(a)]
 		}
@@ -822,9 +774,6 @@ func TestNormalizePathResolvesSymlinkedDirectories(t *testing.T) {
 	if err := os.Symlink(real, link); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	// The temp dir itself can sit behind a symlink — macOS places it under
-	// /var, which resolves to /private/var. The expectation must therefore
-	// resolve the same parent symlinks that normalizePath resolves.
 	resolved, err := filepath.EvalSymlinks(real)
 	if err != nil {
 		t.Fatal(err)
@@ -832,7 +781,6 @@ func TestNormalizePathResolvesSymlinkedDirectories(t *testing.T) {
 	if got, want := normalizePath(filepath.Join(link, "s.jsonl")), filepath.Join(resolved, "s.jsonl"); got != want {
 		t.Fatalf("normalizePath = %q, want %q", got, want)
 	}
-	// A file that does not exist still normalizes to the same key.
 	if got, want := normalizePath(filepath.Join(link, "absent.jsonl")), filepath.Join(resolved, "absent.jsonl"); got != want {
 		t.Fatalf("normalizePath for an absent file = %q, want %q", got, want)
 	}
@@ -864,9 +812,6 @@ func TestNewFileReportsNoReplacedSource(t *testing.T) {
 	}
 }
 
-// TestRewindReplaysRetainedBytes pins the hub-regression recovery: the
-// checkpoint moves back, the retained bytes are pending again, and the state
-// survives a restart.
 func TestRewindReplaysRetainedBytes(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "session.jsonl")
@@ -920,8 +865,6 @@ func TestRewindRejectsBadArguments(t *testing.T) {
 	}
 }
 
-// TestRewindRefusesChangedBytes pins that only unchanged retained bytes
-// replay: a same-inode rewrite of the acknowledged prefix cannot rewind.
 func TestRewindRefusesChangedBytes(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "session.jsonl")

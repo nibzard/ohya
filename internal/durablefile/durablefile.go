@@ -1,6 +1,3 @@
-// Package durablefile writes small local state files by atomic replacement
-// with durable writes. A crash leaves either the previous file or the
-// complete new one, never a torn or empty state file.
 package durablefile
 
 import (
@@ -9,11 +6,6 @@ import (
 	"path/filepath"
 )
 
-// Write atomically replaces the file at path with data. The bytes go to a
-// temporary file in the same directory, are flushed to disk, and are renamed
-// over the target; the directory entry is then flushed too, so the completed
-// rename itself survives a crash. The target directory must already exist.
-// The file is created with owner-only permissions.
 func Write(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
@@ -45,8 +37,6 @@ func Write(path string, data []byte) error {
 	return nil
 }
 
-// syncDir flushes a directory entry so a completed rename cannot vanish
-// after a crash.
 func syncDir(dir string) error {
 	d, err := os.Open(dir)
 	if err != nil {
