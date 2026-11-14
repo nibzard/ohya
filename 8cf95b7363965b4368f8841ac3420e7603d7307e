@@ -1,0 +1,12 @@
+# Context
+
+## Why This Way
+The branch only removed comments in the conflicted files, so the correct
+resolution is main's version with its comments stripped. tokcmp confirmed it
+for every Go file; the only differences from main are the intended fixgen and
+tailcat-spike edits. The new comment lines were found by diffing the comment
+inventory of main against the baseline inventory.
+
+## Checks
+make check, make build, and -race on store, control, codex, and mcpserver
+passed after the merge.
