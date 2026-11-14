@@ -1,0 +1,1 @@
+Batch 5: 784 comments removed. Evidence: tokcmp equal (SQL comments inside mcpserver test literals intact); go test -race passes for mcpserver, registry, control, transport; make check passes.
