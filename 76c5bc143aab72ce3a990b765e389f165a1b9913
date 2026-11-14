@@ -1,0 +1,15 @@
+Context: T055 (looper:finding:remote-mcp-bare-flag-invocation-broken).
+Repair 1 had the functional fix; the combined verify then failed only
+on the README status line, which still listed forced-relay validation
+(T032) as open and omitted the open macOS items. This commit carries
+both: the boolean --remote/--hub-addr split (a string flag can never
+parse bare in Go's flag package, even with a non-empty default) and
+the status correction required by T056's acceptance — T032 complete
+per ADR 0002, leaving T046 runtime verification and T040/T045
+distribution open. ARCHITECTURE.md 234/325 already printed the bare
+form and needed no change. Live verification used only default flags
+under a private HOME: serve, devices invite, join <code>, then
+exactly README line 50's './bin/ohya mcp --remote' (also line 171's
+"args": ["mcp", "--remote"] form) served initialize, sql (16
+fixture events), and annotate (applied 1); writer_id equaled the
+paired device identity. make build/check/vet pass.
