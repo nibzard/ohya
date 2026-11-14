@@ -217,11 +217,11 @@ How to use this file:
   would brick upgrades for no recovery gain) and the poll guards keep both.
 
 - Write-path open question (2026-11-13, internal/store, T006):
-  `sessions.repo` stays NULL — no rule derives a repository path from observed
-  record fields yet (git root discovery from `cwd` is unspecified, and the
-  Claude Code directory encoding is lossy). Define the derivation before any
-  query relies on `repo`. Token aggregate policy is settled in DB.md; tool
-  aggregates remain deferred pending a query need.
+  `sessions.repo` derivation is now defined and implemented (2026-11-14, DB.md
+  "Repository derivation": normalized repository URL from the session's own
+  records; Codex `session_meta.git.repository_url`, others NULL; re-derivation
+  recomputes it; codex parser output version 2). Tool aggregates remain
+  deferred pending a query need.
 
 - Local slice wiring (2026-11-13, cmd/ohya, T007): the production
   record → store.Event adapters live in internal/events (moved out of

@@ -74,7 +74,7 @@ type rebuiltSession struct {
 
 	// First non-empty observation in walk order, which is (source_id,
 	// source_offset) order — deterministic, unlike arrival order.
-	cwd, branch, model string
+	cwd, branch, repo, model string
 
 	prompt    *Event
 	promptRef promptRef
@@ -415,6 +415,9 @@ func rewriteEvent(ctx context.Context, tx *sql.Tx, src rederiveSource, p ParserD
 	if st.branch == "" {
 		st.branch = ev.GitBranch
 	}
+	if st.repo == "" {
+		st.repo = ev.Repo
+	}
 	if st.model == "" {
 		st.model = ev.Model
 	}
@@ -440,9 +443,9 @@ func rewriteEvent(ctx context.Context, tx *sql.Tx, src rederiveSource, p ParserD
 	return nil
 }
 
-// finalizeSession writes one session's recomputed aggregates. The repo column
-// and unknown metadata keys are preserved; only firstPromptRef is managed
-// here, exactly like the write path does.
+// finalizeSession writes one session's recomputed aggregates. Unknown
+// metadata keys are preserved; only firstPromptRef is managed here, exactly
+// like the write path does.
 func finalizeSession(ctx context.Context, tx *sql.Tx, st *rebuiltSession) error {
 	var metadata string
 	if err := tx.QueryRowContext(ctx,
@@ -480,10 +483,10 @@ func finalizeSession(ctx context.Context, tx *sql.Tx, st *rebuiltSession) error 
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE sessions SET
 		   event_count = ?, started_at_ms = ?, last_event_at_ms = ?,
-		   cwd = ?, branch = ?, model = ?, first_prompt = ?, metadata = ?
+		   cwd = ?, branch = ?, repo = ?, model = ?, first_prompt = ?, metadata = ?
 		 WHERE id = ?`,
 		st.count, started, last,
-		nullString(st.cwd), nullString(st.branch), nullString(st.model),
+		nullString(st.cwd), nullString(st.branch), nullString(st.repo), nullString(st.model),
 		firstPrompt, string(encodedMetadata), st.id); err != nil {
 		return fmt.Errorf("store: re-derive session %s: update aggregates: %w", st.id, err)
 	}

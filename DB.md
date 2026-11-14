@@ -57,6 +57,19 @@ only deterministic observations, not inferred outcomes. Raw JSON preserves the
 source record text; line terminators are transport framing. Offsets are byte
 offsets in the original file, including framing when calculating the next cursor.
 
+### Repository derivation
+
+`sessions.repo` holds the repository URL a session's own records carry,
+normalized to `host/path`: the `https://`, `http://`, `ssh://` or `git://`
+scheme, any `user@`, and a trailing `.git` or `/` are stripped, an scp-style
+`git@host:path` separator becomes `/`, and the host is lowercased while the
+path keeps its case. Codex derives it from `session_meta.git.repository_url`
+(embedded parent metas lend nothing); Claude Code and Pi records carry no
+repository URL, so their sessions keep NULL. The first non-empty observation
+in deterministic order wins, exactly like `cwd` and `branch`, and re-derivation
+recomputes it. Never decode the Claude Code project directory name — it is
+lossy — and never discover git roots from the filesystem at ingestion time.
+
 ## Invariants
 
 - Session IDs use an unambiguous encoding of `(device_id, agent, native_id)`:

@@ -190,7 +190,7 @@ func FromCodex(r codex.Record) store.Event {
 		Kind: r.Kind, Role: r.Role, ToolName: r.ToolName, Text: r.Text,
 		RawJSON: r.Raw, Metadata: r.Metadata,
 		HasTime: r.HasTime, TimeMS: r.TimeMS,
-		Cwd: r.Cwd, GitBranch: r.GitBranch, Model: r.Model,
+		Cwd: r.Cwd, GitBranch: r.GitBranch, Repo: r.Repo, Model: r.Model,
 		MessageID: r.ResponseID, Prompt: r.Prompt,
 		HasOrdinal: r.HasOrdinal, Ordinal: r.Ordinal,
 		ParserVersion: codex.OutputVersion,

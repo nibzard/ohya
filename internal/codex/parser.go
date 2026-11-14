@@ -41,7 +41,8 @@ const SyntheticNativeIDPrefix = "ohya-synthetic:"
 // bump it; ingestion stores it per event row (events.parser_version), and
 // store.ReDerive rebuilds rows carrying a smaller version from raw_json.
 // 1 is the output of the parser as of the marker's introduction.
-const OutputVersion = 1
+// 2 derives Record.Repo from session_meta.git.repository_url.
+const OutputVersion = 2
 
 // DefaultMaxRecordBytes bounds one record's JSON text, excluding the line
 // terminator, when Options.MaxRecordBytes is unset. Codex world_state and
@@ -117,6 +118,7 @@ type Record struct {
 	Ordinal    int64
 	Cwd        string // working directory observation
 	GitBranch  string // branch observation
+	Repo       string
 	Model      string // model observation from turn_context
 	ResponseID string // token_usage_record response_id; groups one API response
 	Usage      json.RawMessage
@@ -341,6 +343,9 @@ func normalizeSessionMeta(rec *Record, payload map[string]any, md map[string]any
 	rec.Cwd, _ = stringValue(payload, "cwd")
 	if git, ok := payload["git"].(map[string]any); ok {
 		rec.GitBranch, _ = stringValue(git, "branch")
+		if u, ok := stringValue(git, "repository_url"); ok {
+			rec.Repo = normalizeRepoURL(u)
+		}
 	}
 	for _, key := range []string{"originator", "cli_version", "history_mode", "parent_thread_id", "forked_from_id"} {
 		if v, ok := stringValue(payload, key); ok {
@@ -446,4 +451,36 @@ func stringValue(m map[string]any, key string) (string, bool) {
 	}
 	s, ok := v.(string)
 	return s, ok
+}
+
+func normalizeRepoURL(u string) string {
+	u = strings.TrimSpace(u)
+	u = strings.TrimSuffix(u, "/")
+	if s := strings.TrimSuffix(u, ".git"); s != u {
+		u = s
+	}
+	for _, scheme := range []string{"https://", "http://", "ssh://", "git://"} {
+		if rest, ok := strings.CutPrefix(u, scheme); ok {
+			u = rest
+			break
+		}
+	}
+	if at := strings.IndexByte(u, '@'); at >= 0 {
+		if slash := strings.IndexByte(u, '/'); slash < 0 || at < slash {
+			u = u[at+1:]
+		}
+	}
+	if c := strings.IndexByte(u, ':'); c >= 0 {
+		if slash := strings.IndexByte(u, '/'); slash < 0 || c < slash {
+			u = u[:c] + "/" + u[c+1:]
+		}
+	}
+	if u == "" || strings.ContainsAny(u, " \t") {
+		return ""
+	}
+	host, path, ok := strings.Cut(u, "/")
+	if !ok || host == "" || path == "" {
+		return ""
+	}
+	return strings.ToLower(host) + "/" + path
 }

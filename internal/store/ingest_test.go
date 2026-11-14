@@ -135,19 +135,19 @@ func eventFromRecord(r claudecode.Record) Event {
 
 // sessionRow reads one sessions row for aggregate assertions.
 type sessionRow struct {
-	EventCount                      int
-	Started, Last                   sql.NullInt64
-	Cwd, Branch, Model, FirstPrompt sql.NullString
-	Metadata                        string
+	EventCount                            int
+	Started, Last                         sql.NullInt64
+	Cwd, Branch, Repo, Model, FirstPrompt sql.NullString
+	Metadata                              string
 }
 
 func sessionRowFor(t *testing.T, hub *DB, id string) sessionRow {
 	t.Helper()
 	var row sessionRow
 	err := hub.Writer().QueryRow(
-		`SELECT event_count, started_at_ms, last_event_at_ms, cwd, branch, model, first_prompt, metadata
+		`SELECT event_count, started_at_ms, last_event_at_ms, cwd, branch, repo, model, first_prompt, metadata
 		 FROM sessions WHERE id = ?`, id).
-		Scan(&row.EventCount, &row.Started, &row.Last, &row.Cwd, &row.Branch,
+		Scan(&row.EventCount, &row.Started, &row.Last, &row.Cwd, &row.Branch, &row.Repo,
 			&row.Model, &row.FirstPrompt, &row.Metadata)
 	if err != nil {
 		t.Fatal(err)
@@ -330,6 +330,9 @@ func TestIngestFixtureMainSession(t *testing.T) {
 	}
 	if !row.Branch.Valid || row.Branch.String != "main" {
 		t.Fatalf("branch = %+v, want main", row.Branch)
+	}
+	if row.Repo.Valid {
+		t.Fatalf("repo = %+v, want NULL (claude-code records carry no repository URL)", row.Repo)
 	}
 	if !row.Model.Valid || row.Model.String != "fixture-model-v1" {
 		t.Fatalf("model = %+v, want fixture-model-v1", row.Model)
@@ -624,6 +627,41 @@ func TestIngestTimestampBounds(t *testing.T) {
 	row = sessionRowFor(t, hub, SessionID(deviceHex, "claude-code", "sess-2"))
 	if row.Started.Valid || row.Last.Valid {
 		t.Fatalf("new session bounds = [%+v, %+v]; want NULL", row.Started, row.Last)
+	}
+}
+
+// TestIngestSessionRepoKeepFirst pins the repo derivation contract at the
+// write path: the first non-empty observation wins, a later batch never
+// overwrites it, and a session without an observation keeps NULL.
+func TestIngestSessionRepoKeepFirst(t *testing.T) {
+	hub := ingestHub(t)
+	mustRegister(t, hub, "s1", "/a.jsonl")
+
+	e0 := mkEvent(0, rawUser("one"))
+	e0.Repo = "example.com/dev/example"
+	e1 := mkEvent(e0.End, rawUser("two"))
+	e1.Repo = "other.com/a/different-repo"
+	mustIngest(t, hub, Batch{SourceID: "s1", Events: []Event{e0, e1}})
+	sid := SessionID(deviceHex, "claude-code", "sess-1")
+	row := sessionRowFor(t, hub, sid)
+	if !row.Repo.Valid || row.Repo.String != "example.com/dev/example" {
+		t.Fatalf("repo = %+v, want example.com/dev/example (first observation)", row.Repo)
+	}
+
+	e2 := mkEvent(e1.End, rawUser("three"))
+	e2.Repo = "later.com/x/y"
+	mustIngest(t, hub, Batch{SourceID: "s1", Events: []Event{e2}})
+	row = sessionRowFor(t, hub, sid)
+	if !row.Repo.Valid || row.Repo.String != "example.com/dev/example" {
+		t.Fatalf("repo after later batch = %+v, want unchanged", row.Repo)
+	}
+
+	e3 := mkEvent(e2.End, rawUser("new session"))
+	e3.NativeID = "sess-2"
+	mustIngest(t, hub, Batch{SourceID: "s1", Events: []Event{e3}})
+	row = sessionRowFor(t, hub, SessionID(deviceHex, "claude-code", "sess-2"))
+	if row.Repo.Valid {
+		t.Fatalf("repo without observation = %+v, want NULL", row.Repo)
 	}
 }
 
