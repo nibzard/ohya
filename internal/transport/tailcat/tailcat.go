@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"time"
 
 	"tailscale.com/tsnet"
 	"tailscale.com/types/key"
@@ -116,11 +117,40 @@ func (n *Node) Dial(ctx context.Context, addr string) (net.Conn, error) {
 	if _, err := n.srv.Up(ctx); err != nil {
 		return nil, fmt.Errorf("tailcat: bring node up: %w", err)
 	}
+	if err := n.waitRunning(ctx); err != nil {
+		return nil, fmt.Errorf("tailcat: %w", err)
+	}
 	conn, err := n.srv.Dial(ctx, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("tailcat: dial %s: %w", addr, err)
 	}
 	return conn, nil
+}
+
+func (n *Node) waitRunning(ctx context.Context) error {
+	waitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	lc, err := n.srv.LocalClient()
+	if err != nil {
+		return fmt.Errorf("wait for the tailnet: local client: %w", err)
+	}
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		st, err := lc.Status(waitCtx)
+		if err == nil && st.BackendState == "Running" {
+			return nil
+		}
+		select {
+		case <-waitCtx.Done():
+			state := "unavailable"
+			if err == nil && st != nil {
+				state = st.BackendState
+			}
+			return fmt.Errorf("wait for the tailnet: backend state %s never reached Running: %w", state, waitCtx.Err())
+		case <-ticker.C:
+		}
+	}
 }
 
 func (n *Node) WhoIs(ctx context.Context, conn net.Conn) (login, hostname string, err error) {

@@ -1,6 +1,6 @@
 # Plan for removing code comments
 
-Status: complete on branch `comment-cleanup`; not yet published. This document plans the cleanup; it does not authorize behavior changes.
+Status: complete and merged into `main`. This document plans the cleanup; it does not authorize behavior changes.
 
 ## Objective
 
@@ -260,4 +260,4 @@ Their knowledge moved to `DB.md` (the `codex` version 2 row and the recomputed `
 After the merge, `make check` and `make build` passed, and the Go code matched `main` token for token apart from the intended edits.
 
 The `.gitignore` comments stay. The file is not executable and is outside the scope of this plan.
-Local checks ran on Linux only. The Linux and macOS continuous integration jobs have not run on this branch yet.
+Local checks ran on Linux only. After the push, the CI run for `8cf95b7` passed all jobs: `check-linux`, `check`, and `bench`.
