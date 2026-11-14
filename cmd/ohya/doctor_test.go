@@ -1,0 +1,576 @@
+package main
+
+// The doctor acceptance tests (T063): every injectable fault — newer parser
+// rows, schema behind the binary, stopped source, unreachable coordination
+// plane, missing device identity — produces its finding with the asserted
+// severity and remedy, a healthy fixture exits 0, and the run leaves the
+// database and state directory untouched.
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/nibzard/ohya/internal/claudecode"
+	"github.com/nibzard/ohya/internal/device"
+	"github.com/nibzard/ohya/internal/store"
+
+	_ "github.com/mattn/go-sqlite3"
+)
+
+// doctorEnv is one healthy local hub: the main fixture ingested through one
+// real pass, which also creates the state directory's identity and
+// checkpoint.
+type doctorEnv struct {
+	dbPath   string
+	stateDir string
+	root     string
+}
+
+func newDoctorEnv(t *testing.T) *doctorEnv {
+	t.Helper()
+	e := newSliceEnv(t)
+	copyFixture(t, e.session("main-session.jsonl"), "main-session.jsonl")
+	if _, stderr := e.runPass(t); stderr != "" {
+		t.Fatalf("healthy fixture pass reported diagnostics: %s", stderr)
+	}
+	return &doctorEnv{dbPath: e.dbPath, stateDir: e.stateDir, root: e.root}
+}
+
+// doctorRun runs the production command against one environment and returns
+// the exit code with both streams.
+func doctorRun(t *testing.T, e *doctorEnv, extra ...string) (int, string, string) {
+	t.Helper()
+	return runCLI(append([]string{"doctor", "--db", e.dbPath, "--state", e.stateDir}, extra...)...)
+}
+
+// soleFinding returns the one finding of a check.
+func soleFinding(t *testing.T, findings []finding, check string) finding {
+	t.Helper()
+	var got []finding
+	for _, f := range findings {
+		if f.Check == check {
+			got = append(got, f)
+		}
+	}
+	if len(got) != 1 {
+		t.Fatalf("check %s reported %d findings, want 1: %+v", check, len(got), got)
+	}
+	return got[0]
+}
+
+// rawOpen opens the hub database with the bare driver, so a test can mutate
+// bookkeeping without store.Open migrating it.
+func rawOpen(t *testing.T, path string) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return db
+}
+
+// TestDoctorHealthyFixtureExitsZero is the healthy acceptance: a migrated,
+// ingested hub with an identity and no pairing reports one ok finding per
+// check and exits 0 — warnings aside, errors are the only failure.
+func TestDoctorHealthyFixtureExitsZero(t *testing.T) {
+	e := newDoctorEnv(t)
+
+	findings, err := runDoctor(context.Background(), doctorOptions{
+		dbPath: e.dbPath, stateDir: e.stateDir, controlURL: "http://127.0.0.1:1",
+	})
+	if err != nil {
+		t.Fatalf("healthy run returned %v", err)
+	}
+	for _, check := range []string{"schema_version", "parser_versions", "fts_index", "stopped_sources", "device_identity", "join_state"} {
+		if f := soleFinding(t, findings, check); f.Severity != sevOK {
+			t.Fatalf("check %s = %+v; want ok", check, f)
+		}
+	}
+
+	code, out, stderr := doctorRun(t, e)
+	if code != 0 || stderr != "" {
+		t.Fatalf("healthy run: code %d, stderr %q", code, stderr)
+	}
+	for _, want := range append([]string{
+		"ok    schema_version: database schema",
+		"ok    fts_index: events_fts passes the FTS5 integrity-check",
+		"ok    stopped_sources: no source is stopped at its checkpoint (1 watched)",
+		"ok    device_identity: device.json holds device",
+		"ok    join_state: no credential.json in",
+	}, fmt.Sprintf("ok    parser_versions: stored parser output versions: claude-code %d", claudecode.OutputVersion)) {
+		if !strings.Contains(out, want) {
+			t.Fatalf("stdout misses %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestDoctorNewerParserRowsAreAnError injects rows stamped above the
+// binary's parser output version — the rows store.ReDerive refuses — and
+// asserts the error finding, its remedy, and exit 1.
+func TestDoctorNewerParserRowsAreAnError(t *testing.T) {
+	e := newDoctorEnv(t)
+	raw := rawOpen(t, e.dbPath)
+	if _, err := raw.Exec(`UPDATE events SET parser_version = ?`, claudecode.OutputVersion+1); err != nil {
+		t.Fatal(err)
+	}
+
+	code, out, _ := doctorRun(t, e)
+	if code != 1 {
+		t.Fatalf("exit code %d; want 1 (stdout %q)", code, out)
+	}
+	f := soleFinding(t, parseDoctorFindings(t, out), "parser_versions")
+	if f.Severity != sevError {
+		t.Fatalf("severity = %s; want error", f.Severity)
+	}
+	if !strings.Contains(f.Detail, fmt.Sprintf("above this build's %d", claudecode.OutputVersion)) {
+		t.Fatalf("detail misses the versions: %s", f.Detail)
+	}
+	if !strings.Contains(f.Remedy, "upgrade the ohya binary, then run ohya rederive") {
+		t.Fatalf("remedy misses the upgrade path: %s", f.Remedy)
+	}
+}
+
+// TestDoctorSchemaBehindBinaryWarnsWithoutMigrating injects a database one
+// migration behind the binary. The finding is a warning with the migrating
+// command as its remedy, the exit code stays 0, and doctor itself migrates
+// nothing.
+func TestDoctorSchemaBehindBinaryWarnsWithoutMigrating(t *testing.T) {
+	e := newDoctorEnv(t)
+	schema, err := store.SchemaVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := rawOpen(t, e.dbPath)
+	if _, err := raw.Exec(`DELETE FROM schema_migrations WHERE version = ?`, schema); err != nil {
+		t.Fatal(err)
+	}
+
+	code, out, _ := doctorRun(t, e)
+	if code != 0 {
+		t.Fatalf("exit code %d; want 0 — a warning must not fail (stdout %q)", code, out)
+	}
+	f := soleFinding(t, parseDoctorFindings(t, out), "schema_version")
+	if f.Severity != sevWarn {
+		t.Fatalf("severity = %s; want warn", f.Severity)
+	}
+	if !strings.Contains(f.Detail, fmt.Sprintf("behind this build's migrations (%d)", schema)) {
+		t.Fatalf("detail misses the versions: %s", f.Detail)
+	}
+	if !strings.Contains(f.Remedy, "ohya ingest --once") || !strings.Contains(f.Remedy, "doctor never does") {
+		t.Fatalf("remedy misses the migrating command: %s", f.Remedy)
+	}
+	// Doctor migrated nothing: the newest migration is still unapplied.
+	var n int
+	if err := raw.QueryRow(`SELECT count(*) FROM schema_migrations WHERE version = ?`, schema).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("doctor applied migration %d", schema)
+	}
+}
+
+// TestDoctorSchemaAheadOfBinaryIsAnError covers the other direction: a
+// database this binary cannot open as a writer.
+func TestDoctorSchemaAheadOfBinaryIsAnError(t *testing.T) {
+	e := newDoctorEnv(t)
+	raw := rawOpen(t, e.dbPath)
+	if _, err := raw.Exec(`INSERT INTO schema_migrations (version, name, checksum, applied_at_ms)
+		VALUES (99, 'future', 'x', 0)`); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ := doctorRun(t, e)
+	if code != 1 {
+		t.Fatalf("exit code %d; want 1", code)
+	}
+	f := soleFinding(t, parseDoctorFindings(t, out), "schema_version")
+	if f.Severity != sevError || !strings.Contains(f.Remedy, "upgrade the ohya binary") {
+		t.Fatalf("finding = %+v; want error with the upgrade remedy", f)
+	}
+}
+
+// TestDoctorStoppedSourceCarriesADR0004Remedy injects both stop causes of
+// ADR 0004 and asserts each finding's severity, offset, and remedy; the
+// checkpoint file is byte-identical after the run, and a warning does not
+// fail the command.
+func TestDoctorStoppedSourceCarriesADR0004Remedy(t *testing.T) {
+	line := func(content string) string {
+		return fmt.Sprintf(`{"type":"user","sessionId":%q,"message":{"role":"user","content":%q}}`+"\n",
+			fixtureNativeID, content)
+	}
+	stopFixture := func(t *testing.T, name, oversized string) (*doctorEnv, string) {
+		e := newSliceEnv(t)
+		before := line("before")
+		writeFile(t, e.session(name), before+oversized+line("after"))
+		stats, _ := e.runPass(t)
+		if stats.stopped != 1 || stats.inserted != 1 {
+			t.Fatalf("fixture pass = %+v; want 1 event then a stop", stats)
+		}
+		checkpoint := filepath.Join(e.stateDir, "sources", "claude-code.json")
+		return &doctorEnv{dbPath: e.dbPath, stateDir: e.stateDir, root: e.root}, checkpoint
+	}
+
+	t.Run("size stop names --max-record-bytes", func(t *testing.T) {
+		oversized := line(strings.Repeat("x", claudecode.DefaultMaxRecordBytes+512))
+		e, checkpoint := stopFixture(t, "oversized.jsonl", oversized)
+		beforeBytes, err := os.ReadFile(checkpoint)
+		if err != nil {
+			t.Fatal(err)
+		}
+		code, out, _ := doctorRun(t, e)
+		if code != 0 {
+			t.Fatalf("exit code %d; want 0 — a stopped source warns, it does not fail (stdout %q)", code, out)
+		}
+		f := soleFinding(t, parseDoctorFindings(t, out), "stopped_sources")
+		if f.Severity != sevWarn {
+			t.Fatalf("severity = %s; want warn", f.Severity)
+		}
+		if !strings.Contains(f.Detail, fmt.Sprintf("stopped at offset %d", len(line("before")))) {
+			t.Fatalf("detail misses the stop offset: %s", f.Detail)
+		}
+		if !strings.Contains(f.Remedy, "--max-record-bytes") ||
+			!strings.Contains(f.Remedy, "docs/adr/0004-stopped-source-recovery.md") {
+			t.Fatalf("remedy misses the ADR 0004 size remedy: %s", f.Remedy)
+		}
+		afterBytes, err := os.ReadFile(checkpoint)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(beforeBytes) != string(afterBytes) {
+			t.Fatal("doctor modified the checkpoint file")
+		}
+	})
+
+	t.Run("malformed record names the repair", func(t *testing.T) {
+		e, _ := stopFixture(t, "malformed.jsonl", "{not json}\n")
+		code, out, _ := doctorRun(t, e)
+		if code != 0 {
+			t.Fatalf("exit code %d; want 0 (stdout %q)", code, out)
+		}
+		f := soleFinding(t, parseDoctorFindings(t, out), "stopped_sources")
+		if f.Severity != sevWarn {
+			t.Fatalf("severity = %s; want warn", f.Severity)
+		}
+		if !strings.Contains(f.Remedy, "repair the record at this offset") ||
+			!strings.Contains(f.Remedy, "never skips bytes") {
+			t.Fatalf("remedy misses the ADR 0004 repair remedy: %s", f.Remedy)
+		}
+	})
+
+	t.Run("a growing file is not a stop", func(t *testing.T) {
+		// A source with pending valid bytes — a pass has not caught up —
+		// reports ok, not a stop.
+		e := newDoctorEnv(t)
+		appendFile(t, filepath.Join(e.root, "fixture-project", "main-session.jsonl"),
+			line("appended after the pass"))
+		code, out, _ := doctorRun(t, e)
+		if code != 0 {
+			t.Fatalf("exit code %d; want 0 (stdout %q)", code, out)
+		}
+		f := soleFinding(t, parseDoctorFindings(t, out), "stopped_sources")
+		if f.Severity != sevOK || !strings.Contains(f.Detail, "no source is stopped") {
+			t.Fatalf("finding = %+v; want ok", f)
+		}
+	})
+}
+
+// TestDoctorCoordinationPlaneProbe injects the pairing credential and covers
+// both probe outcomes: an unreachable plane warns with the serve remedy, an
+// answering one reports ok; neither fails the command on its own.
+func TestDoctorCoordinationPlaneProbe(t *testing.T) {
+	const deviceID = "0123456789abcdef0123456789abcdef"
+	pairedEnv := func(t *testing.T) *doctorEnv {
+		e := newDoctorEnv(t)
+		if err := device.SaveCredential(e.stateDir, device.Credential{DeviceID: deviceID, Secret: "s3cret"}); err != nil {
+			t.Fatal(err)
+		}
+		return e
+	}
+
+	t.Run("unreachable plane warns", func(t *testing.T) {
+		e := pairedEnv(t)
+		code, out, _ := doctorRun(t, e, "--control", "http://127.0.0.1:1")
+		if code != 0 {
+			t.Fatalf("exit code %d; want 0 — an unreachable plane warns (stdout %q)", code, out)
+		}
+		f := soleFinding(t, parseDoctorFindings(t, out), "join_state")
+		if f.Severity != sevWarn {
+			t.Fatalf("severity = %s; want warn", f.Severity)
+		}
+		if !strings.Contains(f.Detail, "did not answer") || !strings.Contains(f.Detail, deviceID) {
+			t.Fatalf("detail misses the plane or the device: %s", f.Detail)
+		}
+		if !strings.Contains(f.Remedy, "ohya serve") || !strings.Contains(f.Remedy, "--control") {
+			t.Fatalf("remedy misses the serve control hint: %s", f.Remedy)
+		}
+		// The credential's secret never appears in the report.
+		if strings.Contains(out, "s3cret") {
+			t.Fatalf("report leaks the credential secret:\n%s", out)
+		}
+	})
+
+	t.Run("answering plane is ok", func(t *testing.T) {
+		plane := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.NotFound(w, r) // any response counts: the plane answered
+		}))
+		defer plane.Close()
+		e := pairedEnv(t)
+		code, out, _ := doctorRun(t, e, "--control", plane.URL)
+		if code != 0 {
+			t.Fatalf("exit code %d; want 0 (stdout %q)", code, out)
+		}
+		f := soleFinding(t, parseDoctorFindings(t, out), "join_state")
+		if f.Severity != sevOK || !strings.Contains(f.Detail, "answered") {
+			t.Fatalf("finding = %+v; want ok with an answered plane", f)
+		}
+	})
+
+	t.Run("unusable credential is an error", func(t *testing.T) {
+		e := newDoctorEnv(t)
+		writeFile(t, filepath.Join(e.stateDir, device.CredentialFileName), "{not json}")
+		code, out, _ := doctorRun(t, e)
+		if code != 1 {
+			t.Fatalf("exit code %d; want 1 (stdout %q)", code, out)
+		}
+		f := soleFinding(t, parseDoctorFindings(t, out), "join_state")
+		if f.Severity != sevError || !strings.Contains(f.Remedy, "revoke this device identity") {
+			t.Fatalf("finding = %+v; want error with the revoke remedy", f)
+		}
+	})
+}
+
+// TestDoctorMissingDeviceIdentityWarns removes the identity: the finding
+// warns with the command that creates it, because doctor never creates one.
+func TestDoctorMissingDeviceIdentityWarns(t *testing.T) {
+	e := newDoctorEnv(t)
+	if err := os.Remove(filepath.Join(e.stateDir, device.FileName)); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ := doctorRun(t, e)
+	if code != 0 {
+		t.Fatalf("exit code %d; want 0 — a missing identity warns (stdout %q)", code, out)
+	}
+	f := soleFinding(t, parseDoctorFindings(t, out), "device_identity")
+	if f.Severity != sevWarn {
+		t.Fatalf("severity = %s; want warn", f.Severity)
+	}
+	if !strings.Contains(f.Detail, "no device.json in") {
+		t.Fatalf("detail misses the missing file: %s", f.Detail)
+	}
+	if !strings.Contains(f.Remedy, "ohya ingest --once") {
+		t.Fatalf("remedy misses the creating command: %s", f.Remedy)
+	}
+	// Doctor created no identity while inspecting.
+	if _, err := os.Stat(filepath.Join(e.stateDir, device.FileName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("doctor created a device identity: %v", err)
+	}
+}
+
+// TestDoctorUnusableDeviceIdentityIsAnError corrupts the identity: replacing
+// it silently would fork the device, so the finding is an error.
+func TestDoctorUnusableDeviceIdentityIsAnError(t *testing.T) {
+	e := newDoctorEnv(t)
+	writeFile(t, filepath.Join(e.stateDir, device.FileName), "{not json}")
+	code, out, _ := doctorRun(t, e)
+	if code != 1 {
+		t.Fatalf("exit code %d; want 1 (stdout %q)", code, out)
+	}
+	f := soleFinding(t, parseDoctorFindings(t, out), "device_identity")
+	if f.Severity != sevError || !strings.Contains(f.Remedy, "restore device.json from a backup") {
+		t.Fatalf("finding = %+v; want error with the restore remedy", f)
+	}
+}
+
+// TestDoctorFTSCorruptionIsAnError empties the index behind the content rows
+// and asserts the fts_index error finding and exit 1.
+func TestDoctorFTSCorruptionIsAnError(t *testing.T) {
+	e := newDoctorEnv(t)
+	hub, err := store.Open(context.Background(), e.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hub.Writer().Exec(`INSERT INTO events_fts(events_fts) VALUES ('delete-all')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.Close(); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ := doctorRun(t, e)
+	if code != 1 {
+		t.Fatalf("exit code %d; want 1 (stdout %q)", code, out)
+	}
+	f := soleFinding(t, parseDoctorFindings(t, out), "fts_index")
+	if f.Severity != sevError || !strings.Contains(f.Detail, "integrity-check") {
+		t.Fatalf("finding = %+v; want error naming the integrity-check", f)
+	}
+}
+
+// TestDoctorMissingDatabaseWarns covers a fresh machine: no database exists,
+// doctor reports it with the creating command and exits 0.
+func TestDoctorMissingDatabaseWarns(t *testing.T) {
+	dir := t.TempDir()
+	code, out, _ := runCLI("doctor", "--db", filepath.Join(dir, "absent.db"), "--state", dir)
+	if code != 0 {
+		t.Fatalf("exit code %d; want 0 (stdout %q)", code, out)
+	}
+	if !strings.Contains(out, "warn  database: hub database") ||
+		!strings.Contains(out, "run ohya ingest --once to create and migrate it") {
+		t.Fatalf("stdout misses the missing-database finding:\n%s", out)
+	}
+	if !strings.Contains(out, "warn  device_identity") {
+		t.Fatalf("stdout misses the missing identity on a fresh machine:\n%s", out)
+	}
+}
+
+// TestDoctorJSONEnvelope pins the ADR 0005 shape for doctor: one envelope,
+// findings in data with severity and remedy, error null even when a finding
+// is an error — the exit code is the verdict — and usage errors stay text.
+func TestDoctorJSONEnvelope(t *testing.T) {
+	t.Run("healthy golden", func(t *testing.T) {
+		e := newDoctorEnv(t)
+		code, out, stderr := doctorRun(t, e, "--json")
+		if code != 0 || stderr != "" {
+			t.Fatalf("code %d, stderr %q", code, stderr)
+		}
+		want := `{"schema_version":1,"command":"ohya doctor","data":{"findings":[` +
+			`{"check":"schema_version","severity":"ok","detail":"<detail>","remedy":""},` +
+			`{"check":"parser_versions","severity":"ok","detail":"<detail>","remedy":""},` +
+			`{"check":"fts_index","severity":"ok","detail":"<detail>","remedy":""},` +
+			`{"check":"stopped_sources","severity":"ok","detail":"<detail>","remedy":""},` +
+			`{"check":"device_identity","severity":"ok","detail":"<detail>","remedy":""},` +
+			`{"check":"join_state","severity":"ok","detail":"<detail>","remedy":""}]},"error":null}` + "\n"
+		got := scrubJSONKeys(t, out, "detail")
+		goldenCompare(t, got, want)
+	})
+
+	t.Run("error findings ride in data with exit 1", func(t *testing.T) {
+		e := newDoctorEnv(t)
+		raw := rawOpen(t, e.dbPath)
+		if _, err := raw.Exec(`UPDATE events SET parser_version = ?`, claudecode.OutputVersion+1); err != nil {
+			t.Fatal(err)
+		}
+		code, out, _ := doctorRun(t, e, "--json")
+		if code != 1 {
+			t.Fatalf("exit code %d; want 1 (stdout %q)", code, out)
+		}
+		env := decodeEnvelope(t, out)
+		if env.Error != nil {
+			t.Fatalf("error = %+v; want null — findings are data, the exit code is the verdict", env.Error)
+		}
+		var data doctorJSONData
+		if err := json.Unmarshal(env.Data, &data); err != nil {
+			t.Fatal(err)
+		}
+		if len(data.Findings) == 0 {
+			t.Fatal("findings empty")
+		}
+		var errors int
+		for _, f := range data.Findings {
+			if f.Severity == sevError {
+				errors++
+			}
+		}
+		if errors == 0 {
+			t.Fatalf("no error finding in %+v", data.Findings)
+		}
+	})
+
+	t.Run("usage errors stay text", func(t *testing.T) {
+		code, out, stderr := runCLI("doctor", "extra")
+		if code != 2 || out != "" {
+			t.Fatalf("code %d, stdout %q; want 2 and empty stdout", code, out)
+		}
+		if !strings.Contains(stderr, "unexpected argument") || !strings.Contains(stderr, "ohya doctor --help") {
+			t.Fatalf("stderr %q; want the usage-error line", stderr)
+		}
+		if code, _, _ := runCLI("doctor", "--max-record-bytes", "0"); code != 2 {
+			t.Fatalf("code %d; want 2 for a non-positive bound", code)
+		}
+	})
+}
+
+// TestDoctorReadonlyOath pins the whole-command oath on a behind-schema
+// database with pending stopped bytes: after a doctor run, the database file
+// set carries no new bytes (no -wal growth from doctor).
+func TestDoctorReadonlyOath(t *testing.T) {
+	e := newDoctorEnv(t)
+	raw := rawOpen(t, e.dbPath)
+	if _, err := raw.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		t.Fatal(err)
+	}
+	hub, err := store.Open(context.Background(), e.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.Close(); err != nil { // leave a cleanly checkpointed database
+		t.Fatal(err)
+	}
+	sizes := func() map[string]int64 {
+		out := map[string]int64{}
+		for _, suffix := range []string{"", "-wal", "-shm"} {
+			if info, err := os.Stat(e.dbPath + suffix); err == nil {
+				out[suffix] = info.Size()
+			}
+		}
+		return out
+	}
+	before := sizes()
+	if _, out, _ := doctorRun(t, e); !strings.Contains(out, "ok") {
+		t.Fatalf("doctor output: %q", out)
+	}
+	after := sizes()
+	for suffix, size := range before {
+		if after[suffix] != size {
+			t.Fatalf("database%s changed size: %d -> %d", suffix, size, after[suffix])
+		}
+	}
+	if _, ok := after["-wal"]; ok && after["-wal"] != 0 {
+		t.Fatalf("doctor left a -wal of %d bytes", after["-wal"])
+	}
+}
+
+// parseDoctorFindings decodes the text lines back into findings, so tests
+// assert the printed report, not a private slice.
+func parseDoctorFindings(t *testing.T, out string) []finding {
+	t.Helper()
+	var findings []finding
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if line == "" {
+			continue
+		}
+		var f finding
+		rest, ok := strings.CutPrefix(line, "ok    ")
+		f.Severity = sevOK
+		if !ok {
+			rest, ok = strings.CutPrefix(line, "warn  ")
+			f.Severity = sevWarn
+		}
+		if !ok {
+			rest, ok = strings.CutPrefix(line, "error ")
+			f.Severity = sevError
+		}
+		if !ok {
+			t.Fatalf("line lacks a severity: %q", line)
+		}
+		body, remedy, hasRemedy := strings.Cut(rest, "; remedy: ")
+		check, detail, ok := strings.Cut(body, ": ")
+		if !ok {
+			t.Fatalf("line lacks check and detail: %q", line)
+		}
+		f.Check, f.Detail = check, detail
+		if hasRemedy {
+			f.Remedy = remedy
+		}
+		findings = append(findings, f)
+	}
+	return findings
+}

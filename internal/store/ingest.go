@@ -195,9 +195,14 @@ type SourceState struct {
 // SourceState reads one registered source's agent, cursor and first native
 // session ID. An unknown source is ErrSourceNotRegistered.
 func (d *DB) SourceState(ctx context.Context, id string) (SourceState, error) {
+	return sourceState(ctx, d.writer, id)
+}
+
+// sourceState is the query behind SourceState and its read-only counterpart.
+func sourceState(ctx context.Context, db *sql.DB, id string) (SourceState, error) {
 	var st SourceState
 	var native sql.NullString
-	err := d.writer.QueryRowContext(ctx,
+	err := db.QueryRowContext(ctx,
 		`SELECT src.agent, src.cursor_bytes,
 		        (SELECT s.native_id FROM events e JOIN sessions s ON s.id = e.session_id
 		         WHERE e.source_id = src.id AND e.source_offset = 0)
