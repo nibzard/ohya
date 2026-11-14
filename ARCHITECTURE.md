@@ -305,6 +305,8 @@ a device knows permanent rejections from transient ones; transient write
 failures retry with capped backoff inside the hub. One in-flight batch per
 source is enforced by a per-source gate across connections, and a bounded
 connection count rejects the excess explicitly.
+[docs/sync-protocol.md](docs/sync-protocol.md) specifies the frames, their
+bounds, the error codes, and the endpoint and uploader rules.
 
 Implemented (T019): `internal/uploader` is the device side of this contract,
 a library over a `Dialer` (for example `transport.Device.Dial`) and the

@@ -1,11 +1,3 @@
-// Package hubsync implements the hub side of the sync contract from
-// ARCHITECTURE.md: a device registers its sources, then uploads framed
-// batches of one source's original records; the hub normalizes them with the
-// same parser as local ingestion, commits through the transactional write
-// path, and acknowledges only after the durable commit. The wire protocol
-// lives here so the device uploader speaks exactly what the endpoint
-// accepts. The transport stays behind internal/transport: this package sees
-// only ordinary net values.
 package hubsync
 
 import (
@@ -21,77 +13,29 @@ import (
 	"github.com/nibzard/ohya/internal/store"
 )
 
-// ProtocolVersion is the wire protocol version every frame carries. A frame
-// with any other version is refused; there is no negotiation.
 const ProtocolVersion = 1
 
-// Frame bounds. Every declared length is checked against its bound before
-// the buffer is allocated, so a hostile or broken frame cannot make the hub
-// allocate unbounded memory.
 const (
-	// maxDeviceIDLen and maxSourceIDLen hold the 32-hex-character identities
-	// from internal/device and internal/watch with room to spare.
 	maxDeviceIDLen = 64
 	maxSourceIDLen = 64
-	// maxAgentLen holds agent names, which are short lowercase slugs.
-	maxAgentLen = 64
-	// maxPathLen holds one filesystem path.
-	maxPathLen = 4096
-	// maxMessageLen bounds error and stop-reason text, which never carries
-	// transcript content.
-	maxMessageLen = 1024
-	// maxSecretLen holds pairing invitations and device credentials: 32
-	// hex characters from internal/registry with room to spare.
-	maxSecretLen = 128
+	maxAgentLen    = 64
+	maxPathLen     = 4096
+	maxMessageLen  = 1024
+	maxSecretLen   = 128
 
-	// MaxRecordBytes is one record's JSON text without its line terminator.
-	// It is the hub parser's own record limit: a record the parser would
-	// refuse is refused before allocation.
 	MaxRecordBytes = claudecode.DefaultMaxRecordBytes
 
-	// MaxBatchBytes bounds the record bytes one batch may carry, matching the
-	// local ingestion batch bound. A batch never splits a record.
 	MaxBatchBytes = 8 << 20
 
-	// MaxRecords bounds the record count of one batch. The byte bound alone
-	// would admit millions of tiny records, each holding a full Event in
-	// memory during normalization; this cap bounds that work at a level no
-	// real batch reaches — the 8 MiB batch bound with typical records holds
-	// far fewer.
 	MaxRecords = 65536
 
-	// MaxQueryBytes bounds one query's SQL text, matching the sql tool's
-	// input limit (mcpserver.DefaultMaxQueryBytes). The engine may be
-	// configured tighter, never looser, than the wire.
 	MaxQueryBytes = 64 << 10
 
-	// MaxQueryResultBytes bounds the JSON payload of one query result frame,
-	// so a device allocates bounded memory for any reply. The engine's
-	// default output bound (256 KiB) fits sixteen times over; a hub whose
-	// engine is configured past this frame bound has its results refused
-	// with an internal error instead of an undeliverable frame.
 	MaxQueryResultBytes = 4 << 20
 
-	// MaxAnnotateRequestBytes bounds one annotate request's JSON text,
-	// matching the annotate tool's request limit
-	// (mcpserver.DefaultMaxAnnotateRequestBytes).
 	MaxAnnotateRequestBytes = 1 << 20
 )
 
-// Frame layout. All integers are big-endian.
-//
-//	registration = 'R' ver(1) devLen(2) dev srcLen(2) src agentLen(2) agent pathLen(4) path
-//	batch        = 'B' ver(1) devLen(2) dev srcLen(2) src start(8) end(8) count(4)
-//	                 count * [ offset(8) len(4) json ]
-//	ack          = 'A' ver(1) status(1) cursor(8) inserted(8) stopOffset(8) stopLen(2) stop
-//	error        = 'E' ver(1) code(1) msgLen(2) msg
-//	hello        = 'H' ver(1) credLen(2) cred
-//	pair         = 'P' ver(1) invLen(2) inv devLen(2) dev
-//	credential   = 'C' ver(1) devLen(2) dev credLen(2) cred
-//	query        = 'Q' ver(1) sqlLen(4) sql
-//	queryResult  = 'S' ver(1) jsonLen(4) json
-//	annotate     = 'N' ver(1) reqLen(4) json
-//	annotateRes  = 'K' ver(1) applied(8) unchanged(8)
 const (
 	markerRegistration = 'R'
 	markerBatch        = 'B'
@@ -106,52 +50,26 @@ const (
 	markerAnnotateRes  = 'K'
 )
 
-// ErrTooLarge marks a frame whose declared lengths exceed the protocol
-// bounds. The stream cannot be resynchronized past it.
 var ErrTooLarge = errors.New("hubsync: frame exceeds its bounds")
 
-// ErrVersion marks a frame carrying an unsupported protocol version.
 var ErrVersion = errors.New("hubsync: unsupported protocol version")
 
-// ErrorCode classifies one rejection so the uploader knows what follows:
-// reconnect, repair, or a later retry.
 type ErrorCode uint8
 
 const (
-	// CodeAuth reports a peer that is not a paired device, or a frame naming
-	// another device's identity. The connection closes.
 	CodeAuth ErrorCode = iota + 1
-	// CodeVersion reports an unsupported protocol version. The connection
-	// closes.
 	CodeVersion
-	// CodeMalformed reports an undecodable frame. The connection closes.
 	CodeMalformed
-	// CodeTooLarge reports a record or batch above its byte bound. The
-	// connection closes.
 	CodeTooLarge
-	// CodeRejected reports a deterministic batch rejection: a gap ahead of
-	// the stored cursor, conflicting content at a stored offset, or invalid
-	// boundaries. Retrying the same bytes can never succeed.
 	CodeRejected
-	// CodeOwnership reports a source that belongs to another device.
 	CodeOwnership
-	// CodeUnknownSource reports a batch for a source the hub never
-	// registered. The device must register the source first.
 	CodeUnknownSource
-	// CodeUnsupported reports an agent this hub cannot parse.
 	CodeUnsupported
-	// CodeBusy reports the hub at its connection bound; reconnect and retry.
 	CodeBusy
-	// CodeInternal reports a hub-side failure that survived retries; a later
-	// retry may succeed.
 	CodeInternal
-	// CodeNoRemote reports a query or annotate frame on an endpoint serving
-	// the upload protocol only. The connection stays open; retrying the
-	// frame on this hub can never succeed.
 	CodeNoRemote
 )
 
-// String names the code for diagnostics.
 func (c ErrorCode) String() string {
 	switch c {
 	case CodeAuth:
@@ -181,10 +99,6 @@ func (c ErrorCode) String() string {
 	}
 }
 
-// Registration announces one source before its first batch: the source ID the
-// device durably persisted, the agent whose parser owns its records, and the
-// device-local path. It maps onto store.RegisterSource, which binds the
-// source to the authenticated device.
 type Registration struct {
 	DeviceID string
 	SourceID string
@@ -192,22 +106,13 @@ type Registration struct {
 	Path     string
 }
 
-// Record is one original JSONL record without its line terminator, at its
-// byte offset in the source file. The record's end offset is derived:
-// Offset + len(JSON) + 1, exactly one terminator byte.
 type Record struct {
 	Offset int64
 	JSON   []byte
 }
 
-// End returns the offset just past the record's line terminator.
 func (r Record) End() int64 { return r.Offset + int64(len(r.JSON)) + 1 }
 
-// Batch is one source's contiguous records and the byte range they cover.
-// Start is the first record's offset (the device's acknowledged cursor when
-// the batch was built); End is the offset just past the last record's
-// terminator. A batch with no records is a cursor probe: Start must equal
-// End.
 type Batch struct {
 	DeviceID string
 	SourceID string
@@ -216,12 +121,6 @@ type Batch struct {
 	Records  []Record
 }
 
-// Ack acknowledges one committed exchange. Cursor is durable in the hub
-// database before the acknowledgment is written. Inserted counts only newly
-// inserted events, so a replayed batch reports zero. Stopped reports that the
-// batch hit a record the parser refuses: the valid prefix before StopOffset
-// committed, and Stop carries the parser's diagnostic — offsets and reason,
-// never transcript content.
 type Ack struct {
 	Stopped    bool
 	Cursor     int64
@@ -230,7 +129,6 @@ type Ack struct {
 	Stop       string
 }
 
-// Error reports one rejected frame.
 type Error struct {
 	Code    ErrorCode
 	Message string
@@ -240,24 +138,14 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("hubsync: %s: %s", e.Code, e.Message)
 }
 
-// Query is one read-only SQL statement a paired device asks the hub to run
-// against the shared history. The hub executes it under the same bounds and
-// the same read-only policy as the local sql tool; all paired devices may
-// read all history (the MVP rule of ARCHITECTURE.md).
 type Query struct {
 	SQL string
 }
 
-// Annotate is one annotation batch request: the JSON arguments of the
-// annotate tool ({"operations":[...]}) verbatim, under its request limit.
-// No writer identity travels in the request; the hub derives it from the
-// authenticated device.
 type Annotate struct {
 	Request []byte
 }
 
-// Frame is one decoded device-to-hub frame: exactly one of Registration,
-// Batch, Query or Annotate is set.
 type Frame struct {
 	Registration *Registration
 	Batch        *Batch
@@ -265,8 +153,6 @@ type Frame struct {
 	Annotate     *Annotate
 }
 
-// frameReader reads the protocol's primitives. Every length is checked
-// against its bound before the buffer is allocated.
 type frameReader struct {
 	r io.Reader
 }
@@ -310,7 +196,6 @@ func (fr *frameReader) i64() (int64, error) {
 	return int64(binary.BigEndian.Uint64(b[:])), nil
 }
 
-// str16 reads one u16-prefixed string within max bytes, refusing emptiness.
 func (fr *frameReader) str16(max int, what string) (string, error) {
 	n, err := fr.u16()
 	if err != nil {
@@ -326,7 +211,6 @@ func (fr *frameReader) str16(max int, what string) (string, error) {
 	return string(s), nil
 }
 
-// bytes allocates n bytes after the bound check and reads them.
 func (fr *frameReader) bytes(n uint32, max int, what string) ([]byte, error) {
 	if int64(n) > int64(max) {
 		return nil, fmt.Errorf("%w: %s length %d exceeds %d", ErrTooLarge, what, n, max)
@@ -338,10 +222,6 @@ func (fr *frameReader) bytes(n uint32, max int, what string) ([]byte, error) {
 	return buf, nil
 }
 
-// ReadFrame reads one request frame. Every declared length is checked against
-// its bound before allocation. A frame past the bounds, an unsupported
-// version, or a truncated read is an error; the caller must treat the
-// connection as unsynchronized and close it.
 func ReadFrame(r io.Reader) (Frame, error) {
 	fr := &frameReader{r: r}
 	marker, err := fr.u8()
@@ -473,7 +353,6 @@ func readBatch(fr *frameReader) (*Batch, error) {
 	return &b, nil
 }
 
-// readQuery reads one query frame's SQL text within the byte bound.
 func readQuery(fr *frameReader) (*Query, error) {
 	n, err := fr.u32()
 	if err != nil {
@@ -489,7 +368,6 @@ func readQuery(fr *frameReader) (*Query, error) {
 	return &Query{SQL: string(sql)}, nil
 }
 
-// readAnnotate reads one annotate request's JSON within the byte bound.
 func readAnnotate(fr *frameReader) (*Annotate, error) {
 	n, err := fr.u32()
 	if err != nil {
@@ -505,8 +383,6 @@ func readAnnotate(fr *frameReader) (*Annotate, error) {
 	return &Annotate{Request: request}, nil
 }
 
-// replyHead reads one reply's marker and version, refusing an unsupported
-// version.
 func replyHead(fr *frameReader) (byte, error) {
 	marker, err := fr.u8()
 	if err != nil {
@@ -523,8 +399,6 @@ func replyHead(fr *frameReader) (byte, error) {
 	return marker, nil
 }
 
-// readErrorFrame reads the body of one error frame — code and message —
-// after its marker and version were read.
 func readErrorFrame(fr *frameReader) (*Error, error) {
 	code, err := fr.u8()
 	if err != nil {
@@ -544,9 +418,6 @@ func readErrorFrame(fr *frameReader) (*Error, error) {
 	return &Error{Code: ErrorCode(code), Message: string(msg)}, nil
 }
 
-// ReadReply reads one hub reply to a registration or batch: an
-// acknowledgment, or an error frame. A non-nil *Error is a protocol-level
-// rejection; a non-nil error is a broken or closed connection.
 func ReadReply(r io.Reader) (Ack, *Error, error) {
 	fr := &frameReader{r: r}
 	marker, err := replyHead(fr)
@@ -591,9 +462,6 @@ func ReadReply(r io.Reader) (Ack, *Error, error) {
 	}
 }
 
-// ReadQueryReply reads the hub's answer to one query: the bounded result as
-// the sql tool shapes it, or a protocol-level rejection. A non-nil error is
-// a broken or closed connection.
 func ReadQueryReply(r io.Reader) (mcpserver.Result, *Error, error) {
 	fr := &frameReader{r: r}
 	marker, err := replyHead(fr)
@@ -626,9 +494,6 @@ func ReadQueryReply(r io.Reader) (mcpserver.Result, *Error, error) {
 	}
 }
 
-// ReadAnnotateReply reads the hub's answer to one annotate batch: the
-// committed counts, or a protocol-level rejection. A non-nil error is a
-// broken or closed connection.
 func ReadAnnotateReply(r io.Reader) (store.AnnotateResult, *Error, error) {
 	fr := &frameReader{r: r}
 	marker, err := replyHead(fr)
@@ -663,7 +528,6 @@ func ReadAnnotateReply(r io.Reader) (store.AnnotateResult, *Error, error) {
 	}
 }
 
-// WriteRegistration frames one source registration.
 func WriteRegistration(w io.Writer, r Registration) error {
 	for _, f := range []struct {
 		value string
@@ -699,8 +563,6 @@ func WriteRegistration(w io.Writer, r Registration) error {
 	return nil
 }
 
-// WriteBatch frames one batch. It refuses a batch past the byte or record
-// bounds, so a sender never produces a frame the hub must reject.
 func WriteBatch(w io.Writer, b Batch) error {
 	if b.DeviceID == "" || b.SourceID == "" {
 		return fmt.Errorf("hubsync: batch has an empty device or source ID")
@@ -760,7 +622,6 @@ func WriteBatch(w io.Writer, b Batch) error {
 	return nil
 }
 
-// WriteAck frames one acknowledgment.
 func WriteAck(w io.Writer, a Ack) error {
 	status := byte(0)
 	if a.Stopped {
@@ -781,8 +642,6 @@ func WriteAck(w io.Writer, a Ack) error {
 	return nil
 }
 
-// WriteError frames one rejection. Closing the connection is the caller's
-// decision; the frame itself is complete.
 func WriteError(w io.Writer, code ErrorCode, msg string) error {
 	head := []byte{markerError, ProtocolVersion, byte(code)}
 	msg = truncate(msg, maxMessageLen)
@@ -794,8 +653,6 @@ func WriteError(w io.Writer, code ErrorCode, msg string) error {
 	return nil
 }
 
-// WriteQuery frames one query. It refuses empty or oversized SQL text, so a
-// sender never produces a frame the hub must reject.
 func WriteQuery(w io.Writer, sql string) error {
 	if sql == "" {
 		return fmt.Errorf("hubsync: query has no SQL text")
@@ -815,8 +672,6 @@ func WriteQuery(w io.Writer, sql string) error {
 	return nil
 }
 
-// WriteAnnotate frames one annotate request's JSON arguments. It refuses
-// empty or oversized requests, matching the read-side bound.
 func WriteAnnotate(w io.Writer, request []byte) error {
 	if len(request) == 0 {
 		return fmt.Errorf("hubsync: annotate request has no JSON")
@@ -836,10 +691,6 @@ func WriteAnnotate(w io.Writer, request []byte) error {
 	return nil
 }
 
-// WriteQueryResult frames one query's answer: the bounded result exactly as
-// the sql tool shapes it, as JSON. The engine's output limits are the only
-// truncation point; a result past the frame bound is refused, never cut
-// silently.
 func WriteQueryResult(w io.Writer, r mcpserver.Result) error {
 	payload, err := json.Marshal(r)
 	if err != nil {
@@ -860,7 +711,6 @@ func WriteQueryResult(w io.Writer, r mcpserver.Result) error {
 	return nil
 }
 
-// WriteAnnotateResult frames one committed annotate batch's counts.
 func WriteAnnotateResult(w io.Writer, r store.AnnotateResult) error {
 	head := []byte{markerAnnotateRes, ProtocolVersion}
 	var wide [8]byte
@@ -874,34 +724,20 @@ func WriteAnnotateResult(w io.Writer, r store.AnnotateResult) error {
 	return nil
 }
 
-// Hello presents one device credential: the first frame a paired device
-// sends on a connection. The credential registry behind the endpoint maps it
-// to the device identity; frames inside the connection never establish one.
 type Hello struct {
 	Credential string
 }
 
-// PairRequest asks the hub to consume one pairing invitation and enroll the
-// named device: the first frame a stranger sends to join. The device ID is
-// the peer's stable local identity (internal/device); the hub mints and
-// returns the credential.
 type PairRequest struct {
 	Invitation string
 	DeviceID   string
 }
 
-// CredentialReply carries the hub-minted credential of a newly paired
-// device, exactly once, for storage in its protected credential file.
 type CredentialReply struct {
 	DeviceID   string
 	Credential string
 }
 
-// ReadAuthFrame reads a connection's first frame: a Hello from a paired
-// device, or a PairRequest from a stranger joining. It reads exactly the
-// frame's bytes — never past it — so the endpoint's own reader starts at the
-// next frame. Any other marker, an unsupported version, or a truncation is
-// an error; the caller closes the connection.
 func ReadAuthFrame(r io.Reader) (*Hello, *PairRequest, error) {
 	fr := &frameReader{r: r}
 	marker, err := fr.u8()
@@ -937,7 +773,6 @@ func ReadAuthFrame(r io.Reader) (*Hello, *PairRequest, error) {
 	}
 }
 
-// WriteHello frames one credential presentation.
 func WriteHello(w io.Writer, credential string) error {
 	if credential == "" {
 		return fmt.Errorf("hubsync: hello has an empty credential")
@@ -954,7 +789,6 @@ func WriteHello(w io.Writer, credential string) error {
 	return nil
 }
 
-// WritePairRequest frames one pairing request.
 func WritePairRequest(w io.Writer, invitation, deviceID string) error {
 	for _, f := range []struct {
 		value string
@@ -982,7 +816,6 @@ func WritePairRequest(w io.Writer, invitation, deviceID string) error {
 	return nil
 }
 
-// WriteCredentialReply frames one minted credential.
 func WriteCredentialReply(w io.Writer, r CredentialReply) error {
 	for _, f := range []struct {
 		value string
@@ -1010,8 +843,6 @@ func WriteCredentialReply(w io.Writer, r CredentialReply) error {
 	return nil
 }
 
-// ReadCredentialReply reads the hub's answer to a pairing request: the
-// minted credential, or a protocol-level rejection.
 func ReadCredentialReply(r io.Reader) (CredentialReply, *Error, error) {
 	fr := &frameReader{r: r}
 	marker, err := replyHead(fr)
@@ -1039,12 +870,6 @@ func ReadCredentialReply(r io.Reader) (CredentialReply, *Error, error) {
 	}
 }
 
-// Pair performs the device side of pairing over one connection: it presents
-// the invitation and the device's stable identity, and returns the
-// hub-minted credential. The caller stores it in its protected credential
-// file (internal/device) and keeps the connection, which is now an
-// authorized session of the device. Set deadlines on conn to bound the
-// exchange.
 func Pair(conn net.Conn, invitation, deviceID string) (string, error) {
 	if err := WritePairRequest(conn, invitation, deviceID); err != nil {
 		return "", err
@@ -1062,14 +887,12 @@ func Pair(conn net.Conn, invitation, deviceID string) (string, error) {
 	return reply.Credential, nil
 }
 
-// appendLen16 appends one u16 length prefix.
 func appendLen16(buf []byte, s string) []byte {
 	var l [2]byte
 	binary.BigEndian.PutUint16(l[:], uint16(len(s)))
 	return append(buf, l[:]...)
 }
 
-// truncate cuts s to at most max bytes on a rune boundary.
 func truncate(s string, max int) string {
 	if len(s) <= max {
 		return s

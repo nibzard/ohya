@@ -27,8 +27,6 @@ const (
 	deviceB = "ffffffffffffffffffffffffffffffff"
 )
 
-// fixtureRecords frames the main-session fixture as one batch's original
-// records, preserving byte offsets.
 func fixtureRecords(t *testing.T) []Record {
 	t.Helper()
 	recs := framedFixture(t, "claude-code", "main-session.jsonl")
@@ -38,8 +36,6 @@ func fixtureRecords(t *testing.T) []Record {
 	return recs
 }
 
-// framedFixture frames one fixture's complete records, preserving byte
-// offsets.
 func framedFixture(t *testing.T, agent, name string) []Record {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", agent, name))
@@ -51,7 +47,7 @@ func framedFixture(t *testing.T, agent, name string) []Record {
 	for len(data) > 0 {
 		idx := bytes.IndexByte(data, '\n')
 		if idx < 0 {
-			break // the incomplete tail stays pending
+			break
 		}
 		recs = append(recs, Record{Offset: off, JSON: data[:idx:idx]})
 		off += int64(idx) + 1
@@ -65,12 +61,10 @@ func fixtureBatch(deviceID, sourceID string, recs []Record) Batch {
 		Start: recs[0].Offset, End: recs[len(recs)-1].End(), Records: recs}
 }
 
-// rawLine builds one minimal Claude Code user record for a session ID.
 func rawLine(sessionID, content string) []byte {
 	return []byte(fmt.Sprintf(`{"type":"user","sessionId":%q,"message":{"role":"user","content":%q}}`, sessionID, content))
 }
 
-// server runs one endpoint for its tests and stops it afterwards.
 type server struct {
 	t      *testing.T
 	ep     *Endpoint
@@ -80,8 +74,6 @@ type server struct {
 	wait   sync.Once
 }
 
-// stop cancels the serving context and waits for Serve to return; it is safe
-// to call from the test and from the cleanup.
 func (s *server) stop() {
 	s.cancel()
 	s.wait.Do(func() {
@@ -105,7 +97,7 @@ func startEndpoint(t *testing.T, db *store.DB, auth Authenticator, opts Options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0") // free port
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +109,6 @@ func startEndpoint(t *testing.T, db *store.DB, auth Authenticator, opts Options)
 	return s
 }
 
-// deviceConn is a test uploader: one connection, sequential exchanges.
 type deviceConn struct {
 	t    *testing.T
 	conn net.Conn
@@ -158,7 +149,6 @@ func (d *deviceConn) send(b Batch) {
 	}
 }
 
-// reply reads one hub reply: an ack or a rejection.
 func (d *deviceConn) reply() (Ack, *Error) {
 	d.t.Helper()
 	d.deadline()
@@ -169,7 +159,6 @@ func (d *deviceConn) reply() (Ack, *Error) {
 	return ack, perr
 }
 
-// mustAck asserts the reply is an acknowledgment with the wanted fields.
 func (d *deviceConn) mustAck(want Ack) Ack {
 	d.t.Helper()
 	ack, perr := d.reply()
@@ -197,7 +186,6 @@ func (d *deviceConn) wantError(code ErrorCode, sub string) *Error {
 	return perr
 }
 
-// expectClosed asserts the hub closed the connection: the next read fails.
 func (d *deviceConn) expectClosed() {
 	d.t.Helper()
 	d.deadline()
@@ -206,11 +194,6 @@ func (d *deviceConn) expectClosed() {
 	}
 }
 
-// peerAuth maps each connection's remote address to a device identity, so
-// several devices can be simulated deterministically regardless of accept
-// order. The hub may authenticate a connection before the test assigns its
-// identity, so authentication waits briefly for the assignment; a peer with
-// none is refused.
 type peerAuth struct {
 	mu  sync.Mutex
 	ids map[string]string
@@ -218,9 +201,6 @@ type peerAuth struct {
 
 func newPeerAuth() *peerAuth { return &peerAuth{ids: map[string]string{}} }
 
-// assign fixes the identity the hub will report for this connection. The
-// hub sees the connection's peer, which is the local address on the device
-// side, so key by that.
 func (a *peerAuth) assign(conn net.Conn, deviceID string) {
 	a.mu.Lock()
 	a.ids[conn.LocalAddr().String()] = deviceID
@@ -270,8 +250,6 @@ func queryInt(t *testing.T, hub *store.DB, query string, args ...any) int64 {
 	return n
 }
 
-// dumpEvents renders every events row so two databases can be compared
-// byte for byte.
 func dumpEvents(t *testing.T, hub *store.DB) []string {
 	t.Helper()
 	rows, err := hub.Writer().Query(
@@ -301,7 +279,6 @@ func dumpEvents(t *testing.T, hub *store.DB) []string {
 	return out
 }
 
-// dumpSessions renders every sessions row the same way.
 func dumpSessions(t *testing.T, hub *store.DB) []string {
 	t.Helper()
 	rows, err := hub.Writer().Query(
@@ -332,12 +309,6 @@ func dumpSessions(t *testing.T, hub *store.DB) []string {
 	return out
 }
 
-// TestEndpointCommitsFixtureLikeLocalIngestion drives a full device session:
-// registration, the fixture batch, then an incremental follow-up. The hub
-// normalizes with the same parser as local ingestion — every events and
-// sessions row equals what the local write path produces from the same
-// bytes — FTS follows, and the acknowledged cursor matches the committed
-// one.
 func TestEndpointCommitsFixtureLikeLocalIngestion(t *testing.T) {
 	db := newTestDB(t)
 	s := startEndpoint(t, db, nil, Options{Retry: RetryPolicy{Base: time.Millisecond}})
@@ -360,21 +331,17 @@ func TestEndpointCommitsFixtureLikeLocalIngestion(t *testing.T) {
 		t.Fatalf("event_count = %d, want 16", got)
 	}
 
-	// The incremental follow-up record extends the session on a second
-	// batch, like an agent appending while sync runs.
 	next := rawLine("00000000-0000-4000-8000-0000000000a1", "one more prompt")
 	d.send(Batch{DeviceID: deviceA, SourceID: "src-1",
 		Start: 6528, End: 6528 + int64(len(next)) + 1,
 		Records: []Record{{Offset: 6528, JSON: next}}})
 	d.mustAck(Ack{Cursor: 6529 + int64(len(next)), Inserted: 1})
 
-	// FTS carries the committed text.
 	if got := queryInt(t, db,
 		`SELECT count(*) FROM events_fts WHERE events_fts MATCH 'prime'`); got == 0 {
 		t.Fatal("FTS holds no match for the fixture text")
 	}
 
-	// Reference run: the same bytes through the local write path.
 	local := newTestDB(t)
 	if err := local.RegisterSource(context.Background(), "src-1", deviceA,
 		claudecode.AgentName, "/home/dev/s.jsonl"); err != nil {
@@ -422,12 +389,6 @@ func TestEndpointCommitsFixtureLikeLocalIngestion(t *testing.T) {
 	}
 }
 
-// TestEndpointCommitsCodexLikeLocalIngestion uploads a Codex thread the way
-// the uploader does — the main rollout in two batches, then its resumed page
-// as another source — and compares the hub's rows with local ingestion of
-// the same bytes. The second batch starts past offset 0, so the hub must take
-// the thread from the source's committed first record; the page's replayed
-// ordinals become duplicates.
 func TestEndpointCommitsCodexLikeLocalIngestion(t *testing.T) {
 	db := newTestDB(t)
 	s := startEndpoint(t, db, nil, Options{Retry: RetryPolicy{Base: time.Millisecond}})
@@ -443,14 +404,11 @@ func TestEndpointCommitsCodexLikeLocalIngestion(t *testing.T) {
 	register("src-page", "/page.jsonl")
 	d.send(fixtureBatch(deviceA, "src-main", main[:5]))
 	d.mustAck(Ack{Cursor: main[4].End(), Inserted: 5})
-	// A retry overlapping the committed prefix inserts only the rest.
 	d.send(fixtureBatch(deviceA, "src-main", main[3:]))
 	d.mustAck(Ack{Cursor: 4780, Inserted: 9})
 	d.send(fixtureBatch(deviceA, "src-page", page))
 	d.mustAck(Ack{Cursor: 2048, Inserted: 5})
 
-	// A batch past offset 0 of a source with no committed first record
-	// cannot name its thread: rejected, nothing stored.
 	register("src-gap", "/gap.jsonl")
 	d.send(fixtureBatch(deviceA, "src-gap", main[1:3]))
 	d.wantError(CodeRejected, "")
@@ -458,7 +416,6 @@ func TestEndpointCommitsCodexLikeLocalIngestion(t *testing.T) {
 		t.Fatalf("gap source stored %d events", got)
 	}
 
-	// Reference run: the same bytes through the local write path.
 	local := newTestDB(t)
 	ctx := context.Background()
 	for _, src := range []struct{ id, path, name string }{
@@ -501,7 +458,6 @@ func TestEndpointCommitsCodexLikeLocalIngestion(t *testing.T) {
 		t.Fatalf("duplicates = %d, want the page's 2 replayed records", got)
 	}
 
-	// A malformed Codex line commits the valid prefix and stops there.
 	register("src-bad", "/bad.jsonl")
 	bad := framedFixture(t, "codex", "malformed-line.jsonl")
 	d.send(fixtureBatch(deviceA, "src-bad", bad))
@@ -511,9 +467,6 @@ func TestEndpointCommitsCodexLikeLocalIngestion(t *testing.T) {
 	}
 }
 
-// TestAckFollowsDurableCommit proves the acknowledged cursor survives
-// closing the endpoint and its database handle: what the device may
-// checkpoint was on disk before the acknowledgment left the hub.
 func TestAckFollowsDurableCommit(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "hub.db")
@@ -529,8 +482,6 @@ func TestAckFollowsDurableCommit(t *testing.T) {
 	d.send(fixtureBatch(deviceA, "src-1", recs))
 	ack := d.mustAck(Ack{Cursor: 6528, Inserted: 16})
 
-	// Close the device, the endpoint, and the database handle — a hub
-	// restart — then reopen from disk.
 	d.conn.Close()
 	s.stop()
 	if err := db.Close(); err != nil {
@@ -553,9 +504,6 @@ func TestAckFollowsDurableCommit(t *testing.T) {
 	}
 }
 
-// TestReplayAndOverlap covers lost acknowledgments: a fully repeated batch
-// returns the existing cursor without changing aggregates, and an
-// overlapping retry inserts only its new suffix.
 func TestReplayAndOverlap(t *testing.T) {
 	db := newTestDB(t)
 	s := startEndpoint(t, db, nil, Options{Retry: RetryPolicy{Base: time.Millisecond}})
@@ -566,8 +514,6 @@ func TestReplayAndOverlap(t *testing.T) {
 	d.send(fixtureBatch(deviceA, "src-1", recs))
 	d.mustAck(Ack{Cursor: 6528, Inserted: 16})
 
-	// Full replay after a lost acknowledgment: nothing inserts, nothing
-	// re-aggregates, same cursor.
 	d.send(fixtureBatch(deviceA, "src-1", recs))
 	d.mustAck(Ack{Cursor: 6528, Inserted: 0})
 	if got := queryInt(t, db, `SELECT event_count FROM sessions`); got != 16 {
@@ -578,7 +524,6 @@ func TestReplayAndOverlap(t *testing.T) {
 		t.Fatalf("usage rows after replay = %d, want 2", got)
 	}
 
-	// Overlapping retry: the whole first batch plus one fresh record.
 	next := rawLine("00000000-0000-4000-8000-0000000000a1", "overlap tail")
 	extended := append(append([]Record{}, recs...),
 		Record{Offset: 6528, JSON: next})
@@ -589,14 +534,11 @@ func TestReplayAndOverlap(t *testing.T) {
 		t.Fatalf("event_count after overlap = %d, want 17", got)
 	}
 
-	// A cursor probe with no records reports the cursor and writes nothing.
 	d.send(Batch{DeviceID: deviceA, SourceID: "src-1",
 		Start: 6529 + int64(len(next)), End: 6529 + int64(len(next))})
 	d.mustAck(Ack{Cursor: 6529 + int64(len(next)), Inserted: 0})
 }
 
-// TestConflictingRetryRejected proves changed content at a stored offset is
-// rejected, the connection stays usable, and the stored history is intact.
 func TestConflictingRetryRejected(t *testing.T) {
 	db := newTestDB(t)
 	s := startEndpoint(t, db, nil, Options{Retry: RetryPolicy{Base: time.Millisecond}})
@@ -607,11 +549,9 @@ func TestConflictingRetryRejected(t *testing.T) {
 	d.send(fixtureBatch(deviceA, "src-1", recs))
 	d.mustAck(Ack{Cursor: 6528, Inserted: 16})
 
-	// Same first record, different bytes; the rest of the batch differs too.
 	tampered := append([]Record{}, recs...)
 	tampered[0].JSON = []byte(`{"type":"user","sessionId":"00000000-0000-4000-8000-0000000000ff","message":{"role":"user","content":"rewritten"}}`)
 	tampered[0].JSON = append([]byte{}, tampered[0].JSON...)
-	// Keep boundaries honest: rebuild offsets for the tampered length.
 	for i := 1; i < len(tampered); i++ {
 		tampered[i].Offset = tampered[i-1].End()
 	}
@@ -619,7 +559,6 @@ func TestConflictingRetryRejected(t *testing.T) {
 		Start: 0, End: tampered[len(tampered)-1].End(), Records: tampered})
 	d.wantError(CodeRejected, "conflicting retry")
 
-	// The connection stays open and the history is untouched.
 	if got := queryInt(t, db, `SELECT count(*) FROM events`); got != 16 {
 		t.Fatalf("events after conflict = %d, want 16", got)
 	}
@@ -633,8 +572,6 @@ func TestConflictingRetryRejected(t *testing.T) {
 	d.mustAck(Ack{Cursor: 6529 + int64(len(next)), Inserted: 1})
 }
 
-// TestGapRejected proves bytes are never skipped: a batch starting ahead of
-// the stored cursor is refused without any write.
 func TestGapRejected(t *testing.T) {
 	db := newTestDB(t)
 	s := startEndpoint(t, db, nil, Options{Retry: RetryPolicy{Base: time.Millisecond}})
@@ -658,7 +595,6 @@ func TestGapRejected(t *testing.T) {
 		t.Fatalf("events after gap = %d, want 16", got)
 	}
 
-	// A batch whose records are internally non-contiguous is also rejected.
 	discontinuous := Batch{DeviceID: deviceA, SourceID: "src-1", Start: 6528, End: 6528 + 2*(int64(len(next))+1),
 		Records: []Record{
 			{Offset: 6528, JSON: next},
@@ -667,18 +603,12 @@ func TestGapRejected(t *testing.T) {
 	d.send(discontinuous)
 	d.wantError(CodeRejected, "record 1 starts at offset")
 
-	// The end of the batch must match its last record.
 	badEnd := fixtureBatch(deviceA, "src-1", recs)
 	badEnd.End += 7
 	d.send(badEnd)
 	d.wantError(CodeRejected, "last record ends at")
 }
 
-// TestOfflineRecoveryDropsAndReplays covers the DropAck window of the TLA+
-// model: the hub commits and the acknowledgment is lost with the
-// connection. The device reconnects, re-registers (idempotent), replays the
-// same batch from its stale checkpoint, and the hub answers with the
-// existing cursor and no new events.
 func TestOfflineRecoveryDropsAndReplays(t *testing.T) {
 	db := newTestDB(t)
 	s := startEndpoint(t, db, nil, Options{Retry: RetryPolicy{Base: time.Millisecond}})
@@ -688,12 +618,10 @@ func TestOfflineRecoveryDropsAndReplays(t *testing.T) {
 	d := dial(t, s.addr)
 	mustRegisterVia(t, d, deviceA, "src-1", "/p/s.jsonl")
 	d.send(batch)
-	// Drop the connection without reading the acknowledgment.
 	if err := d.conn.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	// The commit happened durably even though the device never saw the ack.
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		if queryInt(t, db, `SELECT cursor_bytes FROM sources WHERE id='src-1'`) == 6528 {
@@ -705,7 +633,6 @@ func TestOfflineRecoveryDropsAndReplays(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	// Reconnect and replay from the stale checkpoint.
 	d2 := dial(t, s.addr)
 	mustRegisterVia(t, d2, deviceA, "src-1", "/p/s.jsonl")
 	d2.send(batch)
@@ -714,7 +641,6 @@ func TestOfflineRecoveryDropsAndReplays(t *testing.T) {
 		t.Fatalf("event_count after replay = %d, want 16 (no duplicate events)", got)
 	}
 
-	// Then the source continues with fresh bytes.
 	next := rawLine("00000000-0000-4000-8000-0000000000a1", "after recovery")
 	d2.send(Batch{DeviceID: deviceA, SourceID: "src-1",
 		Start: 6528, End: 6529 + int64(len(next)),
@@ -722,11 +648,6 @@ func TestOfflineRecoveryDropsAndReplays(t *testing.T) {
 	d2.mustAck(Ack{Cursor: 6529 + int64(len(next)), Inserted: 1})
 }
 
-// TestRolledBackTransactionLeavesCursorUnchanged breaks the commit
-// mid-transaction with an aborting trigger, the way TestIngest's store tests
-// break it with invalid metadata: the transaction rolls back, the device
-// learns an internal failure, and neither the cursor nor any event moves.
-// The same bytes then commit whole once the failure clears.
 func TestRolledBackTransactionLeavesCursorUnchanged(t *testing.T) {
 	db := newTestDB(t)
 	s := startEndpoint(t, db, nil, Options{Retry: RetryPolicy{Base: time.Millisecond, Attempts: 2}})
@@ -735,8 +656,6 @@ func TestRolledBackTransactionLeavesCursorUnchanged(t *testing.T) {
 	l1 := rawLine("sess-1", "record one")
 	l2 := rawLine("sess-1", "record two")
 	off1 := int64(len(l0) + 1)
-	// The aborting trigger breaks the commit at the second record, after the
-	// first inserted cleanly. Trigger bodies take no bound parameters.
 	if _, err := db.Writer().Exec(fmt.Sprintf(
 		`CREATE TRIGGER rollback_probe BEFORE INSERT ON events
 		 WHEN NEW.source_offset = %d
@@ -763,7 +682,6 @@ func TestRolledBackTransactionLeavesCursorUnchanged(t *testing.T) {
 		t.Fatal("a session kept an aggregate from a rolled-back commit")
 	}
 
-	// Clearing the failure lets the same bytes commit whole.
 	if _, err := db.Writer().Exec(`DROP TRIGGER rollback_probe`); err != nil {
 		t.Fatal(err)
 	}
@@ -771,15 +689,12 @@ func TestRolledBackTransactionLeavesCursorUnchanged(t *testing.T) {
 	d.mustAck(Ack{Cursor: batch.End, Inserted: 3})
 }
 
-// TestMalformedRecordCommitsPrefixAndStops mirrors the local source-stop
-// semantics: the valid prefix before an unparseable record commits, the ack
-// reports the stop offset and reason, and bytes are never skipped past it.
 func TestMalformedRecordCommitsPrefixAndStops(t *testing.T) {
 	db := newTestDB(t)
 	s := startEndpoint(t, db, nil, Options{Retry: RetryPolicy{Base: time.Millisecond}})
 
 	good := rawLine("sess-1", "commits")
-	bad := []byte(`{"type":"user","sessionId":`) // no closing brace
+	bad := []byte(`{"type":"user","sessionId":`)
 	after := rawLine("sess-1", "valid after the malformed record")
 	off1 := int64(len(good) + 1)
 	off2 := off1 + int64(len(bad)) + 1
@@ -807,8 +722,6 @@ func TestMalformedRecordCommitsPrefixAndStops(t *testing.T) {
 		t.Fatalf("events after stop = %d, want 1", got)
 	}
 
-	// The replayed stop is idempotent, and skipping the malformed bytes is
-	// rejected.
 	d.send(batch)
 	ack, perr = d.reply()
 	if perr != nil || !ack.Stopped || ack.Cursor != off1 || ack.StopOffset != off1 || ack.Inserted != 0 {
@@ -820,8 +733,6 @@ func TestMalformedRecordCommitsPrefixAndStops(t *testing.T) {
 	d.send(skip)
 	d.wantError(CodeRejected, "bytes would be skipped")
 
-	// A record containing a line terminator lies about its boundaries and is
-	// rejected outright.
 	embedded := append(append([]byte{}, good...), '\n')
 	embedded = append(embedded, []byte(`{"type":"user","sessionId":"x"}`)...)
 	d.send(Batch{DeviceID: deviceA, SourceID: "src-1",
@@ -830,17 +741,13 @@ func TestMalformedRecordCommitsPrefixAndStops(t *testing.T) {
 	d.wantError(CodeRejected, "exactly one record")
 }
 
-// TestRegistrationLifecycle covers idempotent re-registration, path moves
-// and the unsupported agent.
 func TestRegistrationLifecycle(t *testing.T) {
 	db := newTestDB(t)
 	s := startEndpoint(t, db, nil, Options{})
 
 	d := dial(t, s.addr)
 	mustRegisterVia(t, d, deviceA, "src-1", "/a.jsonl")
-	// Same registration again: idempotent.
 	mustRegisterVia(t, d, deviceA, "src-1", "/a.jsonl")
-	// A path move is followed, like the local watcher's rename handling.
 	d.register(Registration{DeviceID: deviceA, SourceID: "src-1",
 		Agent: claudecode.AgentName, Path: "/moved.jsonl"})
 	d.mustAck(Ack{})
@@ -848,7 +755,6 @@ func TestRegistrationLifecycle(t *testing.T) {
 	if err := db.Writer().QueryRow(`SELECT path FROM sources WHERE id='src-1'`).Scan(&path); err != nil || path != "/moved.jsonl" {
 		t.Fatalf("path = %q, %v; want /moved.jsonl", path, err)
 	}
-	// The hub parses what its parsers cover; anything else is explicit.
 	d.register(Registration{DeviceID: deviceA, SourceID: "src-2",
 		Agent: "opencode", Path: "/c.jsonl"})
 	d.wantError(CodeUnsupported, "no parser")
@@ -857,10 +763,6 @@ func TestRegistrationLifecycle(t *testing.T) {
 	d.mustAck(Ack{})
 }
 
-// TestOwnershipAndIdentity pins the authorization rules the endpoint can
-// enforce before pairing exists: frames carry the authenticated identity,
-// sources are bound to it, and another device — even an authenticated one —
-// can neither claim the source nor upload under it.
 func TestOwnershipAndIdentity(t *testing.T) {
 	db := newTestDB(t)
 	auth := newPeerAuth()
@@ -873,8 +775,6 @@ func TestOwnershipAndIdentity(t *testing.T) {
 	a.send(fixtureBatch(deviceA, "src-1", recs))
 	a.mustAck(Ack{Cursor: 6528, Inserted: 16})
 
-	// A frame naming another device's identity violates the protocol; the
-	// hub closes the connection.
 	liar := dial(t, s.addr)
 	auth.assign(liar.conn, deviceA)
 	liar.register(Registration{DeviceID: deviceB, SourceID: "src-9",
@@ -882,20 +782,16 @@ func TestOwnershipAndIdentity(t *testing.T) {
 	liar.wantError(CodeAuth, "belongs to")
 	liar.expectClosed()
 
-	// An authenticated second device cannot register the first device's
-	// source (ownership change) ...
 	b := dial(t, s.addr)
 	auth.assign(b.conn, deviceB)
 	b.register(Registration{DeviceID: deviceB, SourceID: "src-1",
 		Agent: claudecode.AgentName, Path: "/a.jsonl"})
 	b.wantError(CodeOwnership, "ownership")
-	// ... nor upload under it, and cannot batch an unregistered source.
 	b.send(fixtureBatch(deviceB, "src-1", recs))
 	b.wantError(CodeOwnership, "claims device")
 	b.send(fixtureBatch(deviceB, "src-b", recs[:1]))
 	b.wantError(CodeUnknownSource, "not registered")
 
-	// The same source for the same device on a new connection still works.
 	a2 := dial(t, s.addr)
 	auth.assign(a2.conn, deviceA)
 	mustRegisterVia(t, a2, deviceA, "src-1", "/a.jsonl")
@@ -906,8 +802,6 @@ func TestOwnershipAndIdentity(t *testing.T) {
 	}
 }
 
-// TestUnauthenticatedConnectionClose verifies a peer the authenticator
-// refuses learns CodeAuth and gets no further.
 func TestUnauthenticatedConnectionClose(t *testing.T) {
 	db := newTestDB(t)
 	auth := newPeerAuth()
@@ -917,19 +811,17 @@ func TestUnauthenticatedConnectionClose(t *testing.T) {
 	auth.assign(d.conn, deviceA)
 	mustRegisterVia(t, d, deviceA, "src-1", "/a.jsonl")
 
-	refused := dial(t, s.addr) // never assigned an identity
+	refused := dial(t, s.addr)
 	refused.register(Registration{DeviceID: deviceA, SourceID: "src-2",
 		Agent: claudecode.AgentName, Path: "/b.jsonl"})
 	refused.wantError(CodeAuth, "no assigned identity")
 	refused.expectClosed()
 }
 
-// TestBrokenFramesCloseConnection pins which violations end a connection.
 func TestBrokenFramesCloseConnection(t *testing.T) {
 	db := newTestDB(t)
 	s := startEndpoint(t, db, nil, Options{})
 
-	// Unsupported protocol version.
 	badVersion := func() []byte {
 		var buf bytes.Buffer
 		batch := fixtureBatch(deviceA, "src-1", fixtureRecords(t)[:1])
@@ -947,17 +839,15 @@ func TestBrokenFramesCloseConnection(t *testing.T) {
 	d.wantError(CodeVersion, "version")
 	d.expectClosed()
 
-	// A record above the byte bound: the frame declares its length up front,
-	// so the hub refuses before allocating and closes.
 	head := []byte{'B', ProtocolVersion}
 	head = appendLen16(head, deviceA)
 	head = append(head, deviceA...)
 	head = appendLen16(head, "src-1")
 	head = append(head, "src-1"...)
-	head = append(head, 0, 0, 0, 0, 0, 0, 0, 0)  // start 0
-	head = append(head, 0, 0, 0, 0, 0, 0, 0, 16) // end 16
-	head = append(head, 0, 0, 0, 1)              // count 1
-	head = append(head, 0, 0, 0, 0, 0, 0, 0, 0)  // offset 0
+	head = append(head, 0, 0, 0, 0, 0, 0, 0, 0)
+	head = append(head, 0, 0, 0, 0, 0, 0, 0, 16)
+	head = append(head, 0, 0, 0, 1)
+	head = append(head, 0, 0, 0, 0, 0, 0, 0, 0)
 	var big [4]byte
 	binary.BigEndian.PutUint32(big[:], uint32(MaxRecordBytes+1))
 	head = append(head, big[:]...)
@@ -968,7 +858,6 @@ func TestBrokenFramesCloseConnection(t *testing.T) {
 	d.wantError(CodeTooLarge, "record")
 	d.expectClosed()
 
-	// An unknown marker is undecodable.
 	d = dial(t, s.addr)
 	if _, err := d.conn.Write([]byte{'X', ProtocolVersion}); err != nil {
 		t.Fatal(err)
@@ -976,9 +865,6 @@ func TestBrokenFramesCloseConnection(t *testing.T) {
 	d.wantError(CodeMalformed, "marker")
 	d.expectClosed()
 
-	// A truncated frame body is rejected once the device stops sending: the
-	// mid-frame EOF reads as an undecodable frame, which is reported before
-	// the connection closes.
 	d = dial(t, s.addr)
 	if _, err := d.conn.Write([]byte{'B', ProtocolVersion, 0}); err != nil {
 		t.Fatal(err)
@@ -991,15 +877,10 @@ func TestBrokenFramesCloseConnection(t *testing.T) {
 	d.wantError(CodeMalformed, "read frame")
 	d.expectClosed()
 
-	// The endpoint still serves the next device afterwards.
 	ok := dial(t, s.addr)
 	mustRegisterVia(t, ok, deviceA, "src-1", "/a.jsonl")
 }
 
-// TestConcurrentSameSourceSerializes runs overlapping batches for one source
-// from two connections at once. The one-in-flight gate and the single writer
-// keep the outcome consistent whatever the interleaving: every unique
-// record is stored exactly once and the cursor ends at the largest commit.
 func TestConcurrentSameSourceSerializes(t *testing.T) {
 	db := newTestDB(t)
 	s := startEndpoint(t, db, nil, Options{Retry: RetryPolicy{Base: time.Millisecond}})
@@ -1007,11 +888,10 @@ func TestConcurrentSameSourceSerializes(t *testing.T) {
 	recs := fixtureRecords(t)
 	mustRegisterVia(t, dial(t, s.addr), deviceA, "src-1", "/a.jsonl")
 
-	// conn1 sends records [0, 8), conn2 sends [0, 16) — a full overlap.
 	first := fixtureBatch(deviceA, "src-1", recs[:8])
 	second := fixtureBatch(deviceA, "src-1", recs)
 
-	for i := 0; i < 3; i++ { // shake the interleavings
+	for i := 0; i < 3; i++ {
 		var wg sync.WaitGroup
 		results := make([]Ack, 2)
 		errs := make([]*Error, 2)
@@ -1048,8 +928,6 @@ func TestConcurrentSameSourceSerializes(t *testing.T) {
 				t.Fatalf("batch %d rejected: %+v", j, perr)
 			}
 		}
-		// Both acks never claim less than what they carried... the shorter
-		// batch may commit first or replay entirely.
 		if results[0].Cursor != recs[7].End() && results[0].Cursor != 6528 {
 			t.Fatalf("first batch cursor = %d", results[0].Cursor)
 		}
@@ -1068,14 +946,10 @@ func TestConcurrentSameSourceSerializes(t *testing.T) {
 	}
 }
 
-// TestConnectionBoundRejectsBeyondMaxConns pins the bounded queue: with one
-// connection allowed, the second learns CodeBusy and the first keeps
-// working.
 func TestConnectionBoundRejectsBeyondMaxConns(t *testing.T) {
 	db := newTestDB(t)
 	s := startEndpoint(t, db, nil, Options{MaxConns: 1, Retry: RetryPolicy{Base: time.Millisecond}})
 
-	// Hold the one slot with a registered, idle connection.
 	holder := dial(t, s.addr)
 	mustRegisterVia(t, holder, deviceA, "src-1", "/a.jsonl")
 
@@ -1085,14 +959,11 @@ func TestConnectionBoundRejectsBeyondMaxConns(t *testing.T) {
 	extra.wantError(CodeBusy, "connections")
 	extra.expectClosed()
 
-	// The holder still commits.
 	recs := fixtureRecords(t)
 	holder.send(fixtureBatch(deviceA, "src-1", recs))
 	holder.mustAck(Ack{Cursor: 6528, Inserted: 16})
 }
 
-// TestEmptyBatchOnUnregisteredSource pins that an empty batch still needs
-// the source to exist, so a probe cannot invent one.
 func TestEmptyBatchOnUnregisteredSource(t *testing.T) {
 	db := newTestDB(t)
 	s := startEndpoint(t, db, nil, Options{})
@@ -1101,11 +972,6 @@ func TestEmptyBatchOnUnregisteredSource(t *testing.T) {
 	d.wantError(CodeUnknownSource, "not registered")
 }
 
-// TestEndpointCommitsPiLikeLocalIngestion uploads a Pi session the way the
-// uploader does — the header batch first, then the rest past offset 0 — and
-// compares the hub's rows with local ingestion of the same bytes. The second
-// batch has no session field of its own, so the hub must take the session
-// from the source's committed first record.
 func TestEndpointCommitsPiLikeLocalIngestion(t *testing.T) {
 	db := newTestDB(t)
 	s := startEndpoint(t, db, nil, Options{Retry: RetryPolicy{Base: time.Millisecond}})
@@ -1119,7 +985,6 @@ func TestEndpointCommitsPiLikeLocalIngestion(t *testing.T) {
 	d.send(fixtureBatch(deviceA, "src-pi", recs[4:]))
 	d.mustAck(Ack{Cursor: 2953, Inserted: 4})
 
-	// Reference run: the same bytes through the local write path.
 	local := newTestDB(t)
 	ctx := context.Background()
 	if err := local.RegisterSource(ctx, "src-pi", deviceA, pi.AgentName, "/session.jsonl"); err != nil {
@@ -1155,7 +1020,6 @@ func TestEndpointCommitsPiLikeLocalIngestion(t *testing.T) {
 		t.Fatalf("tokens = %d/%d, %v; want %d/%d", input, output, err, 1840+345, 24+41)
 	}
 
-	// A malformed Pi entry commits the valid prefix and stops there.
 	d.register(Registration{DeviceID: deviceA, SourceID: "src-bad", Agent: pi.AgentName, Path: "/bad.jsonl"})
 	d.mustAck(Ack{})
 	bad := framedFixture(t, "pi", "malformed-line.jsonl")

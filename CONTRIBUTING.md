@@ -40,6 +40,12 @@ protocols live in `tla/`; run `make tla` to check them with TLC (Java 11 or
 later; the pinned TLC jar is downloaded and checksum-verified automatically).
 See tla/README.md for the checked properties and assumptions. Use synthetic,
 non-sensitive fixtures in `testdata/`.
+Fuzz targets run their seed corpus in `make check`. For deep fuzzing, run one
+target at a time, for example
+`go test -tags sqlite_fts5 -run '^$' -fuzz=FuzzReadFrame ./internal/hubsync`.
+The targets are `FuzzParse` in `internal/claudecode`, `internal/codex`, and
+`internal/pi`; `FuzzSingleStatement` in `internal/mcpserver`; and
+`FuzzReadFrame` and `FuzzReadAuthFrame` in `internal/hubsync`.
 Do not commit session transcripts or credentials. See BACKLOG.md for work order.
 
 `make memory-e2e` is the memory verification gate for release claims. It

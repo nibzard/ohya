@@ -101,9 +101,6 @@ func TestProtocolRoundTrip(t *testing.T) {
 	}
 }
 
-// TestReadFrameRejectsBrokenFrames feeds structurally invalid frames; every
-// one must fail without panic, and bound violations must identify themselves
-// through ErrTooLarge or ErrVersion.
 func TestReadFrameRejectsBrokenFrames(t *testing.T) {
 	oversizedRecord := make([]byte, 0, 64)
 	oversizedRecord = append(oversizedRecord, 'B', ProtocolVersion)
@@ -111,7 +108,6 @@ func TestReadFrameRejectsBrokenFrames(t *testing.T) {
 	oversizedRecord = append(oversizedRecord, testDevice...)
 	oversizedRecord = appendLen16(oversizedRecord, testSource)
 	oversizedRecord = append(oversizedRecord, testSource...)
-	// start 0, end 16, count 1, offset 0, len MaxRecordBytes+1.
 	oversizedRecord = append(oversizedRecord, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 0, 1)
 	oversizedRecord = append(oversizedRecord, 0, 0, 0, 0, 0, 0, 0, 0)
 	var badLen [4]byte
@@ -144,8 +140,6 @@ func TestReadFrameRejectsBrokenFrames(t *testing.T) {
 	}
 }
 
-// TestReadFrameRejectsOversizedBatch declares in-range per-record lengths
-// whose total, span, and count each break a different bound.
 func TestReadFrameRejectsOversizedBatch(t *testing.T) {
 	head := func(start, end int64, count uint32) []byte {
 		b := []byte{'B', ProtocolVersion}
@@ -178,8 +172,6 @@ func TestReadFrameRejectsOversizedBatch(t *testing.T) {
 	}
 }
 
-// TestWritersRefuseOversizedFrames pins the sender-side bounds so a device
-// never builds a frame the hub must reject.
 func TestWritersRefuseOversizedFrames(t *testing.T) {
 	var buf bytes.Buffer
 	if err := WriteRegistration(&buf, Registration{
@@ -208,9 +200,6 @@ func TestWritersRefuseOversizedFrames(t *testing.T) {
 	}
 }
 
-// FuzzReadFrame checks the decoder against arbitrary and mutated frames: it
-// must never panic, and a successful decode of a valid encoding must round
-// trip. Run with go test -fuzz=FuzzReadFrame for deep fuzzing.
 func FuzzReadFrame(f *testing.F) {
 	var buf bytes.Buffer
 	records := withEnds(testRecords())
@@ -233,7 +222,7 @@ func FuzzReadFrame(f *testing.F) {
 	f.Fuzz(func(t *testing.T, data []byte) {
 		frame, err := ReadFrame(bytes.NewReader(data))
 		if err != nil {
-			return // rejected input, including truncation
+			return
 		}
 		var out bytes.Buffer
 		switch {
@@ -243,7 +232,7 @@ func FuzzReadFrame(f *testing.F) {
 			err = WriteBatch(&out, *frame.Batch)
 		}
 		if err != nil {
-			return // decode accepted what the writer refuses; uneven but safe
+			return
 		}
 		again, err := ReadFrame(&out)
 		if err != nil {
@@ -256,9 +245,6 @@ func FuzzReadFrame(f *testing.F) {
 	})
 }
 
-// TestAuthFrameRoundTrip covers the pairing and hello frames: the client
-// writers and the readers decode each other, and the first-frame reader
-// consumes exactly the frame's bytes, leaving the next frame intact.
 func TestAuthFrameRoundTrip(t *testing.T) {
 	var buf bytes.Buffer
 	if err := WriteHello(&buf, "cred-1"); err != nil {
@@ -301,7 +287,6 @@ func TestAuthFrameRoundTrip(t *testing.T) {
 		t.Fatalf("credential reply = %+v, %+v, %v", reply, perr, err)
 	}
 
-	// Writers refuse what the reader would reject.
 	if err := WriteHello(&buf, ""); err == nil {
 		t.Fatal("an empty credential was framed")
 	}
@@ -313,9 +298,6 @@ func TestAuthFrameRoundTrip(t *testing.T) {
 	}
 }
 
-// TestReadAuthFrameRejectsBrokenFrames pins the first-frame gate: wrong
-// version, wrong marker, oversize and truncation all fail, and the bounds
-// hold before any allocation.
 func TestReadAuthFrameRejectsBrokenFrames(t *testing.T) {
 	oversized := []byte{'H', ProtocolVersion}
 	oversized = appendLen16(oversized, strings.Repeat("c", maxSecretLen+1))
@@ -346,9 +328,6 @@ func TestReadAuthFrameRejectsBrokenFrames(t *testing.T) {
 	}
 }
 
-// FuzzReadAuthFrame checks the first-frame decoder against arbitrary input:
-// it must never panic. Run with go test -fuzz=FuzzReadAuthFrame for deep
-// fuzzing.
 func FuzzReadAuthFrame(f *testing.F) {
 	var buf bytes.Buffer
 	if err := WriteHello(&buf, "cred-1"); err != nil {
@@ -365,7 +344,7 @@ func FuzzReadAuthFrame(f *testing.F) {
 	f.Fuzz(func(t *testing.T, data []byte) {
 		hello, pair, err := ReadAuthFrame(bytes.NewReader(data))
 		if err != nil {
-			return // rejected input, including truncation
+			return
 		}
 		if hello == nil && pair == nil {
 			t.Fatal("a decoded frame carries neither hello nor pairing request")
@@ -398,7 +377,6 @@ func TestQueryAnnotateFrameRoundTrip(t *testing.T) {
 		t.Fatalf("annotate round trip = %+v", frame.Annotate)
 	}
 
-	// Replies do not cross: an ack is not a query reply, an error frame is.
 	if err := WriteAck(&buf, Ack{}); err != nil {
 		t.Fatal(err)
 	}
@@ -414,7 +392,6 @@ func TestQueryAnnotateFrameRoundTrip(t *testing.T) {
 		t.Fatalf("error as annotate reply = %+v, %+v, %v", store.AnnotateResult{}, perr, err)
 	}
 
-	// Writer-side bounds: empty and oversized requests never reach the wire.
 	if err := WriteQuery(&buf, ""); err == nil || !strings.Contains(err.Error(), "no SQL text") {
 		t.Fatalf("empty query error = %v", err)
 	}
@@ -428,8 +405,6 @@ func TestQueryAnnotateFrameRoundTrip(t *testing.T) {
 		t.Fatalf("oversized annotate error = %v", err)
 	}
 
-	// Read-side bounds: a declared length past the bound is refused before
-	// allocation, and an empty payload is refused after it.
 	declared := func(marker byte, n uint32) *bytes.Buffer {
 		var b bytes.Buffer
 		b.Write([]byte{marker, ProtocolVersion})
@@ -451,7 +426,6 @@ func TestQueryAnnotateFrameRoundTrip(t *testing.T) {
 		t.Fatalf("empty annotate frame error = %v", err)
 	}
 
-	// A result frame declaring past its bound is refused before allocation.
 	big := bytes.NewBuffer([]byte{markerQueryResult, ProtocolVersion})
 	var l [4]byte
 	binary.BigEndian.PutUint32(l[:], uint32(MaxQueryResultBytes+1))
@@ -460,7 +434,6 @@ func TestQueryAnnotateFrameRoundTrip(t *testing.T) {
 		t.Fatalf("oversized result error = %v", err)
 	}
 
-	// Annotate result counts are sanity-checked: a hostile count is refused.
 	hostile := bytes.NewBuffer([]byte{markerAnnotateRes, ProtocolVersion})
 	var wide [8]byte
 	binary.BigEndian.PutUint64(wide[:], 1<<40)

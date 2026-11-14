@@ -17,13 +17,12 @@ func TestRetryPolicyWait(t *testing.T) {
 		{2, 20 * time.Millisecond},
 		{3, 40 * time.Millisecond},
 		{4, 80 * time.Millisecond},
-		{9, 80 * time.Millisecond}, // capped
+		{9, 80 * time.Millisecond},
 	} {
 		if got := p.Wait(tc.attempt); got != tc.want {
 			t.Fatalf("Wait(%d) = %v; want %v", tc.attempt, got, tc.want)
 		}
 	}
-	// Unset fields select the defaults.
 	if got := (RetryPolicy{}).Wait(1); got != DefaultRetryBase {
 		t.Fatalf("default Wait(1) = %v; want %v", got, DefaultRetryBase)
 	}
@@ -83,8 +82,6 @@ func TestRetryExhaustsAndStopsOnCanceledContext(t *testing.T) {
 		t.Fatalf("exhausted retry = %v after %d calls", err, calls)
 	}
 
-	// A canceled context stops the loop before the first sleep, however long
-	// the configured backoff is.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	calls = 0
@@ -96,8 +93,6 @@ func TestRetryExhaustsAndStopsOnCanceledContext(t *testing.T) {
 		t.Fatalf("canceled retry = %v after %d calls", err, calls)
 	}
 
-	// Cancellation mid-backoff also stops the loop instead of sleeping out
-	// the full wait.
 	ctx, cancel = context.WithCancel(context.Background())
 	calls = 0
 	go func() {

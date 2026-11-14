@@ -1,8 +1,3 @@
-// Uploader tests run the real sync endpoint over TCP, authenticated by the
-// credential registry, and inject transport faults on the device side: lost
-// acknowledgments, stalled replies, refused connections, hub restarts, and a
-// hub restored from a backup.
-
 package uploader
 
 import (
@@ -28,7 +23,6 @@ import (
 	"github.com/nibzard/ohya/internal/watch"
 )
 
-// testHub is one serving endpoint over a hub database and a registry.
 type testHub struct {
 	t      *testing.T
 	db     *store.DB
@@ -52,7 +46,6 @@ func (h *testHub) stop() {
 	})
 }
 
-// openHubDB opens a hub database and closes it at cleanup.
 func openHubDB(t *testing.T, path string) *store.DB {
 	t.Helper()
 	db, err := store.Open(context.Background(), path)
@@ -63,7 +56,6 @@ func openHubDB(t *testing.T, path string) *store.DB {
 	return db
 }
 
-// serve runs an endpoint over db on a free local port.
 func serve(t *testing.T, db *store.DB, reg *registry.DB, opts hubsync.Options) *testHub {
 	t.Helper()
 	opts.Retry = hubsync.RetryPolicy{Base: time.Millisecond}
@@ -82,21 +74,19 @@ func serve(t *testing.T, db *store.DB, reg *registry.DB, opts hubsync.Options) *
 	return h
 }
 
-// fault selects the injected transport failure of the next data batch.
 type fault int32
 
 const (
-	noFault   fault = iota
-	loseAck         // the hub commits, then the connection dies before the ack arrives
-	stallAck        // the hub commits, but the ack never arrives: the request times out
-	closedHub       // nothing listens: dialing fails
+	noFault fault = iota
+	loseAck
+	stallAck
+	closedHub
 )
 
-// testDialer dials the current hub address and injects one fault.
 type testDialer struct {
 	addr    atomic.Pointer[string]
 	fault   atomic.Int32
-	batches atomic.Int32 // data batches sent, probes excluded
+	batches atomic.Int32
 }
 
 func (d *testDialer) point(addr string) { d.addr.Store(&addr) }
@@ -113,9 +103,6 @@ func (d *testDialer) dial(ctx context.Context) (net.Conn, error) {
 	return &faultConn{Conn: c, d: d, frameStart: true}, nil
 }
 
-// faultConn watches the frames the uploader writes. A frame begins with the
-// first write after a reply was read; a data batch is a 'B' frame carrying
-// JSON, which a probe never does.
 type faultConn struct {
 	net.Conn
 	d          *testDialer
@@ -143,7 +130,6 @@ func (c *faultConn) Read(p []byte) (int, error) {
 	switch fault(c.d.fault.Load()) {
 	case loseAck:
 		c.d.fault.Store(int32(noFault))
-		// Wait for the reply, so the hub has committed, then lose it.
 		if _, err := c.Conn.Read(p); err != nil {
 			return 0, err
 		}
@@ -154,15 +140,14 @@ func (c *faultConn) Read(p []byte) (int, error) {
 		if _, err := c.Conn.Read(p); err != nil {
 			return 0, err
 		}
-		return c.Conn.Read(p) // nothing else arrives: the deadline fires
+		return c.Conn.Read(p)
 	}
 	return c.Conn.Read(p)
 }
 
-// fixture is one paired device with a sessions directory.
 type fixture struct {
 	t        *testing.T
-	dir      string // watched session files
+	dir      string
 	stateDir string
 	reg      *registry.DB
 	cred     device.Credential
@@ -266,8 +251,6 @@ func (f *fixture) wantDisconnected() {
 	}
 }
 
-// checkpoint reads the persisted local cursor of path through a fresh
-// watcher, as a restarted device would.
 func (f *fixture) checkpoint(path string) int64 {
 	f.t.Helper()
 	w, err := watch.New(f.stateDir, claudecode.AgentName, watch.Options{})
@@ -287,7 +270,6 @@ func (f *fixture) checkpoint(path string) int64 {
 	return 0
 }
 
-// line builds one Claude Code user record, newline-terminated.
 func line(session, content string) string {
 	return fmt.Sprintf(`{"type":"user","sessionId":%q,"message":{"role":"user","content":%q}}`+"\n", session, content)
 }
@@ -334,8 +316,6 @@ const (
 	sessB = "00000000-0000-4000-8000-0000000000b1"
 )
 
-// TestOfflineCatchUp writes history while the hub is unreachable: nothing is
-// acknowledged, and the first connected pass uploads every retained file.
 func TestOfflineCatchUp(t *testing.T) {
 	f := newFixture(t, Options{})
 	a := filepath.Join(f.dir, "a.jsonl")
@@ -368,7 +348,6 @@ func TestOfflineCatchUp(t *testing.T) {
 		t.Fatalf("log lacks the reconnect line:\n%s", f.log)
 	}
 
-	// Appends upload incrementally on the same connection.
 	appendFile(t, a, line(sessA, "four"))
 	if stats := f.mustSync(); stats.Inserted != 1 {
 		t.Fatalf("incremental stats = %+v; want 1 event", stats)
@@ -378,9 +357,6 @@ func TestOfflineCatchUp(t *testing.T) {
 	}
 }
 
-// TestLostAcknowledgment loses the ack after the hub committed: the device
-// keeps its old checkpoint, and the next connection learns the committed
-// cursor from the probe without duplicating any event.
 func TestLostAcknowledgment(t *testing.T) {
 	f := newFixture(t, Options{})
 	h := serve(t, openHubDB(t, filepath.Join(t.TempDir(), "hub.db")), f.reg, hubsync.Options{})
@@ -416,8 +392,6 @@ func TestLostAcknowledgment(t *testing.T) {
 	}
 }
 
-// TestTimeoutRetries stalls an acknowledgment past the request timeout: the
-// exchange fails, the checkpoint stays, and the retry replays idempotently.
 func TestTimeoutRetries(t *testing.T) {
 	f := newFixture(t, Options{RequestTimeout: 300 * time.Millisecond})
 	h := serve(t, openHubDB(t, filepath.Join(t.TempDir(), "hub.db")), f.reg, hubsync.Options{})
@@ -442,8 +416,6 @@ func TestTimeoutRetries(t *testing.T) {
 	}
 }
 
-// TestReconnectAfterHubRestart drops the connection under the uploader: the
-// pass fails, and the next one reconnects and resumes from the checkpoint.
 func TestReconnectAfterHubRestart(t *testing.T) {
 	f := newFixture(t, Options{})
 	dbPath := filepath.Join(t.TempDir(), "hub.db")
@@ -471,8 +443,6 @@ func TestReconnectAfterHubRestart(t *testing.T) {
 	}
 }
 
-// TestBusyHubRetries meets a hub at its connection bound: the refusal is a
-// retryable disconnect, not a failure.
 func TestBusyHubRetries(t *testing.T) {
 	f := newFixture(t, Options{})
 	h := serve(t, openHubDB(t, filepath.Join(t.TempDir(), "hub.db")), f.reg, hubsync.Options{MaxConns: 1})
@@ -484,7 +454,7 @@ func TestBusyHubRetries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(50 * time.Millisecond) // let the hub take the slot
+	time.Sleep(50 * time.Millisecond)
 	_, err = f.sync()
 	if !errors.Is(err, ErrDisconnected) || !strings.Contains(err.Error(), "busy") {
 		t.Fatalf("Sync error = %v; want busy wrapping ErrDisconnected", err)
@@ -507,8 +477,6 @@ func TestBusyHubRetries(t *testing.T) {
 	}
 }
 
-// TestRunRetriesUntilHubAppears runs the loop against a hub that starts
-// late: capped backoff reconnects, and the retained files catch up.
 func TestRunRetriesUntilHubAppears(t *testing.T) {
 	f := newFixture(t, Options{})
 	f.up = f.newUploader(Options{
@@ -548,9 +516,6 @@ func TestRunRetriesUntilHubAppears(t *testing.T) {
 	}
 }
 
-// TestHubRestoreReplaysRetainedFiles restores the hub from a backup that
-// predates acknowledged history: retained files replay the lost bytes, and a
-// deleted file is reported as an unrecoverable gap.
 func TestHubRestoreReplaysRetainedFiles(t *testing.T) {
 	f := newFixture(t, Options{})
 	dbPath := filepath.Join(t.TempDir(), "hub.db")
@@ -558,8 +523,8 @@ func TestHubRestoreReplaysRetainedFiles(t *testing.T) {
 	h := serve(t, db, f.reg, hubsync.Options{})
 	f.dialer.point(h.addr)
 
-	a := filepath.Join(f.dir, "a.jsonl") // retained: replays
-	b := filepath.Join(f.dir, "b.jsonl") // deleted: unrecoverable gap
+	a := filepath.Join(f.dir, "a.jsonl")
+	b := filepath.Join(f.dir, "b.jsonl")
 	writeFile(t, a, line(sessA, "one"))
 	writeFile(t, b, line(sessB, "two"))
 	f.mustSync()
@@ -569,7 +534,7 @@ func TestHubRestoreReplaysRetainedFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c := filepath.Join(f.dir, "c.jsonl") // registered after the backup
+	c := filepath.Join(f.dir, "c.jsonl")
 	writeFile(t, c, line(sessA+"c", "three"))
 	appendFile(t, a, line(sessA, "four"))
 	appendFile(t, b, line(sessB, "five"))
@@ -603,16 +568,12 @@ func TestHubRestoreReplaysRetainedFiles(t *testing.T) {
 		t.Fatalf("log lacks %q:\n%s", gap, log)
 	}
 
-	// The gap is reported once, not every pass.
 	f.mustSync()
 	if n := strings.Count(f.log.String(), "unrecoverable gap"); n != 1 {
 		t.Fatalf("gap reported %d times; want once", n)
 	}
 }
 
-// TestReplacementBeforeUploadReported replaces a file whose appended bytes
-// were never uploaded: the loss is reported, and the new incarnation uploads
-// under a new source.
 func TestReplacementBeforeUploadReported(t *testing.T) {
 	f := newFixture(t, Options{})
 	db := openHubDB(t, filepath.Join(t.TempDir(), "hub.db"))
@@ -625,7 +586,7 @@ func TestReplacementBeforeUploadReported(t *testing.T) {
 	h.stop()
 	lost := line(sessA, "never-uploaded")
 	appendFile(t, a, lost)
-	f.wantDisconnected() // offline: the poll observes the appended bytes
+	f.wantDisconnected()
 
 	tmp := a + ".tmp"
 	writeFile(t, tmp, line(sessB, "replacement"))
@@ -651,7 +612,6 @@ func TestReplacementBeforeUploadReported(t *testing.T) {
 	}
 }
 
-// TestDeletionBeforeUploadReported deletes a file with unsent bytes.
 func TestDeletionBeforeUploadReported(t *testing.T) {
 	f := newFixture(t, Options{})
 	h := serve(t, openHubDB(t, filepath.Join(t.TempDir(), "hub.db")), f.reg, hubsync.Options{})
@@ -672,9 +632,6 @@ func TestDeletionBeforeUploadReported(t *testing.T) {
 	}
 }
 
-// TestParseStopIsNotResent uploads a file with a malformed line: the valid
-// prefix commits, the stop is reported once, and the stopped bytes are sent
-// again only after the file grows.
 func TestParseStopIsNotResent(t *testing.T) {
 	f := newFixture(t, Options{})
 	db := openHubDB(t, filepath.Join(t.TempDir(), "hub.db"))
@@ -705,8 +662,6 @@ func TestParseStopIsNotResent(t *testing.T) {
 	}
 }
 
-// TestOversizedRecordStopsLocally keeps a record above the size limit off
-// the wire, so the connection survives for the other sources.
 func TestOversizedRecordStopsLocally(t *testing.T) {
 	f := newFixture(t, Options{})
 	db := openHubDB(t, filepath.Join(t.TempDir(), "hub.db"))
@@ -725,8 +680,6 @@ func TestOversizedRecordStopsLocally(t *testing.T) {
 	}
 }
 
-// TestLargeFileUploadsInBoundedBatches uploads a file above the batch bound
-// in several batches, one in flight at a time.
 func TestLargeFileUploadsInBoundedBatches(t *testing.T) {
 	f := newFixture(t, Options{})
 	db := openHubDB(t, filepath.Join(t.TempDir(), "hub.db"))
@@ -751,8 +704,6 @@ func TestLargeFileUploadsInBoundedBatches(t *testing.T) {
 	}
 }
 
-// TestRevokedDeviceStops pins that a revoked credential ends the uploader:
-// retrying cannot help.
 func TestRevokedDeviceStops(t *testing.T) {
 	f := newFixture(t, Options{})
 	h := serve(t, openHubDB(t, filepath.Join(t.TempDir(), "hub.db")), f.reg, hubsync.Options{})
@@ -770,8 +721,6 @@ func TestRevokedDeviceStops(t *testing.T) {
 	}
 }
 
-// TestForeignSourceBlocksOnlyThatSource meets a source the hub binds to
-// another device: it stops uploading, and the other sources continue.
 func TestForeignSourceBlocksOnlyThatSource(t *testing.T) {
 	f := newFixture(t, Options{})
 	db := openHubDB(t, filepath.Join(t.TempDir(), "hub.db"))
@@ -782,8 +731,6 @@ func TestForeignSourceBlocksOnlyThatSource(t *testing.T) {
 	writeFile(t, a, line(sessA, "one"))
 	writeFile(t, b, line(sessB, "two"))
 
-	// Learn a's source ID by polling the device state, then bind it to a
-	// foreign device at the hub.
 	w, err := watch.New(f.stateDir, claudecode.AgentName, watch.Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -809,7 +756,6 @@ func TestForeignSourceBlocksOnlyThatSource(t *testing.T) {
 	}
 }
 
-// TestNewRejectsIncompleteConfig pins the constructor's guards.
 func TestNewRejectsIncompleteConfig(t *testing.T) {
 	w, err := watch.New(t.TempDir(), claudecode.AgentName, watch.Options{})
 	if err != nil {

@@ -1,9 +1,3 @@
-// Capped exponential backoff for retrying retryable failures. The hub uses
-// it for transient write-path failures (an external process holding the
-// database lock past the busy timeout); the device uploader reuses the same
-// policy for reconnects and resends. Backoff is deterministic — no jitter —
-// so tests and traces stay reproducible.
-
 package hubsync
 
 import (
@@ -12,28 +6,18 @@ import (
 	"time"
 )
 
-// Retry policy defaults: three attempts waiting 100 ms, then 200 ms between
-// the rest, capped at 2 s. Transient contention clears well inside that; a
-// longer outage surfaces to the device, which retries with its own policy.
 const (
 	DefaultRetryBase     = 100 * time.Millisecond
 	DefaultRetryCap      = 2 * time.Second
 	DefaultRetryAttempts = 3
 )
 
-// RetryPolicy bounds one retry loop.
 type RetryPolicy struct {
-	// Base is the wait before the second attempt. It doubles per attempt up
-	// to Cap. Values <= 0 select DefaultRetryBase.
-	Base time.Duration
-	// Cap bounds one wait. Values <= 0 select DefaultRetryCap.
-	Cap time.Duration
-	// Attempts is the total number of runs of the operation, including the
-	// first. Values <= 0 select DefaultRetryAttempts.
+	Base     time.Duration
+	Cap      time.Duration
 	Attempts int
 }
 
-// normalized replaces unset fields with the defaults.
 func (p RetryPolicy) normalized() RetryPolicy {
 	if p.Base <= 0 {
 		p.Base = DefaultRetryBase
@@ -47,8 +31,6 @@ func (p RetryPolicy) normalized() RetryPolicy {
 	return p
 }
 
-// Wait returns the pause before the retry with the given 1-based attempt
-// number: Base doubled attempt-1 times, capped.
 func (p RetryPolicy) Wait(attempt int) time.Duration {
 	p = p.normalized()
 	wait := p.Base
@@ -61,10 +43,6 @@ func (p RetryPolicy) Wait(attempt int) time.Duration {
 	return wait
 }
 
-// Retry runs fn until it succeeds, reports a permanent error, or exhausts
-// the attempts. permanent classifies errors that retrying cannot fix; when
-// it is nil every error retries. A canceled context stops the loop and
-// returns the context error wrapped over the last failure.
 func Retry(ctx context.Context, policy RetryPolicy, permanent func(error) bool, fn func() error) error {
 	policy = policy.normalized()
 	var err error

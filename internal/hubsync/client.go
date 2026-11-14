@@ -1,10 +1,3 @@
-// The device side of the remote query path: one authenticated hub
-// connection carrying strictly sequential query and annotate exchanges, the
-// same discipline the uploader applies to registrations and batches. The
-// caller owns the connection up to authentication — WriteHello on a fresh
-// connection, or Pair when joining — and may interleave upload exchanges:
-// every exchange on one connection is sequential whatever its kind.
-
 package hubsync
 
 import (
@@ -20,24 +13,15 @@ import (
 	"github.com/nibzard/ohya/internal/store"
 )
 
-// DefaultRemoteTimeout bounds one query or annotate exchange, including the
-// hub's execution time. The engine's own deadline is shorter; this bound
-// covers the wire and a hub that went silent mid-reply.
 const DefaultRemoteTimeout = 60 * time.Second
 
-// RemoteClient runs bounded queries and annotation batches against one hub
-// endpoint over one authenticated connection. It is safe for concurrent
-// use: exchanges serialize on the connection, like the uploader's.
 type RemoteClient struct {
-	conn net.Conn
-	br   *bufio.Reader
-	mu   sync.Mutex
-	// Timeout bounds one exchange. Values <= 0 select DefaultRemoteTimeout.
+	conn    net.Conn
+	br      *bufio.Reader
+	mu      sync.Mutex
 	Timeout time.Duration
 }
 
-// NewRemoteClient wraps one authenticated hub connection. The connection
-// stays the caller's to close; Close is provided for symmetry.
 func NewRemoteClient(conn net.Conn) *RemoteClient {
 	return &RemoteClient{
 		conn:    conn,
@@ -46,13 +30,8 @@ func NewRemoteClient(conn net.Conn) *RemoteClient {
 	}
 }
 
-// Close closes the connection.
 func (c *RemoteClient) Close() error { return c.conn.Close() }
 
-// Query runs exactly one read-only statement on the hub and returns its
-// bounded result, the same shape the local sql tool returns. A protocol
-// rejection — a denied statement, a policy violation, a busy hub — is
-// returned as a *Error; use errors.As to read its code.
 func (c *RemoteClient) Query(ctx context.Context, query string) (mcpserver.Result, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -69,10 +48,6 @@ func (c *RemoteClient) Query(ctx context.Context, query string) (mcpserver.Resul
 	return result, nil
 }
 
-// Annotate submits one annotation batch — the JSON arguments of the annotate
-// tool — and reports the committed counts. The hub derives the writer from
-// the authenticated device behind the connection; the request cannot name
-// one.
 func (c *RemoteClient) Annotate(ctx context.Context, request []byte) (store.AnnotateResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -89,9 +64,6 @@ func (c *RemoteClient) Annotate(ctx context.Context, request []byte) (store.Anno
 	return result, nil
 }
 
-// exchange writes one request frame and reads the hub's reply under the
-// exchange timeout. A context cancellation interrupts the wait by expiring
-// the connection deadline, mirroring the uploader's exchange.
 func (c *RemoteClient) exchange(ctx context.Context, write func(io.Writer) error) error {
 	timeout := c.Timeout
 	if timeout <= 0 {
