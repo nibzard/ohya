@@ -1,0 +1,27 @@
+# Context
+
+## Why This Way
+BenchmarkIngestAppend must ingest genuine inserts: every batch has to sit
+above the source's committed cursor, or the write path treats it as an
+idempotent replay (which BenchmarkIngestReplay already measures). The 16 MiB
+corpus yields only ~470 eight-record windows, but the benchmark framework
+owns b.N and grows it until benchtime is met — on fast storage (CI runners)
+that passes the cap within the default 1 s. A benchmark over a bounded
+stream therefore cannot b.Fatalf on exhaustion; it must re-prime.
+
+The re-prime swaps in a fresh database file (close, remove db/-wal/-shm,
+store.Open, RegisterSource, ingest the 1024-event prefix) with the benchmark
+timer stopped, then wraps the window index. Alternatives rejected:
+ingesting below the cursor measures replay, not append; a new source per lap
+grows the database without bound as hardware gets faster; a bigger corpus
+only moves the cap.
+
+## Gotchas
+- The prefix re-ingest cost is excluded via StopTimer/StartTimer; keep it
+  that way or the append rows silently include setup.
+- store.Close checkpoints and removes the WAL files on clean close, so the
+  -wal/-shm removes are belt-and-braces for crash-leftovers.
+
+## Related
+- CI run 43579608531 (bench job): the failure this fixes.
+- NOTES.md "Benchstat tracking choices" bullet records the general rule.
