@@ -1,0 +1,1 @@
+Batch 4: 602 comments removed; the approved //go:embed directive remains. Evidence: tokcmp equal; sha256 of internal/store/migrations/*.sql equal to baseline; make check, make build, and go test -race ./internal/store pass. DB.md now says re-derivation preserves the repo column; the main worktree's uncommitted Codex repo work changes that and must update DB.md on merge.
