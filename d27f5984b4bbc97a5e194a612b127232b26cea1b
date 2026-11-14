@@ -1,0 +1,24 @@
+The live test reproduced a stalled uploader when remote MCP loaded the
+same enrolled transport identity into a second network stack.
+
+The shared adapter keeps one node per state directory under flock. Other
+processes use tsnet's authenticated loopback SOCKS5 proxy. No LocalAPI
+credential is shared. The owner closes the node before releasing its
+lock. Borrowers can acquire ownership after normal shutdown or a crash.
+The wire protocol, Device credential, and hub authorization stay intact.
+
+Validation:
+- The live-append regression fails before the fix and passes after it.
+- Two MCP clients coexist with the uploader and survive owner changes.
+- Both uploader and MCP ownership transfers preserve later appends.
+- Revocation still denies remote queries after ownership transfers.
+- make check and make tla pass, including the new ownership model.
+- The adapter passes race detection and a macOS arm64 test cross-build.
+- The rebuilt binary passes 30 live checks with isolated synthetic data.
+
+Native macOS and cross-machine live behavior remain unverified. Stop
+older device processes before upgrading because they do not acquire the
+new ownership lock. Keep device state on a local filesystem.
+
+The commit body contains literal backslash-n sequences from shell
+quoting. This note records its context and validation with real newlines.
