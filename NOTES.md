@@ -37,9 +37,13 @@ How to use this file:
     reference a side file ("Full output saved to: ..."). Recorded `cwd` beats
     the encoded directory name for project identity; worktrees make cwd-only
     identity brittle, so keep `git` evidence from records when present.
-  - Codex: rollouts older than about one week are zstd-compressed to
-    `.jsonl.zst` in place (none locally yet; plan a streaming decompressing
-    reader or an explicit skip with a diagnostic). `session_index.jsonl` is a
+  - Codex: agentsview claimed rollouts older than about one week are
+    zstd-compressed to `.jsonl.zst` in place; this machine's corpus
+    contradicts it (2,488 files back to February 2026, all plain JSONL,
+    verified 2026-11-13), so treat the claim as unconfirmed. The ingest
+    walker only picks up `.jsonl` files, so a `.zst` would be skipped
+    silently; if one ever appears, decide skip-with-diagnostic versus a
+    streaming decompressing reader then. `session_index.jsonl` is a
     shared, rewritten index — never treat it as an append-only source.
     Forked/subagent rollouts replay the parent's whole history with
     re-stamped timestamps; gate on turn-ID membership or usage double-counts.
