@@ -22,10 +22,74 @@ How to use this file:
   - Claude Code: verified 2026-11-13 against installed 2.1.280 (895 main sessions, 2,646 JSONL files). Format, record kinds, identity fields, compound records and usage semantics are documented in `testdata/claude-code/README.md`, with synthetic fixtures. Points that shape ingestion: `sessionId` is the main file name and never spans files; subagent files under `<session-uuid>/subagents/` reuse the parent `sessionId` with `isSidechain: true` plus `agentId`; one API response is several records sharing `message.id` and repeating the same per-request `usage` (not cumulative — dedupe by `message.id` before summing); `cwd`/`gitBranch` live on message records; the project directory name encodes `cwd` lossily (`/ . _` → `-`), so never decode it; timestamps are ISO-8601 UTC ms but not strictly monotonic; malformed complete lines do occur in real files, with valid lines after them.
   - Codex: verified 2026-11-13 against installed codex-cli 0.166.0 (2,488 files, 3.0 GB under `~/.codex/sessions/`, written by versions 0.104–0.167; envelope unchanged). Format, record kinds, identity fields and fixtures are documented in `testdata/codex/README.md`. Points that shape ingestion: the native session id is `session_meta.payload.id` (equals the first file-name UUID) and **one thread spans several rollout files** — resumed/paginated pages are named `rollout-…-<thread-id>_<resume-id>.jsonl` (second UUID never appears in content), set `history_mode: "paginated"`, and re-enumerate prior records after a rollback — 4 of the 7 corpus pairs carry `history_base {thread_id, end_ordinal_exclusive, end_byte_offset}` and overlap the original's ordinal tail (pair: original ordinals 1–984, page 979–1019, but with different content at every shared ordinal); the other 3 re-enumerate from ordinal 1 with no `history_base` — so grouping must key on the thread id across files, never byte offsets, and ordinal collisions need care (see the T044 finding below); `ordinal` exists only from 0.147.0. `event_msg` mirrors `response_item` text (`user_message`/`agent_message`) — parse `response_item` as the transcript or dedupe. Usage: each `token_usage_record.usage` is per `response_id` (not cumulative); `turn_token_usage`/`thread_token_usage` are running totals — sum `usage` only. `session_meta.git` (`branch`, `commit_hash`, `repository_url`) is a direct input for the sessions.repo derivation (T029). Subagent rollouts open with their own meta (`source.subagent.thread_spawn.parent_thread_id`) and then embed the parent's `session_meta` as line 2. `CODEX_HOME` redirects everything (verified: 0.166.0 created `<dir>/tmp` and read `auth.json` there); no compressed session files exist (all plain JSONL). The old `~/.codex/sqlite/codex-dev.db` (`local_thread_catalog`) layout is gone in 0.166.0: schema-numbered DBs sit directly under the Codex home, and the earlier "metadata only" claim fails for `thread_history_1.sqlite`, whose `thread_items.item_json` holds full message/command bodies (projection cache over 511 of 2,488 threads, with byte offsets back into the rollouts) — ingest rollout files only. `session_index.jsonl` is thread-name metadata; `history.jsonl` duplicates user prompts. Wild files occasionally lack the trailing newline or contain malformed complete lines (both covered by fixtures).
   - Pi agent: verified 2026-11-13 (T012) against installed 0.84.2 (already present globally as `@earendil-works/pi-coding-agent`) and latest 1.5.2 from a scratch npm prefix. The writeup claim "project-local `.pi/`" is wrong for sessions: sessions are global, one append-only JSONL per session, at `~/.pi/agent/sessions/<encoded-cwd>/<timestamp>_<session-uuid>.jsonl` (agent dir overridable by `PI_CODING_AGENT_DIR`; session dir by `--session-dir` > `PI_CODING_AGENT_SESSION_DIR` > `sessionDir`; `--no-session` is ephemeral). `<encoded-cwd>` = cwd minus one leading `/`, every `/` `\` `:` replaced by `-`, wrapped in `--`…`--` (source: `dist/core/session-manager.js`, identical in both versions); lossy (`/a/b` and `/a-b` collide), so never decode it — the `session` header's `cwd` is authoritative. File name = session-start `toISOString()` with `:`/`.` → `-`, then `_` + session UUID (time-ordered, `01a1…`). Session format v3: line 0 is a `session` header (`version`, `id`, `timestamp`, `cwd`); every other entry has `type`, `id` (8-hex), `parentId` (tree, `null` = root), ISO `timestamp`. Kinds seen: `model_change`, `thinking_level_change`, `message` (roles `system`/`user`/`assistant`/`toolResult`). Assistant messages carry `provider`, `model`, `api`, `stopReason`, `responseId`, `rawStopReason`, and one usage+cost object per response (`input`, `output`, `cacheRead`, `cacheWrite`, `reasoning`, `totalTokens`) — per-response, not repeated across records, so token totals sum straight over assistant messages (no Claude-Code-style dedupe); 1.5.2 adds `durationMs` and `thinkingLevel` and persists a `system` entry (`sections`, `toolsAdded`, empty `content`). `toolResult` carries `toolCallId`, `toolName`, `content[]`, `isError`. Entries flush incrementally: a first model call that fails still persists header + `model_change` + `thinking_level_change` + user + assistant with `stopReason: "error"`, `errorMessage`, zero usage. Headless runs in an untrusted cwd hang on a trust prompt — pass `-a`/`--approve`; runs from the pre-trusted `/home/agent` did not need it. The agent dir also holds `auth.json` (credentials), `settings.json`, `models.json` (provider catalog, keys referenced by env-var name), `trust.json`, `bin/` (`rg`, `fd`), and `~/.pi/skills/`. Real sample sessions and the captured layout (0.84.2 and 1.5.2) are preserved outside the repo at `/home/agent/.looper/ohya-3d80aa08/runtime/task-b55552405a41f18c/work-00-session-15667963bc0501b8/pi-sample-session/` for authoring the fixtures — the T037 fixtures in `testdata/pi/` derive from them; `.pi/` may still exist inside projects for config/packages, but no session writes there were observed.
-  - OpenCode (phase 2): `~/.local/share/opencode/storage/`, one JSON file per message/part — enumerated storage, not append-only; breaks the byte-cursor model.
+  - OpenCode (phase 2): storage moved to SQLite in v2 (verified 2026-11-13 against 2.0.12) - `~/.local/share/opencode/opencode.db` with WAL (tables `session`, `message`, `part`, `event`, and so on); the old one-JSON-per-message layout no longer applies, so it needs a poll-based SQLite source, not a byte cursor.
   - Claude Desktop regular chats: server-side, not file-watchable; potentially pollable via unofficial authenticated API (see Claude Explorer / rpeck/claude-explorer) or official export. Would need a new poll-based source type — deferred.
   - ChatGPT desktop: no reliable local transcripts; official export only — deferred.
   - Cowork local sessions may write JSONL under `~/Library/Application Support/Claude/local-agent-mode-sessions/` — absent on current install; check if usage starts.
+
+- Parser format facts cross-checked against agentsview (2026-11-13, commit
+  b262670; full study at /notes/agentsview-ingestion-study-2026-11-13.md):
+  - Claude Code: session ID is the filename stem; a differing in-file
+    `sessionId` marks a parent/continuation session. Consecutive assistant
+    records sharing one `message.id` are streaming chunks of one message and
+    must merge. Subagent transcripts live under
+    `<project-dir>/<session>/subagents/agent-<id>.jsonl`. Tool results can
+    reference a side file ("Full output saved to: ..."). Recorded `cwd` beats
+    the encoded directory name for project identity; worktrees make cwd-only
+    identity brittle, so keep `git` evidence from records when present.
+  - Codex: rollouts older than about one week are zstd-compressed to
+    `.jsonl.zst` in place (none locally yet; plan a streaming decompressing
+    reader or an explicit skip with a diagnostic). `session_index.jsonl` is a
+    shared, rewritten index — never treat it as an append-only source.
+    Forked/subagent rollouts replay the parent's whole history with
+    re-stamped timestamps; gate on turn-ID membership or usage double-counts.
+    `event_msg.token_count` usage attaches to the last usage-less assistant
+    message in the current turn (never drop tokens silently); distinguish
+    "zero tokens" from "field absent" with presence flags.
+  - Timestamps can disagree with file order in Claude transcripts (queued
+    prompts, hooks); record both and sort deterministically.
+
+- Cursor/checkpoint design inputs from agentsview (2026-11-13, study §1):
+  gate appends on inode/device + size + mtime + ctime ("a write restores mtime
+  but cannot restore ctime"); verify the committed prefix with a SHA-256
+  digest of its last 128 KiB; keep a resumable hash state so appends hash only
+  the suffix. Advance the cursor only through the last complete valid JSON
+  line; if an append contains zero complete records, keep the cursor and write
+  no skip-state, because writers can restore the old mtime. Split small
+  stat-gate metadata from larger resume blobs. These belong in device-local
+  state files (per ARCHITECTURE.md), not the hub schema.
+
+- Version parser output separately from schema (agentsview "dataVersion",
+  179 as of the study): every parser behavior change re-derives rows. Because
+  ohya preserves raw records, re-derivation can run inside the hub from stored
+  raw JSON, without source-file resync. Plan the version marker and a
+  re-derive migration before the first parser ships.
+
+- Open decision, malformed complete lines: ARCHITECTURE.md stops the source
+  at the offending offset; agentsview skips the line, counts it, and surfaces
+  the count. Real archives contain junk lines, and a stopped source blocks all
+  later events for that session. Collect evidence during the Claude Code
+  spike, then confirm or revise the stop-at-offset rule.
+
+- Multi-machine ingestion may not need networking first: agentsview supports
+  out-of-band transport (rsync/git/shared mount) into machine-labeled source
+  roots, one ingesting instance, dedup by native session ID. A "copied roots"
+  source mode could deliver shared history before the Tailcat spike de-risks
+  pairing and relays. Consider the ordering in BACKLOG.md item 4.
+
+- MCP memory patterns for `sql`/`annotate` (2026-11-13, study §6): exclude
+  sessions active in the last 10 minutes by default so agents do not retrieve
+  their own live session; document revision-bound pagination in the tool
+  description; treat transcript text returned to agents as hostile
+  (deterministic injection-bait labels, secret redaction over decoded JSON);
+  fail closed on unreviewed derived values.
+
+- FTS/storage lessons for the hub (2026-11-13, study §4): store
+  content-bearing text once — duplicated tool-result summaries cost agentsview
+  about 40% of file size; drop FTS triggers and derived indexes during bulk
+  import and rebuild after ("any row trigger makes SQLite stage each multi-row
+  INSERT through a temporary table"); keep a one-transaction `rebuild` path
+  for `events_fts` from day one.
 
 - macOS distribution still needs native builds on both supported architectures and
   signing/notarization verification; the SQLite driver requires a C toolchain.

@@ -271,7 +271,7 @@ change nothing, not even timestamps. Agents query annotations through the
 ### Phase 2
 
 - OpenCode as an ingestion source, pending a parser spike for its
-  per-message JSON storage (enumerated files, not append-only JSONL).
+  SQLite storage (v2 stores sessions in `opencode.db`, not files).
 
 ### Explicitly deferred
 
