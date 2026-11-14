@@ -10,3 +10,6 @@
 /perf/
 # memory-e2e gate output: isolated database, client state, traces
 /memory-e2e/
+# looper backlog contract (runtime file owned by the looper tool)
+/to-do.json
+/to-do.schema.json

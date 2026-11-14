@@ -67,7 +67,10 @@ exits 3 when the pass completed but at least one source failed or stopped,
 so a script or agent that checks the exit code does not read missing data
 as success; the stdout summary carries the failed and stopped counts and
 stderr keeps the per-source diagnostics. Flags
-are spelled with two dashes (`--db`); the parser also accepts one dash. No
+are spelled with two dashes (`--db`); the parser also accepts one dash. Pass
+flags before positional arguments — `ohya join --state DIR CODE`, not
+`ohya join CODE --state DIR` — because parsing stops at the first
+positional. No
 command prompts for input: ohya is non-interactive by design.
 
 The commands that report facts also print machine-readable output:
@@ -161,7 +164,11 @@ identity over the tailnet, and then watches the same agent roots as
 `~/.ohya/join`). Give it a state directory dedicated to the hub: its
 checkpoints hold that hub's acknowledgments, not local ingestion's. Revoke
 a device with `ohya devices revoke` on the hub; its connections close and
-its sources stay bound to the revoked identity.
+its sources stay bound to the revoked identity. Hub-side commands (`serve`,
+`devices invite`, `devices list`, `devices revoke`) take `--state` and not
+`--db`: the device registry and the coordination plane live in the state
+directory, beside the hub database. `serve` defaults its state directory to
+the `--db` directory, so the single-machine deployment needs one path.
 
 `ohya mcp --remote` serves the same `sql` and `annotate` tools over stdio,
 but executes them on the hub through the joined device: `--remote` selects
