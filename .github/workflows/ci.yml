@@ -4,11 +4,11 @@ jobs:
   check:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: 21
@@ -19,8 +19,8 @@ jobs:
   check-linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - run: make check
@@ -30,11 +30,11 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - uses: actions/cache/restore@v4
+      - uses: actions/cache/restore@v6
         with:
           path: perf/bench-baseline.txt
           key: bench-baseline-${{ github.sha }}
@@ -55,7 +55,7 @@ jobs:
           else
             echo "No saved baseline yet; this run only becomes the new baseline."
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: bench-${{ github.sha }}
@@ -64,7 +64,7 @@ jobs:
       - name: Refresh the baseline
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: cp perf/bench.txt perf/bench-baseline.txt
-      - uses: actions/cache/save@v4
+      - uses: actions/cache/save@v6
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
           path: perf/bench-baseline.txt
