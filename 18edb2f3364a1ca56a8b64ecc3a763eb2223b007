@@ -1,0 +1,1 @@
+Phase 1 and 4 groundwork of docs/comment-cleanup-plan.md. Baseline c0079bf: make check and make build pass. Inventory: 4,537 comment tokens (2,893 source, 1,643 test, 1 approved go:embed). Checker tests: go test ./cmd/commentcheck passes.
