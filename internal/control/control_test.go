@@ -25,6 +25,38 @@ func freePort(t *testing.T) int {
 	return ln.Addr().(*net.TCPAddr).Port
 }
 
+// freeUDPPort reserves one free loopback UDP port and releases it, for the
+// embedded relay's STUN listener. A port free on TCP is not necessarily free
+// on UDP, and a failed STUN bind is fatal inside the pinned library (it
+// log.Fatal-exits the process), so the reservation must use UDP.
+func freeUDPPort(t *testing.T) int {
+	t.Helper()
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	return pc.LocalAddr().(*net.UDPAddr).Port
+}
+
+// shortTempDir returns a fresh temp directory whose path stays short enough
+// for the plane's gRPC unix socket (<dir>/control/headscale.sock). t.TempDir
+// appends the test name and a counter under the OS temp root; on macOS that
+// root is /var/folders/<xx>/<per-user id>/T/, long enough to push the socket
+// past darwin's 104-byte sun_path limit, so the embedded server dies at its
+// gRPC listener ("bind: invalid argument") — the macOS check-job failure of
+// TestControlStartServeAndMint. A flat os.MkdirTemp keeps every supported
+// platform (darwin's 104 is the smallest) comfortably under the limit.
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "ohya-control-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
+}
+
 func TestProvisionGeneratesDeterministicConfig(t *testing.T) {
 	opts := Options{
 		Dir:        filepath.Join(t.TempDir(), DirName),
@@ -103,10 +135,10 @@ func TestProvisionGeneratesDeterministicConfig(t *testing.T) {
 func TestControlStartServeAndMint(t *testing.T) {
 	port := freePort(t)
 	opts := Options{
-		Dir:        filepath.Join(t.TempDir(), DirName),
+		Dir:        filepath.Join(shortTempDir(t), DirName),
 		ServerURL:  "http://127.0.0.1:" + strconv.Itoa(port),
 		ListenAddr: "127.0.0.1:" + strconv.Itoa(port),
-		STUNAddr:   "127.0.0.1:" + strconv.Itoa(freePort(t)),
+		STUNAddr:   "127.0.0.1:" + strconv.Itoa(freeUDPPort(t)),
 		BaseDomain: tailcat.DefaultBaseDomain,
 	}
 	ctl, err := Provision(opts)
