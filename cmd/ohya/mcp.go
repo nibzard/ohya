@@ -12,7 +12,6 @@ package main
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"io/fs"
@@ -30,31 +29,44 @@ import (
 	"github.com/nibzard/ohya/internal/transport/tailcat"
 )
 
+// mcpSpec is the mcp usage template.
+var mcpSpec = commandSpec{
+	name:      "ohya mcp",
+	synopsis:  "serve the sql and annotate MCP tools on stdio",
+	usageLine: "ohya mcp [flags]",
+	description: "Serves the read-only sql(query) and bounded annotate(operations) MCP tools to any MCP client over stdio. " +
+		"Without --remote the tools run against the local hub database; with --remote they run on the joined hub through the authenticated sync connection, and the hub derives the annotation writer from the device identity. " +
+		"Register the command with the client, for example args [\"mcp\"] for Claude Code.",
+	argsTitle: "Arguments",
+	args:      "(none)",
+	examples:  []string{"ohya mcp", "ohya mcp --remote"},
+}
+
 // runMcpCommand parses the mcp flags and serves the MCP tools on stdio until
 // the process receives SIGINT or SIGTERM or stdin closes. stdout carries only
-// protocol frames; every diagnostic goes to stderr.
-func runMcpCommand(args []string, stderr io.Writer) error {
+// protocol frames and, on a help request, the usage text; every diagnostic
+// goes to stderr.
+func runMcpCommand(args []string, stdout, stderr io.Writer) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("resolve home directory: %w", err)
 	}
-	fs := flag.NewFlagSet("ohya mcp", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	db := fs.String("db", filepath.Join(home, ".ohya", "hub.db"),
+	c := newCommandFlags(mcpSpec)
+	db := c.fs.String("db", filepath.Join(home, ".ohya", "hub.db"),
 		"hub database `path` (ignored with --remote)")
-	state := fs.String("state", "",
-		"state `directory` for the device identity (default: the database directory; with --remote: the join state directory)")
-	remote := fs.Bool("remote", false,
+	state := c.fs.String("state", "",
+		"state `directory` for the device identity; defaults to the database directory, with --remote to the join state directory")
+	remote := c.fs.Bool("remote", false,
 		"serve the tools from the joined hub over the tailnet instead of a local database")
-	hubAddr := fs.String("hub-addr", tailcat.DefaultHubAddr(),
+	hubAddr := c.fs.String("hub-addr", tailcat.DefaultHubAddr(),
 		"hub `address` inside the tailnet (--remote only)")
-	controlURL := fs.String("control", control.DefaultURL(),
+	controlURL := c.fs.String("control", control.DefaultURL(),
 		"coordination `URL` of the hub's tailnet (--remote only)")
-	if err := fs.Parse(args); err != nil {
+	if err := c.parse(args, stdout); err != nil {
 		return err
 	}
-	if fs.NArg() > 0 {
-		return fmt.Errorf("unexpected argument %q", fs.Arg(0))
+	if c.fs.NArg() > 0 {
+		return c.usageErrorf("unexpected argument %q", c.fs.Arg(0))
 	}
 	stateDir := *state
 	if *remote {

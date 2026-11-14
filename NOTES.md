@@ -582,6 +582,19 @@ How to use this file:
     `ohya mcp` session (the same sql surface), so "resolvable evidence" is
     proven against the tool contract, not by opening the database directly.
 
+- CLI contract choices (2026-11-14, cmd/ohya/cli.go, T059): help is stdout
+  plus exit 0 (bare command, -h, --help at every level, bare `ohya devices`);
+  usage errors are one stderr line pointing at the failing command's --help
+  plus exit 2; other failures stay exit 1. The flag package itself prints
+  nothing (SetOutput(io.Discard)); its Usage renders the uniform template
+  into a per-command buffer, because Parse calls Usage both for help and
+  before a parse failure — only a help request flushes the buffer to stdout.
+  cliMain(args, stdout, stderr) int is the testable exit-code mapping behind
+  main; the process-level test forks through TestMain's `child-run` role.
+  Help and error texts spell flags with two dashes; the parser keeps
+  accepting one dash. T060 (exit 3 for degraded ingest) extends the exit
+  code line in rootSpec and the README paragraph.
+
 - Benchstat tracking choices (2026-11-14, Makefile + .github/workflows/ci.yml, T047):
   - benchstat is a pinned tool install
     (golang.org/x/perf/cmd/benchstat@v0.0.0-20261009192801-be2c69fb417e),

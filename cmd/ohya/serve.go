@@ -12,7 +12,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -37,6 +36,19 @@ import (
 // exists, so the bound only caps how long an unused key stays valid.
 const hubAuthKeyTTL = 10 * time.Minute
 
+// serveSpec is the serve usage template.
+var serveSpec = commandSpec{
+	name:      "ohya serve",
+	synopsis:  "run the hub for devices: coordination, sync, remote tools",
+	usageLine: "ohya serve [flags]",
+	description: "Runs the hub side of device sync until the process receives SIGINT or SIGTERM. " +
+		"It provisions the self-hosted coordination plane in-process — own database, generated configuration, embedded DERP relay — enrolls the hub's own transport node, and serves the sync endpoint on the encrypted tailnet: registration, device batches, and the remote query and annotate tools through the same bounded engine as the stdio tools. " +
+		"Devices join with ohya join and one code from ohya devices invite.",
+	argsTitle: "Arguments",
+	args:      "(none)",
+	examples:  []string{"ohya serve", "ohya serve --control-url http://192.0.2.10:8080"},
+}
+
 // runServeCommand parses the serve flags and serves devices until the
 // process receives SIGINT or SIGTERM.
 func runServeCommand(args []string, stdout, stderr io.Writer) error {
@@ -44,36 +56,35 @@ func runServeCommand(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("resolve home directory: %w", err)
 	}
-	fs := flag.NewFlagSet("ohya serve", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	db := fs.String("db", filepath.Join(home, ".ohya", "hub.db"),
+	c := newCommandFlags(serveSpec)
+	db := c.fs.String("db", filepath.Join(home, ".ohya", "hub.db"),
 		"hub database `path`")
-	state := fs.String("state", "",
-		"state `directory` for the device identity, registry, and coordination plane (default: the database directory)")
-	controlListen := fs.String("control-listen", control.DefaultListenAddr,
-		"host:port the coordination plane and its embedded DERP relay listen on")
-	controlURL := fs.String("control-url", "",
-		"coordination `URL` devices reach the hub at (default: http:// plus -control-listen; pass it explicitly when the hub is reachable from other machines)")
-	stunListen := fs.String("stun-listen", control.DefaultSTUNAddr,
-		"UDP host:port of the coordination plane's STUN helper for devices behind NAT")
-	controlLogLevel := fs.String("control-log-level", "warn",
+	state := c.fs.String("state", "",
+		"state `directory` for the device identity, registry, and coordination plane; defaults to the database directory")
+	controlListen := c.fs.String("control-listen", control.DefaultListenAddr,
+		"listen `address` of the coordination plane and its embedded DERP relay")
+	controlURL := c.fs.String("control-url", "",
+		"coordination `URL` devices reach the hub at; defaults to http:// plus --control-listen (pass it when the hub is reachable from other machines)")
+	stunListen := c.fs.String("stun-listen", control.DefaultSTUNAddr,
+		"UDP listen `address` of the coordination plane's STUN helper for devices behind NAT")
+	controlLogLevel := c.fs.String("control-log-level", "warn",
 		"coordination plane log `level`: warn, info or debug")
-	tailnetPort := fs.Int("tailnet-port", tailcat.DefaultHubPort,
+	tailnetPort := c.fs.Int("tailnet-port", tailcat.DefaultHubPort,
 		"tailnet `port` the sync endpoint listens on inside the transport")
-	if err := fs.Parse(args); err != nil {
+	if err := c.parse(args, stdout); err != nil {
 		return err
 	}
-	if fs.NArg() > 0 {
-		return fmt.Errorf("unexpected argument %q", fs.Arg(0))
+	if c.fs.NArg() > 0 {
+		return c.usageErrorf("unexpected argument %q", c.fs.Arg(0))
 	}
 	url := *controlURL
 	if url == "" {
 		host, _, err := net.SplitHostPort(*controlListen)
 		if err != nil {
-			return fmt.Errorf("parse -control-listen: %w", err)
+			return fmt.Errorf("parse --control-listen: %w", err)
 		}
 		if host == "0.0.0.0" || host == "::" || strings.Contains(host, ":") {
-			return fmt.Errorf("-control-listen binds every interface; pass -control-url with the address devices use")
+			return c.usageErrorf("--control-listen binds every interface; pass --control-url with the address devices use")
 		}
 		url = "http://" + *controlListen
 	}

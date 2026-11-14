@@ -52,6 +52,18 @@ type joinOptions struct {
 	stderr     io.Writer
 }
 
+// joinSpec is the join usage template.
+var joinSpec = commandSpec{
+	name:      "ohya join",
+	synopsis:  "pair a device with a hub and upload its agent sessions",
+	usageLine: "ohya join [code] [flags]",
+	description: "Pairs this device with a hub using one join code — printed by ohya devices invite on the hub — then uploads every watched agent source: batches of original records, acknowledged durably, retried after reconnects, catching up offline from the retained files. " +
+		"The join state directory is deliberately its own (default ~/.ohya/join): its checkpoints hold this hub's acknowledgments and must never mix with local ingestion's.",
+	argsTitle: "Arguments",
+	args:      "<code>  join code from ohya devices invite; omit it to resume an already-paired device",
+	examples:  []string{"ohya join <code>", "ohya join --state ~/.ohya/join <code>"},
+}
+
 // runJoinCommand parses the join flags and runs the device side until the
 // process receives SIGINT or SIGTERM.
 func runJoinCommand(args []string, stdout, stderr io.Writer) error {
@@ -59,37 +71,36 @@ func runJoinCommand(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("resolve home directory: %w", err)
 	}
-	fs := flag.NewFlagSet("ohya join", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	state := fs.String("state", filepath.Join(home, ".ohya", "join"),
+	c := newCommandFlags(joinSpec)
+	state := c.fs.String("state", filepath.Join(home, ".ohya", "join"),
 		"join state `directory`: device identity, pairing credential, transport node, and this hub's upload checkpoints")
-	controlURL := fs.String("control", control.DefaultURL(),
+	controlURL := c.fs.String("control", control.DefaultURL(),
 		"coordination `URL` of the hub's tailnet")
-	hubAddr := fs.String("hub-addr", tailcat.DefaultHubAddr(),
+	hubAddr := c.fs.String("hub-addr", tailcat.DefaultHubAddr(),
 		"hub `address` inside the tailnet")
-	claudeRoot := fs.String("claude-root", filepath.Join(home, ".claude", "projects"),
+	claudeRoot := c.fs.String("claude-root", filepath.Join(home, ".claude", "projects"),
 		"Claude Code projects `directory` to watch; empty disables Claude Code")
-	codexRoot := fs.String("codex-root", defaultCodexRoot(home),
-		"Codex sessions `directory` to watch ($CODEX_HOME/sessions when set); empty disables Codex")
-	piRoot := fs.String("pi-root", defaultPiRoot(home),
-		"Pi agent sessions `directory` to watch ($PI_CODING_AGENT_SESSION_DIR or $PI_CODING_AGENT_DIR/sessions when set); empty disables Pi")
-	interval := fs.Duration("interval", 2*time.Second,
+	codexRoot := c.fs.String("codex-root", defaultCodexRoot(home),
+		"Codex sessions `directory` to watch; empty disables Codex")
+	piRoot := c.fs.String("pi-root", defaultPiRoot(home),
+		"Pi agent sessions `directory` to watch; empty disables Pi")
+	interval := c.fs.Duration("interval", 2*time.Second,
 		"polling `interval` between upload passes")
-	if err := fs.Parse(args); err != nil {
+	if err := c.parse(args, stdout); err != nil {
 		return err
 	}
 	code := ""
-	if fs.NArg() > 1 {
-		return fmt.Errorf("unexpected argument %q", fs.Arg(1))
+	if c.fs.NArg() > 1 {
+		return c.usageErrorf("unexpected argument %q", c.fs.Arg(1))
 	}
-	if fs.NArg() == 1 {
-		code = fs.Arg(0)
+	if c.fs.NArg() == 1 {
+		code = c.fs.Arg(0)
 	}
 	if *interval <= 0 {
-		return errors.New("-interval must be positive")
+		return c.usageErrorf("--interval must be positive")
 	}
 	explicit := map[string]bool{}
-	fs.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
+	c.fs.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
 	var roots []agentRoot
 	for _, r := range []agentRoot{
 		{agent: claudecode.AgentName, dir: *claudeRoot, flag: "claude-root"},
