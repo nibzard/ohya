@@ -1,0 +1,1 @@
+Batch 1a of docs/comment-cleanup-plan.md: 201 comments removed. Evidence: tokcmp equal for every file except fixgen.go (isoMS rewrite, field rename); genfixture corpora (5 sessions, each agent) sha256 identical before and after; make check passes.
