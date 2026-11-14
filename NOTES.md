@@ -442,9 +442,17 @@ How to use this file:
     auth complete over TLS, but the first `ohya-hub.tail.ohya:9027` dial
     then resolved through the system resolver (127.0.0.53) instead of
     MagicDNS and join exited 1; the same-host plain-HTTP join resolves and
-    uploads fine. Reproduced twice. Unresolved: warmup/netmap race or a
-    DNS-config difference on the TLS path — chase during T065's two-host
-    measurement before calling cross-machine TLS join done.
+    uploads fine. Reproduced twice. Root cause found (2026-11-15): serve's
+    own hub node also rejects the self-signed plane cert ("bad certificate"
+    handshakes), never enrolls, and the tailnet the device joins therefore
+    has no ohya-hub peer — MagicDNS then falls back to the system resolver
+    for the missing name. Fix: serve prepends a state-dir trust directory
+    (symlink to the plane cert) to `SSL_CERT_DIR` before any TLS use, and
+    `Node.Dial` waits for the backend to be Running with a MagicDNS suffix
+    and peers before dialing. Live retest: zero bad-certificate errors,
+    pairing + 1,307 claude-code + 1,671 codex events synced over TLS;
+    `TestServeJoinTLS` pins the path. T065's two-host relay measurement is
+    still open.
   - The T014 claim that peers "found each other through the embedded DERP"
     is disproven: T014's single-host nodes show no /derp traffic at all;
     discovery ran through the control-plane map exchange, then direct.

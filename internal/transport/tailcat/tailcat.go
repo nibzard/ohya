@@ -138,16 +138,20 @@ func (n *Node) waitRunning(ctx context.Context) error {
 	defer ticker.Stop()
 	for {
 		st, err := lc.Status(waitCtx)
-		if err == nil && st.BackendState == "Running" {
+		if err == nil && st.BackendState == "Running" && st.MagicDNSSuffix != "" && len(st.Peer) > 0 {
 			return nil
 		}
 		select {
 		case <-waitCtx.Done():
 			state := "unavailable"
+			suffix := ""
+			peers := 0
 			if err == nil && st != nil {
 				state = st.BackendState
+				suffix = st.MagicDNSSuffix
+				peers = len(st.Peer)
 			}
-			return fmt.Errorf("wait for the tailnet: backend state %s never reached Running: %w", state, waitCtx.Err())
+			return fmt.Errorf("wait for the tailnet: state %s, MagicDNS suffix %q, %d peers: %w", state, suffix, peers, waitCtx.Err())
 		case <-ticker.C:
 		}
 	}

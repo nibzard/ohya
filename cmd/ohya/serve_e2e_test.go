@@ -4,9 +4,16 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	cryptoRand "crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"database/sql"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
+	"math/big"
 	"net"
 	"os"
 	"os/exec"
@@ -287,4 +294,173 @@ func TestServeJoinEndToEnd(t *testing.T) {
 
 	stopChild(t, joinCmd, joinLog, 30*time.Second)
 	stopChild(t, serveCmd, serveLog, 30*time.Second)
+}
+
+func e2eSelfSignedCert(t *testing.T, dir string) (string, string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), cryptoRand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serial, err := cryptoRand.Int(cryptoRand.Reader, big.NewInt(1<<62))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: "127.0.0.1"},
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	der, err := x509.CreateCertificate(cryptoRand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	certPath := filepath.Join(dir, "cert.pem")
+	keyPath := filepath.Join(dir, "key.pem")
+	if err := os.WriteFile(certPath, certPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return certPath, keyPath
+}
+
+func TestServeJoinTLS(t *testing.T) {
+	if os.Getenv("CI") != "" && runtime.GOOS == "darwin" {
+		t.Skip("darwin CI: the pinned transport's macOS runtime behavior is unverified (backlog T046)")
+	}
+	if testing.Short() {
+		t.Skip("end-to-end stack test")
+	}
+	dir := t.TempDir()
+	hubState := filepath.Join(dir, "hub-state")
+	hubDB := filepath.Join(dir, "hub", "hub.db")
+	devState := filepath.Join(dir, "dev-state")
+	claudeRoot := filepath.Join(dir, "claude-projects")
+	if err := os.MkdirAll(claudeRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "testdata", "claude-code", "main-session.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(claudeRoot, "session.jsonl"), fixture, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	const wantEvents = 16
+	certPath, keyPath := e2eSelfSignedCert(t, dir)
+	ctrlAddr := fmt.Sprintf("127.0.0.1:%d", freeTCPPort(t))
+	stunAddr := fmt.Sprintf("127.0.0.1:%d", freeUDPPort(t))
+
+	serveLog := &bytes.Buffer{}
+	serveCmd := exec.Command(os.Args[0], "child-serve",
+		"--db", hubDB, "--state", hubState,
+		"--control-listen", ctrlAddr, "--stun-listen", stunAddr,
+		"--tls-cert", certPath, "--tls-key", keyPath)
+	serveCmd.Stderr = serveLog
+	serveOut, err := serveCmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := serveCmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if serveCmd.ProcessState == nil {
+			_ = serveCmd.Process.Kill()
+			serveCmd.Wait()
+		}
+	}()
+	lines := make(chan string, 16)
+	go func() {
+		sc := bufio.NewScanner(serveOut)
+		for sc.Scan() {
+			lines <- sc.Text()
+		}
+	}()
+	waitServeReady(t, lines, serveLog)
+	if strings.Contains(serveLog.String(), "bad certificate") {
+		t.Fatalf("serve rejected its own plane certificate; stderr:\n%s", serveLog.String())
+	}
+
+	var invOut bytes.Buffer
+	if err := runDevicesInvite([]string{"--state", hubState}, &invOut, os.Stderr); err != nil {
+		t.Fatal(err)
+	}
+	code := strings.SplitN(strings.TrimSpace(invOut.String()), "\n", 2)[0]
+
+	joinLog := &bytes.Buffer{}
+	joinCmd := exec.Command(os.Args[0], "child-join",
+		"--control", "https://"+ctrlAddr,
+		"--state", devState,
+		"--claude-root", claudeRoot, "--codex-root", "", "--pi-root", "",
+		"--interval", "500ms",
+		code)
+	joinCmd.Stderr = joinLog
+	joinCmd.Env = append(os.Environ(), "SSL_CERT_FILE="+certPath)
+	if err := joinCmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if joinCmd.ProcessState == nil {
+			_ = joinCmd.Process.Kill()
+			joinCmd.Wait()
+		}
+	}()
+
+	upCtx, upCancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer upCancel()
+	for {
+		events, sessions, _ := hubCounts(t, hubDB)
+		if events >= wantEvents && sessions >= 1 {
+			break
+		}
+		select {
+		case <-upCtx.Done():
+			t.Fatalf("joined events never reached the hub over TLS (have %d of %d); serve stderr:\n%s\njoin stderr:\n%s",
+				events, wantEvents, serveLog.String(), joinLog.String())
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	stopChild(t, joinCmd, joinLog, 30*time.Second)
+
+	var devOut bytes.Buffer
+	if err := runDevicesList([]string{"--state", hubState, "--json"}, &devOut, os.Stderr); err != nil {
+		t.Fatal(err)
+	}
+	var listed struct {
+		Data struct {
+			Devices []struct {
+				ID    string `json:"id"`
+				State string `json:"state"`
+			} `json:"devices"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(devOut.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Data.Devices) != 1 || listed.Data.Devices[0].State != "active" {
+		t.Fatalf("devices = %+v; want one active device", listed.Data.Devices)
+	}
+	events, sessions, _ := hubCounts(t, hubDB)
+	if events != wantEvents || sessions < 1 {
+		t.Fatalf("hub holds %d events, %d sessions; want %d, >=1", events, sessions, wantEvents)
+	}
+	stopChild(t, serveCmd, serveLog, 30*time.Second)
+	if strings.Contains(serveLog.String(), "bad certificate") {
+		t.Fatalf("TLS handshakes failed against the plane; stderr:\n%s", serveLog.String())
+	}
 }

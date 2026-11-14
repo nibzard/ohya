@@ -23,6 +23,28 @@ import (
 
 const hubAuthKeyTTL = 10 * time.Minute
 
+func trustOwnPlane(stateDir, certPath string) error {
+	dir := filepath.Join(stateDir, control.DirName, "trust")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create plane trust directory: %w", err)
+	}
+	link := filepath.Join(dir, "plane-cert.pem")
+	if err := os.Remove(link); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("reset plane trust link: %w", err)
+	}
+	if err := os.Symlink(certPath, link); err != nil {
+		return fmt.Errorf("link plane certificate: %w", err)
+	}
+	rest := os.Getenv("SSL_CERT_DIR")
+	if rest == "" {
+		rest = "/etc/ssl/certs"
+	}
+	if err := os.Setenv("SSL_CERT_DIR", dir+":"+rest); err != nil {
+		return fmt.Errorf("publish plane trust directory: %w", err)
+	}
+	return nil
+}
+
 var serveSpec = commandSpec{
 	name:      "ohya serve",
 	synopsis:  "run the hub for devices: coordination, sync, remote tools",
@@ -120,7 +142,11 @@ func runServe(ctx context.Context, o serveOptions) error {
 	if err := os.MkdirAll(o.stateDir, 0o700); err != nil {
 		return fmt.Errorf("create state directory: %w", err)
 	}
-
+	if o.tlsCertPath != "" {
+		if err := trustOwnPlane(o.stateDir, o.tlsCertPath); err != nil {
+			return err
+		}
+	}
 	ctl, err := control.Provision(control.Options{
 		Dir:         filepath.Join(o.stateDir, control.DirName),
 		ServerURL:   o.controlURL,
