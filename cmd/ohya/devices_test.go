@@ -12,9 +12,6 @@ import (
 	"github.com/nibzard/ohya/internal/transport/tailcat"
 )
 
-// provisionControl provisions a coordination plane under a state directory,
-// as `ohya serve` does on its first start, so invite can mint join codes.
-// Free loopback ports: the server is never started here.
 func provisionControl(t *testing.T, stateDir string) {
 	t.Helper()
 	ctl, err := control.Provision(control.Options{
@@ -32,9 +29,6 @@ func provisionControl(t *testing.T, stateDir string) {
 	}
 }
 
-// runDevices runs one devices subcommand against a temporary state
-// directory and returns stdout plus the error. The flags follow the
-// subcommand, as runDevicesCommand expects.
 func runDevices(t *testing.T, stateDir string, args ...string) (string, error) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
@@ -47,21 +41,17 @@ func TestDevicesLifecycle(t *testing.T) {
 	state := t.TempDir()
 	provisionControl(t, state)
 
-	// An empty registry lists nothing.
 	out, err := runDevices(t, state, "list")
 	if err != nil || !strings.Contains(out, "(none paired)") {
 		t.Fatalf("empty list = %q, %v", out, err)
 	}
 
-	// Invite before serve ever ran reports the remedy instead of a traceback.
 	fresh := t.TempDir()
 	if _, err := runDevices(t, fresh, "invite"); err == nil ||
 		!strings.Contains(err.Error(), "run ohya serve once") {
 		t.Fatalf("invite without a coordination plane err = %v; want the serve remedy", err)
 	}
 
-	// Issue a join code; it is the first stdout line, one opaque string
-	// carrying the invitation and the preauth key.
 	out, err = runDevices(t, state, "invite", "--ttl", "1h")
 	if err != nil {
 		t.Fatal(err)
@@ -75,8 +65,6 @@ func TestDevicesLifecycle(t *testing.T) {
 		t.Fatalf("join code = %q; want opaque single-line secret halves", code)
 	}
 
-	// A device consumes the invitation through the registry — the same
-	// transaction the endpoint's pairing frame drives.
 	reg, err := registry.Open(filepath.Join(state, registry.FileName))
 	if err != nil {
 		t.Fatal(err)
@@ -95,7 +83,6 @@ func TestDevicesLifecycle(t *testing.T) {
 		t.Fatalf("list invitations = %q; want the used invitation to name the device", out)
 	}
 
-	// Revocation is final and visible.
 	if _, err := runDevices(t, state, "revoke", deviceID); err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +95,6 @@ func TestDevicesLifecycle(t *testing.T) {
 		t.Fatalf("re-revoke err = %v; want already-revoked", err)
 	}
 
-	// Stray input is refused.
 	_, err = runDevices(t, state, "revoke")
 	if err == nil {
 		t.Fatal("revoke without a device ID succeeded")
@@ -119,8 +105,6 @@ func TestDevicesLifecycle(t *testing.T) {
 	}
 }
 
-// TestDevicesRegistryIsSeparate pins that the devices command never touches
-// the transcript database: the registry file is its own database.
 func TestDevicesRegistryIsSeparate(t *testing.T) {
 	state := t.TempDir()
 	provisionControl(t, state)

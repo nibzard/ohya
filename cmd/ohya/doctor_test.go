@@ -1,11 +1,5 @@
 package main
 
-// The doctor acceptance tests (T063): every injectable fault — newer parser
-// rows, schema behind the binary, stopped source, unreachable coordination
-// plane, missing device identity — produces its finding with the asserted
-// severity and remedy, a healthy fixture exits 0, and the run leaves the
-// database and state directory untouched.
-
 import (
 	"context"
 	"database/sql"
@@ -26,9 +20,6 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// doctorEnv is one healthy local hub: the main fixture ingested through one
-// real pass, which also creates the state directory's identity and
-// checkpoint.
 type doctorEnv struct {
 	dbPath   string
 	stateDir string
@@ -45,14 +36,11 @@ func newDoctorEnv(t *testing.T) *doctorEnv {
 	return &doctorEnv{dbPath: e.dbPath, stateDir: e.stateDir, root: e.root}
 }
 
-// doctorRun runs the production command against one environment and returns
-// the exit code with both streams.
 func doctorRun(t *testing.T, e *doctorEnv, extra ...string) (int, string, string) {
 	t.Helper()
 	return runCLI(append([]string{"doctor", "--db", e.dbPath, "--state", e.stateDir}, extra...)...)
 }
 
-// soleFinding returns the one finding of a check.
 func soleFinding(t *testing.T, findings []finding, check string) finding {
 	t.Helper()
 	var got []finding
@@ -67,8 +55,6 @@ func soleFinding(t *testing.T, findings []finding, check string) finding {
 	return got[0]
 }
 
-// rawOpen opens the hub database with the bare driver, so a test can mutate
-// bookkeeping without store.Open migrating it.
 func rawOpen(t *testing.T, path string) *sql.DB {
 	t.Helper()
 	db, err := sql.Open("sqlite3", path)
@@ -79,9 +65,6 @@ func rawOpen(t *testing.T, path string) *sql.DB {
 	return db
 }
 
-// TestDoctorHealthyFixtureExitsZero is the healthy acceptance: a migrated,
-// ingested hub with an identity and no pairing reports one ok finding per
-// check and exits 0 — warnings aside, errors are the only failure.
 func TestDoctorHealthyFixtureExitsZero(t *testing.T) {
 	e := newDoctorEnv(t)
 
@@ -114,9 +97,6 @@ func TestDoctorHealthyFixtureExitsZero(t *testing.T) {
 	}
 }
 
-// TestDoctorNewerParserRowsAreAnError injects rows stamped above the
-// binary's parser output version — the rows store.ReDerive refuses — and
-// asserts the error finding, its remedy, and exit 1.
 func TestDoctorNewerParserRowsAreAnError(t *testing.T) {
 	e := newDoctorEnv(t)
 	raw := rawOpen(t, e.dbPath)
@@ -140,10 +120,6 @@ func TestDoctorNewerParserRowsAreAnError(t *testing.T) {
 	}
 }
 
-// TestDoctorSchemaBehindBinaryWarnsWithoutMigrating injects a database one
-// migration behind the binary. The finding is a warning with the migrating
-// command as its remedy, the exit code stays 0, and doctor itself migrates
-// nothing.
 func TestDoctorSchemaBehindBinaryWarnsWithoutMigrating(t *testing.T) {
 	e := newDoctorEnv(t)
 	schema, err := store.SchemaVersion()
@@ -169,7 +145,6 @@ func TestDoctorSchemaBehindBinaryWarnsWithoutMigrating(t *testing.T) {
 	if !strings.Contains(f.Remedy, "ohya ingest --once") || !strings.Contains(f.Remedy, "doctor never does") {
 		t.Fatalf("remedy misses the migrating command: %s", f.Remedy)
 	}
-	// Doctor migrated nothing: the newest migration is still unapplied.
 	var n int
 	if err := raw.QueryRow(`SELECT count(*) FROM schema_migrations WHERE version = ?`, schema).Scan(&n); err != nil {
 		t.Fatal(err)
@@ -179,8 +154,6 @@ func TestDoctorSchemaBehindBinaryWarnsWithoutMigrating(t *testing.T) {
 	}
 }
 
-// TestDoctorSchemaAheadOfBinaryIsAnError covers the other direction: a
-// database this binary cannot open as a writer.
 func TestDoctorSchemaAheadOfBinaryIsAnError(t *testing.T) {
 	e := newDoctorEnv(t)
 	raw := rawOpen(t, e.dbPath)
@@ -198,10 +171,6 @@ func TestDoctorSchemaAheadOfBinaryIsAnError(t *testing.T) {
 	}
 }
 
-// TestDoctorStoppedSourceCarriesADR0004Remedy injects both stop causes of
-// ADR 0004 and asserts each finding's severity, offset, and remedy; the
-// checkpoint file is byte-identical after the run, and a warning does not
-// fail the command.
 func TestDoctorStoppedSourceCarriesADR0004Remedy(t *testing.T) {
 	line := func(content string) string {
 		return fmt.Sprintf(`{"type":"user","sessionId":%q,"message":{"role":"user","content":%q}}`+"\n",
@@ -267,8 +236,6 @@ func TestDoctorStoppedSourceCarriesADR0004Remedy(t *testing.T) {
 	})
 
 	t.Run("a growing file is not a stop", func(t *testing.T) {
-		// A source with pending valid bytes — a pass has not caught up —
-		// reports ok, not a stop.
 		e := newDoctorEnv(t)
 		appendFile(t, filepath.Join(e.root, "fixture-project", "main-session.jsonl"),
 			line("appended after the pass"))
@@ -283,9 +250,6 @@ func TestDoctorStoppedSourceCarriesADR0004Remedy(t *testing.T) {
 	})
 }
 
-// TestDoctorCoordinationPlaneProbe injects the pairing credential and covers
-// both probe outcomes: an unreachable plane warns with the serve remedy, an
-// answering one reports ok; neither fails the command on its own.
 func TestDoctorCoordinationPlaneProbe(t *testing.T) {
 	const deviceID = "0123456789abcdef0123456789abcdef"
 	pairedEnv := func(t *testing.T) *doctorEnv {
@@ -312,7 +276,6 @@ func TestDoctorCoordinationPlaneProbe(t *testing.T) {
 		if !strings.Contains(f.Remedy, "ohya serve") || !strings.Contains(f.Remedy, "--control") {
 			t.Fatalf("remedy misses the serve control hint: %s", f.Remedy)
 		}
-		// The credential's secret never appears in the report.
 		if strings.Contains(out, "s3cret") {
 			t.Fatalf("report leaks the credential secret:\n%s", out)
 		}
@@ -320,7 +283,7 @@ func TestDoctorCoordinationPlaneProbe(t *testing.T) {
 
 	t.Run("answering plane is ok", func(t *testing.T) {
 		plane := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			http.NotFound(w, r) // any response counts: the plane answered
+			http.NotFound(w, r)
 		}))
 		defer plane.Close()
 		e := pairedEnv(t)
@@ -348,8 +311,6 @@ func TestDoctorCoordinationPlaneProbe(t *testing.T) {
 	})
 }
 
-// TestDoctorMissingDeviceIdentityWarns removes the identity: the finding
-// warns with the command that creates it, because doctor never creates one.
 func TestDoctorMissingDeviceIdentityWarns(t *testing.T) {
 	e := newDoctorEnv(t)
 	if err := os.Remove(filepath.Join(e.stateDir, device.FileName)); err != nil {
@@ -369,14 +330,11 @@ func TestDoctorMissingDeviceIdentityWarns(t *testing.T) {
 	if !strings.Contains(f.Remedy, "ohya ingest --once") {
 		t.Fatalf("remedy misses the creating command: %s", f.Remedy)
 	}
-	// Doctor created no identity while inspecting.
 	if _, err := os.Stat(filepath.Join(e.stateDir, device.FileName)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("doctor created a device identity: %v", err)
 	}
 }
 
-// TestDoctorUnusableDeviceIdentityIsAnError corrupts the identity: replacing
-// it silently would fork the device, so the finding is an error.
 func TestDoctorUnusableDeviceIdentityIsAnError(t *testing.T) {
 	e := newDoctorEnv(t)
 	writeFile(t, filepath.Join(e.stateDir, device.FileName), "{not json}")
@@ -390,8 +348,6 @@ func TestDoctorUnusableDeviceIdentityIsAnError(t *testing.T) {
 	}
 }
 
-// TestDoctorFTSCorruptionIsAnError empties the index behind the content rows
-// and asserts the fts_index error finding and exit 1.
 func TestDoctorFTSCorruptionIsAnError(t *testing.T) {
 	e := newDoctorEnv(t)
 	hub, err := store.Open(context.Background(), e.dbPath)
@@ -414,8 +370,6 @@ func TestDoctorFTSCorruptionIsAnError(t *testing.T) {
 	}
 }
 
-// TestDoctorMissingDatabaseWarns covers a fresh machine: no database exists,
-// doctor reports it with the creating command and exits 0.
 func TestDoctorMissingDatabaseWarns(t *testing.T) {
 	dir := t.TempDir()
 	code, out, _ := runCLI("doctor", "--db", filepath.Join(dir, "absent.db"), "--state", dir)
@@ -431,9 +385,6 @@ func TestDoctorMissingDatabaseWarns(t *testing.T) {
 	}
 }
 
-// TestDoctorJSONEnvelope pins the ADR 0005 shape for doctor: one envelope,
-// findings in data with severity and remedy, error null even when a finding
-// is an error — the exit code is the verdict — and usage errors stay text.
 func TestDoctorJSONEnvelope(t *testing.T) {
 	t.Run("healthy golden", func(t *testing.T) {
 		e := newDoctorEnv(t)
@@ -498,9 +449,6 @@ func TestDoctorJSONEnvelope(t *testing.T) {
 	})
 }
 
-// TestDoctorReadonlyOath pins the whole-command oath on a behind-schema
-// database with pending stopped bytes: after a doctor run, the database file
-// set carries no new bytes (no -wal growth from doctor).
 func TestDoctorReadonlyOath(t *testing.T) {
 	e := newDoctorEnv(t)
 	raw := rawOpen(t, e.dbPath)
@@ -511,7 +459,7 @@ func TestDoctorReadonlyOath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := hub.Close(); err != nil { // leave a cleanly checkpointed database
+	if err := hub.Close(); err != nil {
 		t.Fatal(err)
 	}
 	sizes := func() map[string]int64 {
@@ -538,8 +486,6 @@ func TestDoctorReadonlyOath(t *testing.T) {
 	}
 }
 
-// parseDoctorFindings decodes the text lines back into findings, so tests
-// assert the printed report, not a private slice.
 func parseDoctorFindings(t *testing.T, out string) []finding {
 	t.Helper()
 	var findings []finding

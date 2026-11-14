@@ -1,8 +1,3 @@
-// The devices subcommand: the hub operator's management surface for pairing.
-// It issues one-time expiring invitations, lists the device registry, and
-// revokes devices. The registry lives in its own protected database next to
-// the hub database, never inside the queryable transcript tables.
-
 package main
 
 import (
@@ -17,8 +12,6 @@ import (
 	"github.com/nibzard/ohya/internal/registry"
 )
 
-// devicesSpec is the devices dispatch usage template; the subcommands carry
-// their own.
 var devicesSpec = commandSpec{
 	name:      "ohya devices",
 	synopsis:  "manage device pairing and revocation",
@@ -32,7 +25,6 @@ revoke <device-id>  revoke a device, final for its identity`,
 	examples: []string{"ohya devices invite --ttl 15m", "ohya devices revoke <device-id>"},
 }
 
-// runDevicesCommand dispatches the devices subcommands.
 func runDevicesCommand(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 || isHelpArg(args[0]) {
 		writeUsage(stdout, devicesSpec, nil)
@@ -51,9 +43,6 @@ func runDevicesCommand(args []string, stdout, stderr io.Writer) error {
 	}
 }
 
-// registryFlags holds the flags every devices subcommand shares: the state
-// directory and --json. The registry sits in the state directory, like the
-// device identity and checkpoints. Callers add their own flags, then parse.
 type registryFlags struct {
 	c     *commandFlagSet
 	state *string
@@ -72,7 +61,6 @@ func newRegistryFlags(spec commandSpec) (*registryFlags, error) {
 	return f, nil
 }
 
-// openRegistry opens the registry database in the state directory.
 func (f *registryFlags) openRegistry() (*registry.DB, error) {
 	reg, err := registry.Open(filepath.Join(*f.state, registry.FileName))
 	if err != nil {
@@ -81,7 +69,6 @@ func (f *registryFlags) openRegistry() (*registry.DB, error) {
 	return reg, nil
 }
 
-// devicesInviteSpec is the invite usage template.
 var devicesInviteSpec = commandSpec{
 	name:      "ohya devices invite",
 	synopsis:  "issue a one-time join code",
@@ -94,14 +81,6 @@ var devicesInviteSpec = commandSpec{
 	examples:  []string{"ohya devices invite --ttl 15m"},
 }
 
-// runDevicesInvite issues one join code and prints it on the first stdout
-// line, so it can be piped to the joining device — or, with --json, in one
-// ADR 0005 envelope whose data carries the code, because the code is the
-// output the operator asked for. The code carries the T018 pairing
-// invitation plus the single-use coordinator preauth key minted with it —
-// the bridge from the registry's admission to tailnet admission — so one
-// code hands one device everything `ohya join` needs, and each half is
-// consumable exactly once within the same lifetime.
 func runDevicesInvite(args []string, stdout, stderr io.Writer) error {
 	flags, err := newRegistryFlags(devicesInviteSpec)
 	if err != nil {
@@ -133,18 +112,11 @@ func runDevicesInvite(args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
-// inviteJSONData is the invite command's data payload. The join code lives
-// here and only here: a failure envelope never carries one, because a failed
-// invite mints no code (ADR 0005).
 type inviteJSONData struct {
 	Code      string `json:"code"`
 	ExpiresAt string `json:"expires_at"`
 }
 
-// issueJoinCode runs the invite operation: coordination plane, user, preauth
-// key, then registry invitation. The coordination plane first: without it
-// there is no admission to bridge the invitation to, and no half a code
-// should be issued.
 func (f *registryFlags) issueJoinCode(ttl time.Duration) (code string, expiresAtMS int64, err error) {
 	ctl, err := control.Open(filepath.Join(*f.state, control.DirName))
 	if err != nil {
@@ -175,7 +147,6 @@ func (f *registryFlags) issueJoinCode(ttl time.Duration) (code string, expiresAt
 	return inv.Secret + ":" + authKey, inv.ExpiresAtMS, nil
 }
 
-// devicesListSpec is the list usage template.
 var devicesListSpec = commandSpec{
 	name:        "ohya devices list",
 	synopsis:    "list devices and invitations",
@@ -186,8 +157,6 @@ var devicesListSpec = commandSpec{
 	examples:    []string{"ohya devices list"},
 }
 
-// runDevicesList prints every paired device and every invitation — as text,
-// or with --json as one ADR 0005 envelope.
 func runDevicesList(args []string, stdout, stderr io.Writer) error {
 	flags, err := newRegistryFlags(devicesListSpec)
 	if err != nil {
@@ -251,15 +220,11 @@ func runDevicesList(args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
-// listJSONData is the devices list command's data payload (ADR 0005). Empty
-// collections are [] so a consumer never meets null.
 type listJSONData struct {
 	Devices     []deviceJSON     `json:"devices"`
 	Invitations []invitationJSON `json:"invitations"`
 }
 
-// deviceJSON is one paired device: its ID, state, and pairing time, plus the
-// revocation time on a revoked device.
 type deviceJSON struct {
 	ID        string `json:"id"`
 	State     string `json:"state"`
@@ -267,8 +232,6 @@ type deviceJSON struct {
 	RevokedAt string `json:"revoked_at,omitempty"`
 }
 
-// invitationJSON is one invitation: its ID, state, and timestamps, the
-// consuming device when used, and the derived expiry flag.
 type invitationJSON struct {
 	ID        string `json:"id"`
 	State     string `json:"state"`
@@ -309,7 +272,6 @@ func invitationJSONList(invitations []registry.InvitationInfo) []invitationJSON 
 	return out
 }
 
-// devicesRevokeSpec is the revoke usage template.
 var devicesRevokeSpec = commandSpec{
 	name:        "ohya devices revoke",
 	synopsis:    "revoke a device, final for its identity",
@@ -320,8 +282,6 @@ var devicesRevokeSpec = commandSpec{
 	examples:    []string{"ohya devices revoke <device-id>"},
 }
 
-// runDevicesRevoke revokes one device. Revocation is final for the device
-// identity; its connections close and re-admission needs a new identity.
 func runDevicesRevoke(args []string, stdout, stderr io.Writer) error {
 	flags, err := newRegistryFlags(devicesRevokeSpec)
 	if err != nil {
@@ -349,12 +309,10 @@ func runDevicesRevoke(args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
-// revokeJSONData is the revoke command's data payload (ADR 0005).
 type revokeJSONData struct {
 	DeviceID string `json:"device_id"`
 }
 
-// msTime renders a Unix-millisecond timestamp as UTC RFC 3339.
 func msTime(ms int64) string {
 	return time.UnixMilli(ms).UTC().Format(time.RFC3339)
 }

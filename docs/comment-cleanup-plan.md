@@ -240,3 +240,4 @@ Comment markers inside raw and quoted strings are not comments and are not count
 | 4 | `internal/store` (migrations excluded) | 602 | `DB.md`: "Write path", "Inspection", connection settings, migration names, re-derivation walk |
 | 5 | `internal/mcpserver`, `internal/registry`, `internal/control`, `internal/transport` | 784 | `ARCHITECTURE.md`, "Registry details" and "Engine details"; ADR 0002, "Deployment defaults" |
 | 6 | `internal/hubsync`, `internal/uploader` | 879 | New `docs/sync-protocol.md`, linked from `ARCHITECTURE.md`; fuzz targets in `CONTRIBUTING.md` |
+| 7 | `cmd/ohya` | 814 | `README.md`, doctor checks and session discovery; `CONTRIBUTING.md`, "Command implementation" |

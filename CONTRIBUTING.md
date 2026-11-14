@@ -90,6 +90,29 @@ The gate (`cmd/memory-e2e`) works as follows:
   currently counts every recorded problem as a case failure; see the open
   item in NOTES.md.
 
+## Command implementation
+
+- `cmd/ohya` uses only the standard `flag` package. Each command level has a
+  `commandSpec` (usage line, description, arguments, flags, examples) and
+  one shared template. The flag package's own output is discarded: the
+  template renders into a buffer, and the caller sends it to stdout for a
+  help request or drops it for a usage error. Flags render with two
+  dashes, and a default is shown only when it differs from the zero value
+  of its type; string defaults are quoted.
+- Local ingestion reads at most 8 MiB per batch. A record larger than the
+  batch bound extends the read to its end, up to the record size limit, so
+  a batch never splits a record. Ingestion never acknowledges inside
+  `ingestSource`; the caller acknowledges the committed cursor afterwards.
+- `ohya devices invite` provisions the coordinator user and preauth key
+  before the registry invitation, so it never issues half a join code. The
+  hub's own admission key is valid for 10 minutes. A joined device's tailnet
+  hostname is `dev-` plus the first 12 characters of its Device ID.
+- The `cmd/ohya` tests run the test binary as a child process. A first
+  argument of `child-run` runs the full CLI with the production exit codes.
+  `child-serve`, `child-join`, and `child-mcp` run those commands for the
+  end-to-end sync test. With `OHYA_MCP_TEST_DB` set, the binary serves
+  `ohya mcp`, so the test framework writes nothing to the protocol stream.
+
 ## Code comments
 
 Never write explanatory comments in code. Use clear names and simple

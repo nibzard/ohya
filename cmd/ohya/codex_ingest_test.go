@@ -17,14 +17,12 @@ import (
 	"github.com/nibzard/ohya/internal/store"
 )
 
-// Thread ids of the Codex fixtures (testdata/codex/README.md).
 const (
 	codexMainThread = "00000000-0000-7000-8000-0000000000c1"
 	codexSubThread  = "00000000-0000-7000-8000-0000000000d1"
 	codexTailThread = "00000000-0000-7000-8000-0000000000c4"
 )
 
-// newCodexEnv is one local hub facing a synthetic Codex sessions directory.
 func newCodexEnv(t *testing.T) *sliceEnv {
 	t.Helper()
 	e := newSliceEnv(t)
@@ -32,8 +30,6 @@ func newCodexEnv(t *testing.T) *sliceEnv {
 	return e
 }
 
-// rollout places a rollout file at the Codex layout: dated directories under
-// the sessions root.
 func (e *sliceEnv) rollout(name string) string {
 	return filepath.Join(e.root, "2026", "11", "13", name)
 }
@@ -47,7 +43,6 @@ func copyCodexFixture(t *testing.T, dst, name string) {
 	writeFile(t, dst, string(data))
 }
 
-// codexLine builds one complete Codex message record with an ordinal.
 func codexLine(ordinal int, role, text string) string {
 	return fmt.Sprintf(`{"timestamp":"2026-11-13T10:31:00.000Z","ordinal":%d,"type":"response_item","payload":{"type":"message","role":%q,"content":[{"type":"input_text","text":%q}]}}`+"\n",
 		ordinal, role, text)
@@ -57,10 +52,6 @@ func codexMeta(thread string) string {
 	return fmt.Sprintf(`{"timestamp":"2026-11-13T10:30:00.000Z","ordinal":0,"type":"session_meta","payload":{"id":%q,"cwd":"/home/dev/example"}}`+"\n", thread)
 }
 
-// TestIngestCodexThreadAcrossRolloutFiles drives the whole slice on a Codex
-// thread that spans two rollout files plus a subagent rollout: the page joins
-// the main thread's session, its replayed ordinals are stored as duplicates,
-// and later appends to the page land in the same session.
 func TestIngestCodexThreadAcrossRolloutFiles(t *testing.T) {
 	e := newCodexEnv(t)
 	mainPath := e.rollout("rollout-2026-11-13T09-00-00-" + codexMainThread + ".jsonl")
@@ -92,8 +83,6 @@ func TestIngestCodexThreadAcrossRolloutFiles(t *testing.T) {
 		t.Fatalf("first_prompt = %q, %v", prompt, err)
 	}
 
-	// The thread continues in the page: the appended record has no session
-	// field of its own and still joins the main thread.
 	appendFile(t, pagePath, codexLine(16, "user", "Appended after the first pass."))
 	stats, _ = e.runPass(t)
 	if stats.inserted != 1 {
@@ -103,17 +92,11 @@ func TestIngestCodexThreadAcrossRolloutFiles(t *testing.T) {
 		t.Fatal("the appended record did not join the main thread")
 	}
 
-	// An idle pass inserts nothing.
 	if stats, _ := e.runPass(t); stats.inserted != 0 {
 		t.Fatalf("idle pass = %+v", stats)
 	}
 }
 
-// TestIngestCodexReenumeratedPage drives the slice over a main file and a
-// page that re-enumerates the ordinals past its history_base rollback point
-// with different records: nothing is suppressed, and both the rolled-back
-// turn's and the re-enumerated turn's records stay searchable with their own
-// per-response usage rows.
 func TestIngestCodexReenumeratedPage(t *testing.T) {
 	e := newCodexEnv(t)
 	copyCodexFixture(t, e.rollout("rollout-2026-11-13T09-00-00-"+codexMainThread+".jsonl"), "main-session.jsonl")
@@ -132,8 +115,6 @@ func TestIngestCodexReenumeratedPage(t *testing.T) {
 	if n := countRows(t, db, `SELECT count(*) FROM events WHERE duplicate_of IS NOT NULL`); n != 0 {
 		t.Fatalf("duplicates = %d, want 0", n)
 	}
-	// The re-enumerated turn's response counts beside the original's two
-	// (raw input totals: 1200 + 1300 + 1400).
 	if n := countRows(t, db, `SELECT count(*) FROM session_token_usage WHERE message_id = 'resp_fixture_0003'`); n != 1 {
 		t.Fatalf("re-enumerated usage rows = %d, want 1", n)
 	}
@@ -147,15 +128,11 @@ func TestIngestCodexReenumeratedPage(t *testing.T) {
 		}
 	}
 
-	// An idle pass inserts nothing.
 	if stats, _ := e.runPass(t); stats.inserted != 0 {
 		t.Fatalf("idle pass = %+v", stats)
 	}
 }
 
-// TestIngestCodexIncompleteTail covers a crash during a rollout write: the
-// partial record stays pending, and once the writer completes the line, the
-// next pass ingests it whole into the same thread.
 func TestIngestCodexIncompleteTail(t *testing.T) {
 	e := newCodexEnv(t)
 	path := e.rollout("rollout-2026-11-13T11-00-00-" + codexTailThread + ".jsonl")
@@ -181,9 +158,6 @@ func TestIngestCodexIncompleteTail(t *testing.T) {
 	}
 }
 
-// TestIngestCodexMalformedLineStops covers a complete but invalid record: the
-// valid prefix commits, and the source stops at the offending offset with a
-// content-free diagnostic reported once per run.
 func TestIngestCodexMalformedLineStops(t *testing.T) {
 	e := newCodexEnv(t)
 	copyCodexFixture(t, e.rollout("rollout-bad.jsonl"), "malformed-line.jsonl")
@@ -210,9 +184,6 @@ func TestIngestCodexMalformedLineStops(t *testing.T) {
 	}
 }
 
-// TestIngestCodexReplacementAndTruncation covers changed incarnations of a
-// rollout file: each starts a new source that re-imports from byte zero and
-// names its thread from its own first record.
 func TestIngestCodexReplacementAndTruncation(t *testing.T) {
 	e := newCodexEnv(t)
 	path := e.rollout("rollout-x.jsonl")
@@ -240,15 +211,10 @@ func TestIngestCodexReplacementAndTruncation(t *testing.T) {
 	if n := countRows(t, db, `SELECT count(*) FROM sources`); n != 3 {
 		t.Fatalf("sources = %d, want one per incarnation", n)
 	}
-	// The truncated incarnation re-imports thread-b's meta: a new source,
-	// the same thread. Its meta carries no ordinal, so it is no duplicate;
-	// copied history is retry-safe, not semantically deduplicated.
 	if n := countRows(t, db, `SELECT count(*) FROM events e JOIN sessions s ON s.id = e.session_id
 	    WHERE s.native_id = 'thread-b'`); n != 4 {
 		t.Fatalf("thread-b events = %d, want 4", n)
 	}
-	// A record appended to the truncated incarnation joins thread-b, and
-	// its ordinal repeats one already stored, so it is a duplicate.
 	appendFile(t, path, codexLine(1, "user", "replaced"))
 	if stats, _ := e.runPass(t); stats.inserted != 1 {
 		t.Fatalf("pass after append = %+v", stats)
@@ -259,9 +225,6 @@ func TestIngestCodexReplacementAndTruncation(t *testing.T) {
 	}
 }
 
-// TestIngestCodexLargeFileSpansBatches forces a rollout above the batch
-// bound, so a later batch starts past offset 0 and takes its thread from the
-// committed first record.
 func TestIngestCodexLargeFileSpansBatches(t *testing.T) {
 	e := newCodexEnv(t)
 	var b strings.Builder
@@ -284,9 +247,6 @@ func TestIngestCodexLargeFileSpansBatches(t *testing.T) {
 	}
 }
 
-// TestIngestCodexCrashBetweenCommitAndAcknowledge kills a helper process
-// after the write path committed a rollout but before the checkpoint
-// acknowledged it. The restart replays the bytes and inserts nothing.
 func TestIngestCodexCrashBetweenCommitAndAcknowledge(t *testing.T) {
 	e := newCodexEnv(t)
 	path := e.rollout("rollout-main.jsonl")
@@ -314,8 +274,6 @@ func TestIngestCodexCrashBetweenCommitAndAcknowledge(t *testing.T) {
 	if stats.inserted != 0 || stderr != "" {
 		t.Fatalf("restart = %+v, stderr %q; want nothing new", stats, stderr)
 	}
-	// The thread continues after the crash; the appended record still
-	// finds its session.
 	line := codexLine(14, "user", "after the crash")
 	appendFile(t, path, line)
 	if stats, _ := e.runPass(t); stats.inserted != 1 {
@@ -330,8 +288,6 @@ func TestIngestCodexCrashBetweenCommitAndAcknowledge(t *testing.T) {
 	}
 }
 
-// TestIngestWatchesBothAgents runs the command loop over a Claude Code root
-// and a Codex root in one pass, each with its own checkpoint file.
 func TestIngestWatchesBothAgents(t *testing.T) {
 	e := newSliceEnv(t)
 	copyFixture(t, e.session("main-session.jsonl"), "main-session.jsonl")
@@ -360,14 +316,12 @@ func TestIngestRootRules(t *testing.T) {
 			stdout: io.Discard, stderr: io.Discard,
 		})
 	}
-	// A missing optional root holds no sessions; the run still works.
 	e := newSliceEnv(t)
 	absent := filepath.Join(e.root, "absent")
 	if err := run(e, agentRoot{agent: claudecode.AgentName, dir: e.root, flag: "claude-root"},
 		agentRoot{agent: codex.AgentName, dir: absent, flag: "codex-root", optional: true}); err != nil {
 		t.Fatalf("missing optional root: %v", err)
 	}
-	// A missing explicit root fails before creating anything.
 	e = newSliceEnv(t)
 	err := run(e, agentRoot{agent: codex.AgentName, dir: absent, flag: "codex-root"})
 	if err == nil || !strings.Contains(err.Error(), "pass --codex-root") {
@@ -376,7 +330,6 @@ func TestIngestRootRules(t *testing.T) {
 	if _, err := os.Stat(e.dbPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("database exists after the failed run: %v", err)
 	}
-	// Nothing to watch at all is an error, not an idle loop.
 	err = run(e, agentRoot{agent: claudecode.AgentName, dir: absent, flag: "claude-root", optional: true},
 		agentRoot{agent: codex.AgentName, dir: absent, flag: "codex-root", optional: true})
 	if err == nil || !strings.Contains(err.Error(), "--claude-root or --codex-root") {

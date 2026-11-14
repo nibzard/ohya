@@ -1,12 +1,3 @@
-// The mcp subcommand: serve the sql(query) and annotate(operations) MCP
-// tools over stdio. Locally, the tools are the agent-facing surface of the
-// hub database — queries run through restricted reader connections guarded
-// by a SQLite authorizer, annotation batches commit through the single
-// writer, and both stay bounded (internal/mcpserver). With --remote, a
-// joined device serves the same tools from its hub over the authenticated
-// sync connection (ADR 0003): the hub runs the same bounded engine, derives
-// the annotation writer from the device's credential, and checks revocation
-// on every frame.
 package main
 
 import (
@@ -29,7 +20,6 @@ import (
 	"github.com/nibzard/ohya/internal/transport/tailcat"
 )
 
-// mcpSpec is the mcp usage template.
 var mcpSpec = commandSpec{
 	name:      "ohya mcp",
 	synopsis:  "serve the sql and annotate MCP tools on stdio",
@@ -42,10 +32,6 @@ var mcpSpec = commandSpec{
 	examples:  []string{"ohya mcp", "ohya mcp --remote"},
 }
 
-// runMcpCommand parses the mcp flags and serves the MCP tools on stdio until
-// the process receives SIGINT or SIGTERM or stdin closes. stdout carries only
-// protocol frames and, on a help request, the usage text; every diagnostic
-// goes to stderr.
 func runMcpCommand(args []string, stdout, stderr io.Writer) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -84,10 +70,6 @@ func runMcpCommand(args []string, stdout, stderr io.Writer) error {
 	return runMcp(ctx, *db, stateDir)
 }
 
-// runMcp opens the hub and serves the tools until ctx is done. The writer
-// stays open alongside the readers: it applies pending migrations, serves
-// annotation batches, and a read-only connection cannot create the database
-// or recover the write-ahead log. The sql tool itself never writes.
 func runMcp(ctx context.Context, dbPath, stateDir string) error {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
 		return fmt.Errorf("create database directory: %w", err)
@@ -114,11 +96,6 @@ func runMcp(ctx context.Context, dbPath, stateDir string) error {
 	return mcpserver.Run(ctx, server)
 }
 
-// runMcpRemote serves the tools from the joined hub: the device's transport
-// node dials the hub, the pairing credential authenticates one connection,
-// and every tool call rides it as a bounded query or annotate exchange. The
-// hub derives the annotation writer from the credential, and a revocation
-// closes the connection at its next frame.
 func runMcpRemote(ctx context.Context, hubAddr, controlURL, stateDir string) error {
 	deviceID, err := device.LoadOrCreate(stateDir)
 	if err != nil {

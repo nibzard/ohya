@@ -17,13 +17,6 @@ import (
 	"github.com/nibzard/ohya/internal/store"
 )
 
-// TestMain implements the fork-server trick: with OHYA_MCP_TEST_DB set, the
-// test binary runs the production mcp command instead of the tests, so the
-// testing framework writes nothing to the protocol stream on stdout. A first
-// argument of child-serve, child-join or child-mcp runs the production
-// command behind that name, for the end-to-end sync test (serve_e2e_test.go);
-// child-run runs the full CLI with the production exit-code mapping, for the
-// help and usage-error contract tests (cli_test.go).
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && strings.HasPrefix(os.Args[1], "child-") {
 		var err error
@@ -56,8 +49,6 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// seedMcpDatabase creates a hub database with one event and returns its path
-// plus the state directory.
 func seedMcpDatabase(t *testing.T) (dbPath, stateDir string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -86,8 +77,6 @@ func seedMcpDatabase(t *testing.T) (dbPath, stateDir string) {
 	return dbPath, stateDir
 }
 
-// startMcpProcess spawns this test binary as the ohya mcp server over real
-// stdio pipes, exactly as an MCP client launches the binary.
 func startMcpProcess(t *testing.T, dbPath, stateDir string) *mcp.ClientSession {
 	t.Helper()
 	cmd := exec.Command(os.Args[0])
@@ -106,10 +95,6 @@ func startMcpProcess(t *testing.T, dbPath, stateDir string) *mcp.ClientSession {
 	return session
 }
 
-// TestMcpRemoteBareFlagParses pins the README invocation `ohya mcp
-// --remote`: the bare flag parses and enters remote mode, which then fails
-// only at the missing pairing credential of an unjoined state directory —
-// a string-shaped --remote would instead die at "flag needs an argument".
 func TestMcpRemoteBareFlagParses(t *testing.T) {
 	err := runMcpCommand([]string{"--remote", "--state", t.TempDir()}, io.Discard, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "pairing credential") {
@@ -129,7 +114,6 @@ func callSql(t *testing.T, session *mcp.ClientSession, query string) *mcp.CallTo
 	return result
 }
 
-// callAnnotate runs one annotate tool call over the session.
 func callAnnotate(t *testing.T, session *mcp.ClientSession, operations string) *mcp.CallToolResult {
 	t.Helper()
 	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
@@ -142,9 +126,6 @@ func callAnnotate(t *testing.T, session *mcp.ClientSession, operations string) *
 	return result
 }
 
-// TestMCPStdioEndToEnd launches the real command as a subprocess and speaks
-// MCP over stdio: initialize handshake, tool listing, a working query, an
-// annotation batch, and adversarial calls rejected as tool errors.
 func TestMCPStdioEndToEnd(t *testing.T) {
 	dbPath, stateDir := seedMcpDatabase(t)
 	session := startMcpProcess(t, dbPath, stateDir)
@@ -200,7 +181,6 @@ func TestMCPStdioEndToEnd(t *testing.T) {
 		}
 	}
 
-	// The rejected writes changed nothing.
 	result = callSql(t, session, `SELECT count(*) FROM events`)
 	raw, _ = json.Marshal(result.StructuredContent)
 	if !strings.Contains(string(raw), "[[1]]") {
@@ -208,10 +188,6 @@ func TestMCPStdioEndToEnd(t *testing.T) {
 	}
 }
 
-// TestMCPStdioAnnotateEndToEnd drives the annotate tool over real stdio: a
-// committed batch, an identical retry, and rejected batches that change
-// nothing. The hub derives the writer from the state directory's device
-// identity, never from the call.
 func TestMCPStdioAnnotateEndToEnd(t *testing.T) {
 	dbPath, stateDir := seedMcpDatabase(t)
 	session := startMcpProcess(t, dbPath, stateDir)
@@ -220,7 +196,6 @@ func TestMCPStdioAnnotateEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// One applied upsert plus one absent delete counted as unchanged.
 	result := callAnnotate(t, session, `[
 		{"op":"upsert","event_id":7,"namespace":"tags","key":"keep","value":{"done": true}},
 		{"op":"delete","event_id":7,"namespace":"tags","key":"absent"}]`)
@@ -231,7 +206,6 @@ func TestMCPStdioAnnotateEndToEnd(t *testing.T) {
 		t.Fatalf("first batch payload = %s", raw)
 	}
 
-	// The identical retry is a complete no-op.
 	result = callAnnotate(t, session, `[
 		{"op":"upsert","event_id":7,"namespace":"tags","key":"keep","value":{"done": true}},
 		{"op":"delete","event_id":7,"namespace":"tags","key":"absent"}]`)
@@ -242,7 +216,6 @@ func TestMCPStdioAnnotateEndToEnd(t *testing.T) {
 		t.Fatalf("retry payload = %s", raw)
 	}
 
-	// The annotation carries the device identity and a compacted value.
 	result = callSql(t, session, `SELECT value, writer_id FROM event_annotations
 		WHERE event_id = 7 AND namespace = 'tags' AND key = 'keep'`)
 	raw, _ := json.Marshal(result.StructuredContent)
@@ -256,8 +229,6 @@ func TestMCPStdioAnnotateEndToEnd(t *testing.T) {
 		t.Fatalf("stored annotation = %v, want compacted {\"done\":true} under writer %s", stored.Rows[0], deviceID)
 	}
 
-	// Spoofing the writer identity and a missing event both fail as tool
-	// errors, and neither applies anything.
 	for _, ops := range []string{
 		`[{"op":"upsert","event_id":7,"namespace":"tags","key":"spoof","value":1,"writer_id":"attacker"}]`,
 		`[{"op":"upsert","event_id":999,"namespace":"tags","key":"missing","value":1}]`,

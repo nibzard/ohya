@@ -1,8 +1,3 @@
-// Command ohya runs the local hub: it captures agent session logs into one
-// hub-owned SQLite database with full-text search, serves the read-only sql
-// and bounded annotate MCP tools to coding agents, and — through serve and
-// join — synchronizes devices over an encrypted tailnet with pairing,
-// revocation, and the same tools reachable remotely.
 package main
 
 import (
@@ -22,8 +17,6 @@ import (
 	"github.com/nibzard/ohya/internal/pi"
 )
 
-// rootSpec is the top-level usage template. The description carries the
-// non-interactive promise and the exit-code contract every command shares.
 var rootSpec = commandSpec{
 	name:      "ohya",
 	synopsis:  "one memory for all your coding agents",
@@ -78,7 +71,6 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 }
 
-// ingestSpec is the ingest usage template.
 var ingestSpec = commandSpec{
 	name:      "ohya ingest",
 	synopsis:  "import agent session history, then poll for new records",
@@ -93,8 +85,6 @@ var ingestSpec = commandSpec{
 	examples:  []string{"ohya ingest --once", "ohya ingest --db ~/.ohya/hub.db"},
 }
 
-// runIngestCommand parses the ingest flags and runs local ingestion until the
-// process receives SIGINT or SIGTERM.
 func runIngestCommand(args []string, stdout, stderr io.Writer) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -133,8 +123,6 @@ func runIngestCommand(args []string, stdout, stderr io.Writer) error {
 	if *maxRecordBytes <= 0 {
 		return c.usageErrorf("--max-record-bytes must be positive")
 	}
-	// A default directory may be absent (the agent is not installed); one
-	// the user passes must exist.
 	explicit := map[string]bool{}
 	c.fs.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
 	var roots []agentRoot
@@ -166,16 +154,12 @@ func runIngestCommand(args []string, stdout, stderr io.Writer) error {
 		stdout:         stdout,
 		stderr:         stderr,
 	})
-	// A degraded pass already printed its envelope; every other failure gets
-	// the failure envelope instead of nothing (ADR 0005).
 	if err != nil && *asJSON && !errors.Is(err, errDegraded) {
 		return printJSONError(stdout, ingestSpec.name, err)
 	}
 	return err
 }
 
-// defaultCodexRoot is the Codex sessions directory: Codex keeps everything
-// under $CODEX_HOME, which defaults to ~/.codex (testdata/codex/README.md).
 func defaultCodexRoot(home string) string {
 	if dir := os.Getenv("CODEX_HOME"); dir != "" {
 		return filepath.Join(dir, "sessions")
@@ -183,12 +167,6 @@ func defaultCodexRoot(home string) string {
 	return filepath.Join(home, ".codex", "sessions")
 }
 
-// defaultPiRoot is the Pi agent sessions root: session files live under
-// `<encoded-cwd>/` directories below it. Pi resolves its session directory
-// per run from --session-dir, $PI_CODING_AGENT_SESSION_DIR, then the agent
-// dir's `sessions/` (testdata/pi/README.md). The environment variables cover
-// the persistent cases; a per-run --session-dir is not discoverable, so pass
-// --pi-root explicitly for such runs.
 func defaultPiRoot(home string) string {
 	if dir := os.Getenv("PI_CODING_AGENT_SESSION_DIR"); dir != "" {
 		return dir

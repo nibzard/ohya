@@ -1,11 +1,3 @@
-// Local ingestion: the vertical slice that wires the source watcher, the
-// deterministic agent parsers and the transactional write path into one run.
-// Each agent (Claude Code, Codex, Pi) has its own session directory, watcher
-// and checkpoint file. One pass discovers every agent's session files, reads
-// only the unacknowledged bytes, commits them through the single writer, and
-// acknowledges the committed cursor in the local checkpoint. A crash between
-// commit and acknowledgment replays safely: the write path validates
-// replayed bytes and counts only new records.
 package main
 
 import (
@@ -25,56 +17,30 @@ import (
 	"github.com/nibzard/ohya/internal/watch"
 )
 
-// maxBatchBytes bounds the bytes of one ingestion batch, so importing a large
-// history file stays within a predictable memory budget. A batch never splits
-// a record: parsing retains an incomplete tail, the next batch resumes at the
-// committed cursor, and one read may extend past this bound to the end of a
-// single record above it (never past the configured record size limit).
 const maxBatchBytes int64 = 8 << 20
 
-// agentRoot is one agent's session directory to watch.
 type agentRoot struct {
-	agent string // parser and checkpoint name, for example "codex"
-	dir   string
-	flag  string // command-line flag that sets dir, for diagnostics
-	// optional marks a default directory the user did not ask for: while it
-	// is missing it holds no sessions, so an agent that is not installed
-	// costs nothing, and its sessions are picked up once it appears. A
-	// directory passed explicitly must exist.
+	agent    string
+	dir      string
+	flag     string
 	optional bool
 }
 
-// ingestOptions configures one ingest run.
 type ingestOptions struct {
-	dbPath         string        // hub database; created with its parent directory
-	stateDir       string        // device identity and source checkpoints
-	roots          []agentRoot   // session directories to watch, one per agent
-	interval       time.Duration // polling interval in continuous mode
-	once           bool          // run exactly one pass
-	maxRecordBytes int64         // per-record bound for every parser; <= 0 selects their default
-	jsonOut        bool          // print the --once report as one ADR 0005 envelope
-	stdout         io.Writer     // progress summaries
-	stderr         io.Writer     // diagnostics
+	dbPath         string
+	stateDir       string
+	roots          []agentRoot
+	interval       time.Duration
+	once           bool
+	maxRecordBytes int64
+	jsonOut        bool
+	stdout         io.Writer
+	stderr         io.Writer
 }
 
-// errDegraded marks a completed --once pass in which at least one source
-// failed or stopped. The pass committed everything it could — the per-source
-// diagnostics are on stderr and the counts are in the stdout summary — so
-// cliMain maps it to exit code 3 without printing another error line.
 var errDegraded = errors.New("ingest completed with a failed or stopped source")
 
-// runIngest imports the existing history of every agent once, then polls
-// incrementally until the context is canceled (continuous mode) or after one
-// pass (--once). It returns only on systemic failures — an unusable database
-// or a lost checkpoint state needs recovery. A failing source stops that
-// source with a diagnostic; the next sources still commit. A --once pass in
-// which any source failed or stopped returns errDegraded (exit 3): the pass
-// completed, but data is missing. The poll loop keeps running instead. With
-// jsonOut the --once report is one ADR 0005 envelope instead of the text
-// summary, and a degraded pass still reports through data, not error.
 func runIngest(ctx context.Context, o ingestOptions) error {
-	// Fail before creating anything: a wrong root must not leave a database
-	// and a device identity behind.
 	if len(o.roots) == 0 {
 		return errors.New("no agent session directory to watch")
 	}
@@ -122,7 +88,7 @@ func runIngest(ctx context.Context, o ingestOptions) error {
 	for i, root := range o.roots {
 		w, err := watch.New(o.stateDir, root.agent, watch.Options{})
 		if err != nil {
-			return err // includes watch.ErrStateLost: recovery, not a silent restart
+			return err
 		}
 		runners[i] = newIngestor(hub, w, root.agent, deviceID, o.maxRecordBytes, o.stderr)
 	}
@@ -142,9 +108,6 @@ func runIngest(ctx context.Context, o ingestOptions) error {
 		}
 		switch {
 		case o.jsonOut:
-			// --json implies --once (the command rejects the combination
-			// otherwise), so this prints exactly one envelope, and a
-			// degraded pass reports through data plus the exit code.
 			stops := stats.stops
 			if stops == nil {
 				stops = []stopReport{}
@@ -179,19 +142,14 @@ func runIngest(ctx context.Context, o ingestOptions) error {
 	}
 }
 
-// ingestor drives one agent's local ingestion. It is not safe for concurrent
-// use; one goroutine drives it, like the database writer.
 type ingestor struct {
 	hub            *store.DB
 	watcher        *watch.Watcher
 	agent          string
 	deviceID       string
-	maxRecordBytes int64 // per-record bound; <= 0 selects the parser default
+	maxRecordBytes int64
 	stderr         io.Writer
-	// reported remembers the stop offset of every diagnostic already written,
-	// so continuous polling prints a persistent diagnostic once per offset
-	// instead of once per poll.
-	reported map[string]int64
+	reported       map[string]int64
 }
 
 func newIngestor(hub *store.DB, w *watch.Watcher, agent, deviceID string, maxRecordBytes int64, stderr io.Writer) *ingestor {
@@ -201,17 +159,14 @@ func newIngestor(hub *store.DB, w *watch.Watcher, agent, deviceID string, maxRec
 	}
 }
 
-// passStats summarizes one polling pass.
 type passStats struct {
-	sources  int          // live sources observed
-	inserted int          // events newly inserted and committed
-	failed   int          // sources whose registration, read, commit or acknowledge failed
-	stopped  int          // sources stopped at a malformed or oversized record
-	stops    []stopReport // one entry per source stopped in this pass
+	sources  int
+	inserted int
+	failed   int
+	stopped  int
+	stops    []stopReport
 }
 
-// stopReport is one stopped source: where it stopped and the remedy that
-// clears it, the way the --json report carries it (ADR 0005).
 type stopReport struct {
 	SourceID string `json:"source_id"`
 	Path     string `json:"path"`
@@ -219,8 +174,6 @@ type stopReport struct {
 	Remedy   string `json:"remedy"`
 }
 
-// ingestJSONData is the ingest --once report (ADR 0005): the pass counts and
-// every stop with its remedy.
 type ingestJSONData struct {
 	Events  int          `json:"events"`
 	Sources int          `json:"sources"`
@@ -229,9 +182,6 @@ type ingestJSONData struct {
 	Stops   []stopReport `json:"stops"`
 }
 
-// poll discovers the session files under root, ingests every live source's
-// pending bytes, and acknowledges the committed cursors. A missing optional
-// root holds no session files.
 func (r *ingestor) poll(ctx context.Context, root string, optional bool) (passStats, error) {
 	candidates, err := discoverSessionFiles(root)
 	if optional && errors.Is(err, fs.ErrNotExist) {
@@ -251,10 +201,6 @@ func (r *ingestor) poll(ctx context.Context, root string, optional bool) (passSt
 		}
 		stats.sources++
 		if o.Fresh && o.Reason != "new file" {
-			// A changed incarnation re-imports from byte zero under a new
-			// source ID; history duplicates. New files stay silent: a first
-			// import of a large projects directory must not print a line per
-			// file.
 			fmt.Fprintf(r.stderr, "ohya: %s: new source %s re-imports from byte zero: %s\n",
 				o.Path, o.SourceID, o.Reason)
 		}
@@ -264,7 +210,7 @@ func (r *ingestor) poll(ctx context.Context, root string, optional bool) (passSt
 			continue
 		}
 		if o.End <= o.Cursor {
-			continue // nothing pending
+			continue
 		}
 		inserted, committed, stop, err := r.ingestSource(ctx, o)
 		if err != nil {
@@ -290,19 +236,8 @@ func (r *ingestor) poll(ctx context.Context, root string, optional bool) (passSt
 	return stats, nil
 }
 
-// ingestSource reads the outcome's pending bytes in bounded batches, parses
-// the complete records, and commits them through the write path. It returns
-// how many events were newly inserted, the committed byte cursor, and the
-// stop error when the parser stopped the source at a record. It never
-// acknowledges: the caller records the cursor, so a crash in between replays
-// the same bytes safely on the next pass.
 func (r *ingestor) ingestSource(ctx context.Context, o watch.Outcome) (int, int64, *events.StopError, error) {
 	inserted := 0
-	// readEnd bounds the bytes of one read. A batch never splits a record,
-	// so when the pending bytes hold one record larger than the batch bound,
-	// the read extends to that record's end instead of stalling below it.
-	// The growth is still bounded: the parser stops the source as soon as
-	// the incomplete record exceeds the configured size limit.
 	readEnd := min(o.End, o.Cursor+maxBatchBytes)
 	for o.Cursor < o.End {
 		chunk := o
@@ -313,8 +248,6 @@ func (r *ingestor) ingestSource(ctx context.Context, o watch.Outcome) (int, int6
 		}
 		opts := events.Options{SourceScope: o.SourceID, MaxRecordBytes: r.maxRecordBytes}
 		if chunk.Cursor > 0 {
-			// Records past offset 0 may not name their session (Codex):
-			// the committed first record does.
 			st, err := r.hub.SourceState(ctx, o.SourceID)
 			if err != nil {
 				return inserted, o.Cursor, nil, err
@@ -337,10 +270,6 @@ func (r *ingestor) ingestSource(ctx context.Context, o watch.Outcome) (int, int6
 		}
 		var stop *events.StopError
 		if errors.As(perr, &stop) {
-			// The valid prefix before the offending offset is committed; the
-			// source stops there until the remedy on the diagnostic is
-			// applied. Bytes are never skipped, so this pass must not read
-			// past the stop.
 			r.reportStop(o, stop)
 			return inserted, o.Cursor, stop, nil
 		}
@@ -349,26 +278,18 @@ func (r *ingestor) ingestSource(ctx context.Context, o watch.Outcome) (int, int6
 		}
 		if len(res.Events) == 0 {
 			if chunk.End >= o.End {
-				return inserted, o.Cursor, nil, nil // one incomplete record still growing
+				return inserted, o.Cursor, nil, nil
 			}
-			// No complete record within a full read: one record exceeds the
-			// batch bound. Extend the read to the record's end.
 			readEnd = min(o.End, readEnd+maxBatchBytes)
 		}
 	}
 	return inserted, o.Cursor, nil, nil
 }
 
-// reportSource writes one source's failure. The source keeps its checkpoint
-// and retries on the next pass; other sources are unaffected.
 func (r *ingestor) reportSource(path string, err error) {
 	fmt.Fprintf(r.stderr, "ohya: %s: %v\n", path, err)
 }
 
-// reportStop writes a source's stopping diagnostic once per offset. The text
-// carries offsets, reasons and the remedy only, never transcript content.
-// The remedy is the decision ADR 0004 owns: a size stop clears by rerunning
-// with a larger --max-record-bytes, every other stop by repairing the file.
 func (r *ingestor) reportStop(o watch.Outcome, stop *events.StopError) {
 	if off, ok := r.reported[o.SourceID]; ok && off == stop.Offset {
 		return
@@ -381,9 +302,6 @@ func (r *ingestor) reportStop(o watch.Outcome, stop *events.StopError) {
 	fmt.Fprintf(r.stderr, "ohya: %s: %v%s (docs/adr/0004-stopped-source-recovery.md)\n", o.Path, stop, remedy)
 }
 
-// stopRemedy is the stable code a stop carries in --json output (ADR 0005):
-// raise the record bound, or repair the source file. The stderr diagnostic
-// states the same decision as prose (ADR 0004).
 func stopRemedy(recordTooLarge bool) string {
 	if recordTooLarge {
 		return "increase_max_record_bytes"
@@ -391,12 +309,6 @@ func stopRemedy(recordTooLarge bool) string {
 	return "repair_source_file"
 }
 
-// discoverSessionFiles walks one agent's session directory and returns every
-// session file. Claude Code main sessions and subagent transcripts are
-// *.jsonl, while spilled tool output and memory files carry other
-// extensions; Codex rollouts are rollout-*.jsonl under dated directories;
-// Pi sessions are <timestamp>_<uuid>.jsonl under encoded-cwd directories. A
-// missing root wraps fs.ErrNotExist.
 func discoverSessionFiles(root string) ([]string, error) {
 	var files []string
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {

@@ -12,9 +12,6 @@ import (
 	"github.com/nibzard/ohya/internal/store"
 )
 
-// parseVersionLine splits the version line into its key=value pairs: the
-// first token must be the program name, every later token exactly one
-// key=value pair, and no key may repeat.
 func parseVersionLine(t *testing.T, line string) map[string]string {
 	t.Helper()
 	fields := strings.Fields(line)
@@ -35,10 +32,6 @@ func parseVersionLine(t *testing.T, line string) map[string]string {
 	return pairs
 }
 
-// TestVersionAliasesPrintSameLine pins the T061 acceptance: `ohya version`,
-// `ohya --version`, and `ohya -version` exit 0 with nothing on stderr and
-// print the same single line, whose pairs cover every key and match the
-// constants they report.
 func TestVersionAliasesPrintSameLine(t *testing.T) {
 	var want string
 	for _, args := range [][]string{{"version"}, {"--version"}, {"-version"}} {
@@ -92,9 +85,6 @@ func TestVersionAliasesPrintSameLine(t *testing.T) {
 	}
 }
 
-// TestVersionRejectsArguments pins the usage contract for the version
-// command: an extra argument or flag is a usage error (exit 2), not a
-// silently ignored one.
 func TestVersionRejectsArguments(t *testing.T) {
 	for _, args := range [][]string{{"version", "extra"}, {"--version", "extra"}} {
 		var stdout, stderr bytes.Buffer

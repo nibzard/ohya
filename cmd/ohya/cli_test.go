@@ -10,8 +10,6 @@ import (
 	"testing"
 )
 
-// helpCases lists every help surface of the CLI: the bare commands and -h or
-// --help at every level (T059 acceptance).
 func helpCases() []struct {
 	name string
 	args []string
@@ -41,9 +39,6 @@ func helpCases() []struct {
 	}
 }
 
-// TestHelpIsSuccessOnStdout pins the help contract: exit 0, nothing on
-// stderr, and the shared template — usage line, description, arguments or
-// commands, flags, examples — on stdout.
 func TestHelpIsSuccessOnStdout(t *testing.T) {
 	for _, tc := range helpCases() {
 		t.Run(tc.name, func(t *testing.T) {
@@ -68,11 +63,9 @@ func TestHelpIsSuccessOnStdout(t *testing.T) {
 			if !strings.Contains(out, "  "+tc.spec.usageLine+"\n") {
 				t.Fatalf("help output lacks the usage line %q:\n%s", tc.spec.usageLine, out)
 			}
-			// The universal help flag is documented, spelled with two dashes.
 			if !strings.Contains(out, "--help") {
 				t.Fatalf("help output lacks the --help flag:\n%s", out)
 			}
-			// Every documented flag name appears with two dashes.
 			for _, line := range strings.Split(out, "\n") {
 				if strings.HasPrefix(line, "  -") && !strings.HasPrefix(line, "  --") {
 					t.Fatalf("flag spelled with one dash: %q", line)
@@ -82,8 +75,6 @@ func TestHelpIsSuccessOnStdout(t *testing.T) {
 	}
 }
 
-// TestRootHelpStatesContract pins the promises the top-level help carries:
-// the non-interactive design and the exit codes.
 func TestRootHelpStatesContract(t *testing.T) {
 	var stdout bytes.Buffer
 	if code := cliMain(nil, &stdout, &bytes.Buffer{}); code != 0 {
@@ -100,9 +91,6 @@ func TestRootHelpStatesContract(t *testing.T) {
 	}
 }
 
-// TestUsageErrorsExitTwoOnStderr pins the usage-failure contract: exit 2,
-// one stderr line naming the problem plus a pointer to the matching --help,
-// and nothing on stdout.
 func TestUsageErrorsExitTwoOnStderr(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -143,12 +131,7 @@ func TestUsageErrorsExitTwoOnStderr(t *testing.T) {
 	}
 }
 
-// TestProcessExitCodes exercises the real process behind the test binary
-// (child-run in TestMain), so the contract covers main's os.Exit and the
-// process streams, not only cliMain's return value.
 func TestProcessExitCodes(t *testing.T) {
-	// A database path whose parent is a regular file: opening it fails
-	// after flag parsing, which makes the run a failure, not a usage error.
 	blocker, err := os.CreateTemp(t.TempDir(), "blocker")
 	if err != nil {
 		t.Fatal(err)

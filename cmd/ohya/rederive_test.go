@@ -12,9 +12,6 @@ import (
 	"github.com/nibzard/ohya/internal/store"
 )
 
-// ingestFixtureOnce ingests the main Claude Code fixture through the
-// production parser and write path, the way `ohya ingest` does, and returns
-// the open hub plus the device ID that owns the source.
 func ingestFixtureOnce(t *testing.T, dbPath string) (*store.DB, string) {
 	t.Helper()
 	data, err := os.ReadFile(fixturePath("main-session.jsonl"))
@@ -54,7 +51,6 @@ func TestRederiveCommandIsNoOpWhenCurrent(t *testing.T) {
 	if out := stdout.String(); !strings.Contains(out, "nothing re-derived") {
 		t.Fatalf("output = %q, want the no-op report", out)
 	}
-	// The no-op commits nothing: the rows and their version stamps stand.
 	if after := countRows(t, hub.Writer(), `SELECT count(*) FROM events`); after != before {
 		t.Fatalf("events after rederive = %d, want %d", after, before)
 	}
@@ -65,8 +61,6 @@ func TestRederiveCommandIsNoOpWhenCurrent(t *testing.T) {
 	}
 }
 
-// eventsClaudeVersion reads the Claude Code parser's output version without
-// importing internal/claudecode here; the binding under test carries it.
 func eventsClaudeVersion() int {
 	for _, p := range events.Derivers() {
 		if p.Agent == "claude-code" {

@@ -21,8 +21,6 @@ import (
 	"github.com/nibzard/ohya/internal/watch"
 )
 
-// fixtureNativeID is the main session's sessionId in main-session.jsonl; the
-// subagent fixture reuses it.
 const fixtureNativeID = "00000000-0000-4000-8000-0000000000a1"
 
 func fixturePath(name string) string {
@@ -67,8 +65,6 @@ func appendFile(t *testing.T, path, content string) {
 	}
 }
 
-// replaceFile puts new content at path through a distinct inode, so the path
-// holds a genuinely new file incarnation.
 func replaceFile(t *testing.T, path, content string) {
 	t.Helper()
 	tmp := path + ".replacement"
@@ -78,14 +74,12 @@ func replaceFile(t *testing.T, path, content string) {
 	}
 }
 
-// sliceEnv is one local hub facing a synthetic Claude Code projects
-// directory.
 type sliceEnv struct {
 	root           string
 	dbPath         string
 	stateDir       string
-	agent          string // the watched agent; newSliceEnv picks Claude Code
-	maxRecordBytes int64  // per-record bound for the runner; 0 selects the default
+	agent          string
+	maxRecordBytes int64
 }
 
 func newSliceEnv(t *testing.T) *sliceEnv {
@@ -103,18 +97,14 @@ func newSliceEnv(t *testing.T) *sliceEnv {
 	return e
 }
 
-// claudeRoots watches the projects directory as an explicit Claude Code root.
 func (e *sliceEnv) claudeRoots() []agentRoot {
 	return []agentRoot{{agent: claudecode.AgentName, dir: e.root, flag: "claude-root"}}
 }
 
-// session places a session file at the watched path layout.
 func (e *sliceEnv) session(name string) string {
 	return filepath.Join(e.root, "fixture-project", name)
 }
 
-// newRunner builds the hub database, the device identity, the watcher and one
-// ingestor, the way runIngest does. The returned func closes the database.
 func (e *sliceEnv) newRunner(t *testing.T, stderr io.Writer) (*ingestor, func()) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(e.dbPath), 0o700); err != nil {
@@ -140,8 +130,6 @@ func (e *sliceEnv) newRunner(t *testing.T, stderr io.Writer) (*ingestor, func())
 	return newIngestor(hub, w, e.agent, deviceID, e.maxRecordBytes, stderr), func() { hub.Close() }
 }
 
-// runPass runs exactly one polling pass against a fresh runner, like one
-// process restart, and returns its stats and diagnostics.
 func (e *sliceEnv) runPass(t *testing.T) (passStats, string) {
 	t.Helper()
 	var stderr bytes.Buffer
@@ -192,14 +180,11 @@ func soleSourceID(t *testing.T, db *sql.DB) (string, int64) {
 	return id, cursor
 }
 
-// soleCheckpoint returns the one checkpointed source's ID and acknowledged
-// cursor from the local state file.
 func soleCheckpoint(t *testing.T, stateDir string) (string, int64) {
 	t.Helper()
 	return soleAgentCheckpoint(t, stateDir, claudecode.AgentName)
 }
 
-// soleAgentCheckpoint reads one agent's checkpoint file the same way.
 func soleAgentCheckpoint(t *testing.T, stateDir, agent string) (string, int64) {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(stateDir, "sources", agent+".json"))
@@ -224,9 +209,6 @@ func soleAgentCheckpoint(t *testing.T, stateDir, agent string) (string, int64) {
 	return "", 0
 }
 
-// TestIngestImportsHistoryThenPollsIncrementally drives the whole slice on
-// the main fixture: the first pass imports the history once, later passes
-// read only the new bytes, and idle passes insert nothing.
 func TestIngestImportsHistoryThenPollsIncrementally(t *testing.T) {
 	e := newSliceEnv(t)
 	session := e.session("main-session.jsonl")
@@ -240,7 +222,6 @@ func TestIngestImportsHistoryThenPollsIncrementally(t *testing.T) {
 		t.Fatalf("first pass diagnostics: %s", stderr)
 	}
 
-	// One writer committed; a restricted read-only connection sees it.
 	hub := openHub(t, e.dbPath)
 	sid := store.SessionID(e.deviceID(t), claudecode.AgentName, fixtureNativeID)
 	readers, err := hub.Reader()
@@ -266,8 +247,6 @@ func TestIngestImportsHistoryThenPollsIncrementally(t *testing.T) {
 		t.Fatalf("token totals = %d/%d, want 180/47", input, output)
 	}
 
-	// The acknowledged checkpoint reached the end of the file: the next poll
-	// starts reading at the cursor, not at byte zero.
 	if _, cursor := soleCheckpoint(t, e.stateDir); cursor != 6528 {
 		t.Fatalf("checkpoint cursor = %d, want 6528", cursor)
 	}
@@ -298,9 +277,6 @@ func TestIngestImportsHistoryThenPollsIncrementally(t *testing.T) {
 	}
 }
 
-// TestIngestMainAndSubagentFilesShareOneSession covers the verified layout:
-// a subagent transcript is its own source, but its records reuse the parent
-// session's identity, so one session accumulates both files' events.
 func TestIngestMainAndSubagentFilesShareOneSession(t *testing.T) {
 	e := newSliceEnv(t)
 	copyFixture(t, e.session("main-session.jsonl"), "main-session.jsonl")
@@ -316,8 +292,6 @@ func TestIngestMainAndSubagentFilesShareOneSession(t *testing.T) {
 	}
 	hub := openHub(t, e.dbPath)
 	sid := store.SessionID(e.deviceID(t), claudecode.AgentName, fixtureNativeID)
-	// The subagent file's started/result records carry no sessionId and land
-	// in the source-scoped synthetic session, never in the parent's.
 	if n := countRows(t, hub.Writer(), `SELECT count(*) FROM sessions`); n != 2 {
 		t.Fatalf("sessions = %d, want 2 (parent and synthetic)", n)
 	}
@@ -331,11 +305,6 @@ func TestIngestMainAndSubagentFilesShareOneSession(t *testing.T) {
 	}
 }
 
-// TestIngestHardlinkedBackupKeepsCheckpoint covers a hardlinking backup tool
-// inside the watched tree: discovery passes two paths on one platform file
-// identity to the watcher. The incarnation is watched once, and when the
-// original path disappears the acknowledged checkpoint rebinds to the
-// surviving link instead of being dropped and re-imported from zero.
 func TestIngestHardlinkedBackupKeepsCheckpoint(t *testing.T) {
 	e := newSliceEnv(t)
 	session := e.session("main-session.jsonl")
@@ -348,7 +317,6 @@ func TestIngestHardlinkedBackupKeepsCheckpoint(t *testing.T) {
 		t.Skipf("hardlinks unavailable: %v", err)
 	}
 
-	// Both paths are discovered, but the shared incarnation is watched once.
 	stats, stderr := e.runPass(t)
 	if stats.sources != 1 || stats.inserted != 16 {
 		t.Fatalf("first pass = %+v, want 16 events from 1 source", stats)
@@ -361,9 +329,6 @@ func TestIngestHardlinkedBackupKeepsCheckpoint(t *testing.T) {
 		t.Fatalf("checkpoint cursor = %d, want 6528", cursor)
 	}
 
-	// The original disappears and only the backup link remains: the source
-	// keeps its ID and acknowledged cursor, so the pass imports nothing and
-	// reports no re-import.
 	if err := os.Remove(session); err != nil {
 		t.Fatal(err)
 	}
@@ -387,9 +352,6 @@ func TestIngestHardlinkedBackupKeepsCheckpoint(t *testing.T) {
 	}
 }
 
-// TestIngestIncompleteTailCommitsOnlyCompleteRecords covers a crash during a
-// session write: the partial record stays pending, and once the writer
-// completes the line, the next pass ingests it whole.
 func TestIngestIncompleteTailCommitsOnlyCompleteRecords(t *testing.T) {
 	e := newSliceEnv(t)
 	session := e.session("incomplete-tail.jsonl")
@@ -406,7 +368,7 @@ func TestIngestIncompleteTailCommitsOnlyCompleteRecords(t *testing.T) {
 		t.Fatalf("checkpoint cursor = %d, want 1545", cursor)
 	}
 
-	appendFile(t, session, `"}]}}`+"\n") // the writer completes the record
+	appendFile(t, session, `"}]}}`+"\n")
 	stats, _ = e.runPass(t)
 	if stats.inserted != 1 {
 		t.Fatalf("pass after completion = %+v, want 1 event", stats)
@@ -420,16 +382,13 @@ func TestIngestIncompleteTailCommitsOnlyCompleteRecords(t *testing.T) {
 	}
 }
 
-// TestIngestMalformedLineStopsSourceAndOthersContinue covers the wild format
-// reality: a complete but invalid record stops its source at the offending
-// offset with a content-free diagnostic, while the other sources commit.
 func TestIngestMalformedLineStopsSourceAndOthersContinue(t *testing.T) {
 	e := newSliceEnv(t)
 	copyFixture(t, filepath.Join(e.root, "a-project", "bad.jsonl"), "malformed-line.jsonl")
 	copyFixture(t, e.session("main-session.jsonl"), "main-session.jsonl")
 
 	stats, stderr := e.runPass(t)
-	if stats.sources != 2 || stats.inserted != 18 || stats.stopped != 1 || stats.failed != 0 { // 2 valid prefix + 16 good
+	if stats.sources != 2 || stats.inserted != 18 || stats.stopped != 1 || stats.failed != 0 {
 		t.Fatalf("pass = %+v, want 18 events from 2 sources, 1 stopped", stats)
 	}
 	if !strings.Contains(stderr, "offset 1094") {
@@ -442,8 +401,6 @@ func TestIngestMalformedLineStopsSourceAndOthersContinue(t *testing.T) {
 		t.Fatalf("diagnostic leaks transcript content:\n%s", stderr)
 	}
 
-	// The stopped source keeps its checkpoint at the offending offset; its
-	// valid prefix is stored, the valid line after the malformed one is not.
 	hub := openHub(t, e.dbPath)
 	if n := countRows(t, hub.Writer(), `SELECT count(*) FROM sources`); n != 2 {
 		t.Fatalf("sources = %d, want 2", n)
@@ -454,18 +411,12 @@ func TestIngestMalformedLineStopsSourceAndOthersContinue(t *testing.T) {
 		t.Fatalf("bad source events = %d, want 2", n)
 	}
 
-	// A later pass still ingests nothing from the stopped source, and the
-	// diagnostic is not reported again within one run. The source counts as
-	// stopped again — an unrepaired file degrades every --once pass.
 	stats, _ = e.runPass(t)
 	if stats.inserted != 0 || stats.stopped != 1 {
 		t.Fatalf("later pass = %+v, want 0 events, 1 stopped", stats)
 	}
 }
 
-// TestIngestReportsPersistentDiagnosticOncePerRun pins the polling behavior:
-// one continuous run reports a persistent stop once per offset, not once per
-// poll.
 func TestIngestReportsPersistentDiagnosticOncePerRun(t *testing.T) {
 	e := newSliceEnv(t)
 	copyFixture(t, e.session("malformed-line.jsonl"), "malformed-line.jsonl")
@@ -482,11 +433,6 @@ func TestIngestReportsPersistentDiagnosticOncePerRun(t *testing.T) {
 	}
 }
 
-// TestIngestOversizedRecordStopRecoversWithLargerLimit covers the remedy
-// ADR 0004 owns for a record above the size limit: the stop diagnostic names
-// --max-record-bytes, and rerunning with a larger limit resumes the same
-// source at the stop offset — nothing re-imports, nothing skips, and the
-// source reaches the end of the file.
 func TestIngestOversizedRecordStopRecoversWithLargerLimit(t *testing.T) {
 	e := newSliceEnv(t)
 	session := e.session("oversized.jsonl")
@@ -499,8 +445,6 @@ func TestIngestOversizedRecordStopRecoversWithLargerLimit(t *testing.T) {
 	after := line("after")
 	writeFile(t, session, before+oversized+after)
 
-	// Default limit: the source stops at the oversized record with the
-	// flag named as the remedy.
 	stats, stderr := e.runPass(t)
 	if stats.inserted != 1 || stats.stopped != 1 || stats.failed != 0 {
 		t.Fatalf("pass = %+v, want 1 event before the stop, 1 stopped", stats)
@@ -514,8 +458,6 @@ func TestIngestOversizedRecordStopRecoversWithLargerLimit(t *testing.T) {
 		t.Fatalf("checkpoint cursor = %d, want the stop offset %d", cursor, len(before))
 	}
 
-	// Rerun with a larger limit, like a restarted process: the source keeps
-	// its checkpoint, ingests past the stop, and reports nothing.
 	e.maxRecordBytes = claudecode.DefaultMaxRecordBytes + 4096
 	stats, stderr = e.runPass(t)
 	if stats.inserted != 2 || stats.stopped != 0 || stats.failed != 0 {
@@ -533,9 +475,6 @@ func TestIngestOversizedRecordStopRecoversWithLargerLimit(t *testing.T) {
 	}
 }
 
-// TestIngestUnreadableSourceCountsFailed covers an unreadable source: the
-// watcher's read fails after registration, the failure is reported and
-// counted, and the other sources still commit.
 func TestIngestUnreadableSourceCountsFailed(t *testing.T) {
 	e := newSliceEnv(t)
 	copyFixture(t, e.session("main-session.jsonl"), "main-session.jsonl")
@@ -544,8 +483,6 @@ func TestIngestUnreadableSourceCountsFailed(t *testing.T) {
 	if err := os.Chmod(locked, 0); err != nil {
 		t.Fatal(err)
 	}
-	// The failure path needs the permission to bite; a privileged process
-	// (root) reads through mode 0.
 	if f, err := os.Open(locked); err == nil {
 		f.Close()
 		t.Skipf("chmod 0 left %s readable", locked)
@@ -560,9 +497,6 @@ func TestIngestUnreadableSourceCountsFailed(t *testing.T) {
 	}
 }
 
-// TestIngestOnceDegradedReturnsErrDegraded covers the typed result behind
-// exit 3: a --once pass with a stopped source returns errDegraded after the
-// summary line, which carries the failed and stopped counts.
 func TestIngestOnceDegradedReturnsErrDegraded(t *testing.T) {
 	e := newSliceEnv(t)
 	copyFixture(t, e.session("malformed-line.jsonl"), "malformed-line.jsonl")
@@ -579,9 +513,6 @@ func TestIngestOnceDegradedReturnsErrDegraded(t *testing.T) {
 	}
 }
 
-// TestIngestOnceExitCodes exercises the real process (child-run in TestMain),
-// the T060 acceptance: `ingest --once` exits 0 when every source imports, 3
-// with a stopped source (oversize record), and 3 with an unreadable source.
 func TestIngestOnceExitCodes(t *testing.T) {
 	line := func(content string) string {
 		return fmt.Sprintf(`{"type":"user","sessionId":%q,"message":{"role":"user","content":%q}}`+"\n",
@@ -665,10 +596,6 @@ func TestIngestOnceExitCodes(t *testing.T) {
 	})
 }
 
-// TestIngestRecordAboveBatchBoundStillIngests covers the read path behind the
-// flag: a batch never splits a record, so one record larger than the batch
-// bound is read whole — up to the configured record size limit — instead of
-// stalling the source below it.
 func TestIngestRecordAboveBatchBoundStillIngests(t *testing.T) {
 	e := newSliceEnv(t)
 	e.maxRecordBytes = maxBatchBytes + 2<<20
@@ -678,7 +605,7 @@ func TestIngestRecordAboveBatchBoundStillIngests(t *testing.T) {
 			fixtureNativeID, content)
 	}
 	content := line("before") +
-		line(strings.Repeat("x", int(maxBatchBytes)+1<<20)) + // one record above the batch bound
+		line(strings.Repeat("x", int(maxBatchBytes)+1<<20)) +
 		line("after")
 	writeFile(t, session, content)
 
@@ -698,10 +625,6 @@ func TestIngestRecordAboveBatchBoundStillIngests(t *testing.T) {
 	}
 }
 
-// TestIngestReplacementAndTruncationReimportUnderNewSources covers changed
-// incarnations: replacement and truncation start new sources, which may
-// reimport history. Deduplication keys cannot merge incarnations; the run
-// says so instead of staying silent.
 func TestIngestReplacementAndTruncationReimportUnderNewSources(t *testing.T) {
 	e := newSliceEnv(t)
 	path := e.session("session.jsonl")
@@ -715,8 +638,6 @@ func TestIngestReplacementAndTruncationReimportUnderNewSources(t *testing.T) {
 		t.Fatalf("first pass = %+v, want 2 events", stats)
 	}
 
-	// Replacement: a new incarnation at the same path re-imports from zero
-	// under a new source ID.
 	replaceFile(t, path, line("replacement one", "sess-2")+line("replacement two", "sess-2"))
 	stats, stderr := e.runPass(t)
 	if stats.inserted != 2 {
@@ -726,8 +647,6 @@ func TestIngestReplacementAndTruncationReimportUnderNewSources(t *testing.T) {
 		t.Fatalf("replacement went unreported:\n%s", stderr)
 	}
 
-	// Truncation below the acknowledged cursor also starts a new source; the
-	// remaining complete prefix re-imports.
 	if err := os.Truncate(path, int64(len(line("replacement one", "sess-2")))); err != nil {
 		t.Fatal(err)
 	}
@@ -753,10 +672,6 @@ func TestIngestReplacementAndTruncationReimportUnderNewSources(t *testing.T) {
 	}
 }
 
-// TestIngestCrashBetweenCommitAndAcknowledge kills a helper process after
-// the write path committed a source's bytes but before the checkpoint
-// acknowledged them. Restarting replays the same bytes, inserts nothing, and
-// catches the checkpoint up: ingestion is idempotent across the crash.
 func TestIngestCrashBetweenCommitAndAcknowledge(t *testing.T) {
 	e := newSliceEnv(t)
 	copyFixture(t, e.session("main-session.jsonl"), "main-session.jsonl")
@@ -771,7 +686,6 @@ func TestIngestCrashBetweenCommitAndAcknowledge(t *testing.T) {
 		t.Fatalf("helper did not crash as intended: %v", err)
 	}
 
-	// The commit is durable; the local checkpoint never advanced.
 	hub := openHub(t, e.dbPath)
 	if n := countRows(t, hub.Writer(), `SELECT count(*) FROM events`); n != 16 {
 		t.Fatalf("events after crash = %d, want 16", n)
@@ -784,7 +698,6 @@ func TestIngestCrashBetweenCommitAndAcknowledge(t *testing.T) {
 		t.Fatalf("checkpoint cursor after crash = %d, want 0", cursor)
 	}
 
-	// The restart replays the acknowledged-nowhere bytes: nothing new.
 	stats, stderr := e.runPass(t)
 	if stats.inserted != 0 {
 		t.Fatalf("restart after crash inserted %d events, want 0", stats.inserted)
@@ -804,9 +717,6 @@ func TestIngestCrashBetweenCommitAndAcknowledge(t *testing.T) {
 	}
 }
 
-// TestIngestCrashHelper is the helper process for the crash test above. It
-// drives the production wiring through the durable commit, then dies before
-// the acknowledgment.
 func TestIngestCrashHelper(t *testing.T) {
 	db := os.Getenv("OHYA_SLICE_CRASH_DB")
 	if db == "" {
@@ -855,15 +765,9 @@ func TestIngestCrashHelper(t *testing.T) {
 		panic(fmt.Sprintf("ingestSource = %d inserts, cursor %d, stopped %t, %v",
 			inserted, committed, stop != nil, err))
 	}
-	os.Exit(3) // die after the durable commit, before the acknowledgment
+	os.Exit(3)
 }
 
-// TestIngestRunsUntilCanceled covers continuous mode: the loop keeps serving
-// passes and returns without error once the context is canceled. The context
-// is canceled from the first pass summary, not from a fixed deadline: under
-// load a first pass can outgrow any short deadline, report its half-finished
-// sources to stderr, and legally print "imported 0 events" — the assertion
-// would race the machine's speed. A safety timeout still bounds the test.
 func TestIngestRunsUntilCanceled(t *testing.T) {
 	e := newSliceEnv(t)
 	copyFixture(t, e.session("main-session.jsonl"), "main-session.jsonl")
@@ -884,8 +788,6 @@ func TestIngestRunsUntilCanceled(t *testing.T) {
 	}
 }
 
-// firstWriteCanceler cancels cancel at the first write, ending the ingest
-// loop right after the one summary this test checks.
 type firstWriteCanceler struct {
 	w      io.Writer
 	cancel context.CancelFunc
@@ -906,7 +808,6 @@ func TestIngestMissingClaudeRootFails(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "does not exist") {
 		t.Fatalf("error = %v, want the missing projects directory", err)
 	}
-	// The failure created nothing: no database, no device identity.
 	if _, err := os.Stat(e.dbPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("database %s exists after the failed run: %v", e.dbPath, err)
 	}

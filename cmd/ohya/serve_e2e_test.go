@@ -1,11 +1,3 @@
-// End-to-end test of the serving and joining commands: a real `ohya serve`
-// child process provisions the coordination plane, enrolls its transport
-// node, and serves the sync endpoint; `ohya devices invite` issues a join
-// code; a real `ohya join` child pairs with it and uploads the fixture
-// sessions; and `ohya mcp --remote` serves the sql and annotate tools to a
-// real MCP client over the same tailnet. Everything runs on loopback with
-// free ports and per-test state directories — no external coordination
-// service, matching the local-first control-plane decision of ADR 0002.
 package main
 
 import (
@@ -29,7 +21,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// freeTCPPort reserves one free loopback TCP port and releases it.
 func freeTCPPort(t *testing.T) int {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -40,7 +31,6 @@ func freeTCPPort(t *testing.T) int {
 	return ln.Addr().(*net.TCPAddr).Port
 }
 
-// freeUDPPort reserves one free loopback UDP port and releases it.
 func freeUDPPort(t *testing.T) int {
 	t.Helper()
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
@@ -51,7 +41,6 @@ func freeUDPPort(t *testing.T) int {
 	return pc.LocalAddr().(*net.UDPAddr).Port
 }
 
-// stopChild terminates a child gracefully and requires a clean exit.
 func stopChild(t *testing.T, cmd *exec.Cmd, stderr *bytes.Buffer, timeout time.Duration) {
 	t.Helper()
 	if cmd.Process == nil || cmd.ProcessState != nil {
@@ -72,8 +61,6 @@ func stopChild(t *testing.T, cmd *exec.Cmd, stderr *bytes.Buffer, timeout time.D
 	}
 }
 
-// hubCounts reads the hub database read-only: its events, sessions and
-// annotations, proving the joined device's uploads committed through serve.
 func hubCounts(t *testing.T, dbPath string) (events, sessions, annotations int) {
 	t.Helper()
 	db, err := sql.Open("sqlite3", "file:"+dbPath+"?mode=ro")
@@ -96,7 +83,6 @@ func hubCounts(t *testing.T, dbPath string) (events, sessions, annotations int) 
 	return events, sessions, annotations
 }
 
-// readDeviceID reads a state directory's device identity file.
 func readDeviceID(t *testing.T, stateDir string) string {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(stateDir, "device.json"))
@@ -112,8 +98,6 @@ func readDeviceID(t *testing.T, stateDir string) string {
 	return id.DeviceID
 }
 
-// e2eCall calls one tool on the remote bridge session and decodes its
-// structured content into out.
 func e2eCall(t *testing.T, ctx context.Context, session *mcp.ClientSession, tool string, args map[string]any, out any) {
 	t.Helper()
 	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
@@ -132,8 +116,6 @@ func e2eCall(t *testing.T, ctx context.Context, session *mcp.ClientSession, tool
 	}
 }
 
-// waitServeReady waits until the serve child prints its serving line, and
-// fails with its collected log otherwise.
 func waitServeReady(t *testing.T, lines <-chan string, serveLog *bytes.Buffer) {
 	t.Helper()
 	timer := time.NewTimer(120 * time.Second)
@@ -151,11 +133,6 @@ func waitServeReady(t *testing.T, lines <-chan string, serveLog *bytes.Buffer) {
 	}
 }
 
-// TestServeJoinEndToEnd walks the whole device path: serve provisions the
-// coordination plane and serves the endpoint; invite issues one join code;
-// join pairs a device and uploads the fixture sessions; the remote MCP
-// bridge queries and annotates the shared history through the same bounded
-// engine, with the annotation writer derived from the authenticated device.
 func TestServeJoinEndToEnd(t *testing.T) {
 	if os.Getenv("CI") != "" && runtime.GOOS == "darwin" {
 		t.Skip("darwin CI: the pinned transport's macOS runtime behavior is unverified (backlog T046); the stack runs on the development platform")
@@ -178,12 +155,11 @@ func TestServeJoinEndToEnd(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(claudeRoot, "session.jsonl"), fixture, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	const wantEvents = 16 // the fixture's complete records
+	const wantEvents = 16
 
 	ctrlAddr := fmt.Sprintf("127.0.0.1:%d", freeTCPPort(t))
 	stunAddr := fmt.Sprintf("127.0.0.1:%d", freeUDPPort(t))
 
-	// The hub: a real serve child on free loopback ports.
 	serveLog := &bytes.Buffer{}
 	serveCmd := exec.Command(os.Args[0], "child-serve",
 		"--db", hubDB, "--state", hubState,
@@ -211,7 +187,6 @@ func TestServeJoinEndToEnd(t *testing.T) {
 	}()
 	waitServeReady(t, lines, serveLog)
 
-	// One join code from the real invite surface.
 	var invOut bytes.Buffer
 	if err := runDevicesInvite([]string{"--state", hubState}, &invOut, os.Stderr); err != nil {
 		t.Fatal(err)
@@ -221,8 +196,6 @@ func TestServeJoinEndToEnd(t *testing.T) {
 		t.Fatalf("join code = %q; want invitation and preauth key halves", code)
 	}
 
-	// The device: a real join child, pairing with the code and uploading the
-	// fixture sessions to the hub.
 	joinLog := &bytes.Buffer{}
 	joinCmd := exec.Command(os.Args[0], "child-join",
 		"--control", "http://"+ctrlAddr,
@@ -241,7 +214,6 @@ func TestServeJoinEndToEnd(t *testing.T) {
 		}
 	}()
 
-	// Wait for the fixture to land in the hub database.
 	upCtx, upCancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer upCancel()
 	for {
@@ -258,9 +230,6 @@ func TestServeJoinEndToEnd(t *testing.T) {
 	}
 	t.Log("joined device's fixture sessions reached the hub")
 
-	// The remote MCP bridge in the README's bare form: a real mcp child
-	// with `--remote` alone (the default hub address), over the joined
-	// device's credential and transport node, driven by a real MCP client.
 	mcpCmd := exec.Command(os.Args[0], "child-mcp",
 		"--remote",
 		"--control", "http://"+ctrlAddr,
@@ -284,8 +253,6 @@ func TestServeJoinEndToEnd(t *testing.T) {
 		t.Fatalf("remote count rows = %+v; want %d events", count.Rows, wantEvents)
 	}
 
-	// Annotate one event through the bridge; the hub derives the writer from
-	// the authenticated device, and the database records it.
 	var ann struct {
 		Applied   int `json:"applied"`
 		Unchanged int `json:"unchanged"`
@@ -318,7 +285,6 @@ func TestServeJoinEndToEnd(t *testing.T) {
 		t.Fatalf("annotation writer = %q; want the joined device identity %q", writer, want)
 	}
 
-	// Both children stop cleanly on SIGTERM.
 	stopChild(t, joinCmd, joinLog, 30*time.Second)
 	stopChild(t, serveCmd, serveLog, 30*time.Second)
 }

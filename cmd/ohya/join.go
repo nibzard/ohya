@@ -1,17 +1,3 @@
-// The join subcommand: the device side of sync. One join code — printed by
-// `ohya devices invite`, carrying the T018 pairing invitation and the
-// single-use coordinator preauth key minted with it — enrolls this device's
-// transport node into the hub's tailnet and pairs its identity: the hub
-// mints and delivers the credential once, and the device keeps it in its
-// join state directory. Afterwards join uploads every watched agent source
-// to the hub through internal/uploader: batches of original records,
-// acknowledged durably, retried after reconnects, catching up offline from
-// the retained files.
-//
-// The join state directory is deliberately its own (default ~/.ohya/join):
-// its checkpoint files hold this hub's acknowledgments, which must never mix
-// with the acknowledgments of local ingestion on a machine that does both
-// (T019).
 package main
 
 import (
@@ -41,18 +27,16 @@ import (
 	"github.com/nibzard/ohya/internal/watch"
 )
 
-// joinOptions configures one join run.
 type joinOptions struct {
 	stateDir   string
 	controlURL string
 	hubAddr    string
-	code       string // join code; empty resumes an already-paired device
+	code       string
 	roots      []agentRoot
 	interval   time.Duration
 	stderr     io.Writer
 }
 
-// joinSpec is the join usage template.
 var joinSpec = commandSpec{
 	name:      "ohya join",
 	synopsis:  "pair a device with a hub and upload its agent sessions",
@@ -64,8 +48,6 @@ var joinSpec = commandSpec{
 	examples:  []string{"ohya join <code>", "ohya join --state ~/.ohya/join <code>"},
 }
 
-// runJoinCommand parses the join flags and runs the device side until the
-// process receives SIGINT or SIGTERM.
 func runJoinCommand(args []string, stdout, stderr io.Writer) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -126,10 +108,6 @@ func runJoinCommand(args []string, stdout, stderr io.Writer) error {
 	})
 }
 
-// runJoin pairs the device when needed, then uploads every watched agent
-// until ctx is done. It returns only when retrying cannot help: an unusable
-// identity or credential, a refused pairing, or a watcher state needing
-// recovery.
 func runJoin(ctx context.Context, o joinOptions) error {
 	if len(o.roots) == 0 {
 		return errors.New("no agent session directory to watch")
@@ -184,7 +162,7 @@ func runJoin(ctx context.Context, o joinOptions) error {
 	for _, root := range o.roots {
 		w, err := watch.New(o.stateDir, root.agent, watch.Options{})
 		if err != nil {
-			return err // includes watch.ErrStateLost: recovery, not a silent restart
+			return err
 		}
 		up, err := uploader.New(w, cred, dial, uploader.Options{
 			Agent:    root.agent,
@@ -199,7 +177,7 @@ func runJoin(ctx context.Context, o joinOptions) error {
 			errs <- up.Run(runCtx, func() ([]string, error) {
 				candidates, err := discoverSessionFiles(dir)
 				if optional && errors.Is(err, fs.ErrNotExist) {
-					return nil, nil // a default directory of an agent not installed
+					return nil, nil
 				}
 				return candidates, err
 			})
@@ -215,10 +193,6 @@ func runJoin(ctx context.Context, o joinOptions) error {
 	}
 }
 
-// pair enrolls the transport node (the dial brings it up, consuming the
-// single-use preauth key of the join code on a first enrollment) and
-// consumes the pairing invitation on one connection: the hub mints the
-// credential and delivers it exactly once, then the connection closes.
 func pair(ctx context.Context, node *tailcat.Node, hubAddr, invitation, deviceID string) (device.Credential, error) {
 	conn, err := node.Dial(ctx, hubAddr)
 	if err != nil {
@@ -238,8 +212,6 @@ func pair(ctx context.Context, node *tailcat.Node, hubAddr, invitation, deviceID
 	return device.Credential{DeviceID: reply.DeviceID, Secret: reply.Credential}, nil
 }
 
-// deviceHostname derives the device's stable tailnet hostname from its
-// identity: DNS-safe, unique per device identity, stable across runs.
 func deviceHostname(deviceID string) string {
 	id := strings.Map(func(r rune) rune {
 		switch {

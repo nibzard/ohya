@@ -124,6 +124,13 @@ check — pass the bound ingestion last ran with. Check a joined device's own
 state with `--state ~/.ohya/join` and its hub's coordination URL through
 `--control`.
 
+The stop check parses the first pending record at each source's
+acknowledged cursor with the given bound and reports a stop only when the
+parser stops exactly there. A source whose pending bytes parse is not
+stopped; it only waits for the next pass. The coordination check passes
+when the URL returns any HTTP response within 3 s, because the plane can
+answer 404 on its bare URL.
+
 `ohya ingest` watches `~/.claude/projects` (override with `--claude-root`),
 the Codex sessions directory, `$CODEX_HOME/sessions` or
 `~/.codex/sessions` (override with `--codex-root`), and the Pi agent
@@ -133,6 +140,10 @@ or `~/.pi/agent/sessions` (override with `--pi-root`). It stores everything in
 database directory and can be set with `--state`). A default directory that
 does not exist holds no sessions, so an agent you do not use costs nothing.
 A directory you pass must exist, and an empty value disables that agent.
+Every regular `*.jsonl` file under a root is a session file; spilled tool
+output and memory files use other extensions. A replaced or truncated file
+starts a new source that re-imports from byte zero, and ingest prints one
+line about it; new files stay silent.
 `--max-record-bytes` (default 1 MiB) bounds one record's JSON text — also a
 memory bound, since one record is held in memory up to it.
 The state directory holds `device.json`, the stable device identity,

@@ -1,9 +1,3 @@
-// The version command: one line naming the build and the data it writes.
-// Operators and agents compare a hub's parser output versions and schema
-// version before acting on its rows — a build refuses rows derived by a
-// newer parser (internal/store/rederive.go) — so the line must be readable
-// without opening any database.
-
 package main
 
 import (
@@ -19,7 +13,6 @@ import (
 	"github.com/nibzard/ohya/internal/store"
 )
 
-// versionSpec is the version usage template.
 var versionSpec = commandSpec{
 	name:      "ohya version",
 	synopsis:  "print the build, parser, and schema versions",
@@ -32,15 +25,11 @@ var versionSpec = commandSpec{
 	examples:  []string{"ohya version", "ohya --version"},
 }
 
-// isVersionArg matches the --version spellings the root command accepts, the
-// same one-or-two-dash rule as help.
 func isVersionArg(arg string) bool {
 	name := strings.TrimLeft(arg, "-")
 	return name != arg && name == "version"
 }
 
-// runVersionCommand prints the version line; `ohya --version` is an alias.
-// With --json it prints one ADR 0005 envelope instead.
 func runVersionCommand(args []string, stdout, stderr io.Writer) error {
 	c := newCommandFlags(versionSpec)
 	asJSON := c.fs.Bool("json", false, "print one JSON object instead of the text line (docs/adr/0005)")
@@ -61,9 +50,6 @@ func runVersionCommand(args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
-// versionJSONData is the version command's data payload. The keys are the
-// T061 text line's keys unchanged, so one vocabulary spans both outputs
-// (ADR 0005).
 type versionJSONData struct {
 	Version      string `json:"version"`
 	Revision     string `json:"revision"`
@@ -75,7 +61,6 @@ type versionJSONData struct {
 	ParserPi     int    `json:"parser.pi"`
 }
 
-// versionJSON prints the version report as one envelope.
 func versionJSON(stdout io.Writer) error {
 	schema, err := store.SchemaVersion()
 	if err != nil {
@@ -94,10 +79,6 @@ func versionJSON(stdout io.Writer) error {
 	})
 }
 
-// versionLine builds the one-line version report: the program name, then
-// space-separated key=value pairs in a fixed order. Values come from the
-// build metadata go build embeds, the newest embedded migration, and each
-// parser's OutputVersion constant.
 func versionLine() (string, error) {
 	version, revision, dirty, goVer := buildIdentity()
 	schema, err := store.SchemaVersion()
@@ -109,10 +90,6 @@ func versionLine() (string, error) {
 		claudecode.OutputVersion, codex.OutputVersion, pi.OutputVersion), nil
 }
 
-// buildIdentity extracts the build identity from runtime/debug.ReadBuildInfo,
-// which go build embeds without ldflags. A binary with no module version
-// reports version=devel; one built outside a version-controlled checkout
-// reports unknown revision and dirty state.
 func buildIdentity() (version, revision, dirty, goVer string) {
 	version, revision, dirty, goVer = "devel", "unknown", "unknown", runtime.Version()
 	info, ok := debug.ReadBuildInfo()
@@ -136,8 +113,6 @@ func buildIdentity() (version, revision, dirty, goVer string) {
 	return
 }
 
-// shortRevision truncates a revision to the short-SHA length; a shorter value
-// stays whole.
 func shortRevision(rev string) string {
 	if len(rev) > 7 {
 		return rev[:7]

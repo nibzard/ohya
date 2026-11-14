@@ -1,10 +1,5 @@
 package main
 
-// The --json contract tests (T062, ADR 0005): one golden test per command
-// for success and one failure — the goldens pin field names, order and the
-// stable values, scrubbing only what varies per run — plus one shared
-// decoder that decodes every command's output with the same envelope struct.
-
 import (
 	"bytes"
 	"context"
@@ -26,17 +21,12 @@ import (
 	"github.com/nibzard/ohya/internal/store"
 )
 
-// runCLI runs one invocation through the production exit-code mapping and
-// returns the exit code with both streams.
 func runCLI(args ...string) (int, string, string) {
 	var stdout, stderr bytes.Buffer
 	code := cliMain(args, &stdout, &stderr)
 	return code, stdout.String(), stderr.String()
 }
 
-// scrubJSONKeys replaces the string values of the named keys with a
-// "<key>" placeholder, so a golden comparison pins the shape and the stable
-// values while tolerating what varies per run.
 func scrubJSONKeys(t *testing.T, got string, keys ...string) string {
 	t.Helper()
 	for _, key := range keys {
@@ -49,7 +39,6 @@ func scrubJSONKeys(t *testing.T, got string, keys ...string) string {
 	return got
 }
 
-// scrubJSONNumbers replaces the numeric values of the named keys the same way.
 func scrubJSONNumbers(t *testing.T, got string, keys ...string) string {
 	t.Helper()
 	for _, key := range keys {
@@ -62,7 +51,6 @@ func scrubJSONNumbers(t *testing.T, got string, keys ...string) string {
 	return got
 }
 
-// goldenCompare fails unless got equals want exactly.
 func goldenCompare(t *testing.T, got, want string) {
 	t.Helper()
 	if got != want {
@@ -70,12 +58,10 @@ func goldenCompare(t *testing.T, got, want string) {
 	}
 }
 
-// dataNull reports whether the envelope's data is absent or the JSON null.
 func dataNull(data []byte) bool {
 	return len(data) == 0 || string(data) == "null"
 }
 
-// decodeEnvelope decodes one exactly-one-object envelope from out.
 func decodeEnvelope(t *testing.T, out string) jsonEnvelope {
 	t.Helper()
 	var env jsonEnvelope
@@ -89,8 +75,6 @@ func decodeEnvelope(t *testing.T, out string) jsonEnvelope {
 	return env
 }
 
-// pairDevice provisions a coordination plane, issues one join code, and
-// consumes it for deviceID, so a revoke or list has a paired device to name.
 func pairDevice(t *testing.T, stateDir, deviceID string) {
 	t.Helper()
 	provisionControl(t, stateDir)
@@ -113,7 +97,6 @@ func pairDevice(t *testing.T, stateDir, deviceID string) {
 	}
 }
 
-// jsonFixtureLine builds one Claude Code user record like the T060 tests.
 func jsonFixtureLine(content string) string {
 	return fmt.Sprintf(`{"type":"user","sessionId":%q,"message":{"role":"user","content":%q}}`+"\n",
 		fixtureNativeID, content)
@@ -135,9 +118,6 @@ func TestVersionJSONGolden(t *testing.T) {
 	}
 }
 
-// TestVersionJSONUsageErrorStaysText pins the ADR 0005 decision that usage
-// errors never produce an envelope: they keep the T059 contract — one stderr
-// line, exit 2, nothing on stdout.
 func TestVersionJSONUsageErrorStaysText(t *testing.T) {
 	code, out, stderr := runCLI("version", "--json", "extra")
 	if code != 2 || out != "" {
@@ -162,9 +142,6 @@ func TestRederiveJSONGolden(t *testing.T) {
 
 	t.Run("success rebuilds stale rows", func(t *testing.T) {
 		dbPath := filepath.Join(t.TempDir(), "hub.db")
-		// Ingest the Pi fixture (parser output version 2), then stamp its
-		// rows with version 1 to make them stale; the Claude Code parser is
-		// already at version 1 and the schema refuses lower stamps.
 		data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "pi", "main-session.jsonl"))
 		if err != nil {
 			t.Fatal(err)
@@ -299,7 +276,6 @@ func TestDevicesInviteJSONGolden(t *testing.T) {
 		if err != nil || len(invitation) < 16 || len(authKey) < 16 {
 			t.Fatalf("join code %q does not carry two secret halves (%v)", data.Code, err)
 		}
-		// The code is the operator's output: it never rides on stderr.
 		if strings.Contains(stderr, data.Code) {
 			t.Fatalf("stderr %q leaks the join code", stderr)
 		}
@@ -383,7 +359,6 @@ func TestIngestOnceJSONGolden(t *testing.T) {
 		if code != 3 {
 			t.Fatalf("exit code %d; want 3 (stderr %q)", code, stderr)
 		}
-		// Diagnostics stay on stderr; the envelope carries the facts.
 		if !strings.Contains(stderr, "--max-record-bytes") {
 			t.Fatalf("stderr %q misses the stop diagnostic", stderr)
 		}
@@ -414,9 +389,6 @@ func TestIngestOnceJSONGolden(t *testing.T) {
 	})
 }
 
-// TestJSONSharedEnvelopeDecoder is the T062 acceptance: every command's
-// --json output decodes with the same envelope struct — exactly one object,
-// schema_version 1, the command's name, and data xor error.
 func TestJSONSharedEnvelopeDecoder(t *testing.T) {
 	const deviceID = "0123456789abcdef0123456789abcdef"
 

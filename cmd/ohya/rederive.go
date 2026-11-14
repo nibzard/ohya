@@ -1,6 +1,3 @@
-// The rederive subcommand: rebuild normalized event rows and events_fts from
-// the stored raw records. Run it after upgrading to a build whose parser
-// carries a higher output version; an up-to-date hub is a no-op.
 package main
 
 import (
@@ -17,7 +14,6 @@ import (
 	"github.com/nibzard/ohya/internal/store"
 )
 
-// rederiveSpec is the rederive usage template.
 var rederiveSpec = commandSpec{
 	name:      "ohya rederive",
 	synopsis:  "rebuild normalized rows and events_fts after a parser upgrade",
@@ -29,9 +25,6 @@ var rederiveSpec = commandSpec{
 	examples:  []string{"ohya rederive", "ohya rederive --db ~/.ohya/hub.db"},
 }
 
-// runRederiveCommand parses the rederive flags and re-derives the hub
-// database in one transaction. With --json it prints one ADR 0005 envelope
-// instead of the text report.
 func runRederiveCommand(args []string, stdout, stderr io.Writer) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -76,7 +69,6 @@ func runRederiveCommand(args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
-// rederiveJSONData is the rederive command's data payload (ADR 0005).
 type rederiveJSONData struct {
 	Events     int   `json:"events"`
 	Sessions   int   `json:"sessions"`
