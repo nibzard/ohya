@@ -1,8 +1,4 @@
 #!/bin/sh
-# Run TLC on every protocol model. Downloads the pinned TLA+ tools jar on
-# first use and verifies its checksum. Requires Java 11 or later.
-#
-# Usage: make tla   (or ./tla/run-tlc.sh from the repository root)
 set -eu
 
 cd "$(dirname "$0")"
@@ -35,10 +31,7 @@ if [ ! -f "$JAR" ]; then
     mv "$JAR.tmp" "$JAR"
 fi
 
-# -deadlock: the drained system legitimately reaches a quiescent fixed
-# point where no action changes state; that is not an error. See
-# tla/README.md.
-check() { # module config...
+check() {
     module=$1
     shift
     for cfg in "$@"; do

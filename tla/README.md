@@ -16,7 +16,8 @@ machines; change the specifications first when a contract changes.
 make tla
 ```
 
-The runner (`run-tlc.sh`) needs Java 11 or later. It downloads the pinned
+You can also run `./tla/run-tlc.sh` directly; it changes to its own
+directory first. The runner needs Java 11 or later. It downloads the pinned
 TLA+ tools jar (1.8.0), verifies its SHA-256 checksum, and checks every
 model below. TLC output ends with `Model checking completed. No error has
 been found.` per model.
@@ -46,6 +47,19 @@ under check.
 | Device's durable checkpoint (acknowledgment) | `ackCursor[s]` |
 | Acknowledgment on the wire | `wireAck[s]` (highest value only; acks are monotone) |
 
+| Constant | Meaning |
+|---|---|
+| `MaxLen` | Model bound: the most records one source file may reach |
+| `MaxBatch` | The most records in one batch; batches may split a file |
+| `Sources` | The set of sources; each source is one watched file |
+| `ReliableNet` | `FALSE` enables message loss and crashes |
+
+`NoBatch` (the empty tuple) and `NoAck` (`MaxLen + 1`, above every real
+cursor) mark an empty channel. They keep each channel single-typed,
+because TLC rejects equality across types and TLA+ has no negative
+numbers. `AckMax` keeps the newer of two acknowledgments; `NoAck` never
+wins over a real one.
+
 Each source models one device's uploader; several sources in one model
 synchronize concurrently on separate connections. A real device crash
 resets every one of its connections at once; the model allows each
@@ -59,11 +73,16 @@ Actions and the failure scenarios they cover:
 | `AppendRecord` | The agent appends records; appends interleave with sync arbitrarily |
 | `SendBatch` | Batch upload from the durable checkpoint; one in-flight batch per source |
 | `HubCommit` | One durable transaction: insert new records, count them once, advance the hub cursor, emit the ack; a repeated batch is a no-op that returns the existing cursor |
-| `DeliverAck` | The device durably persists the acknowledged cursor |
+| `DeliverAck` | The device durably persists the acknowledged cursor; a stale ack that arrives late changes nothing |
 | `DropBatch` | Batch lost in transit, or connection timeout and reset; the device retries from its checkpoint |
 | `DropAck` | Lost acknowledgment; the device retries, the hub replays the overlap |
 | `CrashClient` | Device crash: durable checkpoint survives, in-flight messages for its source vanish — the window between hub commit and local persistence |
 | `CrashHub` | Hub crash: committed state survives, all connections reset, no cursor rolls back |
+
+`HubCommit` requires `lo =< hubCursor[s]`. This guard restates the
+contract rule "reject gaps ahead of the stored cursor". Batches start at
+`ackCursor`, which never passes `hubCursor`, so the guard always holds in
+the model. The hub checks it anyway.
 
 ## Safety invariants
 
@@ -83,6 +102,8 @@ Every configuration checks all of these.
 - `HubWithinFile` — the hub never commits records the file does not hold.
 - `InflightFromAck` — a batch in flight never starts ahead of the durable
   checkpoint. The device never infers success from having sent a batch.
+  A batch may start at an older checkpoint than the current one, because
+  an earlier ack can arrive while the next batch is already on the wire.
 - `WireAckLeCommit` — an acknowledgment on the wire never passes the
   committed cursor.
 
@@ -133,7 +154,8 @@ must sync whatever has arrived, on any schedule.
 
 All runs use `-deadlock`: the drained system legitimately reaches a
 quiescent fixed point where no action changes state, and that is not an
-error.
+error. The `Quiescent` operator describes that fixed point for readers of
+traces; no configuration checks it.
 
 ## Non-vacuousness
 
@@ -190,6 +212,29 @@ fixed source ownership — this model is that assumption, checked.
 | Annotation slot (event, namespace, key) | constant `Annotations`; the writer completes the identity |
 | Annotation rows and their writers | `annRows[a]`, `annRowSes[a][d]` |
 
+| Constant | Meaning |
+|---|---|
+| `Devices` | Device identity strings, for example `{"d1", "d2"}` |
+| `Invitations` | Invitation identity strings |
+| `Sessions` | Session (connection) slot strings |
+| `Sources` | Source identity strings |
+| `Annotations` | Annotation slots: the `(event_id, namespace, key)` part of the annotation identity. The `writer_id` part is state (the row owner), not a constant |
+
+`None` is one sentinel string for "no device", "no invitation", and "no
+session". The domains are disjoint, and no predicate compares sentinels
+across domains, so one sentinel keeps the value sets small.
+
+A session slot is single-use. It binds to its device when the session
+opens and stays bound after the session closes, because annotation
+history refers to it. Only a fresh slot can serve the device again.
+
+`revokedEver`, `srcEverOwned`, and `annRowSes` are history variables.
+They record what happened and never forget it, so "revocation is final",
+"at most one registrar", and "the writer comes from the session" are
+checkable as state invariants. Without them, a rebinding or a reversal
+would leave no trace in the state. The credential secret is not modeled
+state; it is an assumption below.
+
 Actions and the scenarios they cover:
 
 | Action | Scenario |
@@ -201,7 +246,7 @@ Actions and the scenarios they cover:
 | `OpenSession` | Only an active device establishes a session; the slot binds to it permanently |
 | `CloseSession` | A session ends; the device binding survives |
 | `Upload` | The first accepted upload binds the source to the session's device; the same device's retries are accepted; any other device — stranger, paired, or the revoked former owner — is rejected |
-| `Annotate` / `DeleteAnnotation` | Upsert or delete of the session device's own row on a slot; the request carries no writer |
+| `Annotate` / `DeleteAnnotation` | Upsert or delete of the session device's own row on a slot; the request carries no writer, so another device's row is not addressable. Deleting an absent row succeeds and removes nothing |
 
 A rejected request is the absence of a transition: the authorization
 guard fails and no state changes.
@@ -210,6 +255,8 @@ guard fails and no state changes.
 
 Every configuration checks all of these.
 
+- `SessionLiveHasDevice` — a live session always belongs to a bound
+  session slot.
 - `InvitationSingleUse` — at most one device ever paired through one
   invitation. An invitation cannot be consumed twice.
 - `PairingConsistent` / `InvitationUsedByPairer` — the registry admits
@@ -278,9 +325,15 @@ Every configuration checks all of these.
 | `Auth.cfg` | 2 devices, 2 invitations, 3 sessions, 2 sources | Full interleaving: pairing races, revocation under live sessions, cross-writer annotations on one slot | 46,289 states, ~1 s |
 | `AuthWide.cfg` | 3 devices, 2 invitations, 3 sessions, 2 sources | Pairing scarcity: one device stays a stranger whatever happens; one device owning both sources while another owns none | 126,933 states, ~3 s |
 
+In `Auth.cfg`, three session slots let both devices hold live sessions
+and still close a session and open a new one on a fresh slot. In
+`AuthWide.cfg`, a race between consumption and expiry can leave
+invitations dead before any device wins them.
+
 Both run with `-deadlock`: the drained system (every invitation dead,
 every paired device revoked, no live session) is a legitimate fixed
-point.
+point. The `Quiescent` operator describes it for readers of traces; no
+configuration checks it.
 
 ## Non-vacuousness
 
