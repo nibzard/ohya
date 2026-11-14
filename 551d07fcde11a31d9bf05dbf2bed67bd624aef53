@@ -1,0 +1,14 @@
+# Context
+
+## Background
+Last area of plan Phase 3 step 7: TLA+ specifications and the TLC runner.
+
+## Why This Way
+A script removed (* *) and \* comments, dropped lines that held only a
+comment, and asserted that the non-comment text is identical apart from
+whitespace. Identical distinct-state counts under make tla confirm that the
+models did not change.
+
+## Gotchas
+- tla/README.md is now the only place for action meanings and assumptions.
+  Update it with any change to a specification.
