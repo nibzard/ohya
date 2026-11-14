@@ -69,6 +69,26 @@ stderr keeps the per-source diagnostics. Flags
 are spelled with two dashes (`--db`); the parser also accepts one dash. No
 command prompts for input: ohya is non-interactive by design.
 
+The commands that report facts also print machine-readable output:
+`ingest --once`, `devices list`, `devices invite`, `devices revoke`,
+`rederive`, and `version` take `--json` (text stays the default) and print
+exactly one JSON object on stdout, for example
+
+```json
+{"schema_version":1,"command":"ohya devices list","data":{"devices":[],"invitations":[]},"error":null}
+```
+
+`data` carries the command's report and is `null` on failure; `error` is
+`null` on success and otherwise holds a stable snake_case `code`, a
+`message`, and a `hint` naming the remedy. Diagnostics stay on stderr, the
+JSON never carries transcript content, and a join code appears in `data`
+only. A degraded `ingest --once --json` pass still exits 3 and reports
+through `data` (counts plus every stop's offset and remedy), not through
+`error`. Usage errors keep the one-line text contract above — they print no
+envelope. The envelope fields, the per-command `data` fields, and the error
+codes are the contract of [ADR 0005](docs/adr/0005-json-output.md);
+`schema_version` changes only on breaking changes.
+
 `ohya version` (alias: `ohya --version`) prints one line of space-separated
 key=value pairs: `version`, `revision`, and `dirty` from the build metadata
 `go build` embeds, the `go` version, `schema` — the newest embedded

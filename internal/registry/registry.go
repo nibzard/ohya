@@ -70,6 +70,9 @@ var (
 	ErrDeviceRevoked = errors.New("registry: device is revoked; re-admission needs a new device identity")
 	// ErrDeviceUnknown marks a device identity the registry never paired.
 	ErrDeviceUnknown = errors.New("registry: device is not paired")
+	// ErrAlreadyRevoked marks a revoke of an identity that is already
+	// revoked. Revocation is final; re-admission needs a new identity.
+	ErrAlreadyRevoked = errors.New("registry: device is already revoked")
 	// ErrCredentialUnknown marks a presented credential no active or revoked
 	// device holds.
 	ErrCredentialUnknown = errors.New("registry: credential does not belong to a paired device")
@@ -392,7 +395,7 @@ func (d *DB) Revoke(ctx context.Context, deviceID string) error {
 	case err != nil:
 		return fmt.Errorf("registry: revoke %s: %w", deviceID, err)
 	case state == "revoked":
-		return fmt.Errorf("registry: revoke: device %s is already revoked", deviceID)
+		return fmt.Errorf("registry: revoke: %w (device %s)", ErrAlreadyRevoked, deviceID)
 	default:
 		return fmt.Errorf("registry: revoke %s: device state is %q", deviceID, state)
 	}

@@ -612,6 +612,32 @@ How to use this file:
   and vcs.revision/vcs.modified are absent in those builds (revision and
   dirty print "unknown"). The root alias check (isVersionArg) runs before
   subcommand dispatch, so `ohya ingest --version` stays a usage error.
+  T062 done (2026-11-14): --json on ingest --once, devices list/invite/
+  revoke, rederive, version prints one ADR 0005 envelope
+  (cmd/ohya/jsonout.go; schema_version 1). Choices worth keeping:
+  - A degraded --once pass is a completed pass: data carries counts and
+    stops, error stays null, exit stays 3. Failure envelopes (data null,
+    error {code,message,hint}) are only for systemic failures; usage errors
+    never produce an envelope (T059's one-line stderr contract owns them).
+  - Error codes classify by sentinel (errors.Is), never by prose: two
+    sentinels were added for that (registry.ErrAlreadyRevoked,
+    control.ErrNotProvisioned); site-known classes (database_open_failed,
+    missing_agent_root, registry_open_failed) wrap with the local
+    classifiedError, whose Error() stays the underlying message so text
+    output is byte-identical.
+  - The encoder calls SetEscapeHTML(false): messages carry paths and flag
+    spellings with < > & (the hint "--<agent>-root"), and escaped output
+    made goldens unreadable.
+  - Stop remedies are stable codes in JSON (increase_max_record_bytes |
+    repair_source_file) while stderr keeps ADR 0004's prose.
+  - Golden tests scrub run-varying values by key ("code", "expires_at",
+    duration_ms) and replace tempdir prefixes; json.RawMessage data decodes
+    as the literal "null" bytes (never a nil slice) — compare with
+    string(data) == "null", not data == nil.
+  - Forcing stale rows for a rederive golden needs a parser above version 1:
+    events.parser_version has CHECK (>= 1), so the Claude Code parser
+    (version 1) cannot go stale; the Pi fixture (version 2) stamped down to
+    1 works.
 
 - Benchstat tracking choices (2026-11-14, Makefile + .github/workflows/ci.yml, T047):
   - benchstat is a pinned tool install
