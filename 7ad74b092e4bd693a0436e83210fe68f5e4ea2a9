@@ -1,0 +1,41 @@
+# Context
+
+## Background
+Task T038 (tag looper:finding:pi-usage-open-fields) asked to verify the Pi
+usage fields reasoning and cacheWrite against real sessions. The T037
+baseline knew only the six captured T012 sessions (Pi 0.84.2 / 1.5.2,
+openai-responses and one zai error), where both fields were 0.
+
+## Verification evidence (2026-11-14)
+Scanned all 74 real session files under ~/.pi/agent/sessions — 524
+assistant usage records (517 zai via openai-completions, 7 anthropic via
+anthropic-messages; glm-4.6/4.7/5/5.2/5.3, claude-opus-4-6/4-8):
+
+- cacheWrite non-zero in 7 anthropic-messages records; in every one
+  input + cacheRead + cacheWrite + output = totalTokens and the sum
+  without cacheWrite fails -> strictly additive, not part of input.
+- reasoning: no non-zero sample anywhere (key absent from all 524 real
+  usage objects; 0 in the captured openai-responses records) -> stays
+  unmapped.
+- cacheWrite1h (new field, 3 claude-opus-4-8 records) is 0 everywhere ->
+  stays unmapped.
+- responseId absent on 521 of 524 records incl. 507 with non-zero usage
+  (openai-completions never emits one) -> entry-id fallback needed or
+  96.8% of real usage records silently counted nothing.
+
+## End-to-end run
+bin/ohya ingest --once over the real sessions root into a private hub:
+524 usage rows, all four sums equal to raw-file sums (input 842,406;
+cache creation 25,493; cache read 6,555,812; output 165,250), 521 rows
+keyed by entry id, 3 by responseId, all rows parser_version 2; v1-stamped
+copy re-derived to identical totals.
+
+## Gotchas
+- Entry ids are unique per file (verified across the corpus) and 8-hex;
+  responseIds are resp_.../msg_..., so the two key spaces never collide.
+- With the fallback, error responses now contribute a zero usage row
+  keyed by their entry id; sums are unaffected.
+
+## Related
+- NOTES.md "Pi parser choices" bullet; testdata/pi/README.md "Usage
+  fields"; DB.md token-totals invariant.
