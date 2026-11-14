@@ -850,10 +850,10 @@ func TestIngestCrashHelper(t *testing.T) {
 	if err := hub.RegisterSource(ctx, o.SourceID, deviceID, agent, o.Path); err != nil {
 		panic(err)
 	}
-	inserted, committed, stopped, err := r.ingestSource(ctx, o)
-	if err != nil || stopped || inserted == 0 || committed != o.End {
+	inserted, committed, stop, err := r.ingestSource(ctx, o)
+	if err != nil || stop != nil || inserted == 0 || committed != o.End {
 		panic(fmt.Sprintf("ingestSource = %d inserts, cursor %d, stopped %t, %v",
-			inserted, committed, stopped, err))
+			inserted, committed, stop != nil, err))
 	}
 	os.Exit(3) // die after the durable commit, before the acknowledgment
 }

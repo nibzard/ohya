@@ -40,13 +40,18 @@ func isVersionArg(arg string) bool {
 }
 
 // runVersionCommand prints the version line; `ohya --version` is an alias.
+// With --json it prints one ADR 0005 envelope instead.
 func runVersionCommand(args []string, stdout, stderr io.Writer) error {
 	c := newCommandFlags(versionSpec)
+	asJSON := c.fs.Bool("json", false, "print one JSON object instead of the text line (docs/adr/0005)")
 	if err := c.parse(args, stdout); err != nil {
 		return err
 	}
 	if c.fs.NArg() > 0 {
 		return c.usageErrorf("unexpected argument %q", c.fs.Arg(0))
+	}
+	if *asJSON {
+		return versionJSON(stdout)
 	}
 	line, err := versionLine()
 	if err != nil {
@@ -54,6 +59,39 @@ func runVersionCommand(args []string, stdout, stderr io.Writer) error {
 	}
 	fmt.Fprint(stdout, line)
 	return nil
+}
+
+// versionJSONData is the version command's data payload. The keys are the
+// T061 text line's keys unchanged, so one vocabulary spans both outputs
+// (ADR 0005).
+type versionJSONData struct {
+	Version      string `json:"version"`
+	Revision     string `json:"revision"`
+	Dirty        string `json:"dirty"`
+	Go           string `json:"go"`
+	Schema       int    `json:"schema"`
+	ParserClaude int    `json:"parser.claude"`
+	ParserCodex  int    `json:"parser.codex"`
+	ParserPi     int    `json:"parser.pi"`
+}
+
+// versionJSON prints the version report as one envelope.
+func versionJSON(stdout io.Writer) error {
+	schema, err := store.SchemaVersion()
+	if err != nil {
+		return printJSONError(stdout, versionSpec.name, err)
+	}
+	version, revision, dirty, goVer := buildIdentity()
+	return printJSON(stdout, versionSpec.name, versionJSONData{
+		Version:      version,
+		Revision:     revision,
+		Dirty:        dirty,
+		Go:           goVer,
+		Schema:       schema,
+		ParserClaude: claudecode.OutputVersion,
+		ParserCodex:  codex.OutputVersion,
+		ParserPi:     pi.OutputVersion,
+	})
 }
 
 // versionLine builds the one-line version report: the program name, then

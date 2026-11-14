@@ -51,12 +51,13 @@ func runDevicesCommand(args []string, stdout, stderr io.Writer) error {
 	}
 }
 
-// registryFlags holds the flags every devices subcommand shares. The registry
-// sits in the state directory, like the device identity and checkpoints.
-// Callers add their own flags, then parse.
+// registryFlags holds the flags every devices subcommand shares: the state
+// directory and --json. The registry sits in the state directory, like the
+// device identity and checkpoints. Callers add their own flags, then parse.
 type registryFlags struct {
 	c     *commandFlagSet
 	state *string
+	json  *bool
 }
 
 func newRegistryFlags(spec commandSpec) (*registryFlags, error) {
@@ -67,12 +68,17 @@ func newRegistryFlags(spec commandSpec) (*registryFlags, error) {
 	f := &registryFlags{c: newCommandFlags(spec)}
 	f.state = f.c.fs.String("state", filepath.Join(home, ".ohya"),
 		"state `directory` holding the device registry")
+	f.json = f.c.fs.Bool("json", false, "print one JSON object instead of text (docs/adr/0005)")
 	return f, nil
 }
 
 // openRegistry opens the registry database in the state directory.
 func (f *registryFlags) openRegistry() (*registry.DB, error) {
-	return registry.Open(filepath.Join(*f.state, registry.FileName))
+	reg, err := registry.Open(filepath.Join(*f.state, registry.FileName))
+	if err != nil {
+		return nil, classify(err, "registry_open_failed", "check that the --state directory exists and is writable")
+	}
+	return reg, nil
 }
 
 // devicesInviteSpec is the invite usage template.
@@ -89,10 +95,12 @@ var devicesInviteSpec = commandSpec{
 }
 
 // runDevicesInvite issues one join code and prints it on the first stdout
-// line, so it can be piped to the joining device. The code carries the T018
-// pairing invitation plus the single-use coordinator preauth key minted with
-// it — the bridge from the registry's admission to tailnet admission — so
-// one code hands one device everything `ohya join` needs, and each half is
+// line, so it can be piped to the joining device — or, with --json, in one
+// ADR 0005 envelope whose data carries the code, because the code is the
+// output the operator asked for. The code carries the T018 pairing
+// invitation plus the single-use coordinator preauth key minted with it —
+// the bridge from the registry's admission to tailnet admission — so one
+// code hands one device everything `ohya join` needs, and each half is
 // consumable exactly once within the same lifetime.
 func runDevicesInvite(args []string, stdout, stderr io.Writer) error {
 	flags, err := newRegistryFlags(devicesInviteSpec)
@@ -111,38 +119,60 @@ func runDevicesInvite(args []string, stdout, stderr io.Writer) error {
 		return flags.c.usageErrorf("--ttl must be positive")
 	}
 
-	// The coordination plane first: without it there is no admission to
-	// bridge the invitation to, and no half a code should be issued.
-	ctl, err := control.Open(filepath.Join(*flags.state, control.DirName))
+	code, expiresAtMS, err := flags.issueJoinCode(*ttl)
 	if err != nil {
-		return err
+		return jsonFailurePrint(*flags.json, stdout, devicesInviteSpec.name, err)
+	}
+	fmt.Fprintf(stderr, "expires %s (one device may use each half once); join with: ohya join <code>\n",
+		msTime(expiresAtMS))
+	if *flags.json {
+		return printJSON(stdout, devicesInviteSpec.name,
+			inviteJSONData{Code: code, ExpiresAt: msTime(expiresAtMS)})
+	}
+	fmt.Fprintln(stdout, code)
+	return nil
+}
+
+// inviteJSONData is the invite command's data payload. The join code lives
+// here and only here: a failure envelope never carries one, because a failed
+// invite mints no code (ADR 0005).
+type inviteJSONData struct {
+	Code      string `json:"code"`
+	ExpiresAt string `json:"expires_at"`
+}
+
+// issueJoinCode runs the invite operation: coordination plane, user, preauth
+// key, then registry invitation. The coordination plane first: without it
+// there is no admission to bridge the invitation to, and no half a code
+// should be issued.
+func (f *registryFlags) issueJoinCode(ttl time.Duration) (code string, expiresAtMS int64, err error) {
+	ctl, err := control.Open(filepath.Join(*f.state, control.DirName))
+	if err != nil {
+		return "", 0, err
 	}
 	defer ctl.Close()
 	st, err := ctl.State()
 	if err != nil {
-		return err
+		return "", 0, err
 	}
 	user, err := control.EnsureUser(st)
 	if err != nil {
-		return err
+		return "", 0, err
 	}
-	authKey, err := control.MintAuthKey(st, user, *ttl)
+	authKey, err := control.MintAuthKey(st, user, ttl)
 	if err != nil {
-		return err
+		return "", 0, err
 	}
-	reg, err := flags.openRegistry()
+	reg, err := f.openRegistry()
 	if err != nil {
-		return err
+		return "", 0, err
 	}
 	defer reg.Close()
-	inv, err := reg.Issue(context.Background(), *ttl)
+	inv, err := reg.Issue(context.Background(), ttl)
 	if err != nil {
-		return err
+		return "", 0, err
 	}
-	fmt.Fprintln(stdout, inv.Secret+":"+authKey)
-	fmt.Fprintf(stderr, "expires %s (one device may use each half once); join with: ohya join <code>\n",
-		msTime(inv.ExpiresAtMS))
-	return nil
+	return inv.Secret + ":" + authKey, inv.ExpiresAtMS, nil
 }
 
 // devicesListSpec is the list usage template.
@@ -156,7 +186,8 @@ var devicesListSpec = commandSpec{
 	examples:    []string{"ohya devices list"},
 }
 
-// runDevicesList prints every paired device and every invitation.
+// runDevicesList prints every paired device and every invitation — as text,
+// or with --json as one ADR 0005 envelope.
 func runDevicesList(args []string, stdout, stderr io.Writer) error {
 	flags, err := newRegistryFlags(devicesListSpec)
 	if err != nil {
@@ -170,15 +201,26 @@ func runDevicesList(args []string, stdout, stderr io.Writer) error {
 	}
 	reg, err := flags.openRegistry()
 	if err != nil {
-		return err
+		return jsonFailurePrint(*flags.json, stdout, devicesListSpec.name, err)
 	}
 	defer reg.Close()
 	ctx := context.Background()
 
 	devices, err := reg.List(ctx)
 	if err != nil {
-		return err
+		return jsonFailurePrint(*flags.json, stdout, devicesListSpec.name, err)
 	}
+	invitations, err := reg.ListInvitations(ctx)
+	if err != nil {
+		return jsonFailurePrint(*flags.json, stdout, devicesListSpec.name, err)
+	}
+	if *flags.json {
+		return printJSON(stdout, devicesListSpec.name, listJSONData{
+			Devices:     deviceJSONList(devices),
+			Invitations: invitationJSONList(invitations),
+		})
+	}
+
 	fmt.Fprintln(stdout, "devices:")
 	if len(devices) == 0 {
 		fmt.Fprintln(stdout, "  (none paired)")
@@ -192,10 +234,6 @@ func runDevicesList(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stdout, line)
 	}
 
-	invitations, err := reg.ListInvitations(ctx)
-	if err != nil {
-		return err
-	}
 	fmt.Fprintln(stdout, "invitations:")
 	if len(invitations) == 0 {
 		fmt.Fprintln(stdout, "  (none issued)")
@@ -211,6 +249,64 @@ func runDevicesList(args []string, stdout, stderr io.Writer) error {
 		}
 	}
 	return nil
+}
+
+// listJSONData is the devices list command's data payload (ADR 0005). Empty
+// collections are [] so a consumer never meets null.
+type listJSONData struct {
+	Devices     []deviceJSON     `json:"devices"`
+	Invitations []invitationJSON `json:"invitations"`
+}
+
+// deviceJSON is one paired device: its ID, state, and pairing time, plus the
+// revocation time on a revoked device.
+type deviceJSON struct {
+	ID        string `json:"id"`
+	State     string `json:"state"`
+	PairedAt  string `json:"paired_at"`
+	RevokedAt string `json:"revoked_at,omitempty"`
+}
+
+// invitationJSON is one invitation: its ID, state, and timestamps, the
+// consuming device when used, and the derived expiry flag.
+type invitationJSON struct {
+	ID        string `json:"id"`
+	State     string `json:"state"`
+	UsedBy    string `json:"used_by,omitempty"`
+	CreatedAt string `json:"created_at"`
+	ExpiresAt string `json:"expires_at"`
+	Expired   bool   `json:"expired"`
+}
+
+func deviceJSONList(devices []registry.DeviceInfo) []deviceJSON {
+	out := make([]deviceJSON, 0, len(devices))
+	for _, d := range devices {
+		j := deviceJSON{
+			ID:       d.DeviceID,
+			State:    d.State,
+			PairedAt: msTime(d.PairedAtMS),
+		}
+		if d.RevokedAtMS != 0 {
+			j.RevokedAt = msTime(d.RevokedAtMS)
+		}
+		out = append(out, j)
+	}
+	return out
+}
+
+func invitationJSONList(invitations []registry.InvitationInfo) []invitationJSON {
+	out := make([]invitationJSON, 0, len(invitations))
+	for _, inv := range invitations {
+		out = append(out, invitationJSON{
+			ID:        inv.ID,
+			State:     inv.State,
+			UsedBy:    inv.UsedBy,
+			CreatedAt: msTime(inv.CreatedAtMS),
+			ExpiresAt: msTime(inv.ExpiresAtMS),
+			Expired:   inv.Expired,
+		})
+	}
+	return out
 }
 
 // devicesRevokeSpec is the revoke usage template.
@@ -240,14 +336,22 @@ func runDevicesRevoke(args []string, stdout, stderr io.Writer) error {
 	deviceID := flags.c.fs.Arg(0)
 	reg, err := flags.openRegistry()
 	if err != nil {
-		return err
+		return jsonFailurePrint(*flags.json, stdout, devicesRevokeSpec.name, err)
 	}
 	defer reg.Close()
 	if err := reg.Revoke(context.Background(), deviceID); err != nil {
-		return err
+		return jsonFailurePrint(*flags.json, stdout, devicesRevokeSpec.name, err)
+	}
+	if *flags.json {
+		return printJSON(stdout, devicesRevokeSpec.name, revokeJSONData{DeviceID: deviceID})
 	}
 	fmt.Fprintln(stdout, deviceID, "revoked")
 	return nil
+}
+
+// revokeJSONData is the revoke command's data payload (ADR 0005).
+type revokeJSONData struct {
+	DeviceID string `json:"device_id"`
 }
 
 // msTime renders a Unix-millisecond timestamp as UTC RFC 3339.

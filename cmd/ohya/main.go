@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -82,7 +83,8 @@ var ingestSpec = commandSpec{
 	description: "Imports the existing session history of every watched agent once, then polls incrementally until stopped. " +
 		"Later polls read only the bytes past each acknowledged checkpoint, so a restart resumes where the last commit ended. " +
 		"All writes commit through one transactional write path; a malformed record stops its source with a diagnostic and never skips bytes. " +
-		"With --once, a pass in which a source failed or stopped exits 3 (degraded); the poll loop keeps running and keeps its stderr diagnostics.",
+		"With --once, a pass in which a source failed or stopped exits 3 (degraded); the poll loop keeps running and keeps its stderr diagnostics.\n" +
+		"With --json (needs --once), the pass report is one JSON object instead of the text summary (docs/adr/0005).",
 	argsTitle: "Arguments",
 	args:      "(none)",
 	examples:  []string{"ohya ingest --once", "ohya ingest --db ~/.ohya/hub.db"},
@@ -109,6 +111,8 @@ func runIngestCommand(args []string, stdout, stderr io.Writer) error {
 	interval := c.fs.Duration("interval", 2*time.Second,
 		"polling `interval` in continuous mode")
 	once := c.fs.Bool("once", false, "run exactly one pass and exit")
+	asJSON := c.fs.Bool("json", false,
+		"print one JSON object instead of the text summary; needs --once (docs/adr/0005)")
 	maxRecordBytes := c.fs.Int64("max-record-bytes", claudecode.DefaultMaxRecordBytes,
 		"maximum `bytes` of one record's JSON text; a larger record stops its source (docs/adr/0004)")
 	if err := c.parse(args, stdout); err != nil {
@@ -119,6 +123,9 @@ func runIngestCommand(args []string, stdout, stderr io.Writer) error {
 	}
 	if !*once && *interval <= 0 {
 		return c.usageErrorf("--interval must be positive")
+	}
+	if *asJSON && !*once {
+		return c.usageErrorf("--json needs --once; the polling loop prints no JSON")
 	}
 	if *maxRecordBytes <= 0 {
 		return c.usageErrorf("--max-record-bytes must be positive")
@@ -145,16 +152,23 @@ func runIngestCommand(args []string, stdout, stderr io.Writer) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return runIngest(ctx, ingestOptions{
+	err = runIngest(ctx, ingestOptions{
 		dbPath:         *db,
 		stateDir:       stateDir,
 		roots:          roots,
 		interval:       *interval,
 		once:           *once,
 		maxRecordBytes: *maxRecordBytes,
+		jsonOut:        *asJSON,
 		stdout:         stdout,
 		stderr:         stderr,
 	})
+	// A degraded pass already printed its envelope; every other failure gets
+	// the failure envelope instead of nothing (ADR 0005).
+	if err != nil && *asJSON && !errors.Is(err, errDegraded) {
+		return printJSONError(stdout, ingestSpec.name, err)
+	}
+	return err
 }
 
 // defaultCodexRoot is the Codex sessions directory: Codex keeps everything

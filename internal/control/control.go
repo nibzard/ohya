@@ -46,6 +46,10 @@ const UserName = "ohya"
 // Devices dial it inside the tailnet; it must stay stable across runs.
 const HubNodeName = "ohya-hub"
 
+// ErrNotProvisioned marks a directory that holds no coordination plane.
+// `ohya serve` provisions one on its first start.
+var ErrNotProvisioned = errors.New("control: holds no coordination plane")
+
 // Default listen addresses of the coordination plane. The control listener
 // carries the coordination protocol and the embedded DERP relay; the STUN
 // listener helps devices behind NAT discover their endpoint. Both default to
@@ -206,7 +210,7 @@ func Open(dir string) (*Control, error) {
 	}
 	path := filepath.Join(abs, configFileName)
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("control: %s holds no coordination plane; run ohya serve once to provision it", abs)
+		return nil, fmt.Errorf("%w at %s; run ohya serve once to provision it", ErrNotProvisioned, abs)
 	} else if err != nil {
 		return nil, fmt.Errorf("control: stat %s: %w", path, err)
 	}
