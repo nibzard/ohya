@@ -1,0 +1,23 @@
+# Context: Linux CI job
+
+## Why This Way
+All development rounds execute on a Linux machine, but CI had a single
+macos-latest job, so a Linux-only regression (CGO behavior, file identity
+in internal/watch/fileid.go, path handling) could only surface as a failed
+development round. This adds a check-linux job on ubuntu-latest running
+make check and make build, per backlog T043 (looper:finding:ci-linux-coverage).
+
+## Gotchas
+- No explicit compiler-install step: the ubuntu-latest runner image ships
+  gcc and make, which covers CGO.
+- make tla deliberately stays macOS-only: TLC is platform-independent
+  Java, so a second run doubles runtime and adds no coverage.
+- The bench job stays macOS-only: the baseline cache must come from one
+  runner type for benchstat comparisons to be meaningful
+  (docs/performance.md, "Tracking across commits").
+
+## Verification
+- actionlint clean on .github/workflows/ci.yml.
+- make check and make build pass on the Linux reference machine (kernel
+  6.8), and bin/ohya runs; the actual GitHub-hosted run needs a push and
+  is outside this task's authorization.
