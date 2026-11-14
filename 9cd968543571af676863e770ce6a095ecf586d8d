@@ -1,0 +1,15 @@
+Context (T044): Both open items from NOTES.md's Codex parser
+choices were verification questions, so the deliverable is
+evidence, not new behavior. Corpus scans live in
+$LOOPER_ARTIFACT_DIR/t044-scan*.py; the end-to-end pair
+ingest (hub.db, 14 staged files) lives in
+$LOOPER_ARTIFACT_DIR/t044-e2e/.
+
+The re-enumeration finding overturns the migration 003
+comment's premise, but applied migrations cannot be edited
+(checksums are verified on open); the correction is recorded
+in DB.md and testdata/codex/README.md instead. The write-path
+rework needs its own task: either rollback-aware winner
+selection through history_base.end_ordinal_exclusive or
+content-keyed deduplication, both touching the partial unique
+index events_session_ordinal.
