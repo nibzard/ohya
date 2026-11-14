@@ -90,7 +90,7 @@ func TestRootHelpStatesContract(t *testing.T) {
 	out := stdout.String()
 	for _, want := range []string{
 		"non-interactive by design",
-		"0 success, 1 failure, 2 usage error",
+		"0 success, 1 failure, 2 usage error, 3 degraded",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("root help lacks %q:\n%s", want, out)

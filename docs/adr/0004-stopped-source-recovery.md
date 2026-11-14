@@ -39,6 +39,13 @@ documented; no automatic skipping.
   non-object line) names repairing the source file at the stop offset. Both
   name this ADR. `events.StopError.RecordTooLarge` carries the
   classification from each parser.
+- A degraded pass is visible in the exit code, not only on stderr
+  (T060): `ohya ingest --once` exits 3 when at least one source failed or
+  stopped in the pass, and its stdout summary carries the failed and
+  stopped counts. A script or agent that checks the exit code no longer
+  reads missing data as success. The long-running poll loop keeps running
+  and keeps its stderr diagnostics instead; a `--strict` flag was rejected
+  as redundant (YAGNI) — the exit code is the contract.
 - Automatic skipping (skip-with-report) is rejected. A gap in a session file
   silently corrupts everything derived from it — first prompt, token totals,
   replay deduplication, cursor contiguity — and violates "no silent data
@@ -63,7 +70,9 @@ documented; no automatic skipping.
 
 A size stop is no longer a dead end: the diagnostic names the flag, the
 checkpoint holds the offset, and one rerun with a larger limit clears the
-stop. The parsers keep `MaxRecordBytes <= 0` meaning "default", so library
+stop. A degraded `--once` pass is no longer silent either: exit code 3 and
+the summary counts make the missing events observable to every caller. The
+parsers keep `MaxRecordBytes <= 0` meaning "default", so library
 callers (hub-side batch normalization, re-derivation with its exact
 `len(raw_json)` bound) are unchanged; the sync endpoint passes the wire bound
 explicitly so normalization cannot drift from the protocol. Users who raise

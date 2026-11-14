@@ -1,7 +1,9 @@
 // The CLI contract (T059): help is a request — every level prints the same
 // usage template on stdout and exits 0 — while a usage error prints one line
 // plus a pointer to --help on stderr and exits 2, the flag package
-// convention. Every other failure keeps exit 1. Everything runs through the
+// convention. Every other failure keeps exit 1, except a degraded
+// `ingest --once` pass (a source failed or stopped), which exits 3 with its
+// diagnostics already on stderr (T060). Everything runs through the
 // standard library flag package; no CLI framework (MANIFESTO §14,
 // ADR 0001). No command prompts for input: ohya is non-interactive by
 // design.
@@ -35,7 +37,9 @@ func (e usageError) Error() string { return e.msg }
 
 // cliMain runs one command and returns the process exit code: 0 for success
 // and for help, 2 for usage errors (one stderr line plus a --help pointer),
-// 1 for failures.
+// 3 for a degraded `ingest --once` pass (a source failed or stopped; the
+// diagnostics are already on stderr, so no error line is added), 1 for
+// failures.
 func cliMain(args []string, stdout, stderr io.Writer) int {
 	err := run(args, stdout, stderr)
 	if err == nil {
@@ -48,6 +52,8 @@ func cliMain(args []string, stdout, stderr io.Writer) int {
 		return 2
 	case errors.Is(err, errHelp):
 		return 0
+	case errors.Is(err, errDegraded):
+		return 3
 	default:
 		fmt.Fprintln(stderr, "ohya:", err)
 		return 1

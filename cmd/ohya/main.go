@@ -28,8 +28,8 @@ var rootSpec = commandSpec{
 	synopsis:  "one memory for all your coding agents",
 	usageLine: "ohya <command> [flags]",
 	description: "ohya captures Claude Code, Codex, and Pi agent sessions into one hub-owned SQLite database with full-text search, serves the read-only sql and bounded annotate MCP tools to coding agents, and synchronizes devices over an encrypted tailnet through serve and join. " +
-		"No command prompts for input: ohya is non-interactive by design. " +
-		"Exit codes: 0 success, 1 failure, 2 usage error.",
+		"No command prompts for input: ohya is non-interactive by design.\n" +
+		"Exit codes: 0 success, 1 failure, 2 usage error, 3 degraded (only ingest --once: at least one source failed or stopped).",
 	argsTitle: "Commands",
 	args: `ingest     import agent session history, then poll for new records
 serve      run the hub for devices: coordination, sync, remote tools
@@ -75,7 +75,8 @@ var ingestSpec = commandSpec{
 	usageLine: "ohya ingest [flags]",
 	description: "Imports the existing session history of every watched agent once, then polls incrementally until stopped. " +
 		"Later polls read only the bytes past each acknowledged checkpoint, so a restart resumes where the last commit ended. " +
-		"All writes commit through one transactional write path; a malformed record stops its source with a diagnostic and never skips bytes.",
+		"All writes commit through one transactional write path; a malformed record stops its source with a diagnostic and never skips bytes. " +
+		"With --once, a pass in which a source failed or stopped exits 3 (degraded); the poll loop keeps running and keeps its stderr diagnostics.",
 	argsTitle: "Arguments",
 	args:      "(none)",
 	examples:  []string{"ohya ingest --once", "ohya ingest --db ~/.ohya/hub.db"},
