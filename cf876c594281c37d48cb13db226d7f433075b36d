@@ -1,0 +1,1 @@
+Batch 1b: 228 comments removed. tokcmp equal for all files before the headerLen rewrite (constant value unchanged). make check passes.
