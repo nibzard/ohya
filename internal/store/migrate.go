@@ -85,6 +85,17 @@ func loadMigrations(fsys fs.FS) ([]migration, error) {
 	return ms, nil
 }
 
+// SchemaVersion returns the version of the newest embedded migration: the
+// schema a freshly opened database is brought to. It reads the embedded
+// migration set only and opens no database.
+func SchemaVersion() (int, error) {
+	ms, err := loadMigrations(migrationsFS)
+	if err != nil {
+		return 0, err
+	}
+	return ms[len(ms)-1].version, nil
+}
+
 // migrate brings the database up to the newest migration in fsys. Applied
 // migrations never run again: their recorded checksums must match the
 // embedded files, and only files numbered above every applied version may be
