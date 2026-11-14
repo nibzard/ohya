@@ -2,7 +2,16 @@ package control
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -112,7 +121,7 @@ func TestProvisionGeneratesDeterministicConfig(t *testing.T) {
 	}
 }
 
-func TestControlStartServeAndMint(t *testing.T) {
+func TestControlStateAndMint(t *testing.T) {
 	port := freePort(t)
 	opts := Options{
 		Dir:        filepath.Join(shortTempDir(t), DirName),
@@ -126,11 +135,6 @@ func TestControlStartServeAndMint(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ctl.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	if err := ctl.Start(ctx); err != nil {
-		t.Fatalf("start: %v", err)
-	}
 
 	st, err := ctl.State()
 	if err != nil {
@@ -171,5 +175,145 @@ func TestSplitJoinCode(t *testing.T) {
 		if _, _, err := SplitJoinCode(bad); err == nil {
 			t.Fatalf("split %q accepted", bad)
 		}
+	}
+}
+
+func selfSignedCert(t *testing.T, dir string) (string, string, []byte) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serial, err := rand.Int(rand.Reader, big.NewInt(1<<62))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: "127.0.0.1"},
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	certPath := filepath.Join(dir, "cert.pem")
+	keyPath := filepath.Join(dir, "key.pem")
+	if err := os.WriteFile(certPath, certPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return certPath, keyPath, certPEM
+}
+
+func TestProvisionTLSValidation(t *testing.T) {
+	base := Options{
+		Dir:        filepath.Join(shortTempDir(t), DirName),
+		ServerURL:  "https://127.0.0.1:19417",
+		ListenAddr: "127.0.0.1:19417",
+		STUNAddr:   "127.0.0.1:13478",
+		BaseDomain: "tail.ohya",
+	}
+	dir := filepath.Dir(base.Dir)
+	certPath, keyPath, _ := selfSignedCert(t, dir)
+
+	certOnly := base
+	certOnly.TLSCertPath = certPath
+	if _, err := Provision(certOnly); err == nil || !strings.Contains(err.Error(), "both a certificate and a key") {
+		t.Fatalf("cert without key err = %v; want the pair error", err)
+	}
+
+	plainURL := base
+	plainURL.ServerURL = "http://127.0.0.1:19417"
+	plainURL.TLSCertPath, plainURL.TLSKeyPath = certPath, keyPath
+	if _, err := Provision(plainURL); err == nil || !strings.Contains(err.Error(), "must be https") {
+		t.Fatalf("http URL with TLS err = %v; want the https error", err)
+	}
+
+	withTLS := base
+	withTLS.TLSCertPath, withTLS.TLSKeyPath = certPath, keyPath
+	if _, err := Provision(withTLS); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(withTLS.Dir, configFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := string(data)
+	for _, want := range []string{"tls_cert_path: " + certPath, "tls_key_path: " + keyPath} {
+		if !strings.Contains(cfg, want) {
+			t.Errorf("generated config misses %q:\n%s", want, cfg)
+		}
+	}
+}
+
+func TestControlServesTLS(t *testing.T) {
+	dir := shortTempDir(t)
+	certPath, keyPath, certPEM := selfSignedCert(t, dir)
+	port := freePort(t)
+	opts := Options{
+		Dir:         filepath.Join(dir, DirName),
+		ServerURL:   "https://127.0.0.1:" + strconv.Itoa(port),
+		ListenAddr:  "127.0.0.1:" + strconv.Itoa(port),
+		STUNAddr:    "127.0.0.1:" + strconv.Itoa(freeUDPPort(t)),
+		BaseDomain:  tailcat.DefaultBaseDomain,
+		TLSCertPath: certPath,
+		TLSKeyPath:  keyPath,
+	}
+	ctl, err := Provision(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctl.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if err := ctl.Start(ctx); err != nil {
+		t.Fatalf("start with TLS: %v", err)
+	}
+
+	st, err := ctl.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := EnsureUser(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MintAuthKey(st, user, time.Minute); err != nil {
+		t.Fatalf("mint over a TLS plane: %v", err)
+	}
+
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(certPEM) {
+		t.Fatal("self-signed certificate did not parse")
+	}
+	trusted := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}}
+	resp, err := trusted.Get(opts.ServerURL + "/health")
+	if err != nil {
+		t.Fatalf("trusted /health: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("trusted /health status = %d", resp.StatusCode)
+	}
+
+	untrusted := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{}}}
+	if resp, err := untrusted.Get(opts.ServerURL + "/health"); err == nil {
+		resp.Body.Close()
+		t.Fatal("untrusted client reached the TLS endpoint")
 	}
 }

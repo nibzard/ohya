@@ -37,9 +37,13 @@ How to use this file:
     reference a side file ("Full output saved to: ..."). Recorded `cwd` beats
     the encoded directory name for project identity; worktrees make cwd-only
     identity brittle, so keep `git` evidence from records when present.
-  - Codex: rollouts older than about one week are zstd-compressed to
-    `.jsonl.zst` in place (none locally yet; plan a streaming decompressing
-    reader or an explicit skip with a diagnostic). `session_index.jsonl` is a
+  - Codex: agentsview claimed rollouts older than about one week are
+    zstd-compressed to `.jsonl.zst` in place; this machine's corpus
+    contradicts it (2,488 files back to February 2026, all plain JSONL,
+    verified 2026-11-13), so treat the claim as unconfirmed. The ingest
+    walker only picks up `.jsonl` files, so a `.zst` would be skipped
+    silently; if one ever appears, decide skip-with-diagnostic versus a
+    streaming decompressing reader then. `session_index.jsonl` is a
     shared, rewritten index — never treat it as an append-only source.
     Forked/subagent rollouts replay the parent's whole history with
     re-stamped timestamps; gate on turn-ID membership or usage double-counts.
@@ -217,11 +221,11 @@ How to use this file:
   would brick upgrades for no recovery gain) and the poll guards keep both.
 
 - Write-path open question (2026-11-13, internal/store, T006):
-  `sessions.repo` stays NULL — no rule derives a repository path from observed
-  record fields yet (git root discovery from `cwd` is unspecified, and the
-  Claude Code directory encoding is lossy). Define the derivation before any
-  query relies on `repo`. Token aggregate policy is settled in DB.md; tool
-  aggregates remain deferred pending a query need.
+  `sessions.repo` derivation is now defined and implemented (2026-11-14, DB.md
+  "Repository derivation": normalized repository URL from the session's own
+  records; Codex `session_meta.git.repository_url`, others NULL; re-derivation
+  recomputes it; codex parser output version 2). Tool aggregates remain
+  deferred pending a query need.
 
 - Local slice wiring (2026-11-13, cmd/ohya, T007): the production
   record → store.Event adapters live in internal/events (moved out of
@@ -429,6 +433,18 @@ How to use this file:
     vendor debug switch `TS_DEBUG_USE_DERP_HTTP=1` forces plain-HTTP DERP
     and is the only way to exercise the relay on an HTTP plane — cross-
     machine relay in production rides on the serve TLS gap.
+  - Live TLS smoke (2026-11-14, after T054, self-signed ECDSA cert,
+    SAN 127.0.0.1): `ohya serve --tls-cert/--tls-key` serves coordination
+    and health over TLS (curl --cacert 200; untrusted client refused).
+    The tsnet client honors Go's system-roots knobs — `SSL_CERT_FILE` with
+    the plane's certificate is enough for a device to trust it ("passed
+    x509 validation"), no OS trust-store edit needed on Linux. Pairing and
+    auth complete over TLS, but the first `ohya-hub.tail.ohya:9027` dial
+    then resolved through the system resolver (127.0.0.53) instead of
+    MagicDNS and join exited 1; the same-host plain-HTTP join resolves and
+    uploads fine. Reproduced twice. Unresolved: warmup/netmap race or a
+    DNS-config difference on the TLS path — chase during T065's two-host
+    measurement before calling cross-machine TLS join done.
   - The T014 claim that peers "found each other through the embedded DERP"
     is disproven: T014's single-host nodes show no /derp traffic at all;
     discovery ran through the control-plane map exchange, then direct.

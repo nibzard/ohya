@@ -41,7 +41,7 @@ type rebuiltSession struct {
 	minMS, maxMS   int64
 	hasMin, hasMax bool
 
-	cwd, branch, model string
+	cwd, branch, repo, model string
 
 	prompt    *Event
 	promptRef promptRef
@@ -337,6 +337,9 @@ func rewriteEvent(ctx context.Context, tx *sql.Tx, src rederiveSource, p ParserD
 	if st.branch == "" {
 		st.branch = ev.GitBranch
 	}
+	if st.repo == "" {
+		st.repo = ev.Repo
+	}
 	if st.model == "" {
 		st.model = ev.Model
 	}
@@ -396,10 +399,10 @@ func finalizeSession(ctx context.Context, tx *sql.Tx, st *rebuiltSession) error 
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE sessions SET
 		   event_count = ?, started_at_ms = ?, last_event_at_ms = ?,
-		   cwd = ?, branch = ?, model = ?, first_prompt = ?, metadata = ?
+		   cwd = ?, branch = ?, repo = ?, model = ?, first_prompt = ?, metadata = ?
 		 WHERE id = ?`,
 		st.count, started, last,
-		nullString(st.cwd), nullString(st.branch), nullString(st.model),
+		nullString(st.cwd), nullString(st.branch), nullString(st.repo), nullString(st.model),
 		firstPrompt, string(encodedMetadata), st.id); err != nil {
 		return fmt.Errorf("store: re-derive session %s: update aggregates: %w", st.id, err)
 	}

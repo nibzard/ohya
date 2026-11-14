@@ -2,6 +2,8 @@ package control
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -33,12 +35,14 @@ const (
 func DefaultURL() string { return "http://" + DefaultListenAddr }
 
 type Options struct {
-	Dir        string
-	ServerURL  string
-	ListenAddr string
-	STUNAddr   string
-	BaseDomain string
-	LogLevel   string
+	Dir         string
+	ServerURL   string
+	ListenAddr  string
+	STUNAddr    string
+	BaseDomain  string
+	LogLevel    string
+	TLSCertPath string
+	TLSKeyPath  string
 }
 
 func (o Options) validate() error {
@@ -48,8 +52,15 @@ func (o Options) validate() error {
 	if o.ServerURL == "" {
 		return fmt.Errorf("control: ServerURL is required")
 	}
-	if u, err := url.Parse(o.ServerURL); err != nil || u.Scheme == "" || u.Host == "" {
+	u, err := url.Parse(o.ServerURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
 		return fmt.Errorf("control: ServerURL %q is not an absolute URL", o.ServerURL)
+	}
+	if (o.TLSCertPath == "") != (o.TLSKeyPath == "") {
+		return fmt.Errorf("control: TLS needs both a certificate and a key")
+	}
+	if o.TLSCertPath != "" && u.Scheme != "https" {
+		return fmt.Errorf("control: ServerURL %q must be https when TLS is configured", o.ServerURL)
 	}
 	if o.ListenAddr == "" {
 		return fmt.Errorf("control: ListenAddr is required")
@@ -91,6 +102,8 @@ func Provision(opts Options) (*Control, error) {
 	cfgYAML := fmt.Sprintf(`server_url: %s
 listen_addr: %s
 metrics_listen_addr: ""
+tls_cert_path: %s
+tls_key_path: %s
 grpc_listen_addr: 127.0.0.1:0
 grpc_allow_insecure: false
 unix_socket: %s
@@ -130,6 +143,7 @@ log:
   level: %s
 `,
 		opts.ServerURL, opts.ListenAddr,
+		opts.TLSCertPath, opts.TLSKeyPath,
 		filepath.Join(dir, "headscale.sock"),
 		filepath.Join(dir, "noise.key"),
 		opts.STUNAddr,
@@ -181,7 +195,26 @@ func (c *Control) Start(ctx context.Context) error {
 	return c.waitHealthy(ctx)
 }
 
+func (c *Control) healthClient() (*http.Client, error) {
+	if c.cfg.TLS.CertPath == "" {
+		return http.DefaultClient, nil
+	}
+	pem, err := os.ReadFile(c.cfg.TLS.CertPath)
+	if err != nil {
+		return nil, fmt.Errorf("control: read TLS certificate: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pem) {
+		return nil, fmt.Errorf("control: TLS certificate %s holds no PEM certificate", c.cfg.TLS.CertPath)
+	}
+	return &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}}, nil
+}
+
 func (c *Control) waitHealthy(ctx context.Context) error {
+	client, err := c.healthClient()
+	if err != nil {
+		return err
+	}
 	deadline := time.Now().Add(30 * time.Second)
 	reqCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -191,7 +224,7 @@ func (c *Control) waitHealthy(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("control: health request: %w", err)
 		}
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := client.Do(req)
 		if err == nil {
 			_, _ = io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()

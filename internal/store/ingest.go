@@ -44,6 +44,7 @@ type Event struct {
 
 	Cwd       string
 	GitBranch string
+	Repo      string
 	Model     string
 	MessageID string
 	Usage     Usage
@@ -317,6 +318,7 @@ type sessionDelta struct {
 	hasMax bool
 	cwd    string
 	branch string
+	repo   string
 	model  string
 	prompt *Event
 }
@@ -400,6 +402,9 @@ func insertEvents(ctx context.Context, tx *sql.Tx, b Batch, cursor int64, device
 		if d.branch == "" {
 			d.branch = e.GitBranch
 		}
+		if d.repo == "" {
+			d.repo = e.Repo
+		}
 		if d.model == "" {
 			d.model = e.Model
 		}
@@ -438,14 +443,15 @@ func applySessionDelta(ctx context.Context, tx *sql.Tx, sid string, d *sessionDe
 		last        sql.NullInt64
 		cwd         sql.NullString
 		branch      sql.NullString
+		repo        sql.NullString
 		model       sql.NullString
 		firstPrompt sql.NullString
 		metadata    string
 	)
 	err := tx.QueryRowContext(ctx,
-		`SELECT event_count, started_at_ms, last_event_at_ms, cwd, branch, model, first_prompt, metadata
+		`SELECT event_count, started_at_ms, last_event_at_ms, cwd, branch, repo, model, first_prompt, metadata
 		 FROM sessions WHERE id = ?`, sid).
-		Scan(&count, &started, &last, &cwd, &branch, &model, &firstPrompt, &metadata)
+		Scan(&count, &started, &last, &cwd, &branch, &repo, &model, &firstPrompt, &metadata)
 	if err != nil {
 		return fmt.Errorf("store: ingest session %s: read aggregates: %w", sid, err)
 	}
@@ -461,6 +467,9 @@ func applySessionDelta(ctx context.Context, tx *sql.Tx, sid string, d *sessionDe
 	}
 	if !branch.Valid && d.branch != "" {
 		branch = sql.NullString{String: d.branch, Valid: true}
+	}
+	if !repo.Valid && d.repo != "" {
+		repo = sql.NullString{String: d.repo, Valid: true}
 	}
 	if !model.Valid && d.model != "" {
 		model = sql.NullString{String: d.model, Valid: true}
@@ -502,9 +511,9 @@ func applySessionDelta(ctx context.Context, tx *sql.Tx, sid string, d *sessionDe
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE sessions SET
 		   event_count = ?, started_at_ms = ?, last_event_at_ms = ?,
-		   cwd = ?, branch = ?, model = ?, first_prompt = ?, metadata = ?
+		   cwd = ?, branch = ?, repo = ?, model = ?, first_prompt = ?, metadata = ?
 		 WHERE id = ?`,
-		count+d.count, started, last, cwd, branch, model, firstPrompt, string(encodedMetadata), sid); err != nil {
+		count+d.count, started, last, cwd, branch, repo, model, firstPrompt, string(encodedMetadata), sid); err != nil {
 		return fmt.Errorf("store: ingest session %s: update aggregates: %w", sid, err)
 	}
 	return nil

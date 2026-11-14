@@ -397,3 +397,32 @@ func TestOptionsDefaults(t *testing.T) {
 		t.Fatalf("defaults = %+v", got)
 	}
 }
+
+func TestQuerySettledViewExcludesFreshSessions(t *testing.T) {
+	hub, readers := openSeededHub(t)
+	fresh := []string{
+		`INSERT INTO sessions(id,agent,device_id,native_id,last_event_at_ms)
+		 VALUES('claude:dev1:sess-live','claude','dev1','sess-live',` + fmt.Sprint(time.Now().UnixMilli()) + `)`,
+		`INSERT INTO sources(id,device_id,agent,path) VALUES('src-live','dev1','claude','/repo/live.jsonl')`,
+		`INSERT INTO events(id,session_id,source_id,source_offset,kind,role,text,raw_json)
+		 VALUES(3,'claude:dev1:sess-live','src-live',0,'message','user','live session text','{}')`,
+	}
+	for _, q := range fresh {
+		if _, err := hub.Writer().Exec(q); err != nil {
+			t.Fatalf("seed %q: %v", q, err)
+		}
+	}
+	e := NewEngine(readers, hub.Writer(), EngineOptions{WriterID: "dev1"})
+	settled := mustQuery(t, e, `SELECT count(*) AS n FROM events_settled`)
+	if settled.Rows[0][0] != int64(2) {
+		t.Fatalf("events_settled = %v, want 2 (seeded session only; the live session is hidden)", settled.Rows)
+	}
+	all := mustQuery(t, e, `SELECT count(*) AS n FROM events`)
+	if all.Rows[0][0] != int64(3) {
+		t.Fatalf("events = %v, want 3", all.Rows)
+	}
+	hidden := mustQuery(t, e, `SELECT count(*) AS n FROM events_settled WHERE session_id = 'claude:dev1:sess-live'`)
+	if hidden.Rows[0][0] != int64(0) {
+		t.Fatalf("live session in events_settled = %v, want 0", hidden.Rows)
+	}
+}

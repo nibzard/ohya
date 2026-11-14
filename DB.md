@@ -59,11 +59,37 @@ writer.
 | `session_token_usage` | Token counts of one API response, keyed by session and message ID |
 | `event_annotations` | Agent-written JSON values keyed by event, namespace, key and writer |
 | `events_fts` | Search index over event text, maintained transactionally |
+| `events_settled` | View over `events` holding only records of sessions idle at least 10 minutes |
 
 Use Unix milliseconds; absent observations remain NULL. Ingestion JSON metadata contains
 only deterministic observations, not inferred outcomes. Raw JSON preserves the
 source record text; line terminators are transport framing. Offsets are byte
 offsets in the original file, including framing when calculating the next cursor.
+
+### Repository derivation
+
+`sessions.repo` holds the repository URL a session's own records carry,
+normalized to `host/path`: the `https://`, `http://`, `ssh://` or `git://`
+scheme, any `user@`, and a trailing `.git` or `/` are stripped, an scp-style
+`git@host:path` separator becomes `/`, and the host is lowercased while the
+path keeps its case. Codex derives it from `session_meta.git.repository_url`
+(embedded parent metas lend nothing); Claude Code and Pi records carry no
+repository URL, so their sessions keep NULL. The first non-empty observation
+in deterministic order wins, exactly like `cwd` and `branch`, and re-derivation
+recomputes it. Never decode the Claude Code project directory name — it is
+lossy — and never discover git roots from the filesystem at ingestion time.
+
+### Settled events
+
+`events_settled` mirrors the `events` columns but hides records whose session
+was active in the last 10 minutes (`last_event_at_ms` newer than that;
+sessions without timestamps count as settled). It is the default surface the
+`sql` tool's description steers agents to: a querying agent's own session is
+the fresh one, and its transcript is untrusted text — excluding it keeps a
+running agent from reading, and acting on, its own live context. The cutoff
+is fixed at 10 minutes so the view needs no parameters and stays
+deterministic for a given clock. `events` itself stays fully readable for
+queries that deliberately want the live tail.
 
 ## Invariants
 
@@ -209,6 +235,7 @@ Output version history:
 |---|---|---|
 | `claudecode` | 1 | Output when the marker was introduced |
 | `codex` | 1 | Output when the marker was introduced |
+| `codex` | 2 | Adds `Record.Repo`, derived from `session_meta.git.repository_url` |
 | `pi` | 1 | Output when the marker was introduced |
 | `pi` | 2 | Adds `Record.EntryID`, the usage-row key when a provider emits no `responseId` (verified 2026-11-14: `openai-completions` records never carry one) |
 
@@ -239,8 +266,8 @@ of the record before it, exactly like a fresh parse. A deriver must return an ev
 exactly the stored record (offset, end, and raw JSON), names a session, and carries the version it
 was bound with. The pass clears replay-original marks and token totals before the walk, so the
 first usage of a message ID is the one a fresh ingest in walk order keeps. Sessions belong to one
-agent, because the session ID embeds the agent. The `repo` column and unknown metadata keys are
-preserved; only `firstPromptRef` is managed, as in the write path. The result counts rewritten
+agent, because the session ID embeds the agent. The walk recomputes `repo` like `cwd` and `branch`.
+Unknown metadata keys are preserved; only `firstPromptRef` is managed, as in the write path. The result counts rewritten
 events and rebuilt sessions, including removed empty sessions.
 
 ## Inspection

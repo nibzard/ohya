@@ -255,5 +255,9 @@ Recorded 2026-11-14 at revision `551d07f`:
 - Migration SHA-256 checksums are unchanged. Generated corpora are byte-identical.
 - Token comparison against the baseline matched for every batch, apart from the intended edits: the `isoMS` rewrite in `internal/fixgen`, two field renames, and one named constant in `cmd/tailcat-spike`.
 
+Merging `main` at `eb673b2` brought in 23 new comment lines from the repository derivation, settled view, and TLS commits.
+Their knowledge moved to `DB.md` (the `codex` version 2 row and the recomputed `repo` in re-derivation) and ADR 0002 (TLS options and the one-plane-per-process limit).
+After the merge, `make check` and `make build` passed, and the Go code matched `main` token for token apart from the intended edits.
+
 The `.gitignore` comments stay. The file is not executable and is outside the scope of this plan.
 Local checks ran on Linux only. The Linux and macOS continuous integration jobs have not run on this branch yet.

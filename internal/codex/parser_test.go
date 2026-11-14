@@ -149,6 +149,9 @@ func TestParseMainSession(t *testing.T) {
 	if meta.Cwd != "/home/dev/example" || meta.GitBranch != "main" {
 		t.Errorf("meta cwd/branch = %q/%q", meta.Cwd, meta.GitBranch)
 	}
+	if meta.Repo != "example.com/dev/example" {
+		t.Errorf("meta repo = %q, want example.com/dev/example", meta.Repo)
+	}
 	md := metadataOf(t, meta)
 	if md["threadId"] != mainThread || md["originator"] != "codex-tui" || md["source"] != "cli" || md["embedded"] != nil {
 		t.Errorf("meta metadata = %v", md)
@@ -200,14 +203,14 @@ func TestParseSubagentSession(t *testing.T) {
 	if md := metadataOf(t, own); md["source"] != "subagent" || md["parent_thread_id"] != mainThread {
 		t.Errorf("own meta metadata = %v", md)
 	}
-	if own.Cwd != "/home/dev/example" || own.GitBranch != "" {
-		t.Errorf("own meta cwd/branch = %q/%q", own.Cwd, own.GitBranch)
+	if own.Cwd != "/home/dev/example" || own.GitBranch != "" || own.Repo != "" {
+		t.Errorf("own meta cwd/branch/repo = %q/%q/%q", own.Cwd, own.GitBranch, own.Repo)
 	}
 	if md := metadataOf(t, parent); md["embedded"] != true || md["threadId"] != mainThread {
 		t.Errorf("embedded meta metadata = %v", md)
 	}
-	if parent.Cwd != "" || parent.GitBranch != "" {
-		t.Errorf("embedded meta lends cwd/branch %q/%q", parent.Cwd, parent.GitBranch)
+	if parent.Cwd != "" || parent.GitBranch != "" || parent.Repo != "" {
+		t.Errorf("embedded meta lends cwd/branch/repo %q/%q/%q", parent.Cwd, parent.GitBranch, parent.Repo)
 	}
 	if r := res.Records[4]; r.ResponseID != "resp_fixture_0101" || len(r.Usage) == 0 {
 		t.Errorf("usage record = %q/%s", r.ResponseID, r.Usage)
@@ -556,6 +559,29 @@ func TestParseIsDeterministic(t *testing.T) {
 		b, errB := Parse(data, 0, Options{SourceScope: "s"})
 		if !reflect.DeepEqual(a, b) || !reflect.DeepEqual(errA, errB) {
 			t.Fatalf("%s: parse is not deterministic", name)
+		}
+	}
+}
+
+func TestNormalizeRepoURL(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"https://github.com/nibzard/ohya.git", "github.com/nibzard/ohya"},
+		{"https://github.com/nibzard/ohya", "github.com/nibzard/ohya"},
+		{"https://GitHub.Com/Nibzard/Ohya.git", "github.com/Nibzard/Ohya"},
+		{"http://example.com/dev/example.git", "example.com/dev/example"},
+		{"ssh://git@github.com/nibzard/ohya.git", "github.com/nibzard/ohya"},
+		{"git@github.com:nibzard/ohya.git", "github.com/nibzard/ohya"},
+		{"git@gitlab.com:group/sub/project.git", "gitlab.com/group/sub/project"},
+		{"https://example.com/dev/example/", "example.com/dev/example"},
+		{"", ""},
+		{"not a url", ""},
+		{"example.com", ""},
+		{"https://example.com", ""},
+		{"git@github.com:nibzard", "github.com/nibzard"},
+	}
+	for _, c := range cases {
+		if got := normalizeRepoURL(c.in); got != c.want {
+			t.Errorf("normalizeRepoURL(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }

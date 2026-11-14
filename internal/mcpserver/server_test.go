@@ -67,7 +67,7 @@ func TestServerServesSQLTool(t *testing.T) {
 	}
 	description := sql.Description
 	for _, want := range []string{
-		"Current writer ID", "dev1", "events_fts", "event_annotations",
+		"Current writer ID", "dev1", "events_fts", "events_settled", "event_annotations",
 		"session_token_usage", "sqlite_master", "one statement per call",
 		"truncated", "MATCH",
 	} {
