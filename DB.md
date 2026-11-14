@@ -51,6 +51,7 @@ write-ahead log.
 | `session_token_usage` | Token counts of one API response, keyed by session and message ID |
 | `event_annotations` | Agent-written JSON values keyed by event, namespace, key and writer |
 | `events_fts` | Search index over event text, maintained transactionally |
+| `events_settled` | View over `events` holding only records of sessions idle at least 10 minutes |
 
 Use Unix milliseconds; absent observations remain NULL. Ingestion JSON metadata contains
 only deterministic observations, not inferred outcomes. Raw JSON preserves the
@@ -69,6 +70,18 @@ repository URL, so their sessions keep NULL. The first non-empty observation
 in deterministic order wins, exactly like `cwd` and `branch`, and re-derivation
 recomputes it. Never decode the Claude Code project directory name — it is
 lossy — and never discover git roots from the filesystem at ingestion time.
+
+### Settled events
+
+`events_settled` mirrors the `events` columns but hides records whose session
+was active in the last 10 minutes (`last_event_at_ms` newer than that;
+sessions without timestamps count as settled). It is the default surface the
+`sql` tool's description steers agents to: a querying agent's own session is
+the fresh one, and its transcript is untrusted text — excluding it keeps a
+running agent from reading, and acting on, its own live context. The cutoff
+is fixed at 10 minutes so the view needs no parameters and stays
+deterministic for a given clock. `events` itself stays fully readable for
+queries that deliberately want the live tail.
 
 ## Invariants
 

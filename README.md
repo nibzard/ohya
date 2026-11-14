@@ -229,7 +229,10 @@ connection guarded by a SQLite authorizer. Writes, schema changes,
 run under a 5 second deadline, return at most 500 rows and 256 KiB of row
 JSON, and report truncation explicitly instead of silently. The tool
 description publishes the schema, SQL examples, the limits, and this
-device's writer ID. To connect an agent, register the command, for example
+device's writer ID, and steers agents to the `events_settled` view —
+`events` without sessions active in the last 10 minutes — so a querying
+agent does not read its own live session. To connect an agent, register
+the command, for example
 for Claude Code:
 
 ```json
