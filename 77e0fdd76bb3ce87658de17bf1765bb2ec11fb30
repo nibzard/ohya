@@ -1,0 +1,39 @@
+# Context
+
+## Background
+T063 (round 7, agent experience). Agents already read hub data through the
+read-only sql MCP tool, so doctor was scoped to only what that tool cannot
+answer: state tied to this binary (schema vs migrations, parser output
+versions vs the parsers compiled in) or living outside the database (watch
+checkpoints, device identity, pairing credential, coordination plane).
+
+## Why This Way
+- Doctor is read-only by oath. store.OpenReadOnly opens mode=ro with no
+  writer, so nothing doctor does can migrate or repair; a behind-schema
+  database is a warning whose remedy names the migrating command.
+- The FTS5 integrity-check is an SQLite write statement: mode=ro and
+  query_only both refuse it. With no rank argument it checks only index
+  structure (every content drift passes); with a rank argument it demands
+  a %_docsize row per content row, which this schema violates on purpose
+  (text-less events stay unindexed). Resolved by running the rank form on
+  a private in-memory snapshot (driver Backup API) after dropping the
+  maintenance trigger and deleting text-less rows there.
+- Stop detection re-decides ingestion's stop read-only: parse bound+1
+  bytes at each pending checkpoint cursor, report only a StopError at the
+  cursor (where ingest acknowledged). Stops deeper in pending bytes
+  surface after the next pass advances the cursor onto them.
+
+## Gotchas
+- A :memory: snapshot pool must be single-connection and every statement
+  must run through one checked-out *sql.Conn; ExecContext on the pool
+  while the Conn is held blocks forever.
+- SELECT rowid / count(*) on an external-content FTS5 table read the
+  content table, never the index, so no SELECT-only integrity substitute
+  exists.
+- The coordination probe counts any HTTP response as answered (the
+  control plane 404s on /); an unreachable plane warns, not errors.
+
+## Related
+- docs/adr/0004-stopped-source-recovery.md (stop remedies)
+- docs/adr/0005-json-output.md (envelope; doctor data.findings added)
+- NOTES.md "Doctor choices" bullet carries the verified SQLite facts
