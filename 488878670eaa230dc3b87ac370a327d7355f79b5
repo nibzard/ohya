@@ -1,0 +1,11 @@
+# Context
+
+## Background
+Closing record for docs/comment-cleanup-plan.md. All of Phase 3 is done.
+
+## Gotchas
+- The validation was local and on Linux only. CI on Linux and macOS has not
+  run on this branch.
+- The main worktree holds uncommitted Codex repo-derivation work, which is not
+  on this branch. When it merges, it needs a DB.md output version row, and the
+  DB.md statement that the repo column is preserved must change.
