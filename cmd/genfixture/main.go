@@ -1,17 +1,3 @@
-// Command genfixture writes a deterministic synthetic session corpus to
-// disk, for performance measurements against the real binary. It exists so
-// the numbers in docs/performance.md reproduce without real transcripts: the
-// same arguments always produce the same bytes.
-//
-// Usage:
-//
-//	go run ./cmd/genfixture -agent FORMAT -root DIR [-sessions N] [-mean-bytes B] [-subagents S] [-seed S]
-//
-// FORMAT is claude-code (default), codex, or pi; each mirrors the on-disk
-// layout its agent CLI discovers (docs/performance.md names the matching
-// ingest flags). The default shape mirrors the verified real corpus
-// averages: sessions of about 512 KiB (real mean 756 KB per file including
-// subagent transcripts) with two subagent files each.
 package main
 
 import (

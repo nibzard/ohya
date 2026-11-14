@@ -1,18 +1,3 @@
-// Package fixgen generates deterministic synthetic session corpora for
-// benchmarks and performance tests: Generate and Write produce the Claude
-// Code format, GenerateCodex and WriteCodex the Codex rollout format, and
-// GeneratePi and WritePi the Pi agent session format. Each generator follows
-// the verified format description of its agent (testdata/<agent>/README.md),
-// scaled to configurable volumes, so measurements reproduce without real
-// transcripts: the same Corpus value always generates the same bytes, with no
-// clock or environment input.
-//
-// Every corpus is intentionally text-heavy with a skewed word distribution: a
-// few common words appear in many records (wide FTS matches) and each marker
-// word appears in a small fraction of records (selective FTS matches), which
-// is what query benchmarks need to stay realistic. All three generators draw
-// texts from the same distribution, so per-agent benchmarks differ in record
-// envelope and parser, not in text volume.
 package fixgen
 
 import (
@@ -21,37 +6,21 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"time"
 )
 
-// Corpus describes one synthetic corpus. The zero value is not usable. The
-// same knobs shape every agent's corpus; GenerateCodex applies them to
-// rollout files (subagent rollouts included) and GeneratePi to one file per
-// session, where SubagentsPerSession has no equivalent and stays unused.
 type Corpus struct {
-	// Sessions is the number of main session files.
-	Sessions int
-	// MainMeanBytes is the approximate size of one main session file; the
-	// actual size varies per session and lands within one turn of it.
-	MainMeanBytes int64
-	// SubagentsPerSession is the mean number of subagent transcript files
-	// per main session (each about a quarter of the main file's size).
-	// Zero disables subagent files.
+	Sessions            int
+	MainMeanBytes       int64
 	SubagentsPerSession float64
-	// Seed changes the corpus deterministically; 0 uses 1.
-	Seed int64
+	Seed                int64
 }
 
-// File is one generated session file: its path relative to the corpus root
-// and its full JSONL bytes.
 type File struct {
 	Path string
 	Data []byte
 }
 
-// Generate returns every file of the corpus in a deterministic order: for
-// each session the main file first, then its subagent files. The result
-// holds the whole corpus in memory; ingestion itself streams, so benchmark
-// setups call this once outside the timed loop.
 func Generate(c Corpus) []File {
 	rng := rand.New(rand.NewPCG(uint64(c.seed()), 0x6f687961))
 	var files []File
@@ -65,14 +34,10 @@ func Generate(c Corpus) []File {
 	return files
 }
 
-// Write writes the Claude Code corpus under root, mirroring the projects
-// layout (<encoded-cwd>/<session>.jsonl plus subagents/), and returns the
-// total bytes written. Directories are created as needed.
 func Write(root string, c Corpus) (int64, error) {
 	return writeFiles(root, Generate(c))
 }
 
-// writeFiles writes generated files under root in path order.
 func writeFiles(root string, files []File) (int64, error) {
 	var total int64
 	for _, f := range files {
@@ -88,14 +53,10 @@ func writeFiles(root string, files []File) (int64, error) {
 	return total, nil
 }
 
-// uuid formats a deterministic UUID-shaped identifier of the version-7 form
-// the Codex and Pi formats write. hi and n only need to be unique per call.
 func uuid(hi, n uint64) string {
 	return fmt.Sprintf("%08x-0000-7000-8000-%012x", hi, n)
 }
 
-// compact serializes a generated JSON value; the inputs are maps and slices
-// of primitives, so marshaling cannot fail.
 func compact(v any) string {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -111,20 +72,15 @@ func (c Corpus) seed() int64 {
 	return c.Seed
 }
 
-// sessionGen carries the per-session deterministic state shared by the main
-// file and its subagent files.
 type sessionGen struct {
-	idx     int
-	project string
-	cwd     string
-	branch  string
-	id      string // session UUID; also the main file name
-	seed    int64  // corpus seed, folded into the per-file generators
-	// subagents is the number of subagent files drawn for this session.
+	idx       int
+	project   string
+	cwd       string
+	branch    string
+	id        string
+	seed      int64
 	subagents int
-	// baseMS is the session's first timestamp, offset per session so
-	// sessions interleave in time like real usage.
-	baseMS int64
+	baseMS    int64
 }
 
 func newSession(c Corpus, rng *rand.Rand, idx int) *sessionGen {
@@ -135,11 +91,10 @@ func newSession(c Corpus, rng *rand.Rand, idx int) *sessionGen {
 		branch: branches[idx%len(branches)],
 		id:     fmt.Sprintf("%08x-0000-4000-8000-%012x", 0x5e550000+uint64(idx), uint64(idx)),
 		seed:   c.seed(),
-		baseMS: int64(idx) * 86_400_000 / 3, // sessions start eight hours apart
+		baseMS: int64(idx) * 86_400_000 / 3,
 	}
 	s.project = encodeCwd(s.cwd)
 	if c.SubagentsPerSession > 0 {
-		// Uniform draw around the mean, capped at 4.
 		s.subagents = int(rng.Float64() * 2 * c.SubagentsPerSession)
 		if s.subagents > 4 {
 			s.subagents = 4
@@ -156,8 +111,6 @@ func (s *sessionGen) subPath(i int) string {
 	return filepath.Join(s.project, s.id, "subagents", fmt.Sprintf("agent-%08x.jsonl", uint64(i)+1))
 }
 
-// encodeCwd applies Claude Code's lossy directory encoding: every '/', '.'
-// and '_' becomes '-' (testdata/claude-code/README.md).
 func encodeCwd(cwd string) string {
 	out := make([]byte, len(cwd))
 	for i := 0; i < len(cwd); i++ {
@@ -171,24 +124,21 @@ func encodeCwd(cwd string) string {
 	return string(out)
 }
 
-// rec is one JSONL record under construction. encoding/json sorts map keys,
-// so marshal output is deterministic.
 type rec map[string]any
 
-// sessionWriter emits one file's records as JSONL bytes.
 type sessionWriter struct {
-	s       *sessionGen
-	textGen      // word and text distribution shared by every agent's generator
-	sub     bool // subagent transcript
-	buf     []byte
-	uuid    int64
-	ms      int64
+	s *sessionGen
+	textGen
+	subagent bool
+	buf      []byte
+	uuid     int64
+	ms       int64
 }
 
 func (w *sessionWriter) emit(r rec) {
 	w.uuid++
 	r["uuid"] = w.uuidString(w.uuid)
-	r["parentUuid"] = w.uuidString(w.uuid - 1) // 0 renders as null
+	r["parentUuid"] = w.uuidString(w.uuid - 1)
 	w.ms += int64(20 + w.rng.IntN(4000))
 	r["timestamp"] = isoMS(w.s.baseMS + w.ms)
 	b, err := json.Marshal(r)
@@ -206,8 +156,6 @@ func (w *sessionWriter) uuidString(n int64) any {
 	return fmt.Sprintf("%08x-0000-4000-8000-%012x", 0xabcd0000, uint64(n))
 }
 
-// mainJSON generates one main session file: opening bookkeeping, a sequence
-// of turns, closing bookkeeping.
 func (s *sessionGen) mainJSON(c Corpus) []byte {
 	w := &sessionWriter{s: s, textGen: textGen{rng: rand.New(rand.NewPCG(s.seed2(0), 0x6d61696e))}}
 	w.emit(rec{"type": "queue-operation", "sessionId": s.id, "operation": "add"})
@@ -225,11 +173,8 @@ func (s *sessionGen) mainJSON(c Corpus) []byte {
 	return w.buf
 }
 
-// subJSON generates one subagent transcript of about a quarter of the main
-// file's size, reusing the parent session id with isSidechain and agentId,
-// as verified in the real corpus.
 func (s *sessionGen) subJSON(c Corpus, i int) []byte {
-	w := &sessionWriter{s: s, textGen: textGen{rng: rand.New(rand.NewPCG(s.seed2(i+1), 0x737562))}, sub: true}
+	w := &sessionWriter{s: s, textGen: textGen{rng: rand.New(rand.NewPCG(s.seed2(i+1), 0x737562))}, subagent: true}
 	w.emit(rec{"type": "started", "agentId": s.id + ":a" + fmt.Sprint(i+1), "key": "task",
 		"prompt": w.sentence(4, 12)})
 	for int64(len(w.buf)) < c.MainMeanBytes/4 {
@@ -244,14 +189,10 @@ func (s *sessionGen) seed2(i int) uint64 {
 	return uint64(s.idx)<<16 | uint64(i)<<8 | uint64(s.seed)&0xff
 }
 
-// turn emits one conversation turn: a user prompt, optionally an attachment,
-// one assistant response of one to four blocks sharing a message id and
-// usage, one tool_result record per tool_use block, and sometimes a system
-// record. Block and result sizes drive the corpus's size distribution.
 func (w *sessionWriter) turn() {
 	msgBase := rec{"sessionId": w.s.id, "cwd": w.s.cwd, "version": "2.1.280",
 		"gitBranch": w.s.branch, "userType": "external"}
-	if w.sub {
+	if w.subagent {
 		msgBase["isSidechain"] = true
 		msgBase["agentId"] = w.s.id + ":a1"
 	}
@@ -317,11 +258,6 @@ func with(base, extra rec) rec {
 	return out
 }
 
-// Text generation with a skewed word distribution: common words dominate,
-// markers stay rare, so FTS queries see both wide and selective terms.
-// textGen is embedded by every agent's writer, so all corpora share one
-// distribution and per-agent benchmarks compare envelopes, not text volume.
-
 type textGen struct{ rng *rand.Rand }
 
 var vocabulary = []string{
@@ -340,8 +276,6 @@ var vocabulary = []string{
 	"upgrade", "install", "binary", "flag", "config", "state", "help",
 }
 
-// markers appear in a small fraction of texts; each is a selective
-// full-text search term.
 var markers = []string{
 	"authentication", "refresh", "bearer", "deadlock", "fingerprint",
 	"synthetic", "notarization", "quarantine",
@@ -368,7 +302,6 @@ func (t textGen) words(n int) string {
 }
 
 func (t textGen) word() string {
-	// Squared index: the first words dominate, the tail stays rare.
 	f := t.rng.Float64()
 	i := int(f * f * float64(len(vocabulary)))
 	return vocabulary[i]
@@ -379,9 +312,6 @@ func (t textGen) sentence(lo, hi int) string {
 	return t.words(n) + "."
 }
 
-// text emits text of approximately min to max bytes. About three percent of
-// texts carry one marker word, so each marker matches a small, stable share
-// of events; a third of the filler lines look like code.
 func (t textGen) text(min, max int) string {
 	n := min + t.rng.IntN(max-min+1)
 	var out []byte
@@ -427,34 +357,8 @@ func toolInput(w *sessionWriter, name string) rec {
 	}
 }
 
-// epochMS is 2026-01-01T00:00:00.000Z in Unix milliseconds.
 const epochMS int64 = 1767225600_000
 
-// isoMS renders Unix milliseconds as the ISO 8601 UTC form Claude Code
-// writes, from a fixed epoch so output stays deterministic.
 func isoMS(ms int64) string {
-	sec, msec := (epochMS+ms)/1000, (epochMS+ms)%1000
-	days, rem := sec/86400, sec%86400
-	h, mi, s := rem/3600, rem%3600/60, rem%60
-	y, mo, d := civilFromDays(days)
-	return fmt.Sprintf("%04d-%02d-%02dT%02d:%02d:%02d.%03dZ", y, mo, d, h, mi, s, msec)
-}
-
-// civilFromDays converts days since 1970-01-01 to a civil date (Howard
-// Hinnant's algorithm; valid for the whole range a corpus can reach).
-func civilFromDays(z int64) (int64, int64, int64) {
-	z += 719468
-	era := z / 146097
-	doe := z - era*146097 // [0, 146096]
-	yoe := (doe - doe/1460 + doe/36524 - doe/146096) / 365
-	y := yoe + era*400
-	doy := doe - (365*yoe + yoe/4 - yoe/100)
-	mp := (5*doy + 2) / 153
-	d := doy - (153*mp+2)/5 + 1
-	m := mp + 3
-	if mp >= 10 {
-		m = mp - 9
-		y++
-	}
-	return y, m, d
+	return time.UnixMilli(epochMS + ms).UTC().Format("2006-01-02T15:04:05.000Z")
 }

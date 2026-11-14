@@ -8,13 +8,6 @@ import (
 	"strings"
 )
 
-// GeneratePi returns every file of a deterministic synthetic Pi agent
-// session corpus (testdata/pi/README.md, format v3): one append-only JSONL
-// file per session under its encoded-cwd directory, in the 1.5.2 shape (the
-// system preamble entry and durationMs fields; the parser tolerates their
-// absence the same way). Pi sessions never span files and have no subagent
-// transcripts, so Corpus.SubagentsPerSession has no Pi equivalent and stays
-// unused.
 func GeneratePi(c Corpus) []File {
 	rng := rand.New(rand.NewPCG(uint64(c.seed()), 0x00706921))
 	var files []File
@@ -25,24 +18,19 @@ func GeneratePi(c Corpus) []File {
 	return files
 }
 
-// WritePi writes the Pi corpus under root, mirroring the sessions tree
-// layout (--encoded-cwd--/<timestamp>_<session-uuid>.jsonl), and returns the
-// total bytes written.
 func WritePi(root string, c Corpus) (int64, error) {
 	return writeFiles(root, GeneratePi(c))
 }
 
-// piGen carries one session's deterministic state.
 type piGen struct {
 	idx    int
 	cwd    string
-	id     string // session UUID; also the file name's UUID
+	id     string
 	seed   int64
 	baseMS int64
 }
 
 func newPiSession(c Corpus, rng *rand.Rand, idx int) *piGen {
-	// Pi has no subagent files; the corpus rng only spreads session starts.
 	return &piGen{
 		idx:    idx,
 		cwd:    "/home/agent/" + projects[idx%len(projects)],
@@ -52,9 +40,6 @@ func newPiSession(c Corpus, rng *rand.Rand, idx int) *piGen {
 	}
 }
 
-// encodePiCwd applies Pi's lossy session-directory encoding: the cwd minus
-// one leading slash, every '/', '\' and ':' replaced by '-', wrapped in
-// double dashes (testdata/pi/README.md). Never decoded.
 func encodePiCwd(cwd string) string {
 	enc := strings.NewReplacer("/", "-", "\\", "-", ":", "-")
 	return "--" + enc.Replace(strings.TrimPrefix(cwd, "/")) + "--"
@@ -65,21 +50,16 @@ func (g *piGen) path() string {
 	return filepath.Join(encodePiCwd(g.cwd), name+"_"+g.id+".jsonl")
 }
 
-// piWriter emits one session file's entries as JSONL bytes. Entries form a
-// chain: each names the previous entry as its parent, the first after the
-// header parented at null.
 type piWriter struct {
 	textGen
 	g    *piGen
 	buf  []byte
-	seq  int64 // entry counter; ids are 8-hex like the real format
+	seq  int64
 	ms   int64
 	call int64
 	resp int64
 }
 
-// raw appends one record without the entry framing — for the session header,
-// which carries no entry id or parent.
 func (w *piWriter) raw(r rec) {
 	b, err := json.Marshal(r)
 	if err != nil {
@@ -102,8 +82,6 @@ func (w *piWriter) emit(r rec) {
 	w.raw(r)
 }
 
-// json generates one session file: the header, model and thinking-level
-// changes, the system preamble entry, then turns until the target size.
 func (g *piGen) json(c Corpus) []byte {
 	w := &piWriter{textGen: textGen{rng: rand.New(rand.NewPCG(g.seed3(), 0x70697365))}, g: g}
 	w.raw(rec{"type": "session", "version": 3, "id": g.id,
@@ -129,10 +107,6 @@ func (g *piGen) seed3() uint64 {
 	return uint64(g.idx)<<16 | uint64(g.seed)&0xff
 }
 
-// turn emits one conversation turn: the user prompt, one to three tool
-// round-trips (assistant toolCall response plus its toolResult), and the
-// final assistant text response. Every assistant message carries exactly one
-// per-response usage object keyed by its responseId.
 func (w *piWriter) turn() {
 	w.emit(rec{"type": "message", "message": rec{
 		"role":      "user",
@@ -181,9 +155,6 @@ func (w *piWriter) responseID() string {
 	return fmt.Sprintf("resp_%s_%06d", w.g.id[:8], w.resp)
 }
 
-// usage draws one per-response usage object. The verified identity
-// input + cacheRead + output = totalTokens holds by construction, and
-// cacheWrite and reasoning stay at the verified zero.
 func (w *piWriter) usage() rec {
 	in := 400 + w.rng.IntN(50_000)
 	cacheRead := 2000 + w.rng.IntN(180_000)
@@ -200,7 +171,6 @@ func (w *piWriter) usage() rec {
 	}
 }
 
-// toolArguments builds one tool call's arguments object.
 func (w *piWriter) toolArguments(name string) rec {
 	switch name {
 	case "bash":

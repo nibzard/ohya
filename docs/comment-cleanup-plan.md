@@ -233,3 +233,4 @@ Comment markers inside raw and quoted strings are not comments and are not count
 
 | Batch | Paths | Comments removed | Documentation destination |
 |---|---|---|---|
+| 1 | `cmd/genfixture`, `internal/fixgen` | 201 | `docs/performance.md`, "Corpus shape" |

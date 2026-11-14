@@ -18,6 +18,39 @@ in text volume: mean record size is about 3.2 KB for Claude Code, 3.7 KB for
 Codex rollouts and 4.7 KB for Pi sessions. No real transcripts are committed
 or required. The same seed always produces the same bytes.
 
+Corpus shape (`internal/fixgen`, `cmd/genfixture`):
+
+- Generators read no clock or environment. Timestamps count from
+  2026-01-01T00:00:00.000Z, and sessions start eight hours apart.
+- The default shape follows the verified real corpus averages: main
+  sessions of about 512 KiB (the real mean is 756 KB per session including
+  subagent transcripts) and a mean of two subagent files per session. Each
+  subagent file is about a quarter of its main file. The per-session count
+  is a uniform draw around the mean, capped at 4.
+- Word choice is skewed: the probability index is squared, so the first
+  vocabulary words dominate and the tail stays rare. About 3% of texts
+  carry one marker word, which gives selective full-text matches. About a
+  third of filler lines look like code.
+- Claude Code: one file per session under the encoded `cwd` directory, and
+  subagent transcripts under `<session>/subagents/` that reuse the parent
+  `sessionId` with `isSidechain` and `agentId`. Each assistant response has
+  one to four blocks that share one `message.id` and one usage object.
+- Codex: one rollout per thread under `YYYY/MM/DD/`. Ordinals start at the
+  `session_meta` record. Usage records carry per-response usage plus
+  running turn and thread totals, and the cached part stays within
+  `input_tokens`. Subagent rollouts open with their own `session_meta` and
+  embed the parent's as line two. Resumed pages test write-path
+  deduplication, not parse cost, so the corpus omits them.
+- Pi: one file per session in the 1.5.2 shape, including the `system`
+  entry and `durationMs`. Every assistant message carries one usage object
+  keyed by its `responseId`, where `input + cacheRead + output =
+  totalTokens` and `cacheWrite` and `reasoning` stay 0. Pi has no subagent
+  files, so the subagent setting does not apply.
+
+Tests in `internal/fixgen` pin the generator contract: every file parses
+to its end through the production parser and adapter, commits through the
+real write path, and a repeated batch inserts nothing.
+
 Reproduce with:
 
 ```sh

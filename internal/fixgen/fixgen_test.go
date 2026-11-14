@@ -16,11 +16,6 @@ import (
 	"github.com/nibzard/ohya/internal/store"
 )
 
-// TestCorpusParsesCompletely pins the generator's contract: every generated
-// file parses through the production parser with no stop, the parse cursor
-// lands exactly at the file end, and the events adapter accepts every
-// record. A generator change that stops a source would silently poison
-// every benchmark built on it.
 func TestCorpusParsesCompletely(t *testing.T) {
 	c := Corpus{Sessions: 8, MainMeanBytes: 256 << 10, SubagentsPerSession: 2}
 	files := Generate(c)
@@ -50,10 +45,6 @@ func TestCorpusParsesCompletely(t *testing.T) {
 	}
 }
 
-// TestCodexCorpusParsesCompletely pins the Codex generator's contract the
-// same way, and asserts the corpus exercises the paths the adapter derives
-// its value from: the human prompt from event_msg/user_message and one usage
-// object per token_usage_record response.
 func TestCodexCorpusParsesCompletely(t *testing.T) {
 	c := Corpus{Sessions: 4, MainMeanBytes: 256 << 10, SubagentsPerSession: 2}
 	files := GenerateCodex(c)
@@ -95,9 +86,6 @@ func TestCodexCorpusParsesCompletely(t *testing.T) {
 	}
 }
 
-// TestPiCorpusParsesCompletely pins the Pi generator's contract, and asserts
-// the corpus reaches the per-response usage path: one usage per assistant
-// responseId, never repeated across records.
 func TestPiCorpusParsesCompletely(t *testing.T) {
 	c := Corpus{Sessions: 4, MainMeanBytes: 256 << 10}
 	files := GeneratePi(c)
@@ -139,18 +127,12 @@ func TestPiCorpusParsesCompletely(t *testing.T) {
 	}
 }
 
-// TestGenerateIsDeterministic pins reproducibility: the same Corpus value
-// must always produce the same bytes, because the documented measurements
-// depend on it.
 func TestGenerateIsDeterministic(t *testing.T) {
 	c := Corpus{Sessions: 3, MainMeanBytes: 64 << 10, SubagentsPerSession: 1}
 	first, second := Generate(c), Generate(c)
 	compareCorpora(t, first, second)
 }
 
-// TestWriteMirrorsProjectsLayout checks the on-disk shape the CLI discovers:
-// session files under encoded-cwd directories, subagent transcripts under
-// subagents/, every file newline-terminated.
 func TestWriteMirrorsProjectsLayout(t *testing.T) {
 	root := t.TempDir()
 	c := Corpus{Sessions: 2, MainMeanBytes: 8 << 10, SubagentsPerSession: 1}
@@ -187,8 +169,6 @@ func TestWriteMirrorsProjectsLayout(t *testing.T) {
 	}
 }
 
-// TestGenerateCodexIsDeterministic and TestGeneratePiIsDeterministic pin
-// reproducibility for the per-agent corpora, like TestGenerateIsDeterministic.
 func TestGenerateCodexIsDeterministic(t *testing.T) {
 	c := Corpus{Sessions: 3, MainMeanBytes: 64 << 10, SubagentsPerSession: 1}
 	first, second := GenerateCodex(c), GenerateCodex(c)
@@ -216,9 +196,6 @@ func compareCorpora(t *testing.T, first, second []File) {
 var rolloutPath = regexp.MustCompile(`^[0-9]{4}/[0-9]{2}/[0-9]{2}/rollout-\S+\.jsonl$`)
 var piPath = regexp.MustCompile(`^--[^/]+--/[0-9T:.-]+Z_[0-9a-f-]{36}\.jsonl$`)
 
-// TestWriteCodexMirrorsRolloutLayout checks the on-disk shape the CLI
-// discovers: rollouts under YYYY/MM/DD date directories, every file
-// newline-terminated.
 func TestWriteCodexMirrorsRolloutLayout(t *testing.T) {
 	root := t.TempDir()
 	c := Corpus{Sessions: 3, MainMeanBytes: 8 << 10, SubagentsPerSession: 1}
@@ -255,9 +232,6 @@ func TestWriteCodexMirrorsRolloutLayout(t *testing.T) {
 	}
 }
 
-// TestWritePiMirrorsSessionsLayout checks the on-disk shape the CLI
-// discovers: one file per session under its encoded-cwd directory, every
-// file newline-terminated.
 func TestWritePiMirrorsSessionsLayout(t *testing.T) {
 	root := t.TempDir()
 	c := Corpus{Sessions: 3, MainMeanBytes: 8 << 10}
@@ -294,10 +268,6 @@ func TestWritePiMirrorsSessionsLayout(t *testing.T) {
 	}
 }
 
-// TestAgentCorpusIngests pins the generator contract end to end: generated
-// bytes not only parse but commit through the real write path — schema
-// checks, ordinal dedup and usage aggregates included — and a repeated batch
-// inserts nothing, which is what an ingest retry does with corpus bytes.
 func TestAgentCorpusIngests(t *testing.T) {
 	for _, tc := range []struct {
 		agent  string
@@ -335,8 +305,6 @@ func TestAgentCorpusIngests(t *testing.T) {
 			if inserted == 0 {
 				t.Fatal("corpus inserted no events")
 			}
-			// Reingest the last file's batch: a retry after a lost
-			// acknowledgment must insert nothing.
 			f := tc.corpus[len(tc.corpus)-1]
 			sourceID := lastSource
 			res, err := events.Parse(tc.agent, f.Data, 0, events.Options{SourceScope: sourceID})
