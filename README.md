@@ -339,3 +339,26 @@ and answer a current-context case without querying memory.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## Installer development
+
+The integrated installer is under development; see
+[the installer plan](docs/installer-plan.md). The local setup engine is
+available from source builds:
+
+```sh
+./bin/ohya setup --dry-run --json
+./bin/ohya setup
+./bin/ohya uninstall
+```
+
+Setup configures a user ingestion service and native MCP entries for installed
+agents. Use `--agents claude,codex` to select clients, `--no-service` for an
+existing process manager, and `--no-agents` to skip client changes. Agent
+entries and service files use ownership receipts. Uninstall preserves memory,
+credentials, sessions, and entries edited after setup.
+
+This development version reports older Pi versions as unsupported. Remote
+setup, automatic backups, PATH setup, and the download bootstrap are not yet
+implemented. Existing agent sessions need a reload or a new session after
+registration. Native service verification remains a release gate.

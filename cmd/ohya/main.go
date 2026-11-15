@@ -22,7 +22,9 @@ var rootSpec = commandSpec{
 		"No command prompts for input: ohya is non-interactive by design.\n" +
 		"Exit codes: 0 success, 1 failure, 2 usage error, 3 degraded (only ingest --once: at least one source failed or stopped).",
 	argsTitle: "Commands",
-	args: `ingest     import agent session history, then poll for new records
+	args: `setup      configure memory services and installed agents
+uninstall  remove owned integrations and services; preserve memory
+ingest     import agent session history, then poll for new records
 serve      run the hub for devices: coordination, sync, remote tools
 join       pair a device with a hub and upload its agent sessions
 mcp        serve the sql and annotate MCP tools on stdio
@@ -47,6 +49,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	cmd, rest := args[0], args[1:]
 	switch cmd {
+	case "setup":
+		return runSetupCommand(rest, stdout, stderr)
+	case "uninstall":
+		return runUninstallCommand(rest, stdout, stderr)
 	case "ingest":
 		return runIngestCommand(rest, stdout, stderr)
 	case "serve":
@@ -95,6 +101,7 @@ func runIngestCommand(args []string, stdout, stderr io.Writer) error {
 	rootFlags := newAgentRootFlags(c.fs, home)
 	interval := c.fs.Duration("interval", 2*time.Second,
 		"polling `interval` in continuous mode")
+	allowEmpty := c.fs.Bool("allow-empty", false, "watch missing roots until sessions appear; used by managed setup")
 	once := c.fs.Bool("once", false, "run exactly one pass and exit")
 	asJSON := c.fs.Bool("json", false,
 		"print one JSON object instead of the text summary; needs --once (docs/adr/0005)")
@@ -128,6 +135,7 @@ func runIngestCommand(args []string, stdout, stderr io.Writer) error {
 		roots:          roots,
 		interval:       *interval,
 		once:           *once,
+		allowEmpty:     *allowEmpty,
 		maxRecordBytes: *maxRecordBytes,
 		jsonOut:        *asJSON,
 		stdout:         stdout,

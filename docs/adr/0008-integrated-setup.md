@@ -79,3 +79,17 @@ updates retain the prior owned bytes. Removal refuses a file edited after
 setup. A nonblocking file lock serializes setup processes using one state
 directory. The lock file remains on disk after release; process exit releases
 the operating system lock.
+
+## CLI orchestration
+
+`ohya setup` exposes dry runs, agent selection, JSON results, and service and
+agent opt-outs. The local flow serializes updates, applies service files,
+checks the memory protocol, and registers supported native clients. A failed
+component makes the command fail while preserving its completed result report.
+The CLI integration is incremental: remote join, legacy Pi, backups, PATH
+setup, and the bootstrap remain to implement before release.
+
+Managed ingestion uses `--allow-empty` so agents with no session files can
+start writing later. Missing roots remain absent and are polled without being
+created. Normal ingestion keeps its existing missing-root error behavior.
+Uninstall preserves edited service files before sending any stop command.

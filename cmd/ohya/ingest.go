@@ -31,6 +31,7 @@ type ingestOptions struct {
 	stateDir       string
 	roots          []agentRoot
 	interval       time.Duration
+	allowEmpty     bool
 	once           bool
 	maxRecordBytes int64
 	jsonOut        bool
@@ -55,12 +56,12 @@ func runIngest(ctx context.Context, o ingestOptions) error {
 			present++
 		case !errors.Is(err, os.ErrNotExist):
 			return fmt.Errorf("stat %s: %w", root.dir, err)
-		case !root.optional:
+		case !root.optional && !o.allowEmpty:
 			return classify(fmt.Errorf("%s session directory %s does not exist; pass --%s", root.agent, root.dir, root.flag),
 				"missing_agent_root", "pass the named --<agent>-root flag, or create the directory")
 		}
 	}
-	if present == 0 {
+	if present == 0 && !o.allowEmpty {
 		var flags []string
 		for _, root := range o.roots {
 			flags = append(flags, "--"+root.flag)
@@ -96,7 +97,7 @@ func runIngest(ctx context.Context, o ingestOptions) error {
 	for pass := 1; ; pass++ {
 		var stats passStats
 		for i, r := range runners {
-			s, err := r.poll(ctx, o.roots[i].dir, o.roots[i].optional)
+			s, err := r.poll(ctx, o.roots[i].dir, o.roots[i].optional || o.allowEmpty)
 			if err != nil {
 				return err
 			}
