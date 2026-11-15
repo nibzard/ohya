@@ -1040,7 +1040,7 @@ How to use this file:
 
 - Installer proposal (2026-11-15): `docs/installer-plan.md` records the proposed
   integrated installer: user services, agent MCP registration, verification,
-  repair, and later Homebrew support. No installer exists yet. User requires
+  repair, and later Homebrew support. Implementation is in progress. User requires
   one-command working setup, not a binary-only default. Native baselines, Apple
   signing, and Linux bootstrap
   signature policy remain open. Pi's current quickstart recommends a managed
@@ -1052,14 +1052,11 @@ How to use this file:
   owned extension for supported older Pi. Claude user scope and Codex MCP add
   syntax were checked against installed help. Sources: installer plan.
 
-- Integrated setup implementation (2026-11-15): `internal/setup` now has owned
-  JSON/TOML entry updates, discovery paths, and a real MCP connection check.
-  The setup command, services, native Pi capability checks, older-Pi adapter,
-  and bootstrap remain unfinished. Verified with isolated installed Claude:
-  `CLAUDE_CONFIG_DIR` puts user MCP settings in `<dir>/.claude.json`.
-
-- Installer bootstrap implementation (2026-11-15): `install.sh` verifies an exact
-  release over HTTPS, checks archive layout and identity, then delegates binary
-  installation and setup to the executable. Local HTTPS fixtures and an isolated
-  real-binary install passed. No assets are published yet. PATH integration,
-  remote setup, older Pi, and native release validation remain unfinished.
+- Integrated installer implementation (2026-11-15): `install.sh` and
+  `internal/setup` implement verified bootstrap installation, owned JSON/TOML
+  configuration, local and remote setup, user service templates, PATH blocks,
+  SQLite recovery points, removal, and real MCP checks. No assets are published.
+  Older Pi, deeper service health checks, client policy/override checks, and
+  native release validation remain unfinished. The real remote setup test
+  proves pairing and reruns against a hub without changing user services.
+  Verified Claude override path: `CLAUDE_CONFIG_DIR/.claude.json`.

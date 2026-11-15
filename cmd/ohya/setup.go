@@ -3,20 +3,25 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
+	"github.com/nibzard/ohya/internal/control"
+	"github.com/nibzard/ohya/internal/transport/tailcat"
 	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/nibzard/ohya/internal/setup"
 )
 
 var setupSpec = commandSpec{
 	name: "ohya setup", synopsis: "configure local memory and installed agents", usageLine: "ohya setup [flags]",
-	description: "Configures a user service for local ingestion and registers ohya with installed agents. Preserves unrelated settings and reports each result. Rerun to repair owned configuration. Use --dry-run to inspect changes without writing files. Older Pi compatibility and remote setup are still under development.",
+	description: "Configures a user service for local ingestion and registers ohya with installed agents. Preserves unrelated settings and reports each result. Rerun to repair owned configuration. Use --dry-run to inspect changes without writing files. Older Pi compatibility is still under development. Remote setup accepts --join-code-env and saves the hub settings for reruns.",
 	argsTitle:   "Arguments", args: "(none)", examples: []string{"ohya setup", "ohya setup --dry-run --json"},
 }
 
@@ -46,6 +51,11 @@ func runSetupCommand(args []string, stdout, stderr io.Writer) error {
 	binaryPath := c.fs.String("binary", binary, "absolute executable `path` registered with services and agents")
 	state := c.fs.String("state", filepath.Join(home, ".ohya"), "memory state `directory`")
 	agents := c.fs.String("agents", "auto", "agents to configure: auto or comma-separated claude,codex,pi")
+	remote := c.fs.Bool("remote", false, "configure this device to use an existing hub")
+	local := c.fs.Bool("local", false, "configure local memory instead of a saved remote connection")
+	codeEnv := c.fs.String("join-code-env", "", "environment variable holding the one-time join code")
+	controlURL := c.fs.String("control", control.DefaultURL(), "hub coordination URL for remote setup")
+	hubAddr := c.fs.String("hub-addr", tailcat.DefaultHubAddr(), "hub address inside the tailnet")
 	noAgents := c.fs.Bool("no-agents", false, "skip agent configuration")
 	noModifyPath := c.fs.Bool("no-modify-path", false, "leave shell profiles unchanged")
 	noService := c.fs.Bool("no-service", false, "skip the background service")
@@ -65,8 +75,58 @@ func runSetupCommand(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	connection, err := setup.LoadConnection(absState)
+	if err != nil {
+		return err
+	}
+	if *local && (*remote || *codeEnv != "") {
+		return c.usageErrorf("--local cannot be combined with remote setup")
+	}
+	if *local {
+		connection = setup.Connection{Mode: "local"}
+	}
+	if (*remote || *codeEnv != "") && connection.Mode != "remote" {
+		connection = setup.Connection{Mode: "remote", ControlURL: *controlURL, HubAddress: *hubAddr}
+	}
+	c.fs.Visit(func(f *flag.Flag) {
+		if f.Name == "control" {
+			connection.ControlURL = *controlURL
+		}
+		if f.Name == "hub-addr" {
+			connection.HubAddress = *hubAddr
+		}
+	})
+	if err := connection.Validate(); err != nil {
+		return c.usageErrorf("%s", err)
+	}
+	code := ""
+	if *codeEnv != "" {
+		if !regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString(*codeEnv) {
+			return c.usageErrorf("invalid join code environment variable name")
+		}
+		if !*dry {
+			code = os.Getenv(*codeEnv)
+			if code == "" {
+				return c.usageErrorf("join code environment variable is empty")
+			}
+			if _, _, err := control.SplitJoinCode(code); err != nil {
+				return c.usageErrorf("join code environment variable does not contain a valid invitation")
+			}
+			if err := os.Unsetenv(*codeEnv); err != nil {
+				return err
+			}
+		}
+	}
+	dataState := absState
 	db := filepath.Join(absState, "hub.db")
-	serviceArgs := []string{"ingest", "--allow-empty", "--db", db, "--state", absState}
+	clientArgs := []string{"mcp", "--db", db, "--state", dataState}
+	serviceArgs := []string{"ingest", "--allow-empty", "--db", db, "--state", dataState}
+	if connection.Mode == "remote" {
+		dataState = filepath.Join(absState, "join")
+		db = ""
+		clientArgs = []string{"mcp", "--remote", "--state", dataState, "--control", connection.ControlURL, "--hub-addr", connection.HubAddress}
+		serviceArgs = []string{"join", "--allow-empty", "--state", dataState, "--control", connection.ControlURL, "--hub-addr", connection.HubAddress}
+	}
 	for _, root := range []struct {
 		name string
 		dir  *string
@@ -86,7 +146,21 @@ func runSetupCommand(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	options := setup.Options{NoModifyPath: *noModifyPath, Shell: os.Getenv("SHELL"), Database: db, Clients: setup.ClientOptions{Home: home, State: absState, Binary: binary, Args: []string{"mcp", "--db", db, "--state", absState}, Agents: *agents}, ServiceArgs: serviceArgs, NoService: *noService, NoAgents: *noAgents, DryRun: *dry}
+	options := setup.Options{NoModifyPath: *noModifyPath, Shell: os.Getenv("SHELL"), Database: db, Clients: setup.ClientOptions{Home: home, State: absState, Binary: binary, Args: clientArgs, Agents: *agents}, ServiceArgs: serviceArgs, NoService: *noService, NoAgents: *noAgents, DryRun: *dry}
+	options.Prepare = func(ctx context.Context) error {
+		if err := setup.SaveConnection(absState, connection); err != nil {
+			return err
+		}
+		if connection.Mode == "remote" {
+			if err := setup.BindRemote(dataState, connection); err != nil {
+				return err
+			}
+			pairCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+			defer cancel()
+			return runJoin(pairCtx, joinOptions{pairOnly: true, stateDir: dataState, controlURL: connection.ControlURL, hubAddr: connection.HubAddress, code: code, stderr: stderr})
+		}
+		return nil
+	}
 	report, err := setup.Run(ctx, options)
 	return printSetupReport(stdout, setupSpec.name, *asJSON, report, err)
 }

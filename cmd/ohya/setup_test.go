@@ -39,3 +39,25 @@ func TestManagedIngestWaitsForMissingRoots(t *testing.T) {
 		t.Fatalf("created agent root: %v", err)
 	}
 }
+
+func TestRemoteSetupDryRunAndSecretHandling(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state")
+	t.Setenv("OHYA_TEST_JOIN_CODE", "synthetic-one-time:code")
+	var stdout, stderr bytes.Buffer
+	code := cliMain([]string{"setup", "--dry-run", "--no-agents", "--no-service", "--no-modify-path", "--state", state, "--join-code-env", "OHYA_TEST_JOIN_CODE", "--json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("remote plan %d %s %s", code, stdout.String(), stderr.String())
+	}
+	if bytes.Contains(stdout.Bytes(), []byte("synthetic-one-time")) || bytes.Contains(stderr.Bytes(), []byte("synthetic-one-time")) {
+		t.Fatal("join code leaked")
+	}
+	if _, err := os.Stat(state); !os.IsNotExist(err) {
+		t.Fatal("dry run created state")
+	}
+	stdout.Reset()
+	stderr.Reset()
+	code = cliMain([]string{"setup", "--local", "--remote", "--dry-run", "--json"}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("conflicting mode exit %d", code)
+	}
+}

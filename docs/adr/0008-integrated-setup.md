@@ -156,3 +156,23 @@ untrusted status of stored transcripts. It avoids unnecessary recall when the
 current conversation already supplies the answer. This keeps guidance current
 with the executable without replacing user instruction files or changing client
 permissions. The initialization test verifies that clients receive it.
+
+## Remote setup
+
+Setup stores its connection choice under the setup state directory. Remote
+transport, credential, and upload checkpoints live in its `join` subdirectory;
+local memory remains at the original location. Service and client ownership
+receipts remain at the setup root so switching modes updates owned entries.
+A remote join state is bound to one hub and cannot be rebound through setup.
+
+The invitation comes from a named environment variable, is validated without
+printing its value, and is removed from the process environment before children
+start. Setup uses the existing pairing path with a bounded context and closes
+the transport before starting the uploader. Service files carry only saved
+connection addresses and state paths. Reruns reuse the credential and saved
+mode. Local setup is an explicit mode switch. The existing pairing and sync
+protocol transitions are unchanged; all TLA+ models were checked successfully.
+
+An integration test starts a real hub, pairs through setup, checks the remote
+MCP tools, and reruns setup without the invitation. It disables user services,
+client configuration, and PATH changes in the test process.

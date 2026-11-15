@@ -24,6 +24,8 @@ import (
 )
 
 type joinOptions struct {
+	pairOnly   bool
+	allowEmpty bool
 	stateDir   string
 	controlURL string
 	hubAddr    string
@@ -57,6 +59,7 @@ func runJoinCommand(args []string, stdout, stderr io.Writer) error {
 	hubAddr := c.fs.String("hub-addr", tailcat.DefaultHubAddr(),
 		"hub `address` inside the tailnet")
 	rootFlags := newAgentRootFlags(c.fs, home)
+	allowEmpty := c.fs.Bool("allow-empty", false, "wait for session roots that do not yet exist")
 	interval := c.fs.Duration("interval", 2*time.Second,
 		"polling `interval` between upload passes")
 	if err := c.parse(args, stdout); err != nil {
@@ -76,6 +79,7 @@ func runJoinCommand(args []string, stdout, stderr io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return runJoin(ctx, joinOptions{
+		allowEmpty: *allowEmpty,
 		stateDir:   *state,
 		controlURL: *controlURL,
 		hubAddr:    *hubAddr,
@@ -87,7 +91,7 @@ func runJoinCommand(args []string, stdout, stderr io.Writer) error {
 }
 
 func runJoin(ctx context.Context, o joinOptions) error {
-	if len(o.roots) == 0 {
+	if len(o.roots) == 0 && !o.pairOnly {
 		return errors.New("no agent session directory to watch")
 	}
 	if err := os.MkdirAll(o.stateDir, 0o700); err != nil {
@@ -133,6 +137,10 @@ func runJoin(ctx context.Context, o joinOptions) error {
 		return err
 	}
 
+	if o.pairOnly {
+		return nil
+	}
+
 	dial := func(ctx context.Context) (net.Conn, error) { return node.Dial(ctx, o.hubAddr) }
 	errs := make(chan error, len(o.roots))
 	runCtx, cancel := context.WithCancel(ctx)
@@ -154,7 +162,7 @@ func runJoin(ctx context.Context, o joinOptions) error {
 		go func() {
 			errs <- up.Run(runCtx, func() ([]string, error) {
 				candidates, err := discoverSessionFiles(dir)
-				if optional && errors.Is(err, fs.ErrNotExist) {
+				if (optional || o.allowEmpty) && errors.Is(err, fs.ErrNotExist) {
 					return nil, nil
 				}
 				return candidates, err

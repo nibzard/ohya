@@ -359,7 +359,7 @@ entries and service files use ownership receipts. Uninstall preserves memory,
 credentials, sessions, and entries edited after setup.
 
 This development version reports older Pi versions as unsupported. Remote
-setup is not yet implemented. The download bootstrap exists
+setup accepts `--join-code-env` and saves the hub connection for reruns. The download bootstrap exists
 as `install.sh`, but no release assets are published yet. Existing agent sessions need a reload or a new session after
 registration. Native service verification remains a release gate.
 
@@ -380,3 +380,17 @@ later user settings.
 The MCP server supplies memory guidance when a client connects. It teaches
 selective recall, bounded queries, and event citations. It treats transcript
 content as data and leaves your agent instruction files and permissions intact.
+
+For a joined device, set a one-time invitation in an environment variable and
+pass its name to setup:
+
+```sh
+./bin/ohya setup --join-code-env OHYA_JOIN_CODE --control https://your-hub.example
+```
+
+Setup pairs once and configures the uploader and agents for the remote hub.
+The environment variable is consumed before child processes start. The code
+is not stored in setup receipts or service files. Subsequent `ohya setup` runs
+reuse the saved connection and credential. Local memory stays separate from
+join checkpoints. Use `--local` to return to local memory. A join state cannot
+be moved to a different hub; use a new setup state directory for that hub.

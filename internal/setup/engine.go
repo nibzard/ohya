@@ -45,6 +45,7 @@ type Options struct {
 	RunService   func(context.Context, []string) error
 	Verify       func(context.Context, Command) error
 	ProbePi      func(context.Context, string) error
+	Prepare      func(context.Context) error
 }
 
 func Run(ctx context.Context, o Options) (Report, error) {
@@ -92,6 +93,11 @@ func Run(ctx context.Context, o Options) (Report, error) {
 		return report, err
 	}
 	defer unlock()
+	if o.Prepare != nil {
+		if err := o.Prepare(ctx); err != nil {
+			return report, err
+		}
+	}
 	if o.RunService == nil {
 		o.RunService = RunServiceCommand
 	}
