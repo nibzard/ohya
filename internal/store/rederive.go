@@ -34,13 +34,8 @@ type ReDeriveResult struct {
 type rebuiltSession struct {
 	id string
 
-	count          int
-	minMS, maxMS   int64
-	hasMin, hasMax bool
+	sessionDelta
 
-	cwd, branch, repo, model string
-
-	prompt    *Event
 	promptRef promptRef
 }
 
@@ -319,42 +314,14 @@ func rewriteEvent(ctx context.Context, tx *sql.Tx, src rederiveSource, p ParserD
 		st = &rebuiltSession{id: sid}
 		states[sid] = st
 	}
-	st.count++
-	if ev.HasTime {
-		if !st.hasMin || ev.TimeMS < st.minMS {
-			st.minMS, st.hasMin = ev.TimeMS, true
-		}
-		if !st.hasMax || ev.TimeMS > st.maxMS {
-			st.maxMS, st.hasMax = ev.TimeMS, true
-		}
-	}
-	if st.cwd == "" {
-		st.cwd = ev.Cwd
-	}
-	if st.branch == "" {
-		st.branch = ev.GitBranch
-	}
-	if st.repo == "" {
-		st.repo = ev.Repo
-	}
-	if st.model == "" {
-		st.model = ev.Model
-	}
+	st.add(&ev)
 	ref := promptRef{SourceID: src.id, SourceOffset: ev.Offset}
 	if ev.Prompt != "" && (st.prompt == nil || ref.before(st.promptRef)) {
 		st.prompt = &ev
 		st.promptRef = ref
 	}
-	if ev.HasUsage && ev.MessageID != "" {
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO session_token_usage
-			   (session_id, message_id, input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens)
-			 VALUES (?, ?, ?, ?, ?, ?)
-			 ON CONFLICT (session_id, message_id) DO NOTHING`,
-			sid, ev.MessageID, ev.Usage.InputTokens, ev.Usage.CacheCreationInputTokens,
-			ev.Usage.CacheReadInputTokens, ev.Usage.OutputTokens); err != nil {
-			return fmt.Errorf("store: re-derive source %s: count usage at offset %d: %w", src.id, ev.Offset, err)
-		}
+	if err := insertUsage(ctx, tx, sid, &ev); err != nil {
+		return fmt.Errorf("store: re-derive source %s: count usage at offset %d: %w", src.id, ev.Offset, err)
 	}
 	return nil
 }

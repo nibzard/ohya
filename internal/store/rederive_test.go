@@ -515,3 +515,25 @@ func TestIngestRejectsMissingParserVersion(t *testing.T) {
 		t.Fatalf("missing version error = %v", err)
 	}
 }
+
+func TestReDeriveMatchesIngestionAcrossSources(t *testing.T) {
+	hub := ingestHub(t)
+	for _, source := range []string{"z", "a"} {
+		mustRegister(t, hub, source, "/"+source+".jsonl")
+		records, err := parseFixture(t, "main-session.jsonl", source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		split := len(records) / 2
+		mustIngest(t, hub, Batch{SourceID: source, Events: records[:split]})
+		mustIngest(t, hub, Batch{SourceID: source, Events: records[split:]})
+	}
+	before := dumpHub(t, hub)
+	if _, err := hub.ReDerive(context.Background(), []ParserDeriver{claudeDeriver(2, nil)}); err != nil {
+		t.Fatal(err)
+	}
+	after := dumpHub(t, hub)
+	if stripVersions(before) != stripVersions(after) {
+		t.Fatalf("rebuild changed state:\n%s", diffSnip(before, after))
+	}
+}

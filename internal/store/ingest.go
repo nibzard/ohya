@@ -323,6 +323,30 @@ type sessionDelta struct {
 	prompt *Event
 }
 
+func (d *sessionDelta) add(e *Event) {
+	d.count++
+	if e.HasTime {
+		if !d.hasMin || e.TimeMS < d.minMS {
+			d.minMS, d.hasMin = e.TimeMS, true
+		}
+		if !d.hasMax || e.TimeMS > d.maxMS {
+			d.maxMS, d.hasMax = e.TimeMS, true
+		}
+	}
+	if d.cwd == "" {
+		d.cwd = e.Cwd
+	}
+	if d.branch == "" {
+		d.branch = e.GitBranch
+	}
+	if d.repo == "" {
+		d.repo = e.Repo
+	}
+	if d.model == "" {
+		d.model = e.Model
+	}
+}
+
 func insertEvents(ctx context.Context, tx *sql.Tx, b Batch, cursor int64, deviceID, agent string) (int, map[string]*sessionDelta, error) {
 	deltas := make(map[string]*sessionDelta)
 	inserted := 0
@@ -387,43 +411,29 @@ func insertEvents(ctx context.Context, tx *sql.Tx, b Batch, cursor int64, device
 			d = &sessionDelta{}
 			deltas[sid] = d
 		}
-		d.count++
-		if e.HasTime {
-			if !d.hasMin || e.TimeMS < d.minMS {
-				d.minMS, d.hasMin = e.TimeMS, true
-			}
-			if !d.hasMax || e.TimeMS > d.maxMS {
-				d.maxMS, d.hasMax = e.TimeMS, true
-			}
-		}
-		if d.cwd == "" {
-			d.cwd = e.Cwd
-		}
-		if d.branch == "" {
-			d.branch = e.GitBranch
-		}
-		if d.repo == "" {
-			d.repo = e.Repo
-		}
-		if d.model == "" {
-			d.model = e.Model
-		}
+		d.add(e)
 		if d.prompt == nil && e.Prompt != "" {
 			d.prompt = e
 		}
-		if e.HasUsage && e.MessageID != "" {
-			if _, err := tx.ExecContext(ctx,
-				`INSERT INTO session_token_usage
-				   (session_id, message_id, input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens)
-				 VALUES (?, ?, ?, ?, ?, ?)
-				 ON CONFLICT (session_id, message_id) DO NOTHING`,
-				sid, e.MessageID, e.Usage.InputTokens, e.Usage.CacheCreationInputTokens,
-				e.Usage.CacheReadInputTokens, e.Usage.OutputTokens); err != nil {
-				return 0, nil, fmt.Errorf("store: ingest source %s: count usage at offset %d: %w", b.SourceID, e.Offset, err)
-			}
+		if err := insertUsage(ctx, tx, sid, e); err != nil {
+			return 0, nil, fmt.Errorf("store: ingest source %s: count usage at offset %d: %w", b.SourceID, e.Offset, err)
 		}
 	}
 	return inserted, deltas, nil
+}
+
+func insertUsage(ctx context.Context, tx *sql.Tx, sid string, e *Event) error {
+	if !e.HasUsage || e.MessageID == "" {
+		return nil
+	}
+	_, err := tx.ExecContext(ctx,
+		`INSERT INTO session_token_usage
+		   (session_id, message_id, input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens)
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT (session_id, message_id) DO NOTHING`,
+		sid, e.MessageID, e.Usage.InputTokens, e.Usage.CacheCreationInputTokens,
+		e.Usage.CacheReadInputTokens, e.Usage.OutputTokens)
+	return err
 }
 
 type promptRef struct {
