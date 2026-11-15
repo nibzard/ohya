@@ -1,0 +1,17 @@
+# Context
+
+## Background
+The Looper controller that develops this repository writes
+per-task check logs under looper_<hash>/<task>/ beside the
+worktree it verifies. Two such directories (t072, t078) were
+committed by the self-run controller on 2026-11-14/15.
+
+## Why This Way
+Forward removal only. The logs hold make-check output with no
+private content, so no history rewrite is warranted.
+
+## Gotchas
+- The looper repository already ignores looper_*/; this tree
+  now matches that rule.
+- Refs under refs/looper/ are internal controller state and
+  must not be pushed to origin.
