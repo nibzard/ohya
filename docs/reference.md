@@ -73,7 +73,7 @@ and schema a hub runs.
 answer, because it sits outside the database or is tied to this binary: the
 database schema against the binary's migrations, stored parser output
 versions above the binary's (`ohya rederive` refuses those), the FTS5
-integrity of `events_fts`, stopped sources in the local watch state with
+integrity of `events_fts` with `--deep`, stopped sources in the local watch state with
 their [ADR 0004](adr/0004-stopped-source-recovery.md) remedy, the
 device identity in the state directory, and — when that directory holds a
 pairing credential — whether the coordination URL answers within a short
@@ -82,6 +82,9 @@ one-line remedy; `--json` prints the same findings in the
 [ADR 0005](adr/0005-json-output.md) envelope. Doctor is read-only: it
 opens the database read-only — never migrates, repairs, or re-derives —
 creates no device identity, and prints no transcript content or secrets.
+The `--deep` FTS5 check copies the database into memory, so its time and
+memory use grow with the database; without `--deep`, doctor reports the
+check as skipped.
 Exit code 0 means no finding is an error; warnings alone do not fail. It
 takes the same `--db` and `--state` flags as `ingest`, `--control` for the
 coordination URL to probe when paired, and `--max-record-bytes` for the stop

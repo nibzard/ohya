@@ -79,6 +79,15 @@ func TestDoctorHealthyFixtureExitsZero(t *testing.T) {
 			t.Fatalf("check %s = %+v; want ok", check, f)
 		}
 	}
+	deep, err := runDoctor(context.Background(), doctorOptions{
+		dbPath: e.dbPath, stateDir: e.stateDir, controlURL: "http://127.0.0.1:1", deep: true,
+	})
+	if err != nil {
+		t.Fatalf("deep run returned %v", err)
+	}
+	if f := soleFinding(t, deep, "fts_index"); f.Severity != sevOK || !strings.Contains(f.Detail, "passes the FTS5 integrity-check") {
+		t.Fatalf("deep fts_index = %+v", f)
+	}
 
 	code, out, stderr := doctorRun(t, e)
 	if code != 0 || stderr != "" {
@@ -86,7 +95,7 @@ func TestDoctorHealthyFixtureExitsZero(t *testing.T) {
 	}
 	for _, want := range append([]string{
 		"ok    schema_version: database schema",
-		"ok    fts_index: events_fts passes the FTS5 integrity-check",
+		"ok    fts_index: events_fts integrity-check skipped; run ohya doctor --deep to verify it",
 		"ok    stopped_sources: no source is stopped at its checkpoint (1 watched)",
 		"ok    device_identity: device.json holds device",
 		"ok    join_state: no credential.json in",
@@ -361,6 +370,10 @@ func TestDoctorFTSCorruptionIsAnError(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, out, _ := doctorRun(t, e)
+	if code != 0 {
+		t.Fatalf("default exit code %d; want 0 without the deep check (stdout %q)", code, out)
+	}
+	code, out, _ = doctorRun(t, e, "--deep")
 	if code != 1 {
 		t.Fatalf("exit code %d; want 1 (stdout %q)", code, out)
 	}

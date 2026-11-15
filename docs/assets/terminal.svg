@@ -13,7 +13,7 @@
   <text class="bar" x="430" y="22" text-anchor="middle">ohya — synthetic fixtures from testdata/</text>
   <text x="24" y="62" xml:space="preserve"><tspan class="prompt">$ </tspan><tspan class="cmd">ohya ingest --once</tspan></text>
   <text x="24" y="82" xml:space="preserve"><tspan class="out">ohya: imported 51 events from 5 sources</tspan></text>
-  <text x="24" y="122" xml:space="preserve"><tspan class="prompt">$ </tspan><tspan class="cmd">ohya doctor</tspan></text>
+  <text x="24" y="122" xml:space="preserve"><tspan class="prompt">$ </tspan><tspan class="cmd">ohya doctor --deep</tspan></text>
   <text x="24" y="142" xml:space="preserve"><tspan class="ok">ok    </tspan><tspan class="out">schema_version: database schema 6 matches this build's migrations</tspan></text>
   <text x="24" y="162" xml:space="preserve"><tspan class="ok">ok    </tspan><tspan class="out">parser_versions: stored parser output versions: claude-code 1, codex 2, pi 2</tspan></text>
   <text x="24" y="182" xml:space="preserve"><tspan class="ok">ok    </tspan><tspan class="out">fts_index: events_fts passes the FTS5 integrity-check</tspan></text>
