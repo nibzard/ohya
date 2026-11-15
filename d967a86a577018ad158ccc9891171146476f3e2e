@@ -1,0 +1,1 @@
+Save an allowlisted set of setup flags and client homes without provider keys or join codes. Explicit flags override saved choices, including false booleans and empty roots. Focused setup command and preference tests pass. Clarify that SQLite snapshots require matching state before writable recovery.
