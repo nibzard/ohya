@@ -1133,3 +1133,11 @@ How to use this file:
   `internal/setup/service.go` plus a dump-shaped regression test; v0.1.1
   (commit dab456e) shipped the fix the same day and was verified through the
   released installer on the same machine.
+
+- Doctor cost on a 6.6 GB hub (2026-11-15): `parser_versions` scans all events
+  (1.3 s). An index `events(source_id, parser_version)` with a per-source
+  `max` subquery cuts it to 0.02 s (42 MB, 19 s build), measured on a clone.
+  Not added alone because each migration now forces a full recovery copy at
+  setup; add it with the next schema migration. `doctor --deep` still copies
+  the whole database into `:memory:` (`store.FTSIndexConsistent`), so RAM use
+  equals database size; copying only the FTS shadow tables is unverified.
