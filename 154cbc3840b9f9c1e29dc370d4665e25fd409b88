@@ -1,0 +1,1 @@
+Native client adapters preserve unrelated configuration and reject foreign or edited ohya entries. Codex TOML uses the already pinned parser, now a direct dependency. A real subprocess MCP test verifies discovery and SELECT 1. Focused tests and full vet pass. Full suite is running; service orchestration, capability gating, legacy Pi, and bootstrap remain.
