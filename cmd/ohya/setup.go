@@ -203,6 +203,9 @@ func runSetupCommand(args []string, stdout, stderr io.Writer) error {
 		return nil
 	}
 	report, err := setup.Run(ctx, options)
+	if conflict := setupPathConflict(binary); conflict != nil {
+		report.Results = append(report.Results, *conflict)
+	}
 	return printSetupReport(stdout, setupSpec.name, *asJSON, report, err)
 }
 
