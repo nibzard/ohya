@@ -1133,15 +1133,3 @@ How to use this file:
   `internal/setup/service.go` plus a dump-shaped regression test; v0.1.1
   (commit dab456e) shipped the fix the same day and was verified through the
   released installer on the same machine.
-
-- 2026-11-15, cross-machine hub over an existing Tailscale tailnet fails
-  (observed, v0.1.1): `serve --control-url https://<host>.ts.net:9417` bound
-  to the host's Tailscale IP. Both the hub's own tsnet node and a macOS
-  device stall at control dial. Cause: tailscale.com `net/netns` binds every
-  non-loopback control/DERP socket to the default-route interface (Linux
-  non-root: `SO_BINDTODEVICE eth0`, seen as `SYN-SENT 10.77.0.152%eth0 ->
-  100.103.215.44:9417`; darwin skips any `utun` with a Tailscale IP, even
-  with `TS_BIND_TO_INTERFACE_BY_ROUTE`). So the control URL must be
-  reachable off-tailnet; a host Tailscale IP or MagicDNS name never works.
-  Candidate fix: `netns.SetEnabled(false)` for the embedded node (needs an
-  ADR on loop risk). Docs do not mention this limit.

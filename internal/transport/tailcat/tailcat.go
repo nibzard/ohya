@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"tailscale.com/net/netns"
 	"tailscale.com/tsnet"
 	"tailscale.com/types/key"
 
@@ -86,6 +87,7 @@ func NewDevice(opts Options) (*Node, error) {
 }
 
 func server(opts Options) *tsnet.Server {
+	netns.SetEnabled(false)
 	return &tsnet.Server{
 		Hostname:   opts.Hostname,
 		AuthKey:    opts.AuthKey,

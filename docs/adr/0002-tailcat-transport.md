@@ -53,6 +53,30 @@ MCP processes share one node per device state. An exclusive filesystem lock
 protects node ownership. Borrowers use tsnet's authenticated loopback proxy.
 A process acquires ownership before it loads the enrolled transport identity.
 
+### Host routing for node sockets (2026-11-15)
+
+Every embedded node disables `tailscale.com/net/netns` for its process.
+The node sockets for control, DERP, STUN, and WireGuard then follow host
+routing. The upstream default binds these sockets to the default-route
+interface: `SO_MARK` or `SO_BINDTODEVICE` on Linux, and the default
+interface on darwin, which never selects a Tailscale `utun`. That default
+keeps a system `tailscaled` from routing its own packets into its own
+tunnel. An embedded node has no host tunnel, so it cannot make that loop.
+
+The default broke a real deployment. The hub ran on a host that was
+already on a Tailscale tailnet. Its control URL was the host's `ts.net`
+name, which resolves to the host's Tailscale address. The hub node and a
+macOS device both stalled at the control dial. The Linux socket was stuck in
+`SYN-SENT` from `eth0` to the Tailscale address. With host routing, an
+operator can serve the control plane on an existing tailnet and use
+`tailscale cert` for a certificate that devices already trust.
+
+Consequence: when the host routes through a Tailscale exit node or subnet
+router, node traffic follows that route like any other process. The switch
+is process-wide, and ohya runs no system Tailscale code that needs it.
+`TestNodeSocketsFollowHostRouting` checks that node sockets carry no
+interface binding or bypass mark.
+
 ### Deployment defaults
 
 - The coordination plane listens on `127.0.0.1:9417` (coordination protocol

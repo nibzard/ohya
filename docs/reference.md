@@ -132,7 +132,15 @@ the single-machine deployment; binding every interface requires
 DERP over TLS; the default `--control-url` becomes https, and every device
 must trust the certificate's CA. Cross-machine hubs need this for the
 relay path: the tailscale client never falls back to a plain-HTTP DERP
-relay ([ADR 0002](adr/0002-tailcat-transport.md)).
+relay ([ADR 0002](adr/0002-tailcat-transport.md)). A hub already on a
+Tailscale tailnet can bind its Tailscale address and use a `tailscale cert`
+certificate:
+
+```sh
+ohya serve --control-listen 100.x.y.z:9417 --stun-listen 100.x.y.z:3478 \
+  --tls-cert cert.pem --tls-key key.pem \
+  --control-url https://hub.example.ts.net:9417
+```
 
 `ohya join CODE` pairs a device and uploads its sessions. The code comes
 from `ohya devices invite` on the hub and carries two halves: the one-time
