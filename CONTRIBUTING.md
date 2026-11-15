@@ -57,7 +57,9 @@ Never rewrite or delete an applied migration — add a new file instead, and kee
 connection pragmas in `internal/store` code rather than migration SQL (see DB.md
 for the upgrade policy). TLA+ models cover sync, authorization, and device
 transport ownership. Run `make tla` to check them with TLC (Java 11 or later).
-The pinned TLC jar is downloaded and checksum-verified automatically.
+The pinned TLC jar is vendored under `tla/vendor/` and checksum-verified on
+every run; the runner downloads nothing
+([ADR 0007](docs/adr/0007-vendored-tlc-jar.md)).
 See tla/README.md for the checked properties and assumptions. Use synthetic,
 non-sensitive fixtures in `testdata/`.
 Fuzz targets run their seed corpus in `make check`. For deep fuzzing, run one

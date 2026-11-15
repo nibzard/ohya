@@ -18,10 +18,17 @@ make tla
 ```
 
 You can also run `./tla/run-tlc.sh` directly; it changes to its own
-directory first. The runner needs Java 11 or later. It downloads the pinned
-TLA+ tools jar (1.8.0), verifies its SHA-256 checksum, and checks every
-model below. TLC output ends with `Model checking completed. No error has
-been found.` per model.
+directory first. The runner needs Java 11 or later and nothing else: the
+TLA+ tools jar (1.8.0) is vendored at `tla/vendor/`, every run verifies its
+SHA-256 against the pin in the script, and no download happens — a fresh
+checkout cannot break when upstream rebuilds a release tag
+([ADR 0007](../docs/adr/0007-vendored-tlc-jar.md)). TLC output ends with
+`Model checking completed. No error has been found.` per model.
+
+To upgrade TLC, download the new release jar out of band, place it at
+`tla/vendor/tla2tools-<version>.jar`, update `TLA_VERSION` and `TLA_SHA256`
+in `tla/run-tlc.sh`, delete the superseded jar, and commit jar and pin
+together.
 
 # Sync protocol model
 
@@ -389,6 +396,10 @@ publishes the proxy after startup. Other processes borrow connections from
 that proxy. Shutdown withdraws the descriptor, stops the node, and then
 releases the lock. A crash stops its sockets and releases its lock, but may
 leave a stale descriptor. A new owner clears that descriptor before startup.
+An owner whose dial fails while its coordination plane still answers may
+rebuild: it stops its node and starts the same identity again without
+releasing the lock, then publishes again; the stack set and the endpoint
+owner are unchanged and borrowers keep waiting for the republication.
 
 The model checks:
 
@@ -405,5 +416,5 @@ cannot establish connections. Filesystem and SOCKS5 details are covered by
 Go tests. The model checks safety, with no liveness claim. Network recovery
 and retries retain the assumptions in the sync and authorization models.
 
-Verified with TLC 1.8.0 on 2026-11-15: 139 generated states, 40 distinct
+Verified with TLC 1.8.0 on 2026-11-15: 214 generated states, 52 distinct
 states, depth 7, no errors, with three processes.

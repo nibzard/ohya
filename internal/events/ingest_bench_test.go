@@ -52,6 +52,12 @@ func corpusPi(mib int) []fixgen.File {
 	})
 }
 
+const importMixMiB = 4384
+
+func corpusMix(mib int) []fixgen.AgentFiles {
+	return fixgen.GenerateMix(fixgen.ImportMix(float64(mib)/importMixMiB, 7))
+}
+
 func corpusBytes(files []fixgen.File) int64 {
 	var n int64
 	for _, f := range files {
@@ -70,10 +76,10 @@ func openBenchHub(b *testing.B) *store.DB {
 	return hub
 }
 
-func benchIngestFile(b *testing.B, hub *store.DB, f fixgen.File, sourceID string) error {
+func benchIngestFile(b *testing.B, hub *store.DB, agent string, f fixgen.File, sourceID string) error {
 	const maxBatchBytes = 8 << 20
 	ctx := context.Background()
-	if err := hub.RegisterSource(ctx, sourceID, "dev-bench", claudecode.AgentName, "/"+f.Path); err != nil {
+	if err := hub.RegisterSource(ctx, sourceID, "dev-bench", agent, "/"+f.Path); err != nil {
 		return err
 	}
 	end := int64(len(f.Data))
@@ -87,7 +93,7 @@ func benchIngestFile(b *testing.B, hub *store.DB, f fixgen.File, sourceID string
 			}
 			opts.FirstNative = st.FirstNativeID
 		}
-		res, err := Parse(claudecode.AgentName, f.Data[cursor:readEnd], cursor, opts)
+		res, err := Parse(agent, f.Data[cursor:readEnd], cursor, opts)
 		if err != nil {
 			return err
 		}
@@ -109,9 +115,21 @@ func benchIngestFile(b *testing.B, hub *store.DB, f fixgen.File, sourceID string
 }
 
 func BenchmarkIngestCorpus(b *testing.B) {
+	benchIngestCorpus(b, claudecode.AgentName, corpus)
+}
+
+func BenchmarkIngestCorpusCodex(b *testing.B) {
+	benchIngestCorpus(b, codex.AgentName, corpusCodex)
+}
+
+func BenchmarkIngestCorpusPi(b *testing.B) {
+	benchIngestCorpus(b, pi.AgentName, corpusPi)
+}
+
+func benchIngestCorpus(b *testing.B, agent string, gen func(int) []fixgen.File) {
 	for _, mib := range []int{4, benchMIB()} {
 		b.Run(fmt.Sprintf("%dMiB", mib), func(b *testing.B) {
-			files := corpus(mib)
+			files := gen(mib)
 			b.ReportAllocs()
 			b.SetBytes(corpusBytes(files))
 			b.ResetTimer()
@@ -120,8 +138,41 @@ func BenchmarkIngestCorpus(b *testing.B) {
 				hub := openBenchHub(b)
 				b.StartTimer()
 				for j, f := range files {
-					if err := benchIngestFile(b, hub, f, fmt.Sprintf("src-%03d", j)); err != nil {
+					if err := benchIngestFile(b, hub, agent, f, fmt.Sprintf("src-%03d", j)); err != nil {
 						b.Fatal(err)
+					}
+				}
+				b.StopTimer()
+				hub.Close()
+				b.StartTimer()
+			}
+		})
+	}
+}
+
+func BenchmarkIngestCorpusMix(b *testing.B) {
+	for _, mib := range []int{4, benchMIB()} {
+		b.Run(fmt.Sprintf("%dMiB", mib), func(b *testing.B) {
+			corpora := corpusMix(mib)
+			var total int64
+			for _, af := range corpora {
+				for _, f := range af.Files {
+					total += int64(len(f.Data))
+				}
+			}
+			b.ReportAllocs()
+			b.SetBytes(total)
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				hub := openBenchHub(b)
+				b.StartTimer()
+				for _, af := range corpora {
+					for j, f := range af.Files {
+						sourceID := fmt.Sprintf("%s-%04d", af.Agent, j)
+						if err := benchIngestFile(b, hub, af.Agent, f, sourceID); err != nil {
+							b.Fatal(err)
+						}
 					}
 				}
 				b.StopTimer()
@@ -162,7 +213,7 @@ func BenchmarkIngestReplay(b *testing.B) {
 	ctx := context.Background()
 	hub := openBenchHub(b)
 	f := corpus(4)[0]
-	if err := benchIngestFile(b, hub, f, "src-replay"); err != nil {
+	if err := benchIngestFile(b, hub, claudecode.AgentName, f, "src-replay"); err != nil {
 		b.Fatal(err)
 	}
 	res, err := Parse(claudecode.AgentName, f.Data, 0, Options{SourceScope: "src-replay"})

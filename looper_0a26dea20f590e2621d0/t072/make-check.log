@@ -1,0 +1,26 @@
+test -z "$(gofmt -l $(find . -name '*.go' -not -path './vendor/*'))"
+go test -tags sqlite_fts5 -timeout 20m ./...
+ok  	github.com/nibzard/ohya/cmd/commentcheck	0.011s
+?   	github.com/nibzard/ohya/cmd/genfixture	[no test files]
+ok  	github.com/nibzard/ohya/cmd/memory-e2e	0.044s
+ok  	github.com/nibzard/ohya/cmd/ohya	221.736s
+ok  	github.com/nibzard/ohya/cmd/tailcat-spike	0.012s
+ok  	github.com/nibzard/ohya/internal/claudecode	0.006s
+ok  	github.com/nibzard/ohya/internal/codex	0.828s
+ok  	github.com/nibzard/ohya/internal/control	1.457s
+ok  	github.com/nibzard/ohya/internal/device	0.072s
+ok  	github.com/nibzard/ohya/internal/durablefile	0.046s
+ok  	github.com/nibzard/ohya/internal/events	2.851s
+ok  	github.com/nibzard/ohya/internal/fixgen	2.655s
+ok  	github.com/nibzard/ohya/internal/hubsync	8.693s
+ok  	github.com/nibzard/ohya/internal/mcpserver	8.646s
+ok  	github.com/nibzard/ohya/internal/pi	0.326s
+ok  	github.com/nibzard/ohya/internal/registry	2.204s
+ok  	github.com/nibzard/ohya/internal/store	10.279s
+?   	github.com/nibzard/ohya/internal/transport	[no test files]
+ok  	github.com/nibzard/ohya/internal/transport/tailcat	0.199s
+ok  	github.com/nibzard/ohya/internal/uploader	7.514s
+ok  	github.com/nibzard/ohya/internal/watch	0.499s
+go vet -tags sqlite_fts5 ./...
+go run ./cmd/commentcheck
+exit=0

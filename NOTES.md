@@ -293,10 +293,11 @@ How to use this file:
   cannot trip the table CHECK and permanently wedge an annotation.
 
 - TLA+/TLC tooling facts (2026-11-13, tla/, T015; relevant to T016's model):
-  - TLC 1.8.0 from the GitHub release asset
-    (github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar,
-    sha256 e1f11b75…cdbcd7f) differs from the tla2tools-1.8.0.jar kept by
-    other projects on this machine — pin the release URL, not a local copy.
+  - TLC 1.8.0 jars from different builds differ in embedded build metadata
+    only (identical file listing; the 2026-11-15 upstream rebuild moved only
+    the Build-TimeStamp). The exact bytes are vendored at `tla/vendor/` and
+    checksum-pinned (ADR 0007), so build drift between copies no longer
+    matters.
   - cfg files accept only scalar sets/numbers/strings/booleans as constant
     values; records, tuples, and per-element atoms are rejected. That is why
     Sync.tla models "each source is one device's uploader" structurally
@@ -806,6 +807,64 @@ How to use this file:
   problem, so an unknown Codex error still fails the gate. Extend
   `benignCodexErrorItem` only with a verified benign sample.
 
+- Freshness harness (2026-11-15, T068, cmd/ohya/freshness_test.go): measures
+  the north-star metric — append on the device to visibility through the
+  remote sql tool — over the real child-process stack (serve, join, remote
+  mcp observer on one host, local tailnet path). Contract kept: unique
+  `ohyafresh-<run>-<seq>` markers polled on the direct `events` table (never
+  `events_settled`); appender and observer share one process and one
+  monotonic clock; fixed-rate appends never wait for visibility, with a
+  random phase offset plus jitter against the upload interval
+  (`OHYA_FRESH_SEED` reproduces); timed-out samples stay in the distribution
+  at drain lower bounds, split into overdue-but-visible and
+  outstanding-at-drain, followed by a bounded health wait that reports
+  late deliveries and any records that never landed. Env knobs
+  (`OHYA_FRESH_SAMPLES/APPEND_EVERY/POLL_EVERY/TIMEOUT/UPLOAD_EVERY/SEED`)
+  make the same test the T070 workload-matrix vehicle. Smoke result on the
+  default configuration (2 s upload interval, 100 samples, 200 ms appends,
+  100 ms polling, 30 s budget, reference VM, Go 1.27.3): lag p50 1.178 s,
+  p95 2.043 s, p99 2.154 s, max 2.247 s; 223 polls, 0 errors, query p50
+  1.4 ms; 0 timeouts, 0 outstanding; hub 116 events; whole test 44 s. The
+  distribution sits just under the upload interval — the interval, not the
+  write path, dominates the budget. Gotchas: the observer warms its first
+  exchange before the first append (a cold first dial costs seconds and
+  would poison sample one; warm cost 2 ms because the shared device node
+  was already up), and the marker query pages by `id > last` so the 500-row
+  tool bound never truncates a backlog drain.
+
+- Benchmark corpus fixtures (2026-11-15, T069, internal/fixgen/mix.go):
+  `fixgen.ImportMix`/`fixgen.QueryMix` + `genfixture -agent mix` emit the
+  two named fixtures; stats and commands live in docs/performance.md
+  ("Benchmark corpus fixtures"). Facts worth keeping:
+  - Observed corpus re-measured 2026-11-15: claude-code 1,042 main files
+    (1.29 GiB, mean 1.27 MiB) plus 1,280 subagent files (0.59 GiB, mean
+    480 KiB); codex 2,495 rollouts (2.93 GiB, mean 1.17 MiB); pi 74 files
+    (2.1 MiB). The 2026-11-13 NOTES numbers (895/2,646) counted differently;
+    the mix anchors use the fresh file-level counts.
+  - Codex thread count (1,600 at scale 1) is derived from bytes, not
+    observed: the generator omits resumed pages, so threads = observed
+    bytes / (main + mean two quarter-size subagent rollouts). Real threads
+    ≈ 511 spanning ~4.9 files each; the fixture keeps bytes and file sizes,
+    not the page fan-out.
+  - Records map 1:1 to events in all three formats (structural: every
+    adapter makes one event per parsed record), so `fixgen.MeasureMix`
+    counts events through the raw parsers — importing internal/events from
+    fixgen would create a test import cycle (events' in-package bench tests
+    import fixgen), and fixgen now imports only the parser packages.
+  - The query fixture answers the perf plan's "one million events without
+    a 3 GB input": compact records (text ÷8, session bytes ÷4) land at
+    765–889 B mean — the JSON envelope (usage objects, per-block metadata)
+    is the floor — giving 969,004 events in 746.4 MiB (4.4x per event).
+    Full-record 1M events would be ~3.5 GB.
+  - Determinism is pinned by SHA-256 hash tests (mix + all three single
+    agents, `TestAgentCorpusStableHash`); the single-agent hashes were
+    captured before the Compact knob landed, so they also prove Compact
+    leaves default (div=1) bytes identical — repin hashes and the
+    docs/performance.md tables together if generator output ever changes.
+  - `TestNamedFixtureStats` regenerates both fixtures at full scale only
+    under `OHYA_MIX_VERIFY=1` (about 1 GiB RAM, 22 s); the default check
+    stays small. genfixture's plain build needs no sqlite_fts5 tag.
+
 - Shared device transport (2026-11-15, ADR 0006): `join` and remote MCP
   must use `tailcat.NewSharedDevice`. Independent nodes with the same state
   stall uploads. The shared adapter owns the node under `owner.lock` and
@@ -813,3 +872,150 @@ How to use this file:
   Never delete the lock file. Stop older binaries before upgrading: they
   do not acquire it. Keep device state on a local filesystem. The regression
   test covers live appends with two MCP clients and transfer after owner death.
+
+- Workload matrix baselines (2026-11-15, T070, docs/performance.md "Workload
+  matrix baselines"): all four plan workloads measured on the direct
+  local-tailnet path with 1,000-sample doubled runs; raw logs under
+  `perf/t070/` (gitignored). Headlines: steady freshness p50 1.06-1.08 s /
+  p99 2.06-2.07 s (the 2 s upload pass spends the budget); a 1.5 MB/s
+  backlog on a second source doubles it (p99 4.2-4.4 s); three devices
+  draining 570 MB barely move it (p99 2.5-2.7 s) while loaded wide FTS p95
+  is 110-111 ms at 168k events; initial import 137 MiB = 24.6-447 s
+  (fsync-bound swing, CPU constant 10-15 s); FTS-wide p95 at 969k events
+  is 193 ms (fails the proposed 100 ms budget; compact fixture matches ~1/8
+  of events, a full-size 1M hub lands ~1.5 s); hub idle RSS 65-66 MiB; peak
+  WAL 27-32 MiB under sustained mixed read/write — well above the 4-6 MiB
+  import-only figure, plan headroom accordingly. Guardrail verdict table in
+  the doc.
+- Hub-restart recovery regression, found by the T070 matrix (2026-11-15,
+  follow-up key `hub-restart-reconnect`), fixed same day (T075): when the hub
+  process stopped and restarted, a device whose sync connection was
+  established never re-uploaded (dials timed out at the 60 s deadline for
+  3+ minutes, 5/5). Diagnosis: after the coordination plane restarts inside
+  the hub process, the long-lived device node's control connections sit dead
+  in CLOSE-WAIT and its control client never re-polls, so the cached peer
+  endpoints never pick up the restarted hub; tailscale.com v1.104.4 does not
+  recover by itself. Fix (internal/transport/tailcat, ADR 0006): the shared
+  device's owner treats "dial failed while the coordination plane still
+  answers an HTTP request" as stale node state — it closes the node, starts
+  the same durable identity again, republishes the proxy descriptor, and
+  retries once; the direct dial also carries its own 20 s deadline so the
+  rebuild fits inside the uploader's 60 s dial budget. A dial failure with an
+  unreachable plane keeps the node (ordinary downtime backoff).
+  `TestHubRestartReconnect` (two stop/restart cycles, established join)
+  recovers in ~31 s per cycle; a post-fix workload-4 run recovers in 36.2 s
+  with the full 191-source fixture and stays idempotent; unit tests pin the
+  rebuild decision. Open: the
+  intermittent hub-side `panic: ipnlocal: watchdog timeout` (tailscale.com
+  v1.104.4, 1 of 3 manual restarts during T070) was not reproduced across 10
+  post-fix stop/restart cycles (watch the serve stderr in the restart tests if it
+  returns; the panic is an ipnlocal deadlock probe, i.e. some watched lock
+  hung >30 s).
+- T070 harness facts worth keeping: the sql tool returns JSON numbers, which
+  decode as float64 — `fmt.Sprint` renders ids ≥ 1e6 as `1.012834e+06`, so
+  any harness that parses ids from tool output must `CAST(id AS TEXT)` in
+  the query (the bug poisoned every later poll and looked like a hub
+  outage). A fresh device node's first dial to the hub costs ~20-25 s
+  (tsnet path discovery), so the multi-device workload needs
+  `OHYA_FRESH_PAIR_LEAD` before appends start. `fixgen` corpora size at
+  sessions × ~3 MiB (main 2 MiB + two quarter-size subagents), so
+  `OHYA_FRESH_DEVICE_MIB=192` yields ~285 MB per extra device.
+- Ingestion stage attribution (2026-11-15, T071): numbers and method in
+  docs/performance.md "Ingestion stage attribution"; raw evidence under
+  `perf/t071/` (gitignored). Durable findings:
+  - 65–86% of import wall is durable-sync wait (WAL, `synchronous=FULL`):
+    `PRAGMA synchronous=OFF` in a throwaway DB collapses a 320 MiB import
+    from 47–92 s to 12.7–13.4 s. Commit-only wait dominates; checkpoint
+    share 10–17%; FTS trigger maintenance 24–36% at 1x and 14% at 10x
+    (measured with the trigger dropped, so the number includes the sync
+    volume it induces; the index is 6.6–8.5% of DB size). The rate band is
+    flat 32→320 MiB in every agent format — nothing superlinear.
+  - Register commits are a separate, measurable stage: one fsync per source
+    (43 ms each at 439 sources, 19 s total; 0.04 s with syncs off). The
+    harness counts register and first batch as two commits (two
+    transactions).
+  - One commit is NOT one fsync: strace counted ~1.4 WAL fsyncs per commit
+    (each auto-checkpoint adds ~2 WAL + 1 main-db sync; 3,704 commits +
+    2×731 checkpoints = 5,166 predicted, 5,154 measured at 10x). State
+    durability (`internal/durablefile`: temp file + fsync + rename +
+    directory fsync per acknowledged source) costs ~2 fsyncs per file —
+    75.5 s, 19% of the 10x end-to-end wall. Device-side cursor durability,
+    not hub cost; future import-speed work must weigh it.
+  - Discovery is noise: a fully-acknowledged `ingest --once` pass costs
+    0.02 s over 191 files, 0.09 s over 1,852.
+  - Harness gotchas: `go test -bench '^BenchmarkIngestCorpus/32MiB$'` also
+    runs ...Codex/Pi/Mix — the first path element matches as a prefix
+    (verified 2026-11-15, Go 1.27.3); use the full sibling name in the
+    filter or expect the set. Single 10x diagnostic triples can be voided
+    by shared-disk swings (one claude 320 MiB triple went negative on
+    checkpoint share); keep 1x repeats for coherent decomposition and name
+    which 10x triple carries the numbers.
+- tla2tools 1.8.0 release asset replaced upstream (2026-11-15): GitHub now
+  serves a rebuild of the same tag. Both jars have an identical file
+  listing and builder metadata (Apache Ant 1.10.12, Eclipse Adoptium
+  17.0.21+9, Built-By runner); only the embedded Build-TimeStamp differs
+  (old 2026-11-06T22:23:57Z, new 2026-11-15T00:21:46Z). The old sha256 pin
+  in tla/run-tlc.sh therefore failed every fresh download. Repinned to
+  7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f after
+  the comparison and a green run of every model. Resolved 2026-11-15 (T077):
+  the jar is now vendored at `tla/vendor/tla2tools-1.8.0.jar` and
+  `tla/run-tlc.sh` verifies its checksum on every run without downloading
+  (ADR 0007); no immutable artifact host exists for tla2tools (Maven Central
+  has none, and GitHub asset URLs die on re-upload). Upstream rebuilding the
+  tag again can no longer break a fresh run or CI.
+- Perf budgets, Phase 1 selection, CI placement (2026-11-15, T072,
+  docs/performance.md "Budgets, thresholds, and the Phase 1 selection"):
+  freshness p95<2 s and idle RSS<150 MB kept (decision: if freshness needs
+  margin, change the 2 s upload interval, never the target); time-to-memory
+  and 1M-event query thresholds replaced (quiet-disk wall + unconditional
+  CPU per 3 GiB; scoped per-pattern query budgets plus a 1.6 ms/1,000-match
+  wide-BM25 rate); peak-memory/disk-growth/loaded-query budgets recorded
+  with allowed variation. NO Phase 1 candidate selected — after
+  re-scoping, no workload misses (wide-BM25 cost is per-match scoring;
+  contended import misses are tenant fsync load, and register/checkpoint
+  amortization recovers only ~a quarter) — so T073 closes empty per its
+  contract; batch sizing is first in line if the thin 8% quiet-disk
+  time-to-memory margin erodes. CI: the freshness smoke rides `make check`
+  on check-linux (re-measured 50.4 s, p95 2.062 s at 100 samples — above
+  2 s on a phase draw, why the smoke asserts no threshold); statistical
+  runs stay off CI; no new job (the bench job is darwin, where the harness
+  skips, and report-only); `make check` now passes `-timeout 20m` to go
+  test because the cmd/ohya child-process suite measured 229 s reference
+  and a 2–4x slower shared runner reaches the 10-minute per-binary default.
+- T073 closed empty (2026-11-15): T072 selected no Phase 1 candidate, so per
+  its own contract T073 changed no code and no experiment ran. Re-verified at
+  the integrated HEAD: docs/performance.md "Phase 1 selection: none" (section
+  landed in 61a14f6) records that after the threshold re-scoping no workload
+  misses its target or budget and none of the plan's seven candidates meets
+  its trigger — a candidate must dominate a workload that misses; make check
+  green on the unchanged tree. A new miss reopens selection only through a
+  fresh task with new evidence; batch sizing stays first in line. T074
+  (Phase 2 accept-or-discard) therefore finds no T073 change to evaluate.
+- T074 done (2026-11-15): Phase 2 closed with nothing to accept or discard
+  (T072 selected no candidate; T073 changed no code). The matrix was still
+  repeated at the integrated HEAD — same machine, fixtures, knobs, fresh
+  seeds 2001–2006; raw logs in perf/t074/ (gitignored) and the task artifact
+  dir; numbers and budget table in docs/performance.md "Phase 2 acceptance".
+  Every workload landed inside the T070 spread and every T072 budget held;
+  make check green. Notables worth carrying: steady p95 straddles 2 s again
+  (1.971/2.014 s vs T070's 1.945/1.999 s) — the 2 s upload interval consumes
+  the budget and a 1,000-sample draw moves p95 by more than the 1–55 ms
+  margin, so do not read one side of the line as a regression; mixed
+  read/write WAL peak read 33–65 MiB against the 27–32 MiB T070 basis (one
+  run 1 MiB over the 64 MiB ceiling, inside the ±50% variation) — the
+  high-water mark races auto-checkpoints against reader snapshots, so the
+  T070 basis was a low draw; W4 hub-restart recovery 36.2 s in both runs
+  (post-T075) with idempotent final counts. No successor candidate; the T072
+  reopen triggers stand, and all four workloads must be repeated on the
+  relay path after T065.
+- Ingest-floor guard widened (2026-11-15, T078): TestIngestPerformanceFloor's
+  wall ceiling moved 30 s → 120 s; the allowance and its anchors are in
+  docs/performance.md "Regression guards". Anchors: one parallel-load
+  failure at 31.2 s (full `go test ./...`, sibling SQLite packages on the
+  shared reference disk) versus 1.24 s isolated; the worst tenant rate
+  0.31 MiB/s makes the 24 MiB corpus about 77 s, so 120 s covers measured
+  contention with margin while per-record durability (about 290 s at 6,794
+  events) and superlinear regressions still fail loudly. CI serialization
+  (`-p 1`) rejected: tenant load fails a serialized run too, and it slows
+  every check. Reopen condition: a loaded run above 120 s → raise the
+  ceiling with that evidence, like any other allowed variation.

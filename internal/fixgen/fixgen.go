@@ -14,6 +14,7 @@ type Corpus struct {
 	MainMeanBytes       int64
 	SubagentsPerSession float64
 	Seed                int64
+	Compact             bool
 }
 
 type File struct {
@@ -157,7 +158,7 @@ func (w *sessionWriter) uuidString(n int64) any {
 }
 
 func (s *sessionGen) mainJSON(c Corpus) []byte {
-	w := &sessionWriter{s: s, textGen: textGen{rng: rand.New(rand.NewPCG(s.seed2(0), 0x6d61696e))}}
+	w := &sessionWriter{s: s, textGen: newTextGen(s.seed2(0), 0x6d61696e, c)}
 	w.emit(rec{"type": "queue-operation", "sessionId": s.id, "operation": "add"})
 	w.emit(rec{"type": "mode", "sessionId": s.id, "mode": "default"})
 	for int64(len(w.buf)) < c.MainMeanBytes {
@@ -174,7 +175,7 @@ func (s *sessionGen) mainJSON(c Corpus) []byte {
 }
 
 func (s *sessionGen) subJSON(c Corpus, i int) []byte {
-	w := &sessionWriter{s: s, textGen: textGen{rng: rand.New(rand.NewPCG(s.seed2(i+1), 0x737562))}, subagent: true}
+	w := &sessionWriter{s: s, textGen: newTextGen(s.seed2(i+1), 0x737562, c), subagent: true}
 	w.emit(rec{"type": "started", "agentId": s.id + ":a" + fmt.Sprint(i+1), "key": "task",
 		"prompt": w.sentence(4, 12)})
 	for int64(len(w.buf)) < c.MainMeanBytes/4 {
@@ -258,7 +259,18 @@ func with(base, extra rec) rec {
 	return out
 }
 
-type textGen struct{ rng *rand.Rand }
+type textGen struct {
+	rng *rand.Rand
+	div int
+}
+
+func newTextGen(x, y uint64, c Corpus) textGen {
+	t := textGen{rng: rand.New(rand.NewPCG(x, y))}
+	if c.Compact {
+		t.div = compactTextDiv
+	}
+	return t
+}
 
 var vocabulary = []string{
 	"function", "parser", "session", "cursor", "batch", "record", "offset",
@@ -313,6 +325,16 @@ func (t textGen) sentence(lo, hi int) string {
 }
 
 func (t textGen) text(min, max int) string {
+	if t.div > 1 {
+		lo, hi := min/t.div, max/t.div
+		if lo < 8 {
+			lo = 8
+		}
+		if hi < lo {
+			hi = lo
+		}
+		min, max = lo, hi
+	}
 	n := min + t.rng.IntN(max-min+1)
 	var out []byte
 	if t.rng.Float64() < 0.03 {

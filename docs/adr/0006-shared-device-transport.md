@@ -40,6 +40,20 @@ Borrowers wait for publication within the caller's context. Shutdown removes
 the descriptor, closes the node, and then closes the lock file. A borrower
 never closes another process's node or removes its descriptor.
 
+A long-lived node holds transport state that outlives a hub process restart
+(T070 workload 4): after the coordination plane inside `ohya serve` restarts,
+the device node's control connection never re-polls and its cached peer
+endpoints stop matching the restarted hub, so every dial stalls until the
+caller's deadline and the device never uploads again. The owner therefore
+treats "a dial failed while the coordination plane still answers" as proof of
+stale node state: it closes the node, starts the same durable identity again,
+republishes the proxy descriptor, and retries the dial once. The direct dial
+carries its own deadline below the caller's, so this recovery fits inside one
+caller budget. A dial failure with an unreachable plane is ordinary hub
+downtime and only backs off; the node stays. An idle owner that never dials
+is not rebuilt by its borrowers — the borrower contract stays "wait, retry,
+or take over after the owner exits".
+
 On process death, the operating system closes its sockets and releases its
 lock. A borrower can acquire that lock on its next dial, discard the stale
 descriptor, and start the same durable identity. Existing sync and remote
@@ -66,6 +80,10 @@ Go tests cover concurrent startup, owner death, ownership transfer, descriptor
 permissions, settings mismatch, and bounded startup waits. The CLI regression
 test appends records while two MCP clients are connected, kills the owner,
 restarts the uploader, and checks remote queries and revocation again.
+Another CLI regression test stops and restarts serve with an established
+join and asserts the device re-uploads within a bounded window, and unit
+tests pin the rebuild decision: a failing dial rebuilds only while the
+coordination plane answers.
 
 The lock requires a local filesystem with working `flock` semantics on the
 supported Linux and macOS platforms. Do not share one device state directory

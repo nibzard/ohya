@@ -83,9 +83,15 @@ Crash(p) ==
   /\ borrowers' = {}
   /\ UNCHANGED endpoint
 
+Rebuild(p) ==
+  /\ owner = p
+  /\ phase[p] \in {"running", "published"}
+  /\ phase' = [phase EXCEPT ![p] = "running"]
+  /\ UNCHANGED <<owner, stacks, endpoint, borrowers>>
+
 Next == \E p \in Processes:
   Acquire(p) \/ Start(p) \/ Publish(p) \/ Borrow(p) \/ Disconnect(p) \/
-  Withdraw(p) \/ Stop(p) \/ Release(p) \/ Crash(p)
+  Withdraw(p) \/ Stop(p) \/ Release(p) \/ Crash(p) \/ Rebuild(p)
 
 Spec == Init /\ [][Next]_vars
 

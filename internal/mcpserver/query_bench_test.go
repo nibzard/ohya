@@ -5,8 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/nibzard/ohya/internal/claudecode"
 	"github.com/nibzard/ohya/internal/events"
@@ -32,7 +36,14 @@ func benchMIB() int {
 	return 32
 }
 
+func benchFixture() string {
+	return os.Getenv("OHYA_BENCH_FIXTURE")
+}
+
 func seedBenchHub() (*store.DB, *Engine, string, error) {
+	if benchFixture() == "query" {
+		return seedQueryFixtureHub()
+	}
 	dir, err := os.MkdirTemp("", "ohya-query-bench-")
 	if err != nil {
 		return nil, nil, "", err
@@ -64,6 +75,40 @@ func seedBenchHub() (*store.DB, *Engine, string, error) {
 			return nil, nil, "", err
 		}
 	}
+	return finishBenchHub(hub, dir)
+}
+
+func seedQueryFixtureHub() (*store.DB, *Engine, string, error) {
+	dir, err := os.MkdirTemp("", "ohya-query-fixture-")
+	if err != nil {
+		return nil, nil, "", err
+	}
+	hub, err := store.Open(context.Background(), filepath.Join(dir, "hub.db"))
+	if err != nil {
+		return nil, nil, "", err
+	}
+	corpora := fixgen.GenerateMix(fixgen.QueryMix(7))
+	ctx := context.Background()
+	for _, af := range corpora {
+		for j, f := range af.Files {
+			sourceID := fmt.Sprintf("%s-%04d", af.Agent, j)
+			if err := hub.RegisterSource(ctx, sourceID, "dev-bench", af.Agent, "/"+f.Path); err != nil {
+				return nil, nil, "", err
+			}
+			res, err := events.Parse(af.Agent, f.Data, 0, events.Options{SourceScope: sourceID})
+			if err != nil {
+				return nil, nil, "", err
+			}
+			if _, err := hub.Ingest(ctx, store.Batch{
+				SourceID: sourceID, DeviceID: "dev-bench", Events: res.Events}); err != nil {
+				return nil, nil, "", err
+			}
+		}
+	}
+	return finishBenchHub(hub, dir)
+}
+
+func finishBenchHub(hub *store.DB, dir string) (*store.DB, *Engine, string, error) {
 	readers, err := hub.Reader()
 	if err != nil {
 		return nil, nil, "", err
@@ -71,13 +116,13 @@ func seedBenchHub() (*store.DB, *Engine, string, error) {
 	return hub, NewEngine(readers, hub.Writer(), EngineOptions{WriterID: "dev-bench"}), dir, nil
 }
 
-func acquireBenchEngine(b *testing.B) *Engine {
-	b.Helper()
+func acquireBenchEngine(tb testing.TB) *Engine {
+	tb.Helper()
 	benchHub.once.Do(func() {
 		benchHub.db, benchHub.eng, benchHub.dir, benchHub.err = seedBenchHub()
 	})
 	if benchHub.err != nil {
-		b.Fatal(benchHub.err)
+		tb.Fatal(benchHub.err)
 	}
 	return benchHub.eng
 }
@@ -107,29 +152,103 @@ func queryBench(b *testing.B, name, query string) {
 	})
 }
 
-func BenchmarkQuery(b *testing.B) {
-	queryBench(b, "FTS-selective", `SELECT e.id, substr(e.text, 1, 200)
+var fixedQueryWorkload = []struct {
+	name  string
+	query string
+}{
+	{"FTS-selective", `SELECT e.id, substr(e.text, 1, 200)
 		FROM events_fts JOIN events e ON e.id = events_fts.rowid
-		WHERE events_fts MATCH 'authentication' ORDER BY events_fts.rank LIMIT 10`)
-	queryBench(b, "FTS-wide", `SELECT e.id, substr(e.text, 1, 200)
+		WHERE events_fts MATCH 'authentication' ORDER BY events_fts.rank LIMIT 10`},
+	{"FTS-wide", `SELECT e.id, substr(e.text, 1, 200)
 		FROM events_fts JOIN events e ON e.id = events_fts.rowid
-		WHERE events_fts MATCH 'session' ORDER BY events_fts.rank LIMIT 10`)
-	queryBench(b, "session-token-totals", `SELECT s.id, s.first_prompt,
+		WHERE events_fts MATCH 'session' ORDER BY events_fts.rank LIMIT 10`},
+	{"session-token-totals", `SELECT s.id, s.first_prompt,
 			sum(u.input_tokens) AS input_tokens, sum(u.output_tokens) AS output_tokens
 		FROM sessions s
 		LEFT JOIN session_token_usage u ON u.session_id = s.id
-		GROUP BY s.id`)
-	queryBench(b, "recent-sessions", `SELECT id, agent, first_prompt, event_count
-		FROM sessions ORDER BY last_event_at_ms DESC LIMIT 20`)
-	queryBench(b, "session-event-range", `SELECT e.id, e.time_ms, substr(e.text, 1, 200)
+		GROUP BY s.id`},
+	{"recent-sessions", `SELECT id, agent, first_prompt, event_count
+		FROM sessions ORDER BY last_event_at_ms DESC LIMIT 20`},
+	{"session-event-range", `SELECT e.id, e.time_ms, substr(e.text, 1, 200)
 		FROM events e WHERE e.session_id =
 			(SELECT id FROM sessions ORDER BY last_event_at_ms DESC LIMIT 1)
 			AND e.time_ms >= 0
-		ORDER BY e.time_ms LIMIT 500`)
-	queryBench(b, "annotation-paging", `SELECT e.id FROM events e
+		ORDER BY e.time_ms LIMIT 500`},
+	{"annotation-paging", `SELECT e.id FROM events e
 		WHERE e.id > 0 AND NOT EXISTS (
 			SELECT 1 FROM event_annotations a
 			WHERE a.event_id = e.id AND a.writer_id = 'dev-bench'
 				AND a.namespace = 'security' AND a.key = 'review')
-		ORDER BY e.id LIMIT 100`)
+		ORDER BY e.id LIMIT 100`},
+}
+
+func BenchmarkQuery(b *testing.B) {
+	for _, q := range fixedQueryWorkload {
+		queryBench(b, q.name, q.query)
+	}
+}
+
+func queryPct(sorted []time.Duration, pct int) time.Duration {
+	if len(sorted) == 0 {
+		return 0
+	}
+	idx := (pct*len(sorted) + 99) / 100
+	if idx < 1 {
+		idx = 1
+	}
+	return sorted[idx-1]
+}
+
+func TestQueryFixturePercentiles(t *testing.T) {
+	if benchFixture() != "query" {
+		t.Skip("set OHYA_BENCH_FIXTURE=query to measure the one-million-event fixture")
+	}
+	e := acquireBenchEngine(t)
+	ctx := context.Background()
+	if rows, err := e.Query(ctx, "SELECT count(*) AS n FROM events"); err != nil {
+		t.Fatal(err)
+	} else {
+		t.Logf("fixture hub events: %v", rows)
+	}
+	const warmup = 10
+	samples := 150
+	if v := os.Getenv("OHYA_QUERY_SAMPLES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			samples = n
+		}
+	}
+	for _, q := range fixedQueryWorkload {
+		for i := 0; i < warmup; i++ {
+			if _, err := e.Query(ctx, q.query); err != nil {
+				t.Fatalf("%s: %v", q.name, err)
+			}
+		}
+		durs := make([]time.Duration, 0, samples)
+		var errCount, timeouts int
+		for i := 0; i < samples; i++ {
+			start := time.Now()
+			_, err := e.Query(ctx, q.query)
+			dur := time.Since(start)
+			if err != nil {
+				errCount++
+				if strings.Contains(err.Error(), "deadline") || strings.Contains(err.Error(), "timeout") {
+					timeouts++
+				}
+				continue
+			}
+			durs = append(durs, dur)
+		}
+		sort.Slice(durs, func(a, b int) bool { return durs[a] < durs[b] })
+		if len(durs) == 0 {
+			t.Errorf("%s: every query failed", q.name)
+			continue
+		}
+		t.Logf("%s: n=%d/%d p50=%s p95=%s p99=%s max=%s errors=%d timeouts=%d",
+			q.name, len(durs), samples, queryPct(durs, 50).Round(time.Millisecond),
+			queryPct(durs, 95).Round(time.Millisecond), queryPct(durs, 99).Round(time.Millisecond),
+			durs[len(durs)-1].Round(time.Millisecond), errCount, timeouts)
+		if errCount > 0 {
+			t.Errorf("%s: %d of %d queries failed (%d deadlines)", q.name, errCount, samples, timeouts)
+		}
+	}
 }

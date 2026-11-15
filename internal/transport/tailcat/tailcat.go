@@ -20,6 +20,8 @@ const (
 	HubHostname       = "ohya-hub"
 )
 
+const dialTimeout = 20 * time.Second
+
 func DefaultHubAddr() string {
 	return net.JoinHostPort(HubHostname+"."+DefaultBaseDomain, fmt.Sprintf("%d", DefaultHubPort))
 }
@@ -120,7 +122,13 @@ func (n *Node) Dial(ctx context.Context, addr string) (net.Conn, error) {
 	if err := n.waitRunning(ctx); err != nil {
 		return nil, fmt.Errorf("tailcat: %w", err)
 	}
-	conn, err := n.srv.Dial(ctx, "tcp", addr)
+	dialCtx := ctx
+	if d, ok := ctx.Deadline(); !ok || time.Until(d) > dialTimeout {
+		var cancel context.CancelFunc
+		dialCtx, cancel = context.WithTimeout(ctx, dialTimeout)
+		defer cancel()
+	}
+	conn, err := n.srv.Dial(dialCtx, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("tailcat: dial %s: %w", addr, err)
 	}

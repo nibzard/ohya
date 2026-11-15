@@ -83,7 +83,7 @@ func (w *piWriter) emit(r rec) {
 }
 
 func (g *piGen) json(c Corpus) []byte {
-	w := &piWriter{textGen: textGen{rng: rand.New(rand.NewPCG(g.seed3(), 0x70697365))}, g: g}
+	w := &piWriter{textGen: newTextGen(g.seed3(), 0x70697365, c), g: g}
 	w.raw(rec{"type": "session", "version": 3, "id": g.id,
 		"timestamp": isoMS(g.baseMS), "cwd": g.cwd})
 	w.emit(rec{"type": "model_change", "provider": "openai", "modelId": "gpt-5.4-nano"})

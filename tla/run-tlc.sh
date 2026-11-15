@@ -4,10 +4,8 @@ set -eu
 cd "$(dirname "$0")"
 
 TLA_VERSION=1.8.0
-TLA_SHA256=e1f11b75c4b5bc4478ba0ac5cb6ae28e40a01b0016bc33e0aa97da22dfdbcd7f
-TLA_URL="https://github.com/tlaplus/tlaplus/releases/download/v${TLA_VERSION}/tla2tools.jar"
-
-JAR=".tools/tla2tools-${TLA_VERSION}.jar"
+TLA_SHA256=7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f
+JAR="vendor/tla2tools-${TLA_VERSION}.jar"
 
 sha256() {
     if command -v sha256sum >/dev/null 2>&1; then
@@ -18,17 +16,17 @@ sha256() {
 }
 
 if [ ! -f "$JAR" ]; then
-    mkdir -p .tools
-    echo "Downloading tla2tools ${TLA_VERSION} (pinned, checksum-verified)..."
-    curl -fsSL -o "$JAR.tmp" "$TLA_URL"
-    GOT=$(sha256 "$JAR.tmp")
-    if [ "$GOT" != "$TLA_SHA256" ]; then
-        echo "Checksum mismatch for $JAR.tmp: $GOT" >&2
-        echo "Expected: $TLA_SHA256" >&2
-        rm -f "$JAR.tmp"
-        exit 1
-    fi
-    mv "$JAR.tmp" "$JAR"
+    echo "Vendored jar missing: $JAR" >&2
+    echo "Restore it with: git checkout -- tla/vendor/tla2tools-${TLA_VERSION}.jar" >&2
+    exit 1
+fi
+
+GOT=$(sha256 "$JAR")
+if [ "$GOT" != "$TLA_SHA256" ]; then
+    echo "Checksum mismatch for $JAR: $GOT" >&2
+    echo "Expected: $TLA_SHA256" >&2
+    echo "Restore it with: git checkout -- tla/vendor/tla2tools-${TLA_VERSION}.jar" >&2
+    exit 1
 fi
 
 check() {

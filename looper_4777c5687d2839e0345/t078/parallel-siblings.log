@@ -1,0 +1,728 @@
+=== RUN   TestDeriversReproduceFreshParse
+--- PASS: TestDeriversReproduceFreshParse (0.00s)
+=== RUN   TestDeriversRejectUnfaithfulRecords
+--- PASS: TestDeriversRejectUnfaithfulRecords (0.00s)
+=== RUN   TestFromCodexUsage
+--- PASS: TestFromCodexUsage (0.00s)
+=== RUN   TestParseDispatch
+--- PASS: TestParseDispatch (0.00s)
+=== RUN   TestParseMaxRecordBytesAndStopClassification
+--- PASS: TestParseMaxRecordBytesAndStopClassification (0.00s)
+=== RUN   TestCodexFixturesThroughWritePath
+--- PASS: TestCodexFixturesThroughWritePath (1.67s)
+=== RUN   TestCodexReenumeratedPageThroughWritePath
+--- PASS: TestCodexReenumeratedPageThroughWritePath (1.77s)
+=== RUN   TestFromPiUsage
+--- PASS: TestFromPiUsage (0.00s)
+=== RUN   TestFromPiUsageKey
+--- PASS: TestFromPiUsageKey (0.00s)
+=== RUN   TestPiFixturesThroughWritePath
+--- PASS: TestPiFixturesThroughWritePath (1.65s)
+=== RUN   TestPiAnthropicFixtureThroughWritePath
+--- PASS: TestPiAnthropicFixtureThroughWritePath (1.33s)
+=== RUN   TestIngestPerformanceFloor
+    ingest_perf_test.go:58: ingested 6794 events from 20 files in 4.594815934s
+--- PASS: TestIngestPerformanceFloor (5.34s)
+=== RUN   TestIngestStageAttribution
+    ingest_stage_test.go:274: set OHYA_STAGE_MIB to run the ingestion stage attribution harness
+--- SKIP: TestIngestStageAttribution (0.00s)
+=== RUN   TestDeriversReproduceFreshParse
+--- PASS: TestDeriversReproduceFreshParse (0.00s)
+=== RUN   TestDeriversRejectUnfaithfulRecords
+--- PASS: TestDeriversRejectUnfaithfulRecords (0.00s)
+=== RUN   TestFromCodexUsage
+--- PASS: TestFromCodexUsage (0.00s)
+=== RUN   TestParseDispatch
+--- PASS: TestParseDispatch (0.00s)
+=== RUN   TestParseMaxRecordBytesAndStopClassification
+--- PASS: TestParseMaxRecordBytesAndStopClassification (0.00s)
+=== RUN   TestCodexFixturesThroughWritePath
+--- PASS: TestCodexFixturesThroughWritePath (1.79s)
+=== RUN   TestCodexReenumeratedPageThroughWritePath
+--- PASS: TestCodexReenumeratedPageThroughWritePath (2.08s)
+=== RUN   TestFromPiUsage
+--- PASS: TestFromPiUsage (0.00s)
+=== RUN   TestFromPiUsageKey
+--- PASS: TestFromPiUsageKey (0.00s)
+=== RUN   TestPiFixturesThroughWritePath
+--- PASS: TestPiFixturesThroughWritePath (1.58s)
+=== RUN   TestPiAnthropicFixtureThroughWritePath
+--- PASS: TestPiAnthropicFixtureThroughWritePath (1.31s)
+=== RUN   TestIngestPerformanceFloor
+    ingest_perf_test.go:58: ingested 6794 events from 20 files in 4.464880579s
+--- PASS: TestIngestPerformanceFloor (5.32s)
+=== RUN   TestIngestStageAttribution
+    ingest_stage_test.go:274: set OHYA_STAGE_MIB to run the ingestion stage attribution harness
+--- SKIP: TestIngestStageAttribution (0.00s)
+PASS
+ok  	github.com/nibzard/ohya/internal/events	23.840s
+=== RUN   TestAnnotateUpsertLifecycle
+--- PASS: TestAnnotateUpsertLifecycle (0.68s)
+=== RUN   TestAnnotateBatchIsAtomic
+--- PASS: TestAnnotateBatchIsAtomic (0.62s)
+=== RUN   TestAnnotateRejectsInvalidBatches
+--- PASS: TestAnnotateRejectsInvalidBatches (0.57s)
+=== RUN   TestAnnotateWriterIsolationAndConcurrentWrites
+--- PASS: TestAnnotateWriterIsolationAndConcurrentWrites (0.96s)
+=== RUN   TestAnnotateLeavesSourceDataUntouched
+--- PASS: TestAnnotateLeavesSourceDataUntouched (0.86s)
+=== RUN   TestOpenReadOnlyDoesNotMigrate
+--- PASS: TestOpenReadOnlyDoesNotMigrate (0.64s)
+=== RUN   TestAppliedSchemaVersionRejectsForeignDatabase
+--- PASS: TestAppliedSchemaVersionRejectsForeignDatabase (0.18s)
+=== RUN   TestFTSIndexConsistentDetectsCorruption
+--- PASS: TestFTSIndexConsistentDetectsCorruption (0.71s)
+=== RUN   TestRegisterSource
+--- PASS: TestRegisterSource (0.67s)
+=== RUN   TestIngestBindsBatchToDevice
+--- PASS: TestIngestBindsBatchToDevice (0.42s)
+=== RUN   TestIngestFixtureMainSession
+--- PASS: TestIngestFixtureMainSession (0.56s)
+=== RUN   TestIngestCountsUsageOncePerMessageID
+--- PASS: TestIngestCountsUsageOncePerMessageID (1.10s)
+=== RUN   TestIngestReplayAndOverlap
+--- PASS: TestIngestReplayAndOverlap (0.86s)
+=== RUN   TestIngestRejectsGapsAndBadShape
+--- PASS: TestIngestRejectsGapsAndBadShape (1.35s)
+=== RUN   TestIngestOtherSourcesContinue
+--- PASS: TestIngestOtherSourcesContinue (1.01s)
+=== RUN   TestIngestTimestampBounds
+--- PASS: TestIngestTimestampBounds (0.63s)
+=== RUN   TestIngestSessionRepoKeepFirst
+--- PASS: TestIngestSessionRepoKeepFirst (0.60s)
+=== RUN   TestIngestFirstPromptTieBreak
+--- PASS: TestIngestFirstPromptTieBreak (2.66s)
+=== RUN   TestIngestInterruptedCommitRollsBack
+--- PASS: TestIngestInterruptedCommitRollsBack (0.55s)
+=== RUN   TestIngestSurvivesCrashWithOpenTransaction
+--- PASS: TestIngestSurvivesCrashWithOpenTransaction (0.62s)
+=== RUN   TestIngestCrashHelper
+    ingest_test.go:747: crash helper runs only under TestIngestSurvivesCrashWithOpenTransaction
+--- SKIP: TestIngestCrashHelper (0.00s)
+=== RUN   TestIngestIncompleteTailCommitsWholeRecords
+--- PASS: TestIngestIncompleteTailCommitsWholeRecords (0.55s)
+=== RUN   TestMigrateFreshApplyRecordsVersionsInOrder
+--- PASS: TestMigrateFreshApplyRecordsVersionsInOrder (0.38s)
+=== RUN   TestMigrateRepeatedRunAppliesNothing
+--- PASS: TestMigrateRepeatedRunAppliesNothing (0.30s)
+=== RUN   TestMigrateRejectsEditedAppliedMigration
+--- PASS: TestMigrateRejectsEditedAppliedMigration (0.30s)
+=== RUN   TestMigrateRejectsDeletedAppliedMigration
+--- PASS: TestMigrateRejectsDeletedAppliedMigration (0.39s)
+=== RUN   TestMigrateRejectsNewMigrationBelowAppliedVersion
+--- PASS: TestMigrateRejectsNewMigrationBelowAppliedVersion (0.44s)
+=== RUN   TestMigrateFailedMigrationRollsBackCompletely
+--- PASS: TestMigrateFailedMigrationRollsBackCompletely (0.38s)
+=== RUN   TestMigrateRejectsInvalidMigrationSets
+=== RUN   TestMigrateRejectsInvalidMigrationSets/uppercase_name
+=== RUN   TestMigrateRejectsInvalidMigrationSets/wrong_extension
+=== RUN   TestMigrateRejectsInvalidMigrationSets/duplicate_version
+=== RUN   TestMigrateRejectsInvalidMigrationSets/empty_set
+=== RUN   TestMigrateRejectsInvalidMigrationSets/wrong_name_pattern
+=== RUN   TestMigrateRejectsInvalidMigrationSets/short_version
+--- PASS: TestMigrateRejectsInvalidMigrationSets (0.00s)
+    --- PASS: TestMigrateRejectsInvalidMigrationSets/uppercase_name (0.00s)
+    --- PASS: TestMigrateRejectsInvalidMigrationSets/wrong_extension (0.00s)
+    --- PASS: TestMigrateRejectsInvalidMigrationSets/duplicate_version (0.00s)
+    --- PASS: TestMigrateRejectsInvalidMigrationSets/empty_set (0.00s)
+    --- PASS: TestMigrateRejectsInvalidMigrationSets/wrong_name_pattern (0.00s)
+    --- PASS: TestMigrateRejectsInvalidMigrationSets/short_version (0.00s)
+=== RUN   TestSchemaVersionIsNewestEmbeddedMigration
+--- PASS: TestSchemaVersionIsNewestEmbeddedMigration (0.00s)
+=== RUN   TestWriterIsSingleConnectionWithDurablePragmas
+--- PASS: TestWriterIsSingleConnectionWithDurablePragmas (0.50s)
+=== RUN   TestReaderConnectionsAreRestricted
+--- PASS: TestReaderConnectionsAreRestricted (0.70s)
+=== RUN   TestReaderCannotCreateDatabase
+--- PASS: TestReaderCannotCreateDatabase (0.00s)
+=== RUN   TestOpenAppliesRealMigrationsAndReopensCleanly
+--- PASS: TestOpenAppliesRealMigrationsAndReopensCleanly (0.74s)
+=== RUN   TestFTSConsistencyThroughReader
+--- PASS: TestFTSConsistencyThroughReader (1.26s)
+=== RUN   TestIngestDeduplicatesOrdinalsAcrossSources
+--- PASS: TestIngestDeduplicatesOrdinalsAcrossSources (1.59s)
+=== RUN   TestIngestKeepsDistinctRecordsAtOneOrdinal
+--- PASS: TestIngestKeepsDistinctRecordsAtOneOrdinal (1.42s)
+=== RUN   TestIngestOrdinalsAreScopedBySession
+--- PASS: TestIngestOrdinalsAreScopedBySession (0.60s)
+=== RUN   TestSourceState
+--- PASS: TestSourceState (0.56s)
+=== RUN   TestReDeriveIsNoOpWhenCurrent
+--- PASS: TestReDeriveIsNoOpWhenCurrent (0.53s)
+=== RUN   TestReDeriveReproducesRowsAndIsIdempotent
+--- PASS: TestReDeriveReproducesRowsAndIsIdempotent (0.56s)
+=== RUN   TestReDeriveRewritesTextSessionsAndFTS
+--- PASS: TestReDeriveRewritesTextSessionsAndFTS (0.62s)
+=== RUN   TestReDeriveMovesSessions
+--- PASS: TestReDeriveMovesSessions (0.53s)
+=== RUN   TestReDeriveReassignsDuplicatesInWalkOrder
+--- PASS: TestReDeriveReassignsDuplicatesInWalkOrder (0.67s)
+=== RUN   TestReDeriveKeepsDistinctRecordsAtOneOrdinal
+--- PASS: TestReDeriveKeepsDistinctRecordsAtOneOrdinal (0.91s)
+=== RUN   TestReDeriveRefusesNewerStoredVersions
+--- PASS: TestReDeriveRefusesNewerStoredVersions (0.57s)
+=== RUN   TestReDeriveRollsBackOnDeriveFailure
+--- PASS: TestReDeriveRollsBackOnDeriveFailure (0.55s)
+=== RUN   TestReDeriveRejectsBadBindings
+--- PASS: TestReDeriveRejectsBadBindings (0.55s)
+=== RUN   TestReDeriveWalksMoreThanOneChunk
+--- PASS: TestReDeriveWalksMoreThanOneChunk (0.50s)
+=== RUN   TestIngestRejectsMissingParserVersion
+--- PASS: TestIngestRejectsMissingParserVersion (0.23s)
+=== RUN   TestAnnotationsAndFTS
+--- PASS: TestAnnotationsAndFTS (0.32s)
+=== RUN   TestDriverAuthorizerAndCancellation
+--- PASS: TestDriverAuthorizerAndCancellation (0.25s)
+=== RUN   TestAnnotateUpsertLifecycle
+--- PASS: TestAnnotateUpsertLifecycle (0.32s)
+=== RUN   TestAnnotateBatchIsAtomic
+--- PASS: TestAnnotateBatchIsAtomic (0.12s)
+=== RUN   TestAnnotateRejectsInvalidBatches
+--- PASS: TestAnnotateRejectsInvalidBatches (0.10s)
+=== RUN   TestAnnotateWriterIsolationAndConcurrentWrites
+--- PASS: TestAnnotateWriterIsolationAndConcurrentWrites (2.36s)
+=== RUN   TestAnnotateLeavesSourceDataUntouched
+--- PASS: TestAnnotateLeavesSourceDataUntouched (1.92s)
+=== RUN   TestOpenReadOnlyDoesNotMigrate
+--- PASS: TestOpenReadOnlyDoesNotMigrate (0.73s)
+=== RUN   TestAppliedSchemaVersionRejectsForeignDatabase
+--- PASS: TestAppliedSchemaVersionRejectsForeignDatabase (0.15s)
+=== RUN   TestFTSIndexConsistentDetectsCorruption
+--- PASS: TestFTSIndexConsistentDetectsCorruption (0.89s)
+=== RUN   TestRegisterSource
+--- PASS: TestRegisterSource (0.84s)
+=== RUN   TestIngestBindsBatchToDevice
+--- PASS: TestIngestBindsBatchToDevice (0.96s)
+=== RUN   TestIngestFixtureMainSession
+--- PASS: TestIngestFixtureMainSession (0.97s)
+=== RUN   TestIngestCountsUsageOncePerMessageID
+--- PASS: TestIngestCountsUsageOncePerMessageID (0.78s)
+=== RUN   TestIngestReplayAndOverlap
+--- PASS: TestIngestReplayAndOverlap (0.61s)
+=== RUN   TestIngestRejectsGapsAndBadShape
+--- PASS: TestIngestRejectsGapsAndBadShape (0.55s)
+=== RUN   TestIngestOtherSourcesContinue
+--- PASS: TestIngestOtherSourcesContinue (0.67s)
+=== RUN   TestIngestTimestampBounds
+--- PASS: TestIngestTimestampBounds (0.72s)
+=== RUN   TestIngestSessionRepoKeepFirst
+--- PASS: TestIngestSessionRepoKeepFirst (0.66s)
+=== RUN   TestIngestFirstPromptTieBreak
+--- PASS: TestIngestFirstPromptTieBreak (1.78s)
+=== RUN   TestIngestInterruptedCommitRollsBack
+--- PASS: TestIngestInterruptedCommitRollsBack (0.54s)
+=== RUN   TestIngestSurvivesCrashWithOpenTransaction
+--- PASS: TestIngestSurvivesCrashWithOpenTransaction (0.57s)
+=== RUN   TestIngestCrashHelper
+    ingest_test.go:747: crash helper runs only under TestIngestSurvivesCrashWithOpenTransaction
+--- SKIP: TestIngestCrashHelper (0.00s)
+=== RUN   TestIngestIncompleteTailCommitsWholeRecords
+--- PASS: TestIngestIncompleteTailCommitsWholeRecords (0.66s)
+=== RUN   TestMigrateFreshApplyRecordsVersionsInOrder
+--- PASS: TestMigrateFreshApplyRecordsVersionsInOrder (0.41s)
+=== RUN   TestMigrateRepeatedRunAppliesNothing
+--- PASS: TestMigrateRepeatedRunAppliesNothing (0.27s)
+=== RUN   TestMigrateRejectsEditedAppliedMigration
+--- PASS: TestMigrateRejectsEditedAppliedMigration (0.23s)
+=== RUN   TestMigrateRejectsDeletedAppliedMigration
+--- PASS: TestMigrateRejectsDeletedAppliedMigration (0.28s)
+=== RUN   TestMigrateRejectsNewMigrationBelowAppliedVersion
+--- PASS: TestMigrateRejectsNewMigrationBelowAppliedVersion (0.28s)
+=== RUN   TestMigrateFailedMigrationRollsBackCompletely
+--- PASS: TestMigrateFailedMigrationRollsBackCompletely (0.36s)
+=== RUN   TestMigrateRejectsInvalidMigrationSets
+=== RUN   TestMigrateRejectsInvalidMigrationSets/duplicate_version
+=== RUN   TestMigrateRejectsInvalidMigrationSets/empty_set
+=== RUN   TestMigrateRejectsInvalidMigrationSets/wrong_name_pattern
+=== RUN   TestMigrateRejectsInvalidMigrationSets/short_version
+=== RUN   TestMigrateRejectsInvalidMigrationSets/uppercase_name
+=== RUN   TestMigrateRejectsInvalidMigrationSets/wrong_extension
+--- PASS: TestMigrateRejectsInvalidMigrationSets (0.00s)
+    --- PASS: TestMigrateRejectsInvalidMigrationSets/duplicate_version (0.00s)
+    --- PASS: TestMigrateRejectsInvalidMigrationSets/empty_set (0.00s)
+    --- PASS: TestMigrateRejectsInvalidMigrationSets/wrong_name_pattern (0.00s)
+    --- PASS: TestMigrateRejectsInvalidMigrationSets/short_version (0.00s)
+    --- PASS: TestMigrateRejectsInvalidMigrationSets/uppercase_name (0.00s)
+    --- PASS: TestMigrateRejectsInvalidMigrationSets/wrong_extension (0.00s)
+=== RUN   TestSchemaVersionIsNewestEmbeddedMigration
+--- PASS: TestSchemaVersionIsNewestEmbeddedMigration (0.00s)
+=== RUN   TestWriterIsSingleConnectionWithDurablePragmas
+--- PASS: TestWriterIsSingleConnectionWithDurablePragmas (0.22s)
+=== RUN   TestReaderConnectionsAreRestricted
+--- PASS: TestReaderConnectionsAreRestricted (0.29s)
+=== RUN   TestReaderCannotCreateDatabase
+--- PASS: TestReaderCannotCreateDatabase (0.00s)
+=== RUN   TestOpenAppliesRealMigrationsAndReopensCleanly
+--- PASS: TestOpenAppliesRealMigrationsAndReopensCleanly (0.57s)
+=== RUN   TestFTSConsistencyThroughReader
+--- PASS: TestFTSConsistencyThroughReader (0.76s)
+=== RUN   TestIngestDeduplicatesOrdinalsAcrossSources
+--- PASS: TestIngestDeduplicatesOrdinalsAcrossSources (0.98s)
+=== RUN   TestIngestKeepsDistinctRecordsAtOneOrdinal
+--- PASS: TestIngestKeepsDistinctRecordsAtOneOrdinal (0.86s)
+=== RUN   TestIngestOrdinalsAreScopedBySession
+--- PASS: TestIngestOrdinalsAreScopedBySession (0.38s)
+=== RUN   TestSourceState
+--- PASS: TestSourceState (0.26s)
+=== RUN   TestReDeriveIsNoOpWhenCurrent
+--- PASS: TestReDeriveIsNoOpWhenCurrent (0.29s)
+=== RUN   TestReDeriveReproducesRowsAndIsIdempotent
+--- PASS: TestReDeriveReproducesRowsAndIsIdempotent (0.38s)
+=== RUN   TestReDeriveRewritesTextSessionsAndFTS
+--- PASS: TestReDeriveRewritesTextSessionsAndFTS (0.27s)
+=== RUN   TestReDeriveMovesSessions
+--- PASS: TestReDeriveMovesSessions (0.29s)
+=== RUN   TestReDeriveReassignsDuplicatesInWalkOrder
+--- PASS: TestReDeriveReassignsDuplicatesInWalkOrder (0.43s)
+=== RUN   TestReDeriveKeepsDistinctRecordsAtOneOrdinal
+--- PASS: TestReDeriveKeepsDistinctRecordsAtOneOrdinal (0.41s)
+=== RUN   TestReDeriveRefusesNewerStoredVersions
+--- PASS: TestReDeriveRefusesNewerStoredVersions (0.41s)
+=== RUN   TestReDeriveRollsBackOnDeriveFailure
+--- PASS: TestReDeriveRollsBackOnDeriveFailure (0.42s)
+=== RUN   TestReDeriveRejectsBadBindings
+--- PASS: TestReDeriveRejectsBadBindings (0.38s)
+=== RUN   TestReDeriveWalksMoreThanOneChunk
+--- PASS: TestReDeriveWalksMoreThanOneChunk (0.30s)
+=== RUN   TestIngestRejectsMissingParserVersion
+--- PASS: TestIngestRejectsMissingParserVersion (0.26s)
+=== RUN   TestAnnotationsAndFTS
+--- PASS: TestAnnotationsAndFTS (0.41s)
+=== RUN   TestDriverAuthorizerAndCancellation
+--- PASS: TestDriverAuthorizerAndCancellation (0.29s)
+PASS
+ok  	github.com/nibzard/ohya/internal/store	60.778s
+=== RUN   TestRetryPolicyWait
+--- PASS: TestRetryPolicyWait (0.00s)
+=== RUN   TestRetrySucceedsAfterTransientFailures
+--- PASS: TestRetrySucceedsAfterTransientFailures (0.00s)
+=== RUN   TestRetryStopsOnPermanentError
+--- PASS: TestRetryStopsOnPermanentError (0.00s)
+=== RUN   TestRetryExhaustsAndStopsOnCanceledContext
+--- PASS: TestRetryExhaustsAndStopsOnCanceledContext (0.00s)
+=== RUN   TestEndpointCommitsFixtureLikeLocalIngestion
+--- PASS: TestEndpointCommitsFixtureLikeLocalIngestion (1.16s)
+=== RUN   TestEndpointCommitsCodexLikeLocalIngestion
+--- PASS: TestEndpointCommitsCodexLikeLocalIngestion (1.41s)
+=== RUN   TestAckFollowsDurableCommit
+--- PASS: TestAckFollowsDurableCommit (0.62s)
+=== RUN   TestReplayAndOverlap
+--- PASS: TestReplayAndOverlap (0.69s)
+=== RUN   TestConflictingRetryRejected
+--- PASS: TestConflictingRetryRejected (0.59s)
+=== RUN   TestGapRejected
+--- PASS: TestGapRejected (0.66s)
+=== RUN   TestOfflineRecoveryDropsAndReplays
+--- PASS: TestOfflineRecoveryDropsAndReplays (0.57s)
+=== RUN   TestRolledBackTransactionLeavesCursorUnchanged
+--- PASS: TestRolledBackTransactionLeavesCursorUnchanged (0.56s)
+=== RUN   TestMalformedRecordCommitsPrefixAndStops
+--- PASS: TestMalformedRecordCommitsPrefixAndStops (0.70s)
+=== RUN   TestRegistrationLifecycle
+--- PASS: TestRegistrationLifecycle (0.86s)
+=== RUN   TestOwnershipAndIdentity
+--- PASS: TestOwnershipAndIdentity (0.88s)
+=== RUN   TestUnauthenticatedConnectionClose
+--- PASS: TestUnauthenticatedConnectionClose (3.22s)
+=== RUN   TestBrokenFramesCloseConnection
+--- PASS: TestBrokenFramesCloseConnection (0.51s)
+=== RUN   TestConcurrentSameSourceSerializes
+--- PASS: TestConcurrentSameSourceSerializes (0.61s)
+=== RUN   TestConnectionBoundRejectsBeyondMaxConns
+--- PASS: TestConnectionBoundRejectsBeyondMaxConns (0.57s)
+=== RUN   TestEmptyBatchOnUnregisteredSource
+--- PASS: TestEmptyBatchOnUnregisteredSource (0.64s)
+=== RUN   TestEndpointCommitsPiLikeLocalIngestion
+--- PASS: TestEndpointCommitsPiLikeLocalIngestion (1.31s)
+=== RUN   TestProtocolRoundTrip
+--- PASS: TestProtocolRoundTrip (0.00s)
+=== RUN   TestReadFrameRejectsBrokenFrames
+--- PASS: TestReadFrameRejectsBrokenFrames (0.00s)
+=== RUN   TestReadFrameRejectsOversizedBatch
+--- PASS: TestReadFrameRejectsOversizedBatch (0.00s)
+=== RUN   TestWritersRefuseOversizedFrames
+--- PASS: TestWritersRefuseOversizedFrames (0.00s)
+=== RUN   TestAuthFrameRoundTrip
+--- PASS: TestAuthFrameRoundTrip (0.00s)
+=== RUN   TestReadAuthFrameRejectsBrokenFrames
+--- PASS: TestReadAuthFrameRejectsBrokenFrames (0.00s)
+=== RUN   TestQueryAnnotateFrameRoundTrip
+--- PASS: TestQueryAnnotateFrameRoundTrip (0.00s)
+=== RUN   TestRemoteQueryServesSharedHistory
+--- PASS: TestRemoteQueryServesSharedHistory (0.61s)
+=== RUN   TestRemoteQueryBoundsSurviveTheWire
+--- PASS: TestRemoteQueryBoundsSurviveTheWire (0.95s)
+=== RUN   TestRemoteQueryResultFrameBound
+--- PASS: TestRemoteQueryResultFrameBound (0.57s)
+=== RUN   TestRemoteAnnotateDerivesWriter
+--- PASS: TestRemoteAnnotateDerivesWriter (0.94s)
+=== RUN   TestRemoteFramesWithoutEngine
+--- PASS: TestRemoteFramesWithoutEngine (0.53s)
+=== RUN   TestRemoteClientSequentialExchanges
+--- PASS: TestRemoteClientSequentialExchanges (1.07s)
+=== RUN   TestRemoteResultJSONShape
+--- PASS: TestRemoteResultJSONShape (0.00s)
+=== RUN   TestRemoteSessionReconnectsAfterHubRestart
+--- PASS: TestRemoteSessionReconnectsAfterHubRestart (0.66s)
+=== RUN   TestRemoteSessionRefusesWrongCredential
+--- PASS: TestRemoteSessionRefusesWrongCredential (0.71s)
+=== RUN   TestRetryPolicyWait
+--- PASS: TestRetryPolicyWait (0.00s)
+=== RUN   TestRetrySucceedsAfterTransientFailures
+--- PASS: TestRetrySucceedsAfterTransientFailures (0.00s)
+=== RUN   TestRetryStopsOnPermanentError
+--- PASS: TestRetryStopsOnPermanentError (0.00s)
+=== RUN   TestRetryExhaustsAndStopsOnCanceledContext
+--- PASS: TestRetryExhaustsAndStopsOnCanceledContext (0.00s)
+=== RUN   TestEndpointCommitsFixtureLikeLocalIngestion
+--- PASS: TestEndpointCommitsFixtureLikeLocalIngestion (1.71s)
+=== RUN   TestEndpointCommitsCodexLikeLocalIngestion
+--- PASS: TestEndpointCommitsCodexLikeLocalIngestion (1.66s)
+=== RUN   TestAckFollowsDurableCommit
+--- PASS: TestAckFollowsDurableCommit (0.50s)
+=== RUN   TestReplayAndOverlap
+--- PASS: TestReplayAndOverlap (0.61s)
+=== RUN   TestConflictingRetryRejected
+--- PASS: TestConflictingRetryRejected (0.57s)
+=== RUN   TestGapRejected
+--- PASS: TestGapRejected (0.56s)
+=== RUN   TestOfflineRecoveryDropsAndReplays
+--- PASS: TestOfflineRecoveryDropsAndReplays (0.58s)
+=== RUN   TestRolledBackTransactionLeavesCursorUnchanged
+--- PASS: TestRolledBackTransactionLeavesCursorUnchanged (0.56s)
+=== RUN   TestMalformedRecordCommitsPrefixAndStops
+--- PASS: TestMalformedRecordCommitsPrefixAndStops (0.53s)
+=== RUN   TestRegistrationLifecycle
+--- PASS: TestRegistrationLifecycle (0.74s)
+=== RUN   TestOwnershipAndIdentity
+--- PASS: TestOwnershipAndIdentity (0.55s)
+=== RUN   TestUnauthenticatedConnectionClose
+--- PASS: TestUnauthenticatedConnectionClose (2.49s)
+=== RUN   TestBrokenFramesCloseConnection
+--- PASS: TestBrokenFramesCloseConnection (0.21s)
+=== RUN   TestConcurrentSameSourceSerializes
+--- PASS: TestConcurrentSameSourceSerializes (0.25s)
+=== RUN   TestConnectionBoundRejectsBeyondMaxConns
+--- PASS: TestConnectionBoundRejectsBeyondMaxConns (0.14s)
+=== RUN   TestEmptyBatchOnUnregisteredSource
+--- PASS: TestEmptyBatchOnUnregisteredSource (0.09s)
+=== RUN   TestEndpointCommitsPiLikeLocalIngestion
+--- PASS: TestEndpointCommitsPiLikeLocalIngestion (2.44s)
+=== RUN   TestProtocolRoundTrip
+--- PASS: TestProtocolRoundTrip (0.00s)
+=== RUN   TestReadFrameRejectsBrokenFrames
+--- PASS: TestReadFrameRejectsBrokenFrames (0.00s)
+=== RUN   TestReadFrameRejectsOversizedBatch
+--- PASS: TestReadFrameRejectsOversizedBatch (0.00s)
+=== RUN   TestWritersRefuseOversizedFrames
+--- PASS: TestWritersRefuseOversizedFrames (0.00s)
+=== RUN   TestAuthFrameRoundTrip
+--- PASS: TestAuthFrameRoundTrip (0.00s)
+=== RUN   TestReadAuthFrameRejectsBrokenFrames
+--- PASS: TestReadAuthFrameRejectsBrokenFrames (0.00s)
+=== RUN   TestQueryAnnotateFrameRoundTrip
+--- PASS: TestQueryAnnotateFrameRoundTrip (0.00s)
+=== RUN   TestRemoteQueryServesSharedHistory
+--- PASS: TestRemoteQueryServesSharedHistory (1.52s)
+=== RUN   TestRemoteQueryBoundsSurviveTheWire
+--- PASS: TestRemoteQueryBoundsSurviveTheWire (1.26s)
+=== RUN   TestRemoteQueryResultFrameBound
+--- PASS: TestRemoteQueryResultFrameBound (0.87s)
+=== RUN   TestRemoteAnnotateDerivesWriter
+--- PASS: TestRemoteAnnotateDerivesWriter (1.14s)
+=== RUN   TestRemoteFramesWithoutEngine
+--- PASS: TestRemoteFramesWithoutEngine (0.96s)
+=== RUN   TestRemoteClientSequentialExchanges
+--- PASS: TestRemoteClientSequentialExchanges (0.95s)
+=== RUN   TestRemoteResultJSONShape
+--- PASS: TestRemoteResultJSONShape (0.00s)
+=== RUN   TestRemoteSessionReconnectsAfterHubRestart
+--- PASS: TestRemoteSessionReconnectsAfterHubRestart (0.54s)
+=== RUN   TestRemoteSessionRefusesWrongCredential
+--- PASS: TestRemoteSessionRefusesWrongCredential (0.55s)
+=== RUN   FuzzReadFrame
+=== RUN   FuzzReadFrame/seed#0
+--- PASS: FuzzReadFrame (0.00s)
+    --- PASS: FuzzReadFrame/seed#0 (0.00s)
+=== RUN   FuzzReadAuthFrame
+=== RUN   FuzzReadAuthFrame/seed#0
+=== RUN   FuzzReadAuthFrame/seed#1
+=== RUN   FuzzReadAuthFrame/seed#2
+=== RUN   FuzzReadAuthFrame/seed#3
+--- PASS: FuzzReadAuthFrame (0.00s)
+    --- PASS: FuzzReadAuthFrame/seed#0 (0.00s)
+    --- PASS: FuzzReadAuthFrame/seed#1 (0.00s)
+    --- PASS: FuzzReadAuthFrame/seed#2 (0.00s)
+    --- PASS: FuzzReadAuthFrame/seed#3 (0.00s)
+=== RUN   FuzzReadFrame
+=== RUN   FuzzReadFrame/seed#0
+--- PASS: FuzzReadFrame (0.00s)
+    --- PASS: FuzzReadFrame/seed#0 (0.00s)
+=== RUN   FuzzReadAuthFrame
+=== RUN   FuzzReadAuthFrame/seed#0
+=== RUN   FuzzReadAuthFrame/seed#1
+=== RUN   FuzzReadAuthFrame/seed#2
+=== RUN   FuzzReadAuthFrame/seed#3
+--- PASS: FuzzReadAuthFrame (0.00s)
+    --- PASS: FuzzReadAuthFrame/seed#0 (0.00s)
+    --- PASS: FuzzReadAuthFrame/seed#1 (0.00s)
+    --- PASS: FuzzReadAuthFrame/seed#2 (0.00s)
+    --- PASS: FuzzReadAuthFrame/seed#3 (0.00s)
+PASS
+ok  	github.com/nibzard/ohya/internal/hubsync	43.598s
+=== RUN   TestAnnotateToolAppliesBatches
+--- PASS: TestAnnotateToolAppliesBatches (0.77s)
+=== RUN   TestAnnotateToolDescriptionPublishesContract
+--- PASS: TestAnnotateToolDescriptionPublishesContract (0.75s)
+=== RUN   TestAnnotateToolRejectsInvalidRequests
+--- PASS: TestAnnotateToolRejectsInvalidRequests (0.71s)
+=== RUN   TestAnnotateToolRejectsOversizedRequests
+--- PASS: TestAnnotateToolRejectsOversizedRequests (0.70s)
+=== RUN   TestAnnotateWriterIsolation
+--- PASS: TestAnnotateWriterIsolation (0.89s)
+=== RUN   TestAnnotateConcurrentToolCallsTakeLastCommit
+--- PASS: TestAnnotateConcurrentToolCallsTakeLastCommit (0.91s)
+=== RUN   TestAnnotateQueryToolSeesAnnotations
+--- PASS: TestAnnotateQueryToolSeesAnnotations (0.91s)
+=== RUN   TestAnnotateWithoutWriterID
+--- PASS: TestAnnotateWithoutWriterID (0.59s)
+=== RUN   TestAnnotateAsDerivesWriterFromCaller
+--- PASS: TestAnnotateAsDerivesWriterFromCaller (1.05s)
+=== RUN   TestQueryFixturePercentiles
+    query_bench_test.go:204: set OHYA_BENCH_FIXTURE=query to measure the one-million-event fixture
+--- SKIP: TestQueryFixturePercentiles (0.00s)
+=== RUN   TestRetrievalPerformanceCeiling
+    query_perf_test.go:82: fts-wide: 10 rows in 2.742224ms
+    query_perf_test.go:82: session-token-totals: 11 rows in 324.74µs
+    query_perf_test.go:82: annotation-paging: 100 rows in 406.913µs
+--- PASS: TestRetrievalPerformanceCeiling (3.64s)
+=== RUN   TestQuerySelectsAndSchemaInspection
+--- PASS: TestQuerySelectsAndSchemaInspection (0.71s)
+=== RUN   TestQueryDeniesAdversarialSQL
+--- PASS: TestQueryDeniesAdversarialSQL (0.69s)
+=== RUN   TestQueryOneStatementPerCall
+--- PASS: TestQueryOneStatementPerCall (0.77s)
+=== RUN   TestQueryLimitsAndExplicitTruncation
+=== RUN   TestQueryLimitsAndExplicitTruncation/row_limit
+=== RUN   TestQueryLimitsAndExplicitTruncation/row_limit_exact_fit_is_not_truncation
+=== RUN   TestQueryLimitsAndExplicitTruncation/byte_limit_drops_the_crossing_row_whole
+=== RUN   TestQueryLimitsAndExplicitTruncation/byte_limit_exact_fit_is_not_truncation
+--- PASS: TestQueryLimitsAndExplicitTruncation (4.02s)
+    --- PASS: TestQueryLimitsAndExplicitTruncation/row_limit (0.79s)
+    --- PASS: TestQueryLimitsAndExplicitTruncation/row_limit_exact_fit_is_not_truncation (0.93s)
+    --- PASS: TestQueryLimitsAndExplicitTruncation/byte_limit_drops_the_crossing_row_whole (1.48s)
+    --- PASS: TestQueryLimitsAndExplicitTruncation/byte_limit_exact_fit_is_not_truncation (0.81s)
+=== RUN   TestQueryDeadlineInterruptsExecution
+--- PASS: TestQueryDeadlineInterruptsExecution (1.06s)
+=== RUN   TestQueryBusyFailsFastAndRecovers
+--- PASS: TestQueryBusyFailsFastAndRecovers (0.83s)
+=== RUN   TestQueryDeniedTables
+--- PASS: TestQueryDeniedTables (0.95s)
+=== RUN   TestQueryIsolationAcrossConnections
+--- PASS: TestQueryIsolationAcrossConnections (1.04s)
+=== RUN   TestQueryReaderPoolIsReadOnly
+--- PASS: TestQueryReaderPoolIsReadOnly (1.06s)
+=== RUN   TestOptionsDefaults
+--- PASS: TestOptionsDefaults (0.00s)
+=== RUN   TestQuerySettledViewExcludesFreshSessions
+--- PASS: TestQuerySettledViewExcludesFreshSessions (1.15s)
+=== RUN   TestServerServesSQLTool
+--- PASS: TestServerServesSQLTool (0.79s)
+=== RUN   TestServerReportsToolErrorsForBadSQL
+--- PASS: TestServerReportsToolErrorsForBadSQL (1.45s)
+=== RUN   TestServerProtocolCompatibility
+--- PASS: TestServerProtocolCompatibility (2.10s)
+=== RUN   TestSingleStatement
+--- PASS: TestSingleStatement (0.00s)
+=== RUN   TestAnnotateToolAppliesBatches
+--- PASS: TestAnnotateToolAppliesBatches (0.77s)
+=== RUN   TestAnnotateToolDescriptionPublishesContract
+--- PASS: TestAnnotateToolDescriptionPublishesContract (0.72s)
+=== RUN   TestAnnotateToolRejectsInvalidRequests
+--- PASS: TestAnnotateToolRejectsInvalidRequests (0.91s)
+=== RUN   TestAnnotateToolRejectsOversizedRequests
+--- PASS: TestAnnotateToolRejectsOversizedRequests (0.72s)
+=== RUN   TestAnnotateWriterIsolation
+--- PASS: TestAnnotateWriterIsolation (0.81s)
+=== RUN   TestAnnotateConcurrentToolCallsTakeLastCommit
+--- PASS: TestAnnotateConcurrentToolCallsTakeLastCommit (0.69s)
+=== RUN   TestAnnotateQueryToolSeesAnnotations
+--- PASS: TestAnnotateQueryToolSeesAnnotations (0.31s)
+=== RUN   TestAnnotateWithoutWriterID
+--- PASS: TestAnnotateWithoutWriterID (0.32s)
+=== RUN   TestAnnotateAsDerivesWriterFromCaller
+--- PASS: TestAnnotateAsDerivesWriterFromCaller (0.38s)
+=== RUN   TestQueryFixturePercentiles
+    query_bench_test.go:204: set OHYA_BENCH_FIXTURE=query to measure the one-million-event fixture
+--- SKIP: TestQueryFixturePercentiles (0.00s)
+=== RUN   TestRetrievalPerformanceCeiling
+    query_perf_test.go:82: fts-wide: 10 rows in 2.411374ms
+    query_perf_test.go:82: session-token-totals: 11 rows in 195.745µs
+    query_perf_test.go:82: annotation-paging: 100 rows in 311.998µs
+--- PASS: TestRetrievalPerformanceCeiling (4.86s)
+=== RUN   TestQuerySelectsAndSchemaInspection
+--- PASS: TestQuerySelectsAndSchemaInspection (0.88s)
+=== RUN   TestQueryDeniesAdversarialSQL
+--- PASS: TestQueryDeniesAdversarialSQL (1.02s)
+=== RUN   TestQueryOneStatementPerCall
+--- PASS: TestQueryOneStatementPerCall (1.26s)
+=== RUN   TestQueryLimitsAndExplicitTruncation
+=== RUN   TestQueryLimitsAndExplicitTruncation/row_limit
+=== RUN   TestQueryLimitsAndExplicitTruncation/row_limit_exact_fit_is_not_truncation
+=== RUN   TestQueryLimitsAndExplicitTruncation/byte_limit_drops_the_crossing_row_whole
+=== RUN   TestQueryLimitsAndExplicitTruncation/byte_limit_exact_fit_is_not_truncation
+--- PASS: TestQueryLimitsAndExplicitTruncation (4.29s)
+    --- PASS: TestQueryLimitsAndExplicitTruncation/row_limit (1.15s)
+    --- PASS: TestQueryLimitsAndExplicitTruncation/row_limit_exact_fit_is_not_truncation (0.74s)
+    --- PASS: TestQueryLimitsAndExplicitTruncation/byte_limit_drops_the_crossing_row_whole (1.56s)
+    --- PASS: TestQueryLimitsAndExplicitTruncation/byte_limit_exact_fit_is_not_truncation (0.83s)
+=== RUN   TestQueryDeadlineInterruptsExecution
+--- PASS: TestQueryDeadlineInterruptsExecution (1.08s)
+=== RUN   TestQueryBusyFailsFastAndRecovers
+--- PASS: TestQueryBusyFailsFastAndRecovers (0.75s)
+=== RUN   TestQueryDeniedTables
+--- PASS: TestQueryDeniedTables (0.73s)
+=== RUN   TestQueryIsolationAcrossConnections
+--- PASS: TestQueryIsolationAcrossConnections (0.69s)
+=== RUN   TestQueryReaderPoolIsReadOnly
+--- PASS: TestQueryReaderPoolIsReadOnly (0.71s)
+=== RUN   TestOptionsDefaults
+--- PASS: TestOptionsDefaults (0.00s)
+=== RUN   TestQuerySettledViewExcludesFreshSessions
+--- PASS: TestQuerySettledViewExcludesFreshSessions (0.98s)
+=== RUN   TestServerServesSQLTool
+--- PASS: TestServerServesSQLTool (0.57s)
+=== RUN   TestServerReportsToolErrorsForBadSQL
+--- PASS: TestServerReportsToolErrorsForBadSQL (1.15s)
+=== RUN   TestServerProtocolCompatibility
+--- PASS: TestServerProtocolCompatibility (2.00s)
+=== RUN   TestSingleStatement
+--- PASS: TestSingleStatement (0.00s)
+=== RUN   FuzzSingleStatement
+=== RUN   FuzzSingleStatement/seed#0
+=== RUN   FuzzSingleStatement/seed#1
+=== RUN   FuzzSingleStatement/seed#2
+=== RUN   FuzzSingleStatement/seed#3
+=== RUN   FuzzSingleStatement/seed#4
+=== RUN   FuzzSingleStatement/seed#5
+=== RUN   FuzzSingleStatement/seed#6
+=== RUN   FuzzSingleStatement/seed#7
+=== RUN   FuzzSingleStatement/seed#8
+=== RUN   FuzzSingleStatement/seed#9
+=== RUN   FuzzSingleStatement/seed#10
+=== RUN   FuzzSingleStatement/seed#11
+--- PASS: FuzzSingleStatement (0.00s)
+    --- PASS: FuzzSingleStatement/seed#0 (0.00s)
+    --- PASS: FuzzSingleStatement/seed#1 (0.00s)
+    --- PASS: FuzzSingleStatement/seed#2 (0.00s)
+    --- PASS: FuzzSingleStatement/seed#3 (0.00s)
+    --- PASS: FuzzSingleStatement/seed#4 (0.00s)
+    --- PASS: FuzzSingleStatement/seed#5 (0.00s)
+    --- PASS: FuzzSingleStatement/seed#6 (0.00s)
+    --- PASS: FuzzSingleStatement/seed#7 (0.00s)
+    --- PASS: FuzzSingleStatement/seed#8 (0.00s)
+    --- PASS: FuzzSingleStatement/seed#9 (0.00s)
+    --- PASS: FuzzSingleStatement/seed#10 (0.00s)
+    --- PASS: FuzzSingleStatement/seed#11 (0.00s)
+=== RUN   FuzzSingleStatement
+=== RUN   FuzzSingleStatement/seed#0
+=== RUN   FuzzSingleStatement/seed#1
+=== RUN   FuzzSingleStatement/seed#2
+=== RUN   FuzzSingleStatement/seed#3
+=== RUN   FuzzSingleStatement/seed#4
+=== RUN   FuzzSingleStatement/seed#5
+=== RUN   FuzzSingleStatement/seed#6
+=== RUN   FuzzSingleStatement/seed#7
+=== RUN   FuzzSingleStatement/seed#8
+=== RUN   FuzzSingleStatement/seed#9
+=== RUN   FuzzSingleStatement/seed#10
+=== RUN   FuzzSingleStatement/seed#11
+--- PASS: FuzzSingleStatement (0.00s)
+    --- PASS: FuzzSingleStatement/seed#0 (0.00s)
+    --- PASS: FuzzSingleStatement/seed#1 (0.00s)
+    --- PASS: FuzzSingleStatement/seed#2 (0.00s)
+    --- PASS: FuzzSingleStatement/seed#3 (0.00s)
+    --- PASS: FuzzSingleStatement/seed#4 (0.00s)
+    --- PASS: FuzzSingleStatement/seed#5 (0.00s)
+    --- PASS: FuzzSingleStatement/seed#6 (0.00s)
+    --- PASS: FuzzSingleStatement/seed#7 (0.00s)
+    --- PASS: FuzzSingleStatement/seed#8 (0.00s)
+    --- PASS: FuzzSingleStatement/seed#9 (0.00s)
+    --- PASS: FuzzSingleStatement/seed#10 (0.00s)
+    --- PASS: FuzzSingleStatement/seed#11 (0.00s)
+PASS
+ok  	github.com/nibzard/ohya/internal/mcpserver	54.105s
+=== RUN   TestPairingEnrollsAndServes
+--- PASS: TestPairingEnrollsAndServes (1.03s)
+=== RUN   TestSpoofedDeviceRejected
+--- PASS: TestSpoofedDeviceRejected (0.95s)
+=== RUN   TestRevocationCheckedOnEveryRequest
+--- PASS: TestRevocationCheckedOnEveryRequest (0.88s)
+=== RUN   TestRevocationCancelsInFlightRequest
+--- PASS: TestRevocationCancelsInFlightRequest (1.42s)
+=== RUN   TestSilentStrangerTimesOut
+--- PASS: TestSilentStrangerTimesOut (1.07s)
+=== RUN   TestRemoteQueriesThroughPairing
+--- PASS: TestRemoteQueriesThroughPairing (0.87s)
+=== RUN   TestRevocationCancelsInFlightQuery
+--- PASS: TestRevocationCancelsInFlightQuery (1.46s)
+=== RUN   TestIssueAndConsumeRegistersDevice
+--- PASS: TestIssueAndConsumeRegistersDevice (0.43s)
+=== RUN   TestInvitationSingleUse
+--- PASS: TestInvitationSingleUse (0.79s)
+=== RUN   TestConsumeRaceSingleUse
+--- PASS: TestConsumeRaceSingleUse (0.97s)
+=== RUN   TestInvitationExpiry
+--- PASS: TestInvitationExpiry (0.38s)
+=== RUN   TestRevocationIsFinal
+--- PASS: TestRevocationIsFinal (0.76s)
+=== RUN   TestActiveDeviceCannotConsumeSecondInvitation
+--- PASS: TestActiveDeviceCannotConsumeSecondInvitation (0.38s)
+=== RUN   TestUnknownInputs
+--- PASS: TestUnknownInputs (0.26s)
+=== RUN   TestProtectedStore
+--- PASS: TestProtectedStore (0.30s)
+=== RUN   TestPersistenceAcrossReopen
+--- PASS: TestPersistenceAcrossReopen (0.31s)
+=== RUN   TestWatchRevocations
+--- PASS: TestWatchRevocations (0.57s)
+=== RUN   TestSchemaVersionRefusesUnknownDatabase
+--- PASS: TestSchemaVersionRefusesUnknownDatabase (0.44s)
+=== RUN   TestPairingEnrollsAndServes
+--- PASS: TestPairingEnrollsAndServes (1.30s)
+=== RUN   TestSpoofedDeviceRejected
+--- PASS: TestSpoofedDeviceRejected (0.94s)
+=== RUN   TestRevocationCheckedOnEveryRequest
+--- PASS: TestRevocationCheckedOnEveryRequest (0.92s)
+=== RUN   TestRevocationCancelsInFlightRequest
+--- PASS: TestRevocationCancelsInFlightRequest (1.38s)
+=== RUN   TestSilentStrangerTimesOut
+--- PASS: TestSilentStrangerTimesOut (1.16s)
+=== RUN   TestRemoteQueriesThroughPairing
+--- PASS: TestRemoteQueriesThroughPairing (1.26s)
+=== RUN   TestRevocationCancelsInFlightQuery
+--- PASS: TestRevocationCancelsInFlightQuery (1.64s)
+=== RUN   TestIssueAndConsumeRegistersDevice
+--- PASS: TestIssueAndConsumeRegistersDevice (0.39s)
+=== RUN   TestInvitationSingleUse
+--- PASS: TestInvitationSingleUse (0.54s)
+=== RUN   TestConsumeRaceSingleUse
+--- PASS: TestConsumeRaceSingleUse (0.49s)
+=== RUN   TestInvitationExpiry
+--- PASS: TestInvitationExpiry (0.31s)
+=== RUN   TestRevocationIsFinal
+--- PASS: TestRevocationIsFinal (0.43s)
+=== RUN   TestActiveDeviceCannotConsumeSecondInvitation
+--- PASS: TestActiveDeviceCannotConsumeSecondInvitation (0.49s)
+=== RUN   TestUnknownInputs
+--- PASS: TestUnknownInputs (0.27s)
+=== RUN   TestProtectedStore
+--- PASS: TestProtectedStore (0.31s)
+=== RUN   TestPersistenceAcrossReopen
+--- PASS: TestPersistenceAcrossReopen (0.28s)
+=== RUN   TestWatchRevocations
+--- PASS: TestWatchRevocations (0.60s)
+=== RUN   TestSchemaVersionRefusesUnknownDatabase
+--- PASS: TestSchemaVersionRefusesUnknownDatabase (0.40s)
+PASS
+ok  	github.com/nibzard/ohya/internal/registry	26.415s
