@@ -1099,3 +1099,25 @@ How to use this file:
   `ohya doctor`, and `sql` tool output over the Claude Code, Codex, and Pi
   `main-session.jsonl` fixtures plus `claude-code/subagent-session.jsonl` and
   `pi/anthropic-session.jsonl`; regenerate it when that output changes.
+
+- 2026-11-15, local trial on macOS 27.2.1 arm64 (real data, throwaway DB):
+  - Native transport evidence for T046: `TestFreshnessSmoke` and
+    `TestHubRestartReconnect` (serve, join, live appends, hub restart) pass
+    on this Mac (`go test ./cmd/ohya`, 145 s). CI still skips them on darwin.
+    One machine; not yet a CI result.
+  - `ohya setup` blocks Claude Code when `~/.claude/settings.json` is a
+    symlink (stow-style dotfiles): `readRegular` refuses symlinks for the
+    read-only policy check, and one blocked client stops the service, Codex,
+    and Pi setup too. Claude Code itself follows the symlink. Open decision:
+    follow symlinks for read-only policy files; keep `O_NOFOLLOW` for written
+    files.
+  - Ingest of the full local history (3,292 files, 4.2 GB): 876,852 events in
+    182 s, 130 MB peak RSS, 5.1 GB database (4.1 GB raw_json). 104 sources
+    (3%) stopped on the 1 MiB `--max-record-bytes` default: oversized Codex
+    and Claude records, median 1.7 MiB, max above 8 MiB. Rerun with 8 MiB
+    resumed 100 of them (87,357 events, 24 s). The default is too small for
+    real Codex data.
+  - Claude Code deletes transcripts after `cleanupPeriodDays` (default 30),
+    so continuous ingestion is the only copy of older Claude history.
+  - FTS queries on 964k events return in about 0.25 s including process
+    start.
