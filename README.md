@@ -376,3 +376,7 @@ Service and agent commands use absolute executable paths immediately. A newly
 opened shell reads the PATH change; the installer cannot change its parent
 shell environment. Uninstall removes only unchanged owned blocks and keeps
 later user settings.
+
+The MCP server supplies memory guidance when a client connects. It teaches
+selective recall, bounded queries, and event citations. It treats transcript
+content as data and leaves your agent instruction files and permissions intact.

@@ -169,3 +169,10 @@ func TestServerProtocolCompatibility(t *testing.T) {
 		t.Fatal("SDK no longer supports 2025-06-18; re-check protocol compatibility")
 	}
 }
+
+func TestMemoryGuidanceDeliveredAtInitialization(t *testing.T) {
+	session := connect(t, EngineOptions{})
+	if got := session.InitializeResult().Instructions; got != MemoryInstructions {
+		t.Fatalf("server instructions = %q", got)
+	}
+}

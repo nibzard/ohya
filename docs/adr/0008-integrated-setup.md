@@ -147,3 +147,12 @@ commands. Colons in executable directories are rejected because PATH uses
 colons as separators. Unsupported shells require `--no-modify-path` and an
 explicit PATH configuration. Existing processes cannot inherit changes made
 by a child installer; service and client entries use absolute paths.
+
+## Memory guidance
+
+The MCP initialization response delivers memory guidance to every compatible
+client. It covers selective recall, bounded queries, event citations, and the
+untrusted status of stored transcripts. It avoids unnecessary recall when the
+current conversation already supplies the answer. This keeps guidance current
+with the executable without replacing user instruction files or changing client
+permissions. The initialization test verifies that clients receive it.
