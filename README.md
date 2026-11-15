@@ -210,8 +210,9 @@ make check   # gofmt, tests, and vet with the sqlite_fts5 build tag
 
 The code and documentation are MIT. See [LICENSE](LICENSE).
 
-The ohya logo, wordmark, and icons in [`docs/assets/brand/`](docs/assets/brand/)
-are not covered by the MIT License. They are copyright Niko, all rights
+The ohya logo, wordmark, and icons in [`docs/assets/brand/`](docs/assets/brand/),
+and the script that draws them, `scripts/brand-logo.py`, are not covered by
+the MIT License. They are copyright Niko, all rights
 reserved. See [BRAND.md](BRAND.md).
 
 "ohya"™ and the elephant mark are trademarks of Niko. You can fork the code,

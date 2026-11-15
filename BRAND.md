@@ -20,6 +20,7 @@ All files are in [`docs/assets/brand/`](docs/assets/brand/).
 | `icon.svg` | Mark on the purple tile, 32 px and larger |
 | `icon-small.svg` | Mark on the purple tile with a heavier line, smaller than 32 px |
 | `icon-512.png` | Avatar for GitHub and other services |
+| `social-preview.svg` | Source of the social preview |
 | `social-preview.png` | Repository social preview, 1280 × 640 |
 
 Use the logo (mark and wordmark) when you have space. Use the icon (mark on
@@ -29,6 +30,16 @@ At small sizes, the tile and its color identify ohya.
 On GitHub, select the light or dark logo with `<picture>`. GitHub does not
 apply its theme to `prefers-color-scheme` inside an SVG file. The README
 header shows the pattern.
+
+## Regenerate the files
+
+`scripts/brand-logo.py` draws all brand files. Change the script, not the
+SVG files. Then run:
+
+```sh
+python3 scripts/brand-logo.py --png   # needs rsvg-convert for the PNG files
+python3 scripts/test_brand_logo.py    # the SVG files must match the script
+```
 
 ## Colors
 
@@ -60,8 +71,8 @@ In running text, write "ohya" in lowercase.
 ## License
 
 The ohya logo, wordmark, icons, and social preview are not open source. They
-are copyright Niko, all rights reserved. The MIT License of this repository
-does not apply to them. The name and the marks are also trademarks; see
+are copyright Niko, all rights reserved. This includes `scripts/brand-logo.py`,
+which draws them. The MIT License of this repository does not apply to them. The name and the marks are also trademarks; see
 [TRADEMARKS.md](TRADEMARKS.md). See
 [`docs/assets/brand/LICENSE`](docs/assets/brand/LICENSE). To use them, ask
 for written permission.

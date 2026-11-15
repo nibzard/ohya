@@ -13,6 +13,7 @@ jobs:
           distribution: temurin
           java-version: 21
       - run: make check
+      - run: python3 scripts/test_brand_logo.py
       - run: make build
       - run: make tla
 
