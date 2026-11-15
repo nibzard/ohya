@@ -1,0 +1,1 @@
+Setup retains a stable invocation link only when it resolves to the running executable. Uninstall removes only an unchanged standalone executable after integrations are removed; manual/package-manager files and edited binaries are preserved. Recovery copies and advisory lock files stay intact. Ownership lifecycle tests, path tests, focused CLI tests, and full vet pass.
