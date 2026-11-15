@@ -10,7 +10,7 @@ purple ear is the only color in the mark.
 
 ## Files
 
-All files are in [`docs/assets/`](docs/assets/).
+All files are in [`docs/assets/brand/`](docs/assets/brand/).
 
 | File | Use |
 | --- | --- |
@@ -55,6 +55,14 @@ In running text, write "ohya" in lowercase.
   makes it clear at small sizes.
 - Do not put the light logo on a dark background or the dark logo on a light
   background.
+
+## License
+
+The ohya logo, wordmark, icons, and social preview are not open source. They
+are copyright Niko, all rights reserved. The MIT License of this repository
+does not apply to them. See
+[`docs/assets/brand/LICENSE`](docs/assets/brand/LICENSE). To use them, ask
+for written permission.
 
 ## Manual setup
 

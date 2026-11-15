@@ -2,8 +2,8 @@
 
 <h1>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
-    <img alt="ohya" src="docs/assets/logo-light.svg" width="320">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/brand/logo-dark.svg">
+    <img alt="ohya" src="docs/assets/brand/logo-light.svg" width="320">
   </picture>
 </h1>
 
@@ -207,4 +207,8 @@ make check   # gofmt, tests, and vet with the sqlite_fts5 build tag
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+The code and documentation are MIT. See [LICENSE](LICENSE).
+
+The ohya logo, wordmark, and icons in [`docs/assets/brand/`](docs/assets/brand/)
+are not covered by the MIT License. They are copyright Niko, all rights
+reserved. See [BRAND.md](BRAND.md).
