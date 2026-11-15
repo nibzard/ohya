@@ -1,0 +1,5 @@
+Docs only. Stat tables measured by OHYA_MIX_VERIFY=1
+TestNamedFixtureStats on 2026-11-15 (reference VM): import
+fixture 137.0 MiB / 40,020 events / 191 files, ingests end to
+end in 9.8 s via three roots; query fixture 746.4 MiB / 969,004
+events / 4,149 files, 21 s generation.
