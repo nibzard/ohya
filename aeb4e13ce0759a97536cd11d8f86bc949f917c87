@@ -1,0 +1,1 @@
+The join command now checks the returned Device ID through the shared pairing exchange.
