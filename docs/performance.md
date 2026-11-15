@@ -214,6 +214,7 @@ end-to-end tests. Knobs, all optional environment variables:
 A run of roughly 100 samples is a smoke check only. Numbers used for p99
 claims need at least 1,000 samples and repeated runs (backlog T070); the
 in-test run exists to prove the harness and the stack, not to set baselines.
+The workload-matrix runs below follow that rule.
 
 Smoke result, 2026-11-15, reference machine, default configuration
 (2 s upload interval, 100 samples, 200 ms append period, 100 ms polling,
@@ -225,6 +226,240 @@ consumes most of the freshness budget before parsing, transport, and commit.
 The first exchange through the remote session cost 2 ms because the shared
 device node was already up; a cold first dial costs seconds (see the serve
 end-to-end notes in `NOTES.md`).
+
+## Workload matrix baselines
+
+Measured 2026-11-15 (T070) per the performance plan's Phase 0 step 2: the
+four workloads of the measurement contract on the direct local-tailnet path,
+each combining freshness with every guardrail so an import improvement cannot
+hide a search regression. The DERP relay leg is not measured here; it stays
+with backlog T065.
+
+### Environment
+
+| Item | Value |
+|---|---|
+| Commit | measurement code at `f8fe1fb`, `2b3d5a4`, `e1e327a` (worktree of `1fa94e2` + these) |
+| Date | 2026-11-15 |
+| Hardware | shared Linux VM, 12th-generation laptop CPU, 8 cores, 12 GiB RAM |
+| Storage | `/dev/sda1`, ext4, ~195 GB, about half full, serving other tenants |
+| Operating system | Linux 6.8.0-147-generic (x86-64) |
+| Go | 1.27.3, CGO build |
+| SQLite | 3.54.1 (bundled with mattn/go-sqlite3 v1.14.53), WAL, `synchronous = FULL` |
+| Transport path | direct local tailnet: serve, join, and observer on one host through the embedded coordination plane |
+| Polling intervals | uploader passes 2 s (shipped default); observer 100 ms; resource sampler 250 ms (200 ms in the import workload); import drain poll 500 ms; restart-marker poll 100 ms |
+| Batch limits | sync batches 8 MiB / 65,536 records; record size limit 1 MiB (ADR 0004); sql tool 5 s deadline, 500 rows, 256 KiB |
+| Cache state | OS page cache warm: same-host processes, repeated runs on the same fixtures; fsync-bound numbers still swing with tenant load |
+
+### Workload 1: steady appends on an idle hub
+
+Configuration: 1,000 marker appends at 200 ms (±10% jitter, random phase),
+one joined device with its fixture session, 2 s upload interval, 100 ms
+observer polling, 30 s per-sample budget. Two runs, seeds 1001 and 1002
+(`OHYA_FRESH_SAMPLES=1000 OHYA_FRESH_SEED=<seed> go test -tags sqlite_fts5
+-run TestFreshnessSmoke -v ./cmd/ohya`).
+
+| Metric | Run A (seed 1001) | Run B (seed 1002) |
+|---|---|---|
+| Freshness lag p50 | 1.079 s | 1.061 s |
+| Freshness lag p95 | 1.945 s | 1.999 s |
+| Freshness lag p99 | 2.058 s | 2.070 s |
+| Freshness lag max | 2.115 s | 2.149 s |
+| Visible / timeouts / outstanding | 1000 / 0 / 0 | 1000 / 0 / 0 |
+| Poll queries (errors) | 2010 (0) | 1994 (0) |
+| Marker query duration p50 / p95 / max | 1.38 / 1.76 / 2.94 ms | 1.39 / 1.79 / 2.92 ms |
+| Hub idle RSS over 5 s (mean = max) | 65 MiB | 65 MiB |
+| Hub idle CPU over 5 s | 0.00–0.01 s | 0.00–0.01 s |
+| Hub peak RSS (serve, whole run) | 72 MiB | 70 MiB |
+| Hub CPU (serve, whole run) | 2.31 s | 2.31 s |
+| Uploader peak RSS (join) | 59 MiB | 59 MiB |
+| Uploader CPU | 1.43 s | 1.44 s |
+| Hub database size | 1,016 events, under 1 MiB | same |
+| Peak WAL size | 3 MiB | 3 MiB |
+
+The distribution sits just under the 2 s upload interval: the pass interval,
+not the write path, spends the freshness budget, matching the T068 smoke
+observation at 100 samples.
+
+### Workload 2: live appends while another source uploads a backlog
+
+Workload 1 plus a second source on the same device receiving synthetic
+records (~355 B each) at a fixed 1.5 MB/s for the whole window. Two runs,
+seeds 1003 and 1004 (`OHYA_FRESH_SAMPLES=1000 OHYA_FRESH_BACKLOG_BPS=1500000
+OHYA_FRESH_SEED=<seed>`, same test).
+
+| Metric | Run A (seed 1003) | Run B (seed 1004) |
+|---|---|---|
+| Freshness lag p50 | 1.830 s | 1.868 s |
+| Freshness lag p95 | 3.827 s | 3.785 s |
+| Freshness lag p99 | 4.401 s | 4.174 s |
+| Freshness lag max | 5.218 s | 4.548 s |
+| Visible / timeouts / outstanding | 1000 / 0 / 0 | 1000 / 0 / 0 |
+| Poll queries (errors) | 2013 (0) | 2012 (0) |
+| Marker query duration p50 / p95 / max | 5.5 / 8.8 / 13.6 ms | 5.6 / 8.8 / 15.2 ms |
+| Backlog written / acknowledged / outstanding at drain | 299.4 / 293.4 / 6.0 MB | 299.3 / 294.2 / 5.1 MB |
+| Hub events at drain | 1,041,608 | 1,044,268 |
+| Hub peak RSS | 140 MiB | 133 MiB |
+| Hub CPU over ~230 s window | 87.5 s | 88.4 s |
+| Uploader peak RSS | 90 MiB | 95 MiB |
+| Uploader CPU | 3.19 s | 3.14 s |
+| Hub database size | 910 MiB | 910 MiB |
+| Peak WAL size | 30 MiB | 32 MiB |
+
+The sustained commit stream roughly doubles the freshness budget: p50 rises
+from ~1.07 s to ~1.85 s and p99 from ~2.06 s to ~4.2–4.4 s. The hub keeps up
+with the 1.5 MB/s backlog (about 6 MB outstanding at drain, one to two
+passes), but the marker session's small batches now queue behind multi-megabyte
+backlog batches inside the same 2 s pass. The sustained drain of ~355 B
+records ran at about 1.5 MB/s (≈4,200 events/s); comparing that per byte with
+the 3.4 KB-record import of workload 4 is confounded by the fsync swing, which
+moved that import between 0.3 and 5.6 MiB/s across its runs.
+
+Peak WAL under sustained concurrent write and read reached 30–32 MiB — well
+above the 4–6 MiB observed during a pure import. Between auto-checkpoints the
+writer appends while scans of the growing `events` table hold read snapshots;
+the WAL carries every commit until a checkpoint can complete. Plan WAL
+headroom accordingly: tens of MiB, not the single-digit import figure.
+
+### Workload 3: multiple devices uploading while fixed search queries run
+
+Workload 1 plus two more devices, each joining at window start with its own
+192 MiB-class fixture corpus (claude-code shape, seeds 701/702; 288.4 MB and
+282.2 MB on disk), uploading concurrently with the live-append device, while
+a second remote sql session runs the fixed BM25 workload (the six patterns of
+`BenchmarkQuery`) every second. Extra joins get a 40 s pairing lead — a fresh
+tsnet node needs about 20–25 s for its first dial. Two runs, seeds 1005 and
+1006 (`OHYA_FRESH_SAMPLES=1000 OHYA_FRESH_DEVICES=3
+OHYA_FRESH_DEVICE_MIB=192 OHYA_FRESH_QUERIES_EVERY=1s
+OHYA_FRESH_PAIR_LEAD=40s OHYA_FRESH_SEED=<seed>`, same test).
+
+| Metric | Run A (seed 1005) | Run B (seed 1006) |
+|---|---|---|
+| Freshness lag p50 | 1.204 s | 1.216 s |
+| Freshness lag p95 | 2.206 s | 2.222 s |
+| Freshness lag p99 | 2.516 s | 2.673 s |
+| Freshness lag max | 3.071 s | 3.080 s |
+| Visible / timeouts / outstanding | 1000 / 0 / 0 | 1000 / 0 / 0 |
+| Marker query duration p50 / p95 / max | 1.8 / 15.4 / 171.5 ms | 2.1 / 14.6 / 190.5 ms |
+| Extra devices uploaded / outstanding at drain | 288.4 + 282.2 MB / 0 | 288.4 + 282.2 MB / 0 |
+| Hub events at drain | 168,002 | ~168 k |
+| Loaded FTS-selective p95 (max) | 4 ms (5) | 4 ms (5) |
+| Loaded FTS-wide p95 (max) | 111 ms (116) | 110 ms (130) |
+| Loaded token totals p95 (max) | 38 ms (42) | 38 ms (44) |
+| Loaded recent sessions p95 (max) | 3 ms (4) | 3 ms (4) |
+| Loaded session range p95 (max) | 7 ms (8) | 7 ms (9) |
+| Loaded annotation paging p95 (max) | 2 ms (3) | 2 ms (3) |
+| Loaded query errors / deadline timeouts | 0 / 0 (n=181) | 0 / 0 (n=184) |
+| Hub idle RSS / CPU | 66 MiB / 0.02 s | 66 MiB / 0.02 s |
+| Hub peak RSS | 152 MiB | 156 MiB |
+| Hub CPU (whole run) | 72.35 s | 72.08 s |
+| Uploader peaks (join / join2 / join3 RSS) | 63 / 81 / 79 MiB | 61 / 80 / 76 MiB |
+| Hub database size | 1312 MiB | 1312 MiB |
+| Peak WAL size | 27 MiB | 27 MiB |
+
+Three devices drained 570 MB into the hub at roughly 2 MB/s aggregate while
+freshness stayed near the idle distribution (p99 2.5–2.7 s against 2.06 s
+idle): the marker session is one small source among many, and its batches
+interleave with the large ones. The concurrent search workload answered every
+query inside the 5 s deadline with p95 at 111 ms for the wide BM25 match over
+168 k events; the marker poller itself saw p95 15 ms with a 171–190 ms max
+when a commit storm held the write lock. No timeouts.
+
+### Workload 4: initial import, replay, restart
+
+Fresh hub, fresh device importing the T069 import fixture (191 files,
+40,020 events, 137.0 MiB of records at real sizes, all three agents) through
+`ohya join`, then a clean device restart and a clean hub restart.
+`OHYA_WORKLOAD_IMPORT=1 go test -tags sqlite_fts5 -run TestWorkloadImport -v
+./cmd/ohya`. Three runs; visibility of restart markers is observed on the
+events table through a read-only connection (the sql-tool path adds about
+2 ms, see the freshness workloads).
+
+| Metric | Run A | Run B | Run C |
+|---|---|---|---|
+| Time-to-memory (join start to last event, 500 ms poll) | 24.576 s | 7m26.173 s | 4m14.925 s |
+| Import rate | 5.57 MiB/s | 0.31 MiB/s | 0.54 MiB/s |
+| Hub peak RSS / CPU | 91 MiB / 10.08 s | 93 MiB / 12.19 s | 89 MiB / 11.02 s |
+| Uploader peak RSS / CPU | 73 MiB / 1.60 s | 76 MiB / 3.29 s | 73 MiB / 2.05 s |
+| Hub database size after import | 275 MiB | 277 MiB | 276 MiB |
+| Peak WAL size | 14 MiB | 12 MiB | 11 MiB |
+| Device restart, recovery to visibility | 6.636 s | 20.149 s | 14.595 s |
+| Hub restart, recovery to visibility | no recovery ≤ 3m | no recovery ≤ 3m | no recovery ≤ 3m |
+
+- **Time-to-memory swings with disk contention**, as every fsync-bound number
+  in this document does: the same fixture imported in 24.6 s when the shared
+  disk was quiet (5.57 MiB/s) and in 4–7.5 minutes under tenant load. CPU
+  stays 10–15 s in every run — the path waits on fsync, not compute. The
+  proposal budget (10 minutes for a 3 GB corpus) extrapolates to 9–165
+  minutes at these rates: it holds only on a quiet disk.
+- **Replay is idempotent**: after both restarts the hub holds exactly 40,020
+  events plus the delivered restart markers (40,021 when the hub-restart
+  marker never landed); no duplicates, no losses. The device-restart pass
+  re-probes all 191 sources and delivers one appended record in 6.6–20.1 s.
+- **Hub restart exposes a recovery regression** (consistent across every run,
+  2026-11-15): a device whose sync connection was established when the hub
+  process stopped never re-uploads — its dials time out at the 60 s deadline
+  in a backoff loop for at least three minutes. A device that had not yet
+  exchanged with the hub connects to the restarted hub in about 20 s, and
+  restarting only the join process reconnects it in about 25 s while the
+  restarted hub stays healthy. Separately, the restarted hub itself
+  intermittently dies with `panic: ipnlocal: watchdog timeout` in
+  tailscale.com v1.104.4 (1 of 3 manual restarts). The fault sits in the
+  transport layer's reconnection after a peer restart, not in sync or
+  storage; it is tracked as the `hub-restart-reconnect` follow-up finding
+  from this matrix, with the manual reproduction commands in `NOTES.md`.
+
+### Query latency at one million events
+
+`BenchmarkQuery` seeded from the T069 query fixture under
+`OHYA_BENCH_FIXTURE=query` (seed 7, the canonical fixture: 969,004 events,
+4,149 sources, 746.4 MiB of records); `TestQueryFixturePercentiles` reports
+the percentiles the benchmark mean cannot (150 samples per pattern after 10
+warmup, none timed out):
+
+```sh
+OHYA_BENCH_FIXTURE=query go test -tags sqlite_fts5 -run TestQueryFixturePercentiles \
+    -bench BenchmarkQuery -benchtime 20x -benchmem -v ./internal/mcpserver
+```
+
+| Pattern | p50 | p95 | p99 | max | ns/op (bench mean, 20x) |
+|---|---|---|---|---|---|
+| FTS selective term, ranked, LIMIT 10 | 2 ms | 2 ms | 2 ms | 2 ms | 2.16 ms |
+| FTS wide term, ranked, LIMIT 10 | 190 ms | 193 ms | 193 ms | 201 ms | 192.3 ms |
+| Session token totals (all 1,901 sessions) | 8 ms | 10 ms | 13 ms | 20 ms | 8.80 ms |
+| Recent sessions (indexed, LIMIT 20) | < 1 ms | < 1 ms | < 1 ms | < 1 ms | 78 µs |
+| One session's event range (LIMIT 500) | 1 ms | 1 ms | 1 ms | 2 ms | 0.61 ms |
+| Annotation paging (NOT EXISTS, LIMIT 100) | < 1 ms | < 1 ms | 1 ms | 1 ms | 130 µs |
+
+Seeding the fixture hub (generation plus 4,149 source ingests) dominates the
+run at roughly five minutes; queries themselves answer in seconds of wall
+time. The wide BM25 match is the only pattern above the proposed 100 ms p95
+budget, and it is the honest number for this fixture: the compact fixture
+divides every record's text by eight, so the wide term matches about one
+eighth of the corpus. A real-corpus hub at one million full-size events
+carries roughly eight times the postings and would land near 1.5 s per wide
+match — the same 0.5–1 ms per 1,000 matching events scaling already recorded
+for the smaller hubs. Selective search, listings, aggregation and paging stay
+at milliseconds and are flat in volume.
+
+### Guardrail verdicts against the proposed thresholds
+
+The perf plan's Phase 0 thresholds were hypotheses to validate; the matrix
+results:
+
+| Proposed threshold | Measured | Verdict |
+|---|---|---|
+| Freshness p95 < 2 s, steady local tailnet | 1.945–1.999 s (W1, 2×1,000 samples) | Pass, ~50 ms margin; the 2 s upload interval consumes the budget |
+| Time-to-memory < 10 min for a 3 GB corpus | 24.6–447 s for 137 MiB (W4, 3 runs) → 9–165 min extrapolated | Pass on a quiet disk, fails under disk contention |
+| Query p95 < 100 ms at one million events | 193 ms wide / ≤ 10 ms everything else | Fails for the wide BM25 term; every other pattern passes |
+| Hub idle RSS < 150 MB | 65–66 MiB (every workload) | Pass |
+
+Missed targets carry direct Phase 1 evidence: freshness is bounded by the
+2 s upload pass interval (the plan's "polling and discovery" candidate), and
+wide-query latency is bounded by BM25 postings volume (the plan's "FTS5
+merge policy" and "settled queries" candidates). Selecting an optimization
+stays a separate decision on this recorded baseline; the hub-restart
+recovery regression above is a correctness fix, not a performance choice.
 
 ## Ingestion
 

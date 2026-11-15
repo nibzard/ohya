@@ -871,3 +871,51 @@ How to use this file:
   Never delete the lock file. Stop older binaries before upgrading: they
   do not acquire it. Keep device state on a local filesystem. The regression
   test covers live appends with two MCP clients and transfer after owner death.
+
+- Workload matrix baselines (2026-11-15, T070, docs/performance.md "Workload
+  matrix baselines"): all four plan workloads measured on the direct
+  local-tailnet path with 1,000-sample doubled runs; raw logs under
+  `perf/t070/` (gitignored). Headlines: steady freshness p50 1.06-1.08 s /
+  p99 2.06-2.07 s (the 2 s upload pass spends the budget); a 1.5 MB/s
+  backlog on a second source doubles it (p99 4.2-4.4 s); three devices
+  draining 570 MB barely move it (p99 2.5-2.7 s) while loaded wide FTS p95
+  is 110-111 ms at 168k events; initial import 137 MiB = 24.6-447 s
+  (fsync-bound swing, CPU constant 10-15 s); FTS-wide p95 at 969k events
+  is 193 ms (fails the proposed 100 ms budget; compact fixture matches ~1/8
+  of events, a full-size 1M hub lands ~1.5 s); hub idle RSS 65-66 MiB; peak
+  WAL 27-32 MiB under sustained mixed read/write — well above the 4-6 MiB
+  import-only figure, plan headroom accordingly. Guardrail verdict table in
+  the doc.
+- Hub-restart recovery regression, found by the T070 matrix (2026-11-15,
+  follow-up key `hub-restart-reconnect`): when the hub process stops and
+  restarts, a device whose sync connection was established NEVER re-uploads
+  — `tailcat: dial ohya-hub.tail.ohya:9027: context deadline exceeded`
+  repeats past the 60 s dial deadline for minutes (reproduced 5/5 across
+  harness runs and manual repros). A device that had not yet exchanged
+  connects to the restarted hub in ~20 s, and restarting only the join
+  process reconnects in ~25 s — stale peer state in the long-lived device
+  node, plus an intermittent hub-side `panic: ipnlocal: watchdog timeout`
+  (tailscale.com v1.104.4, 1 of 3 manual restarts). Repro sketch: serve +
+  join + fixture, wait for events to land, SIGTERM serve, restart serve
+  (ready again), append a marker — it never arrives; kill/restart only the
+  join — it arrives in ~25 s. Device restart (clean SIGTERM of join) recovers
+  in 6.6-20.1 s including the 191-source re-probe. Fix belongs in
+  internal/transport/tailcat reconnection, not sync or storage.
+- T070 harness facts worth keeping: the sql tool returns JSON numbers, which
+  decode as float64 — `fmt.Sprint` renders ids ≥ 1e6 as `1.012834e+06`, so
+  any harness that parses ids from tool output must `CAST(id AS TEXT)` in
+  the query (the bug poisoned every later poll and looked like a hub
+  outage). A fresh device node's first dial to the hub costs ~20-25 s
+  (tsnet path discovery), so the multi-device workload needs
+  `OHYA_FRESH_PAIR_LEAD` before appends start. `fixgen` corpora size at
+  sessions × ~3 MiB (main 2 MiB + two quarter-size subagents), so
+  `OHYA_FRESH_DEVICE_MIB=192` yields ~285 MB per extra device.
+- tla2tools 1.8.0 release asset replaced upstream (2026-11-15): GitHub now
+  serves a rebuild of the same tag. Both jars have an identical file
+  listing and builder metadata (Apache Ant 1.10.12, Eclipse Adoptium
+  17.0.21+9, Built-By runner); only the embedded Build-TimeStamp differs
+  (old 2026-11-06T22:23:57Z, new 2026-11-15T00:21:46Z). The old sha256 pin
+  in tla/run-tlc.sh therefore failed every fresh download. Repinned to
+  7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f after
+  the comparison and a green run of every model. Upstream can rebuild the
+  tag again; if this recurs, pin an immutable artifact or vendor the jar.
