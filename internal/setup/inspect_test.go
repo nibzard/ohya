@@ -42,6 +42,57 @@ func TestInspectOwnedIntegrationsDoesNotWrite(t *testing.T) {
 	}
 }
 
+const launchAgentPrintRunning = `gui/501/com.nibzard.ohya = {
+	active count = 1
+	path = /Users/example/Library/LaunchAgents/com.nibzard.ohya.plist
+	type = LaunchAgent
+	state = running
+
+	program = /Users/example/.local/bin/ohya
+	arguments = {
+		/Users/example/.local/bin/ohya
+		ingest
+	}
+
+	default environment = {
+		PATH => /usr/bin:/bin:/usr/sbin:/sbin
+	}
+
+	domain = gui/501 [100016]
+	runs = 2
+	pid = 4242
+	last terminating signal = Terminated: 15
+
+	resource coalition = {
+		ID = 17528
+		type = resource
+		state = active
+		active count = 1
+		name = com.nibzard.ohya
+	}
+
+	jetsam coalition = {
+		ID = 17529
+		type = jetsam
+		state = active
+		active count = 1
+		name = com.nibzard.ohya
+	}
+}
+`
+
+const launchAgentPrintWaiting = `gui/501/com.nibzard.ohya = {
+	state = waiting
+	pid = -
+
+	resource coalition = {
+		ID = 17528
+		type = resource
+		state = active
+	}
+}
+`
+
 func TestServiceReadinessRequiresRunningProcess(t *testing.T) {
 	cases := []struct {
 		platform, output string
@@ -50,9 +101,11 @@ func TestServiceReadinessRequiresRunningProcess(t *testing.T) {
 		{"linux", "ActiveState=active\nSubState=running\nMainPID=123\n", true},
 		{"linux", "ActiveState=active\nSubState=exited\nMainPID=0\n", false},
 		{"linux", "ActiveState=activating\nSubState=auto-restart\nMainPID=123\n", false},
-		{"darwin", "state = running\n pid = 123\n", true},
-		{"darwin", "state = waiting\n pid = 123\n", false},
-		{"darwin", "state = running\n", false},
+		{"darwin", "gui/501/com.nibzard.ohya = {\n\tstate = running\n\tpid = 123\n}\n", true},
+		{"darwin", "gui/501/com.nibzard.ohya = {\n\tstate = waiting\n\tpid = 123\n}\n", false},
+		{"darwin", "gui/501/com.nibzard.ohya = {\n\tstate = running\n}\n", false},
+		{"darwin", launchAgentPrintRunning, true},
+		{"darwin", launchAgentPrintWaiting, false},
 	}
 	for _, c := range cases {
 		if ready := serviceRunning(c.platform, c.output) == nil; ready != c.ready {

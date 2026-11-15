@@ -81,13 +81,39 @@ func serviceOutput(ctx context.Context, args []string) (string, error) {
 	return output.String(), nil
 }
 
-func serviceRunning(platform, output string) error {
+func launchctlFields(output string) map[string]string {
+	values := map[string]string{}
+	depth := 0
+	for _, line := range strings.Split(output, "\n") {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.HasSuffix(trimmed, "{"):
+			depth++
+		case trimmed == "}":
+			depth--
+		case depth == 1:
+			if key, value, found := strings.Cut(trimmed, "="); found {
+				values[strings.TrimSpace(key)] = strings.TrimSpace(value)
+			}
+		}
+	}
+	return values
+}
+
+func systemdFields(output string) map[string]string {
 	values := map[string]string{}
 	for _, line := range strings.Split(output, "\n") {
-		key, value, found := strings.Cut(strings.TrimSpace(line), "=")
-		if found {
+		if key, value, found := strings.Cut(strings.TrimSpace(line), "="); found {
 			values[strings.TrimSpace(key)] = strings.TrimSpace(value)
 		}
+	}
+	return values
+}
+
+func serviceRunning(platform, output string) error {
+	values := systemdFields(output)
+	if platform == "darwin" {
+		values = launchctlFields(output)
 	}
 	state, pid := values["ActiveState"], values["MainPID"]
 	if platform == "darwin" {

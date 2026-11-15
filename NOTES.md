@@ -1122,3 +1122,13 @@ How to use this file:
   `install.sh` prints "release version must start with v and a digit" when a
   repository has no stable release, because GitHub redirects
   `/releases/latest` to `/releases`; that diagnostic gap is still open.
+
+- 2026-11-15, v0.1.0 setup failure on a real GUI Mac (27.2.1): `launchctl
+  print` includes `resource coalition`/`jetsam coalition` sub-blocks whose
+  `state = active` lines clobbered the job-level `state = running` in the
+  flat parser, so setup's 12 s readiness wait timed out and doctor reported
+  a false "not running" while ingestion ran fine. CI macOS runners show no
+  coalition blocks, so runner-green launchctl parsing proves little; verify
+  such parsing on a logged-in GUI Mac. Fixed with depth-aware parsing in
+  `internal/setup/service.go` plus a dump-shaped regression test; installed
+  v0.1.0 binaries need a patch release to report correctly.
