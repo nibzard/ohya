@@ -1,6 +1,11 @@
 <div align="center">
 
-# ohya
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
+    <img alt="ohya" src="docs/assets/logo-light.svg" width="320">
+  </picture>
+</h1>
 
 **One memory for all your coding agents. Everywhere.**
 
@@ -189,6 +194,7 @@ for the product vision.
 | [Release operations](docs/release-operations.md) | Release, backup, and recovery |
 | [ADRs](docs/adr/) | Architecture decisions |
 | [MANIFESTO.md](MANIFESTO.md) | Engineering principles |
+| [BRAND.md](BRAND.md) | Logo, icon, colors, and usage |
 
 ## Contributing
 
