@@ -113,6 +113,9 @@ A binary downgrade cannot undo a schema migration or newer parser output.
   packaging, HTTPS bootstrap, user-service ingestion smoke, doctor,
   native-dependency inspection, and Homebrew install, test, and removal on
   both macOS architectures.
+- v0.1.1 (commit `dab456e`) followed the same day: it fixes the launchctl
+  readiness parse for logged-in GUI Macs and was verified end to end on
+  macOS 27.2.1 arm64 through the released installer.
 - The published macOS archives are unsigned and not notarized
   (`signing=unverified`); Developer ID credentials are still required.
 - No Homebrew tap is published; the qualified formula from the candidate run

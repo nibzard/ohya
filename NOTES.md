@@ -1130,5 +1130,6 @@ How to use this file:
   a false "not running" while ingestion ran fine. CI macOS runners show no
   coalition blocks, so runner-green launchctl parsing proves little; verify
   such parsing on a logged-in GUI Mac. Fixed with depth-aware parsing in
-  `internal/setup/service.go` plus a dump-shaped regression test; installed
-  v0.1.0 binaries need a patch release to report correctly.
+  `internal/setup/service.go` plus a dump-shaped regression test; v0.1.1
+  (commit dab456e) shipped the fix the same day and was verified through the
+  released installer on the same machine.
