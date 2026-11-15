@@ -145,7 +145,7 @@ Malformed complete lines and records above the configured size limit stop that
 source at the offending offset and expose a diagnostic without transcript content.
 Do not silently skip bytes. Other sources continue. Recovery is user-owned and
 the diagnostic states its remedy ([ADR 0004](docs/adr/0004-stopped-source-recovery.md)):
-`ohya ingest --max-record-bytes` (default 1 MiB) raises the per-record bound, so a
+`ohya ingest --max-record-bytes` (default 32 MiB) raises the per-record bound, so a
 size stop clears on the next pass from the checkpointed offset, and every other
 stop needs the source file repaired at that offset; automatic skipping is rejected.
 
@@ -162,7 +162,7 @@ has the same contract:
   shows the diagnostic. The reason is a fixed text and never quotes input,
   because JSON decoder errors can contain transcript characters.
 - `RecordTooLarge` marks a stop that the size limit caused. The limit
-  (`Options.MaxRecordBytes`, default 1 MiB) applies to the JSON text without
+  (`Options.MaxRecordBytes`, default 32 MiB) applies to the JSON text without
   the terminator. A record exactly at the limit passes. An incomplete tail
   that is already above the limit also stops the source, because an
   append-only file cannot make it valid.
@@ -291,7 +291,7 @@ authenticated device) and the batch (version, device, source, byte range,
 records with their offsets); acknowledgments carry the committed cursor, the
 newly inserted count and, when the parser refused a record, the stop offset
 and reason. Every declared length is checked against a bound before
-allocation: 1 MiB per record, 8 MiB per batch, 65,536 records per batch. The
+allocation: 32 MiB per record, 64 MiB per batch, 65,536 records per batch. The
 endpoint authenticates each connection through an `Authenticator` interface
 and rejects any frame naming another device; the credential registry backs
 the interface (T018, `internal/registry`), with a per-frame registry check

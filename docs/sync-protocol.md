@@ -67,8 +67,8 @@ the connection closes.
 | Path | 4,096 bytes | One filesystem path |
 | Error and stop text | 1,024 bytes | Never carries transcript content |
 | Invitation and credential | 128 bytes | Secrets are 32 hex characters |
-| Record | 1 MiB | The parser's own record limit |
-| Batch record bytes | 8 MiB | The local ingestion batch bound |
+| Record | 32 MiB | The parser's own record limit |
+| Batch record bytes | 64 MiB | Holds the largest record and its newline (ADR 0004 amendment) |
 | Batch record count | 65,536 | Bounds normalization work for tiny records |
 | Query text | 64 KiB | The `sql` tool's input limit |
 | Query result | 4 MiB | 16 times the engine's default output bound |
@@ -145,7 +145,7 @@ The uploader (`internal/uploader`) implements the `SendBatch` and
   file, or the uploader reports an unrecoverable gap when the file is gone or
   changed. A `CodeRejected` gap during a pass triggers a new probe before the
   uploader declares a conflict.
-- A record above 1 MiB, or an incomplete tail already above it, stops the
+- A record above 32 MiB, or an incomplete tail already above it, stops the
   source locally, because sending it would close the connection. A parse
   stop is not sent again until the file grows. A source refused for a
   reason retrying cannot fix is blocked for the rest of the process; a

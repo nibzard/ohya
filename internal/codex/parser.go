@@ -17,7 +17,7 @@ const SyntheticNativeIDPrefix = "ohya-synthetic:"
 
 const OutputVersion = 2
 
-const DefaultMaxRecordBytes = 1 << 20
+const DefaultMaxRecordBytes = 32 << 20
 
 var ErrNoNative = errors.New("codex: parse after offset 0 needs Options.Native from the source's first record")
 

@@ -16,7 +16,7 @@ const SyntheticNativeIDPrefix = "ohya-synthetic:"
 
 const OutputVersion = 1
 
-const DefaultMaxRecordBytes = 1 << 20
+const DefaultMaxRecordBytes = 32 << 20
 
 var knownKinds = map[string]bool{
 	"user": true, "assistant": true, "attachment": true, "system": true,

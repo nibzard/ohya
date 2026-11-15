@@ -779,3 +779,26 @@ func TestNewRejectsIncompleteConfig(t *testing.T) {
 		}
 	}
 }
+
+func TestRecordAboveEightMiBSyncs(t *testing.T) {
+	f := newFixture(t, Options{})
+	db := openHubDB(t, filepath.Join(t.TempDir(), "hub.db"))
+	h := serve(t, db, f.reg, hubsync.Options{})
+	f.dialer.point(h.addr)
+	a := filepath.Join(f.dir, "a.jsonl")
+	writeFile(t, a, line(sessA, "one")+line(sessA, strings.Repeat("z", 10<<20))+line(sessA, "three"))
+
+	f.mustSync()
+	if got := count(t, db, `SELECT count(*) FROM events`); got != 3 {
+		t.Fatalf("hub events = %d; want 3\n%s", got, f.log)
+	}
+	if got, want := f.checkpoint(a), size(t, a); got != want {
+		t.Fatalf("checkpoint = %d; want %d", got, want)
+	}
+}
+
+func TestBatchWindowHoldsLargestRecord(t *testing.T) {
+	if hubsync.MaxBatchBytes <= hubsync.MaxRecordBytes+1 {
+		t.Fatalf("batch window %d cannot hold a %d-byte record and its newline", hubsync.MaxBatchBytes, hubsync.MaxRecordBytes)
+	}
+}

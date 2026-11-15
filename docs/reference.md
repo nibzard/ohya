@@ -109,7 +109,7 @@ Every regular `*.jsonl` file under a root is a session file; spilled tool
 output and memory files use other extensions. A replaced or truncated file
 starts a new source that re-imports from byte zero, and ingest prints one
 line about it; new files stay silent.
-`--max-record-bytes` (default 1 MiB) bounds one record's JSON text — also a
+`--max-record-bytes` (default 32 MiB) bounds one record's JSON text — also a
 memory bound, since one record is held in memory up to it.
 The state directory holds `device.json`, the stable device identity,
 `credential.json`, the owner-only hub pairing credential, and one

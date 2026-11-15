@@ -25,7 +25,7 @@ const (
 
 	MaxRecordBytes = claudecode.DefaultMaxRecordBytes
 
-	MaxBatchBytes = 8 << 20
+	MaxBatchBytes = 64 << 20
 
 	MaxRecords = 65536
 

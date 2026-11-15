@@ -24,7 +24,8 @@ The stop-and-diagnose rule stands. Recovery is user-owned, explicit and
 documented; no automatic skipping.
 
 - `ohya ingest` exposes the per-record bound as `--max-record-bytes`
-  (default 1,048,576, the parsers' `DefaultMaxRecordBytes`). A source stopped
+  (default 33,554,432, the parsers' `DefaultMaxRecordBytes`; 1 MiB before the
+  2026-11-15 amendment below). A source stopped
   by the limit recovers by rerunning with a larger value: ingestion resumes
   from the checkpointed stop offset, so nothing re-imports and nothing skips.
   The bound is also a memory bound — one record is held in memory up to it —
@@ -80,3 +81,24 @@ the limit accept the memory cost; the diagnostic and the flag help text say
 so. Records above any limit a user will set remain uningestible by design —
 that boundary is now documented here instead of silently deferring a
 recovery operation nobody owns.
+
+## Amendment (2026-11-15): 32 MiB record bound
+
+Real data demanded the larger wire bound. A full local history on one macOS
+machine (3,292 Claude Code, Codex, and Pi files, 4.2 GB) held 303 records
+above 1 MiB, mostly Codex tool outputs; the largest was 16.8 MiB. The 1 MiB
+default stopped 104 sources (3%), and a joined device could not sync those
+records at all, because the uploader and the hub enforce the wire bound with
+no flag.
+
+- `DefaultMaxRecordBytes` is 32 MiB in all three parsers. The
+  `--max-record-bytes` default and the wire bound `hubsync.MaxRecordBytes`
+  follow it. One record can hold 32 MiB of memory.
+- `hubsync.MaxBatchBytes` is 64 MiB. The uploader reads at most one batch
+  window past the cursor, so the window must hold the largest record and its
+  newline; otherwise a record between the two bounds never completes and its
+  source waits without a diagnostic. A test enforces
+  `MaxBatchBytes > MaxRecordBytes + 1`.
+- Hub and devices must run builds with the same bounds. A device with the
+  larger bound can send a record that an older hub refuses. Upgrade the hub
+  first. No release has shipped with the 1 MiB wire bound.

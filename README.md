@@ -44,6 +44,8 @@ day. That context stays in one tool on one machine, until it is lost.
   ingestion model, no vector store, and no AI pipeline.
 - **Lossless:** every original JSONL record is kept byte for byte. Parser
   upgrades re-derive rows from the stored records.
+- **Durable:** Claude Code deletes transcripts after 30 days by default
+  (`cleanupPeriodDays`). ohya keeps every record that it has ingested.
 
 ## How it works
 
