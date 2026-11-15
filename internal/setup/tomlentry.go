@@ -142,6 +142,9 @@ func ApplyTOMLEntry(path, receiptPath string, command Command) (bool, error) {
 	if bytes.Equal(raw, append(bytes.Clone(base), []byte(block)...)) {
 		return false, nil
 	}
+	if err := backupConfiguration(path, receiptPath, raw); err != nil {
+		return false, err
+	}
 	previous := r.Block
 	if r.Previous != "" && strings.Contains(string(raw), r.Previous) {
 		previous = r.Previous
@@ -177,6 +180,9 @@ func RemoveTOMLEntry(receiptPath string) (bool, error) {
 		return false, err
 	}
 	if !bytes.Equal(raw, updated) {
+		if err := backupConfiguration(r.Path, receiptPath, raw); err != nil {
+			return false, err
+		}
 		if err := replaceTOML(r.Path, raw, updated); err != nil {
 			return false, err
 		}

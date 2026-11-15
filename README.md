@@ -415,3 +415,8 @@ Release preparation is documented in [release and recovery operations](docs/rele
 The manual candidate workflow builds native archives, tests downloaded binaries,
 and exercises a real user service. It publishes no releases. Candidate packaging
 and formula generation are available under `scripts/`; no Homebrew tap exists yet.
+
+Setup keeps private copies of changed client files beside each client receipt
+under `STATE/setup/clients/*.json.backups/`. Each copy retains the original
+bytes. Uninstall preserves these copies. Restore only the needed settings;
+copying an old file over a current client file can remove later user edits.

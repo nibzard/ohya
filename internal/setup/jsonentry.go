@@ -157,6 +157,9 @@ func ApplyJSONEntry(e JSONEntry, receiptPath string) (bool, error) {
 	if sameJSON(children[e.Name], e.Value) {
 		return false, nil
 	}
+	if err := backupConfiguration(e.Path, receiptPath, original); err != nil {
+		return false, err
+	}
 	receipt.Previous = children[e.Name]
 	receipt.Entry = e
 	encoded, err := json.Marshal(receipt)
@@ -196,6 +199,9 @@ func RemoveJSONEntry(receiptPath string) (bool, error) {
 	if current, exists := children[e.Name]; exists {
 		if !sameJSON(current, e.Value) && !sameJSON(current, receipt.Previous) {
 			return false, fmt.Errorf("%s entry %s has been edited; preserve it", e.Path, e.Name)
+		}
+		if err := backupConfiguration(e.Path, receiptPath, original); err != nil {
+			return false, err
 		}
 		delete(children, e.Name)
 		if err := writeEntry(e, root, children, original); err != nil {
