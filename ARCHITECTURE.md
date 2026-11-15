@@ -351,6 +351,18 @@ connection before any result is delivered. Reads carry no ownership state
 without a `RemoteEngine` stays upload-only and answers these frames with an
 explicit `CodeNoRemote`.
 
+Workspace observations ([ADR 0009](docs/adr/0009-workspace-repository-observations.md))
+give sessions a repository key that matches across devices, because one
+project has a different `cwd` on each device. Parsers never read the
+filesystem, so the device observes instead: the hub names the session
+`cwd` values of that device that still lack a repository, the device
+resolves each one from `.git` with `internal/workspace` (no git process,
+only normalized URLs leave the device), and the hub stores the result
+write-once in `workspaces` and fills the NULL `sessions.repo` values.
+`ohya join` runs the exchange over the `workspaces` frame; `ohya ingest`
+runs the same `workspace.Sync` loop against its own database.
+Re-derivation reads the stored observations, so it stays file-free.
+
 Implemented (T034): the deployment commands. `ohya serve` runs the hub: it
 provisions the self-hosted coordination plane in-process (ADR 0002 — own
 SQLite database under `control/` in the state directory, a generated

@@ -26,6 +26,10 @@ query        = 'Q' ver(1) sqlLen(4) sql
 queryResult  = 'S' ver(1) jsonLen(4) json
 annotate     = 'N' ver(1) reqLen(4) json
 annotateRes  = 'K' ver(1) applied(8) unchanged(8)
+workspaces   = 'W' ver(1) devLen(2) dev agentLen(2) agent count(2)
+                 count * [ pathLen(2) path repoLen(2) repo ]
+pending      = 'D' ver(1) applied(8) unchanged(8) ignored(8) count(2)
+                 count * [ pathLen(2) path ]
 ```
 
 - `registration` announces one source before its first batch: the source ID
@@ -52,6 +56,15 @@ annotateRes  = 'K' ver(1) applied(8) unchanged(8)
   (`{"operations":[...]}`) verbatim. No writer travels in the frame; the hub
   uses the authenticated device. `annotateRes` carries the committed
   `applied` and `unchanged` counts.
+- `workspaces` carries a device's workspace observations for one agent
+  ([ADR 0009](adr/0009-workspace-repository-observations.md)): a session
+  `cwd` and the normalized repository the device found there, or an empty
+  `repo` for none. The count can be 0. The hub takes the writer from the
+  authenticated device, stores each new observation write-once, and answers
+  with `pending`: the counts, then up to 256 `cwd` values of that device and
+  agent whose sessions have no repository and no observation yet. The hub
+  ignores an observation for a path that is not a `cwd` of the device's
+  sessions, and rejects the frame when a `repo` is not in normalized form.
 
 ## Bounds
 
@@ -73,10 +86,12 @@ the connection closes.
 | Query text | 64 KiB | The `sql` tool's input limit |
 | Query result | 4 MiB | 16 times the engine's default output bound |
 | Annotate request | 1 MiB | The `annotate` tool's request limit |
+| Workspaces per frame | 256 | Both in `workspaces` and in `pending` |
+| Repository | 1,024 bytes | A normalized `host/path`; it can be empty |
 
 The writers refuse to build a frame past these bounds. An engine configured
 past the query result bound gets `CodeInternal` instead of a cut payload.
-String fields with a 2-byte length must not be empty.
+String fields with a 2-byte length must not be empty, except `repo` in `workspaces`.
 
 ## Error codes
 
@@ -122,6 +137,9 @@ String fields with a 2-byte length must not be empty.
   retry with the hub policy: 3 attempts, waits from 100 ms doubling up to
   2 s, no jitter. Deterministic rejections (`ErrBatchRejected`,
   `ErrSourceOwnership`, `ErrSourceNotRegistered`) never retry.
+- A `workspaces` frame that names another device closes the connection, like
+  a batch. An unknown agent gets `CodeUnsupported` and a value that is not
+  in normalized form gets `CodeRejected`; both stay open.
 - Query and annotate outcomes are always answered in band, and the connection
   stays open. Policy and input rejections map to `CodeRejected`, contention
   to `CodeBusy`, and other failures to `CodeInternal`.
@@ -162,6 +180,14 @@ The uploader (`internal/uploader`) implements the `SendBatch` and
 - Before each pass, a non-blocking read checks that an idle connection is
   still open. The hub never sends unsolicited frames, so a closed connection
   means a hub restart. This is how an idle device notices a restored hub.
+- After it connects, and after a pass that inserted events, the uploader
+  runs the workspace exchange: it sends its observations, resolves the
+  returned paths with `workspace.Resolve`, and repeats until no new path
+  resolves. A path it cannot read stays pending for a later exchange.
+  Only normalized repositories leave the device, so remote credentials do
+  not. An older hub answers the unknown `W` marker with `CodeMalformed` and
+  closes the connection; the uploader then stops workspace exchanges for
+  the process, reports it once, and keeps uploading.
 - The checkpoint state must belong to one hub. Its cursors are that hub's
   acknowledgments, so a state directory that local ingestion also writes to
   would skip bytes the hub never received.

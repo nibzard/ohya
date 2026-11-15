@@ -150,6 +150,11 @@ ORDER BY events_fts.rank LIMIT 10;
 `events_settled` omits sessions that were active in the last 10 minutes, so
 an agent does not read its own live transcript.
 
+`sessions.repo` names the project as `host/path`, for example
+`github.com/nibzard/ohya`, and it matches across devices even when the
+working directory differs. Each device reads the git remote of its session
+directories and sends only the normalized value to the hub.
+
 ## Commands
 
 | Command | Purpose |
