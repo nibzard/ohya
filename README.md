@@ -241,7 +241,10 @@ usage, so session token totals sum straight over responses.
 Every stored row also names the parser output version that derived its
 normalized fields (`events.parser_version`), separate from the schema
 version. When an ohya upgrade changes what a parser derives, run
-`ohya rederive` (same `--db` flag): it re-derives stale rows from the stored
+`ohya rederive` (same `--db` flag). It has no `--state` flag because it
+uses only the database, without device identity, pairing credentials, or
+source checkpoints. Run it on the hub; use `--db` to select its database.
+It re-derives stale rows from the stored
 raw records — inside the hub, with no access to the original files — in one
 transaction, recomputing sessions and token totals and rebuilding the search
 index. Event IDs and annotations survive; an up-to-date hub is a no-op, so
