@@ -11,3 +11,5 @@ cannot run remotely until the changes are published. No push is made.
 Also adopted the existing migration 006 documentation update and closed
 the obsolete malformed-line decision in NOTES.md. Related documentation
 hunks were staged separately to preserve other uncommitted work.
+
+Final verification: make check passes on the integrated working tree, including formatting, all Go tests, vet, and the comment checker. The memory-gate package also passes race detection.
