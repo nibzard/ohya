@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -200,17 +199,11 @@ func pair(ctx context.Context, node transport.Device, hubAddr, invitation, devic
 		return device.Credential{}, fmt.Errorf("join: reach the hub at %s: %w", hubAddr, err)
 	}
 	defer conn.Close()
-	if err := hubsync.WritePairRequest(conn, invitation, deviceID); err != nil {
-		return device.Credential{}, fmt.Errorf("join: send pairing request: %w", err)
-	}
-	reply, perr, err := hubsync.ReadCredentialReply(bufio.NewReader(conn))
+	secret, err := hubsync.Pair(conn, invitation, deviceID)
 	if err != nil {
-		return device.Credential{}, fmt.Errorf("join: read pairing reply: %w", err)
+		return device.Credential{}, fmt.Errorf("join: pair with hub: %w", err)
 	}
-	if perr != nil {
-		return device.Credential{}, fmt.Errorf("join: hub refused the pairing: %w", perr)
-	}
-	return device.Credential{DeviceID: reply.DeviceID, Secret: reply.Credential}, nil
+	return device.Credential{DeviceID: deviceID, Secret: secret}, nil
 }
 
 func deviceHostname(deviceID string) string {
