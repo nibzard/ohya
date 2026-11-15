@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -78,4 +79,26 @@ func TestPolicyBlockPreventsSetupPreparation(t *testing.T) {
 	if _, err := os.Stat(o.Clients.State); !os.IsNotExist(err) {
 		t.Fatal("created state despite blocked client")
 	}
+}
+
+func TestDryRunReportsBlockReason(t *testing.T) {
+	o := engineOptions(t)
+	o.DryRun = true
+	o.WorkingDirectory = t.TempDir()
+	if err := os.WriteFile(filepath.Join(o.WorkingDirectory, ".mcp.json"), []byte(`{"mcpServers":{"ohya":{}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	report, err := Run(context.Background(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range report.Results {
+		if r.Status == "blocked" {
+			if !strings.Contains(r.Detail, "defines ohya for this project") {
+				t.Fatalf("dry run hid the block reason: %+v", r)
+			}
+			return
+		}
+	}
+	t.Fatalf("dry run reported no blocked client: %+v", report.Results)
 }

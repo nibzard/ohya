@@ -96,7 +96,11 @@ func Run(ctx context.Context, o Options) (Report, error) {
 			report.Results = append(report.Results, Result{Component: "service", Status: "planned", Detail: service.Path})
 		}
 		for _, c := range clients {
-			report.Results = append(report.Results, Result{Component: c.Name, Status: c.Status, Detail: c.Config})
+			detail := c.Config
+			if c.Status == "blocked" {
+				detail = c.Detail
+			}
+			report.Results = append(report.Results, Result{Component: c.Name, Status: c.Status, Detail: detail})
 		}
 		return report, nil
 	}
