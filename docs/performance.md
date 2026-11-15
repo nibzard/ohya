@@ -630,6 +630,151 @@ Each needs a new miss and a fresh measurement, per the plan's Phase 2.
   stack's first dials cost 20–25 s each, so the check target now passes an
   explicit `-timeout 20m` to `go test`.
 
+## Phase 2 acceptance: nothing to accept or discard
+
+Decided 2026-11-15 (T074) per the performance plan's Phase 2. T072 selected
+no Phase 1 candidate, and T073 closed empty per its own contract: no
+optimization was implemented, so there is no change to accept or discard.
+This section records that verdict and the evidence behind it.
+
+The rejected experiments are the selection record above ("Phase 1
+selection: none"): every candidate's measured trigger read false, and no
+workload misses its re-scoped target or budget. Between the T070 baseline
+tree and this verdict, production code changed only in the T075
+hub-restart transport fix (`internal/transport/tailcat`) — a correctness
+fault the first matrix exposed — plus test harness and documentation
+changes. T073 added no migration (the schema stays at 006) and touched no
+synchronization or authorization model, so the TLA+ specifications are
+unchanged and needed no new TLC run. Phase 2 step 1 still ran, as a
+confirmation that the budgets set from the T070 numbers describe the
+shipped tree: the matrix repeated on the same reference machine, the same
+deterministic fixtures, the same knobs and protocol, fresh seeds
+(2001–2006), same direct local-tailnet path.
+
+### Repeated matrix, 2026-11-15, integrated HEAD
+
+Raw logs under `perf/t074/` (gitignored); copies in the task artifact
+directory. Two runs per workload, as in T070. Every run passed with 1,000
+of 1,000 markers visible, zero poll errors, zero query timeouts, and zero
+outstanding marker records at drain.
+
+Workload 1, steady appends:
+
+| Metric | T070 (seeds 1001/1002) | T074 (seeds 2001/2002) |
+|---|---|---|
+| Freshness lag p50 | 1.079 / 1.061 s | 1.105 / 1.041 s |
+| Freshness lag p95 | 1.945 / 1.999 s | 2.014 / 1.971 s |
+| Freshness lag p99 | 2.058 / 2.070 s | 2.111 / 2.041 s |
+| Marker query p50 / p95 / max | 1.38–1.39 / 1.76–1.79 / ≤ 2.94 ms | 1.39–1.44 / 1.80–1.86 / ≤ 3.02 ms |
+| Hub idle RSS | 65 MiB | 65–66 MiB |
+| Hub peak RSS / CPU | 70–72 MiB / 2.31 s | 71–72 MiB / 2.32–2.35 s |
+| Uploader peak RSS | 59 MiB | 59 MiB |
+| Peak WAL | 3 MiB | 3–4 MiB |
+
+The p95 pair straddles the 2 s line exactly as T070's pair did (1.945 and
+1.999 then, 2.014 and 1.971 now): the distribution sits at the 2 s upload
+interval, and a 1,000-sample draw moves p95 by more than the distance to
+the target. The companion p99 < 2.5 s holds in every run (2.041–2.111 s).
+
+Workload 2, live appends during a 1.5 MB/s backlog on a second source:
+
+| Metric | T070 (seeds 1003/1004) | T074 (seeds 2003/2004) |
+|---|---|---|
+| Freshness lag p50 | 1.830 / 1.868 s | 2.032 / 1.865 s |
+| Freshness lag p95 | 3.827 / 3.785 s | 4.060 / 3.864 s |
+| Freshness lag p99 | 4.401 / 4.174 s | 4.627 / 4.439 s |
+| Backlog acknowledged / outstanding at drain | 293.4–294.2 / 5.1–6.0 MB | 294.6–295.7 / 5.9–7.7 MB |
+| Hub events at drain | 1.042–1.044 M | 1.046–1.050 M |
+| Hub peak RSS / CPU | 133–140 MiB / 87.5–88.4 s | 138 MiB / 89.2–89.7 s |
+| Uploader peak RSS | 90–95 MiB | 91–92 MiB |
+| Database / peak WAL | 910 MiB / 30–32 MiB | 911–920 MiB / 33 and 48 MiB |
+
+Workload 3, three devices uploading while the fixed search workload runs:
+
+| Metric | T070 (seeds 1005/1006) | T074 (seeds 2005/2006) |
+|---|---|---|
+| Freshness lag p50 | 1.204 / 1.216 s | 1.233 / 1.257 s |
+| Freshness lag p99 | 2.516 / 2.673 s | 2.688 / 2.709 s |
+| Marker query p95 / max | 14.6–15.4 / 171–191 ms | 14.8–15.1 / 189–194 ms |
+| Extra devices outstanding at drain | 0 / 0 | 0 / 20.7 MB (one device still draining) |
+| Loaded FTS selective p95 | 4 ms | 3–4 ms |
+| Loaded FTS wide p95 (max) | 110–111 ms (116–130) | 104 / 114 ms (119 / 126) |
+| Loaded token totals p95 | 38 ms | 37 / 40 ms |
+| Loaded recent / range / annotation p95 | 3 / 7 / 2 ms | 3 / 7–8 / 2 ms |
+| Loaded query errors / timeouts | 0 / 0 | 0 / 0 (n = 181, 183) |
+| Hub peak RSS / CPU | 152–156 MiB / ~72 s | 148–154 MiB / 69.5–72.6 s |
+| Uploader peaks (join / join2 / join3) | 61–63 / 80–81 / 76–79 MiB | 62 / 78–80 / 78–79 MiB |
+| Database / peak WAL | 1312 MiB / 27 MiB | 1262 and 1312 MiB / 61 and 65 MiB |
+
+Workload 4, initial import, replay, restart (fresh hub and device, import
+fixture):
+
+| Metric | T070 (3 runs) | T074 (2 runs) |
+|---|---|---|
+| Time-to-memory | 24.6–447 s | 40.6 / 50.7 s |
+| Import rate | 0.31–5.57 MiB/s | 3.37 / 2.70 MiB/s |
+| Hub peak RSS / CPU | 89–93 MiB / 10.1–12.2 s | 91–92 MiB / 10.1 s |
+| Uploader peak RSS / CPU | 73–76 MiB / 1.6–3.3 s | 74 MiB / 1.6 s |
+| Hub CPU plus device CPU | 11.7–15.5 s | 11.7 s (both runs) |
+| Database after import | 275–277 MiB | 275 / 277 MiB (2.0x input) |
+| Peak WAL | 11–14 MiB | 11–12 MiB |
+| Device restart, recovery to visibility | 6.6–20.1 s | 6.9 / 9.1 s |
+| Hub restart, recovery to visibility | no recovery ≤ 3 m (pre-fix) | 36.2 s (both runs) |
+| Final event count | 40,020–40,021, idempotent | 40,022, idempotent |
+
+The hub-restart rows match the post-T075 state: both runs recovered in
+36.2 s against the pre-fix "never within three minutes". The W4 wall times
+landed mid-band of the recorded fsync swing, so the quiet-disk budget does
+not apply to them; the unconditional CPU budget holds at about 4.4 minutes
+per 3 GiB extrapolated (11.7 s per 137.0 MiB), against the 8-minute
+ceiling.
+
+### Budget check at the integrated HEAD
+
+| Budget (T072) | T074 measured | Verdict |
+|---|---|---|
+| Freshness p95 < 2 s, steady | 1.971 / 2.014 s | At the line, within the recorded 2.8% run spread; p99 < 2.5 s holds everywhere |
+| Hub idle RSS ≤ 150 MiB | 65–66 MiB | Pass |
+| Hub peak RSS ≤ 192 MiB | 138–154 MiB | Pass |
+| Uploader peak RSS ≤ 128 MiB | 59–92 MiB | Pass |
+| Database ≤ 2.5x source bytes | 2.0x (W4), 2.4x (W3) | Pass |
+| Peak WAL ≤ 64 MiB, mixed read and write | 33–65 MiB | One run read 65 MiB — 1.6% over the ceiling, inside the ±50% allowed variation |
+| Loaded FTS wide p95 ≤ 160 ms | 104 / 114 ms | Pass |
+| All other loaded patterns | at or under 40 ms p95 | Pass |
+| Loaded timeouts | 0 in 364 queries | Pass |
+| Import CPU < 8 min per 3 GiB (hub + device) | ~4.4 min extrapolated | Pass |
+
+One observation to keep with the budgets: the mixed-read/write WAL
+high-water mark read 33–65 MiB across this campaign against the 27–32 MiB
+T070 basis. Three of four runs sit below the 64 MiB ceiling and the fourth
+exceeded it by 1 MiB. The high-water mark moves with the race between
+auto-checkpoints and reader snapshots, so the T070 basis reads as a low
+draw, not a regression. Plan WAL headroom for tens of MiB; nothing here
+changes the ceiling or the planning guidance.
+
+### Relay caveat
+
+Every number in this document, including the repetition above, was
+measured on the direct local-tailnet path. Direct-path results do not
+establish relay performance (performance plan, Phase 2). After backlog
+task T065 provides the two-host relay environment, repeat all four matrix
+workloads on the relay path: steady freshness (the p95 < 2 s target has no
+relay measurement behind it), the backlog drain, multi-device upload with
+loaded queries, and initial-import time-to-memory. ADR 0002 measured the
+forced-relay leg at 1.8–2.1x direct latency at kilobyte payloads and about
+4x at 1 MiB, so the freshness and time-to-memory budgets may need a
+relay-specific restatement on that evidence.
+
+### No successor candidate
+
+No measured target is unmet, so Phase 2 selects no new candidate. The
+reopening triggers recorded above stand: batch sizing if the thin
+quiet-disk time-to-memory margin erodes, the upload interval if a
+freshness target is missed or tightened, an FTS5 merge comparison if the
+wide-match budget is tightened. Each needs a fresh miss, a fresh
+measurement, and a new task per the plan — optimization chains inside one
+task are out of scope by contract.
+
 ## Ingestion
 
 Benchmarks: `internal/events` (`make bench`), end-to-end run of

@@ -986,3 +986,20 @@ How to use this file:
   green on the unchanged tree. A new miss reopens selection only through a
   fresh task with new evidence; batch sizing stays first in line. T074
   (Phase 2 accept-or-discard) therefore finds no T073 change to evaluate.
+- T074 done (2026-11-15): Phase 2 closed with nothing to accept or discard
+  (T072 selected no candidate; T073 changed no code). The matrix was still
+  repeated at the integrated HEAD — same machine, fixtures, knobs, fresh
+  seeds 2001–2006; raw logs in perf/t074/ (gitignored) and the task artifact
+  dir; numbers and budget table in docs/performance.md "Phase 2 acceptance".
+  Every workload landed inside the T070 spread and every T072 budget held;
+  make check green. Notables worth carrying: steady p95 straddles 2 s again
+  (1.971/2.014 s vs T070's 1.945/1.999 s) — the 2 s upload interval consumes
+  the budget and a 1,000-sample draw moves p95 by more than the 1–55 ms
+  margin, so do not read one side of the line as a regression; mixed
+  read/write WAL peak read 33–65 MiB against the 27–32 MiB T070 basis (one
+  run 1 MiB over the 64 MiB ceiling, inside the ±50% variation) — the
+  high-water mark races auto-checkpoints against reader snapshots, so the
+  T070 basis was a low draw; W4 hub-restart recovery 36.2 s in both runs
+  (post-T075) with idempotent final counts. No successor candidate; the T072
+  reopen triggers stand, and all four workloads must be repeated on the
+  relay path after T065.
