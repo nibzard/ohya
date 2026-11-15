@@ -609,8 +609,11 @@ Each needs a new miss and a fresh measurement, per the plan's Phase 2.
   reads above 2 s because a 100-sample phase draw moves p95 by more than
   the 1,000-sample margin — one more reason it asserts no threshold.
 - The order-of-magnitude guards stay in `make check`
-  (`TestIngestPerformanceFloor`, `TestRetrievalPerformanceCeiling`). Their
-  reliability under parallel package load is owned by backlog task T078.
+  (`TestIngestPerformanceFloor`, `TestRetrievalPerformanceCeiling`). The
+  ingest guard's ceiling carries an explicit contention allowance (decided
+  in T078; see "Regression guards") so parallel package load and
+  shared-disk tenants do not flake it; serializing the package in CI was
+  considered and rejected there.
 - Longer statistical comparison stays off CI: the 1,000-sample matrix runs
   about an hour on the reference machine, and shared-runner noise makes its
   percentile claims unfalsifiable there. Cross-commit comparison remains
@@ -1080,8 +1083,23 @@ ceilings sit far above the measured times so machine-speed drift does not
 flake them:
 
 - `TestIngestPerformanceFloor` (`internal/events`): a 24 MiB import through
-  the full path must finish inside 30 s (measured about 3 s; a superlinear
-  write path blows past the ceiling).
+  the full path must finish inside 120 s. Quiet-disk runs measure 1.3-3 s.
+  The ceiling carries a contention allowance, widened from 30 s in T078
+  (2026-11-15) after one failure at 31.2 s during a full parallel
+  `go test ./...` on the shared reference machine while the sibling
+  packages (store, hubsync, mcpserver, registry) ran their SQLite suites;
+  the same test passed in 1.24 s with the package alone. The 120 s value
+  is anchored on the measured import-rate swing above: at the worst
+  observed tenant rate (0.31 MiB/s) the 24 MiB corpus takes about 77 s,
+  and 120 s covers that with margin. Serializing the package in CI
+  (`-p 1` or a separate job) was rejected: it slows every check run, and
+  it cannot prevent the same failure when the contention comes from other
+  tenants of the shared reference disk rather than sibling test packages.
+  The widened ceiling still catches the regressions the guard exists for:
+  per-record durability (6,794 events at about 43 ms per fsync is about
+  290 s) and any superlinear write path land far above it. If a loaded run
+  ever exceeds the ceiling, raise it with that evidence, as with any other
+  allowed variation.
 - `TestRetrievalPerformanceCeiling` (`internal/mcpserver`): wide FTS search,
   token totals and annotation paging over a seeded hub must each answer
   inside 2 s (measured under 10 ms; the engine's 5 s deadline is the hard

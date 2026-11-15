@@ -50,9 +50,10 @@ func TestIngestPerformanceFloor(t *testing.T) {
 	if inserted == 0 {
 		t.Fatal("corpus inserted no events")
 	}
-	if elapsed > 30*time.Second {
-		t.Fatalf("ingesting %d files took %s (ceiling 30s; measured ~1.3s on the 2026-11-14 reference machine) — the write path likely regressed",
-			len(files), elapsed)
+	ceiling := 120 * time.Second
+	if elapsed > ceiling {
+		t.Fatalf("ingesting %d files took %s (ceiling %s with a contention allowance; quiet runs measure 1.3-3 s — docs/performance.md, Regression guards) — the write path likely regressed",
+			len(files), elapsed, ceiling)
 	}
 	t.Logf("ingested %d events from %d files in %s", inserted, len(files), elapsed)
 }

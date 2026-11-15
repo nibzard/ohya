@@ -1003,3 +1003,14 @@ How to use this file:
   (post-T075) with idempotent final counts. No successor candidate; the T072
   reopen triggers stand, and all four workloads must be repeated on the
   relay path after T065.
+- Ingest-floor guard widened (2026-11-15, T078): TestIngestPerformanceFloor's
+  wall ceiling moved 30 s → 120 s; the allowance and its anchors are in
+  docs/performance.md "Regression guards". Anchors: one parallel-load
+  failure at 31.2 s (full `go test ./...`, sibling SQLite packages on the
+  shared reference disk) versus 1.24 s isolated; the worst tenant rate
+  0.31 MiB/s makes the 24 MiB corpus about 77 s, so 120 s covers measured
+  contention with margin while per-record durability (about 290 s at 6,794
+  events) and superlinear regressions still fail loudly. CI serialization
+  (`-p 1`) rejected: tenant load fails a serialized run too, and it slows
+  every check. Reopen condition: a loaded run above 120 s → raise the
+  ceiling with that evidence, like any other allowed variation.
