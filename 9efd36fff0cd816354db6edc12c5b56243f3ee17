@@ -1,0 +1,1 @@
+PATH setup handles Bash login precedence, POSIX shells, Zsh, and an owned Fish file. Prepared receipts make reruns safe and removal preserves user edits. Shell tests verify literal quotes, spaces, expansion characters, repeated sourcing, and later user content. Focused tests and full vet pass. Native system tests and remaining installer features are still required.
