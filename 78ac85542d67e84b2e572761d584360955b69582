@@ -1,0 +1,1 @@
+Report another ohya selected by the current PATH without changing or adopting it. Equivalent symlinks do not produce a conflict. The focused command-path test passes. Full checks are running against the final source snapshot.
