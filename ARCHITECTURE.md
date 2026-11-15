@@ -17,8 +17,10 @@ processes exchanging encrypted batches against a self-hosted Headscale
 coordination server (ADR 0002, `cmd/tailcat-spike`), and all transport code
 stays behind the `internal/transport` interfaces consumed by the sync layer.
 The production control plane is decided and ships embedded in `ohya serve`
-(ADR 0002); forced-relay behavior remains an open item there. See README.md
-for implementation order.
+(ADR 0002). Forced-relay (DERP-only) behavior is validated between isolated
+network peers (T032, 2026-11-14). The open relay item is to re-measure the
+relay leg over TLS in the two-host isolated-network setup (T065, blocked).
+See README.md for implementation order.
 
 The hub also ingests its own files through the same transactional write path.
 All writes use one writer. Readers use separate restricted connections.
