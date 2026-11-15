@@ -1,8 +1,8 @@
 # Installer plan
 
-Status: implemented locally; native release qualification pending, 2026-11-15.
-No installer URL or release is published. See `docs/release-operations.md` for
-the candidate workflow, evidence, and remaining release gates.
+Status: implemented and published as v0.1.0 on 2026-11-15; macOS archives are
+unsigned. See `docs/release-operations.md` for the candidate workflow,
+evidence, and remaining release gates.
 
 ## Recommendation
 

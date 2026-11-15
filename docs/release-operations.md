@@ -1,9 +1,9 @@
 # Release and recovery operations
 
-The installer is implemented, but no release assets are published yet. Local
-Linux candidate tests pass. The macOS matrix, Apple signing, and Homebrew tests
-must pass before a public release. Generated candidates are not qualified
-releases merely because packaging succeeds.
+v0.1.0 was published on 2026-11-15 from commit `8fb3d2e` after the full
+candidate matrix passed; its macOS archives are unsigned. Apple signing and
+notarization must pass before a signed public release. Generated candidates
+are not qualified releases merely because packaging succeeds.
 
 ## Prepare a candidate
 
@@ -108,14 +108,17 @@ A binary downgrade cannot undo a schema migration or newer parser output.
 
 ## Current verification limits
 
-- Linux amd64 packaging, HTTPS bootstrap, real user-service ingestion, doctor,
-  and service removal passed on the current Linux host.
+- v0.1.0 (commit `8fb3d2e`, dirty=false) was published on 2026-11-15 for
+  darwin-arm64, darwin-amd64, and linux-amd64 after the hosted matrix passed:
+  packaging, HTTPS bootstrap, user-service ingestion smoke, doctor,
+  native-dependency inspection, and Homebrew install, test, and removal on
+  both macOS architectures.
+- The published macOS archives are unsigned and not notarized
+  (`signing=unverified`); Developer ID credentials are still required.
+- No Homebrew tap is published; the qualified formula from the candidate run
+  is ready for a future tap.
 - Pi 0.84.2 automatically discovered the compatibility extension and completed
   SQL and Unicode annotation round trips without model access.
-- The hosted native matrix has not run for these unpublished commits.
-- Apple signing and notarization have not run; credentials and a native Mac
-  are required. Homebrew native execution is also pending.
-- No GitHub release, tag, Homebrew tap, or installer URL has been published.
 
 The candidate workflow also tests the generated formula on both native macOS
 architectures. `scripts/homebrew-install-smoke.sh dist` creates a temporary local

@@ -27,9 +27,10 @@ One Go binary. No cloud account. No embeddings.
 </div>
 
 > [!IMPORTANT]
-> ohya is pre-release. No release assets are published yet, so build from
-> source. Ingestion, MCP tools, and device sync run end to end. macOS
-> runtime verification and distribution are still open.
+> ohya is pre-release. Install the [latest release](https://github.com/nibzard/ohya/releases/latest)
+> with `install.sh`, or build from source. Ingestion, MCP tools, and device
+> sync run end to end. macOS archives are not signed or notarized yet; a
+> Homebrew tap is still open.
 
 ## Why ohya
 
@@ -70,8 +71,14 @@ day. That context stays in one tool on one machine, until it is lost.
 
 ## Quick start
 
-Requirements: Go 1.27.3 or later, CGO, and a C compiler (Xcode Command Line
-Tools on macOS, `build-essential` on Debian or Ubuntu).
+Install the latest release (macOS arm64/amd64, Linux amd64):
+
+```sh
+curl -fsSL https://github.com/nibzard/ohya/releases/latest/download/install.sh | sh
+```
+
+Building from source requires Go 1.27.3 or later, CGO, and a C compiler
+(Xcode Command Line Tools on macOS, `build-essential` on Debian or Ubuntu).
 
 ```sh
 git clone https://github.com/nibzard/ohya && cd ohya
@@ -176,7 +183,7 @@ exit codes, and failure behavior.
 
 - **Works now:** Claude Code, Codex, and Pi ingestion; `sql` and `annotate`;
   pairing, sync, and revocation; remote MCP; integrated setup.
-- **Open:** macOS runtime verification; release archives and a Homebrew tap.
+- **Open:** Developer ID signing and notarization for macOS; a Homebrew tap.
 - **Next:** an OpenCode source (OpenCode stores sessions in SQLite).
 - **Not planned:** embeddings, vector search, built-in AI classification,
   third-party AI processing.

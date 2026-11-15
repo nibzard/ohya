@@ -1113,3 +1113,12 @@ How to use this file:
     so continuous ingestion is the only copy of older Claude history.
   - FTS queries on 964k events return in about 0.25 s including process
     start.
+
+- 2026-11-15, v0.1.0 published from `8fb3d2e` after `make check`, `make tla`,
+  and the hosted candidate matrix (run 43760301528) passed. Assets: three
+  archives, `SHA256SUMS`, and `install.sh`; macOS archives are unsigned
+  because this machine has no Developer ID Application certificate. The
+  qualified `ohya.rb` formula is in the run artifacts for a future tap.
+  `install.sh` prints "release version must start with v and a digit" when a
+  repository has no stable release, because GitHub redirects
+  `/releases/latest` to `/releases`; that diagnostic gap is still open.
