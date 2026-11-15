@@ -66,3 +66,16 @@ memory tools and checks the exact result of `SELECT 1 AS ohya_setup_check`.
 It has a bounded lifetime and launches from a neutral working directory.
 The integration test launches the real application through its existing
 subprocess test entry point. It requires no model access.
+
+## Service files
+
+User services use argument arrays on macOS and escaped systemd arguments on
+Linux. The Linux unit uses the user journal with a rate limit. Neither template
+embeds credentials. Service paths and arguments reject line breaks and null
+bytes. Native service-manager tests remain a release requirement.
+
+Service and other complete files have separate ownership receipts. Prepared
+updates retain the prior owned bytes. Removal refuses a file edited after
+setup. A nonblocking file lock serializes setup processes using one state
+directory. The lock file remains on disk after release; process exit releases
+the operating system lock.
