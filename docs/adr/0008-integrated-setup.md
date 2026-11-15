@@ -235,3 +235,11 @@ https://code.claude.com/docs/en/managed-mcp and
 https://learn.chatgpt.com/docs/extend/mcp?surface=cli.
 Setup reads regular configuration files with an 8 MiB bound and refuses final
 symlinks. It never executes project configuration to inspect it.
+
+Native Linux service validation (2026-11-15) found that systemd treats quotes
+in WorkingDirectory as literal path characters. That field now uses the raw
+absolute path with specifiers escaped; ExecStart keeps argument quoting. A
+systemd-analyze regression test parses the generated unit with spaces and
+expansion characters. The corrected native service imported 16 synthetic events,
+acknowledged the full Source cursor, passed doctor, and uninstalled cleanly.
+This verifies the current Linux host, not the unrun release baseline matrix.

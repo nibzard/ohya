@@ -43,7 +43,7 @@ func ServicePlan(platform, home, binary string, args []string) (Service, error) 
 		for _, arg := range args {
 			words = append(words, systemdQuote(arg))
 		}
-		content := "[Unit]\nDescription=ohya agent memory\nStartLimitIntervalSec=60\nStartLimitBurst=5\n\n[Service]\nType=simple\nExecStart=" + strings.Join(words, " ") + "\nWorkingDirectory=" + strconv.Quote(strings.ReplaceAll(home, "%", "%%")) + "\nRestart=on-failure\nRestartSec=5\nUMask=0077\nStandardOutput=journal\nStandardError=journal\nLogRateLimitIntervalSec=60\nLogRateLimitBurst=20\n\n[Install]\nWantedBy=default.target\n"
+		content := "[Unit]\nDescription=ohya agent memory\nStartLimitIntervalSec=60\nStartLimitBurst=5\n\n[Service]\nType=simple\nExecStart=" + strings.Join(words, " ") + "\nWorkingDirectory=" + strings.ReplaceAll(home, "%", "%%") + "\nRestart=on-failure\nRestartSec=5\nUMask=0077\nStandardOutput=journal\nStandardError=journal\nLogRateLimitIntervalSec=60\nLogRateLimitBurst=20\n\n[Install]\nWantedBy=default.target\n"
 		return Service{Path: filepath.Join(home, ".config", "systemd", "user", "ohya.service"), Content: []byte(content), Start: [][]string{{"systemctl", "--user", "daemon-reload"}, {"systemctl", "--user", "enable", "ohya.service"}, {"systemctl", "--user", "restart", "ohya.service"}}, Stop: [][]string{{"systemctl", "--user", "disable", "--now", "ohya.service"}}, Loaded: []string{"systemctl", "--user", "show", "--property=LoadState", "--value", "ohya.service"}, Check: []string{"systemctl", "--user", "show", "--property=ActiveState,SubState,MainPID", "ohya.service"}}, nil
 	case "darwin":
 		var b strings.Builder
