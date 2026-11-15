@@ -1,0 +1,1 @@
+User requires one pasted command to deliver working memory. The revised plan makes services, ingestion, MCP registration, guidance, verification, repair, and removal part of setup. Current Pi docs and installed help differ, so native MCP and older-version extension paths need explicit compatibility tests. Documentation only; no user services or agent configurations were changed.
