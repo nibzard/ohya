@@ -562,26 +562,3 @@ func TestParseIsDeterministic(t *testing.T) {
 		}
 	}
 }
-
-func TestNormalizeRepoURL(t *testing.T) {
-	cases := []struct{ in, want string }{
-		{"https://github.com/nibzard/ohya.git", "github.com/nibzard/ohya"},
-		{"https://github.com/nibzard/ohya", "github.com/nibzard/ohya"},
-		{"https://GitHub.Com/Nibzard/Ohya.git", "github.com/Nibzard/Ohya"},
-		{"http://example.com/dev/example.git", "example.com/dev/example"},
-		{"ssh://git@github.com/nibzard/ohya.git", "github.com/nibzard/ohya"},
-		{"git@github.com:nibzard/ohya.git", "github.com/nibzard/ohya"},
-		{"git@gitlab.com:group/sub/project.git", "gitlab.com/group/sub/project"},
-		{"https://example.com/dev/example/", "example.com/dev/example"},
-		{"", ""},
-		{"not a url", ""},
-		{"example.com", ""},
-		{"https://example.com", ""},
-		{"git@github.com:nibzard", "github.com/nibzard"},
-	}
-	for _, c := range cases {
-		if got := normalizeRepoURL(c.in); got != c.want {
-			t.Errorf("normalizeRepoURL(%q) = %q, want %q", c.in, got, c.want)
-		}
-	}
-}

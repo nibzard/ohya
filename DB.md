@@ -72,10 +72,13 @@ offsets in the original file, including framing when calculating the next cursor
 ### Repository derivation
 
 `sessions.repo` holds the repository URL a session's own records carry,
-normalized to `host/path`: the `https://`, `http://`, `ssh://` or `git://`
-scheme, any `user@`, and a trailing `.git` or `/` are stripped, an scp-style
-`git@host:path` separator becomes `/`, and the host is lowercased while the
-path keeps its case. Codex derives it from `session_meta.git.repository_url`
+normalized to `host/path` by `workspace.NormalizeRemote`: the `https://`,
+`http://`, `ssh://` or `git://` scheme, all user information up to the last
+`@`, the port of a URL with a scheme, and trailing `.git` and `/` are
+stripped, an scp-style `git@host:path` separator becomes `/`, and the host is
+lowercased while the path keeps its case. A host other than a DNS-style name
+or a bracketed IPv6 address, an empty path, or a path with whitespace or
+control characters yields no repository. The result normalizes to itself. Codex derives it from `session_meta.git.repository_url`
 (embedded parent metas lend nothing); Claude Code and Pi records carry no
 repository URL, so their sessions keep NULL. The first non-empty observation
 in deterministic order wins, exactly like `cwd` and `branch`, and re-derivation
@@ -239,6 +242,7 @@ Output version history:
 | `claudecode` | 1 | Output when the marker was introduced |
 | `codex` | 1 | Output when the marker was introduced |
 | `codex` | 2 | Adds `Record.Repo`, derived from `session_meta.git.repository_url` |
+| `codex` | 3 | `Record.Repo` uses `workspace.NormalizeRemote`: drops a port from a URL with a scheme, drops all user information up to the last `@`, and rejects an invalid host |
 | `pi` | 1 | Output when the marker was introduced |
 | `pi` | 2 | Adds `Record.EntryID`, the usage-row key when a provider emits no `responseId` (verified 2026-11-14: `openai-completions` records never carry one) |
 
