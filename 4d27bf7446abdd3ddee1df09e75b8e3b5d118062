@@ -1,0 +1,37 @@
+# Design: end-to-end freshness harness as a parameterized test
+
+## Problem
+The performance plan's north-star metric (append on a device to
+visibility through the remote sql tool) had no harness. Polling a
+remote hub from a test is easy to get subtly wrong: subtracting
+timestamps across hosts, querying events_settled (which hides the
+last ten minutes by design), waiting for visibility before the next
+append (which hides queue growth), and dropping timed-out samples
+(which flatters percentiles).
+
+## Why This Way
+One process plays device and observer: the appender writes the JSONL
+and the observer polls the remote sql tool, so the lag is one
+monotonic clock subtraction, never cross-host wall clock. Markers are
+`ohyafresh-<run>-<seq>` in the record text, matched with a LIKE on
+the direct events table, paged by `id > last` so the tool's 500-row
+bound never truncates a drain. The appender runs at a fixed rate with
+a random phase offset against the upload interval plus jitter
+(reproducible through OHYA_FRESH_SEED) and never waits for
+visibility. Timed-out samples keep drain-window lower-bound lags in
+the distribution; a bounded health wait after the drain reports late
+deliveries and records that never landed, without touching the
+percentiles. The observer warms its first exchange before the first
+append so a cold tsnet dial (seconds) cannot poison sample one.
+
+## Key Trade-offs
+- Polling bounds visibility from above; the report carries the poll
+  resolution and query durations instead of pretending precision.
+- The in-test run stays at ~100 samples on the shipped 2 s interval:
+  a smoke check, not p99 evidence; T070 scales it with env knobs.
+- The stack sits on one host (loopback tailnet path); the DERP relay
+  leg stays out of scope with blocked T065.
+
+## References
+- Plan: /notes/ohya-perf-plan-2026-11-15.md (measurement contract)
+- Backlog T069/T070 (fixtures, workload matrix)
