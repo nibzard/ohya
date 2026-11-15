@@ -1,0 +1,8 @@
+The requested memory-gate fix was already present in the working tree.
+Reviewed it, ran the package tests with and without race detection,
+and ran vet and the comment checker before saving this focused commit.
+
+The known fallback prefix becomes a report note. Unknown error items
+remain failures. The case-level regression checks both outcomes.
+Only the related gate changes and documentation are included; other
+uncommitted workload, transport, and tooling work stays separate.
