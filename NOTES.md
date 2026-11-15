@@ -1106,11 +1106,9 @@ How to use this file:
     on this Mac (`go test ./cmd/ohya`, 145 s). CI still skips them on darwin.
     One machine; not yet a CI result.
   - Ingest of the full local history (3,292 files, 4.2 GB): 876,852 events in
-    182 s, 130 MB peak RSS, 5.1 GB database (4.1 GB raw_json). 104 sources
-    (3%) stopped on the 1 MiB `--max-record-bytes` default: oversized Codex
-    and Claude records, median 1.7 MiB, max above 8 MiB. Rerun with 8 MiB
-    resumed 100 of them (87,357 events, 24 s). The default is too small for
-    real Codex data.
+    182 s, 130 MB peak RSS, 5.1 GB database (4.1 GB raw_json). The record
+    bound is now 32 MiB (ADR 0004 amendment); the largest local record was
+    16.8 MiB.
   - Claude Code deletes transcripts after `cleanupPeriodDays` (default 30),
     so continuous ingestion is the only copy of older Claude history.
   - FTS queries on 964k events return in about 0.25 s including process
