@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/nibzard/ohya/internal/store"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -32,6 +33,7 @@ func (r Report) Complete() bool {
 }
 
 type Options struct {
+	Database    string
 	Clients     ClientOptions
 	ServiceArgs []string
 	Platform    string
@@ -101,13 +103,20 @@ func Run(ctx context.Context, o Options) (Report, error) {
 		}
 		result.Changed = changed
 		if err == nil {
-			if changed && active {
+			if active {
 				for _, cmd := range service.Stop {
 					if err = o.RunService(ctx, cmd); err != nil {
 						break
 					}
 				}
 				active = false
+			}
+			if err == nil {
+				var recovery Result
+				recovery, err = recoveryPoint(ctx, o.Database, o.Clients.State)
+				if recovery.Component != "" {
+					report.Results = append(report.Results, recovery)
+				}
 			}
 			if err == nil && !active {
 				for _, cmd := range service.Start {
@@ -127,6 +136,18 @@ func Run(ctx context.Context, o Options) (Report, error) {
 			result.Detail = "History imports in the background; run ohya doctor to check sources."
 		}
 		report.Results = append(report.Results, result)
+	}
+	if o.NoService {
+		recovery, err := recoveryPoint(ctx, o.Database, o.Clients.State)
+		if recovery.Component != "" {
+			report.Results = append(report.Results, recovery)
+		}
+		if err != nil {
+			return report, err
+		}
+	}
+	if !report.Complete() {
+		return report, nil
 	}
 	command := Command{Command: o.Clients.Binary, Args: o.Clients.Args}
 	verified := o.Verify(ctx, command)
@@ -219,4 +240,37 @@ func Remove(ctx context.Context, state string, run func(context.Context, []strin
 		report.Results = append(report.Results, result)
 	}
 	return report, nil
+}
+
+func recoveryPoint(ctx context.Context, database, state string) (Result, error) {
+	if database == "" {
+		return Result{}, nil
+	}
+	info, err := os.Lstat(database)
+	if os.IsNotExist(err) {
+		return Result{}, nil
+	}
+	if err != nil {
+		return Result{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return Result{}, fmt.Errorf("memory database is not a regular file")
+	}
+	dir := filepath.Join(state, "setup", "backups")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return Result{}, err
+	}
+	point, err := os.MkdirTemp(dir, "recovery-")
+	if err != nil {
+		return Result{}, err
+	}
+	path := filepath.Join(point, "hub.db")
+	result := Result{Component: "backup", Status: "saved", Detail: path, Changed: true}
+	if err := store.Backup(ctx, database, path); err != nil {
+		result.Status = "failed"
+		result.Detail = "could not create a consistent recovery point"
+		result.Changed = false
+		return result, err
+	}
+	return result, nil
 }

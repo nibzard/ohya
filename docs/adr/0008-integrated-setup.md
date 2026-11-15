@@ -93,3 +93,18 @@ Managed ingestion uses `--allow-empty` so agents with no session files can
 start writing later. Missing roots remain absent and are polled without being
 created. Normal ingestion keeps its existing missing-root error behavior.
 Uninstall preserves edited service files before sending any stop command.
+
+## Recovery points
+
+Before setup starts a memory process against an existing local database, it
+creates an owner-only recovery directory and copies the database through
+SQLite's online backup API. The copy includes committed WAL pages and does not
+migrate the source. Each backup uses an exclusive destination and a bounded,
+context-aware copy loop. The backup is flushed before setup proceeds.
+
+Owned ingestion is stopped before the recovery point, including on a setup
+rerun with unchanged service settings. External writers do not invalidate the
+online snapshot. Setup does not proceed to database opening when backup or
+service preparation fails. Backups are retained during removal. Restore with
+a compatible binary after stopping writers and preserving the old database
+and WAL files together; copying a live database file is not a backup procedure.

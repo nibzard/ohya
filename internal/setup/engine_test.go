@@ -60,7 +60,7 @@ func TestSetupReportsVerificationAndServiceFailures(t *testing.T) {
 	if err != nil || report.Complete() {
 		t.Fatalf("partial = %+v %v", report, err)
 	}
-	if report.Results[0].Status != "failed" || report.Results[1].Status != "failed" {
+	if len(report.Results) != 1 || report.Results[0].Status != "failed" {
 		t.Fatal(report)
 	}
 }
@@ -76,5 +76,27 @@ func TestSetupPreservesUnownedLoadedService(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("modified unowned service: %d calls", calls)
+	}
+}
+
+func TestSetupRecoveryPrecedesMemoryOpen(t *testing.T) {
+	o := engineOptions(t)
+	o.NoAgents = true
+	o.Database = filepath.Join(o.Clients.State, "hub.db")
+	if err := os.MkdirAll(o.Clients.State, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(o.Database, []byte("not a SQLite database"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	verified := false
+	o.Verify = func(context.Context, Command) error { verified = true; return nil }
+	_, err := Run(context.Background(), o)
+	if err == nil || verified {
+		t.Fatalf("unsafe open: verified=%v error=%v", verified, err)
+	}
+	after, err := os.ReadFile(o.Database)
+	if err != nil || string(after) != "not a SQLite database" {
+		t.Fatal("changed original database")
 	}
 }

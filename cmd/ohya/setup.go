@@ -80,7 +80,7 @@ func runSetupCommand(args []string, stdout, stderr io.Writer) error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	options := setup.Options{Clients: setup.ClientOptions{Home: home, State: absState, Binary: binary, Args: []string{"mcp", "--db", db, "--state", absState}, Agents: *agents}, ServiceArgs: serviceArgs, NoService: *noService, NoAgents: *noAgents, DryRun: *dry}
+	options := setup.Options{Database: db, Clients: setup.ClientOptions{Home: home, State: absState, Binary: binary, Args: []string{"mcp", "--db", db, "--state", absState}, Agents: *agents}, ServiceArgs: serviceArgs, NoService: *noService, NoAgents: *noAgents, DryRun: *dry}
 	report, err := setup.Run(ctx, options)
 	return printSetupReport(stdout, setupSpec.name, *asJSON, report, err)
 }

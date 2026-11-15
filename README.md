@@ -359,6 +359,13 @@ entries and service files use ownership receipts. Uninstall preserves memory,
 credentials, sessions, and entries edited after setup.
 
 This development version reports older Pi versions as unsupported. Remote
-setup, automatic backups, PATH setup, and the download bootstrap are not yet
+setup, PATH setup, and the download bootstrap are not yet
 implemented. Existing agent sessions need a reload or a new session after
 registration. Native service verification remains a release gate.
+
+Before local setup restarts ingestion or opens an existing database, it saves
+an owner-only SQLite recovery copy under `STATE/setup/backups/recovery-*/hub.db`.
+The copy includes committed WAL data. Setup stops if it cannot make the copy.
+Recovery files are retained; uninstall preserves them. To restore one, stop all
+writers, preserve the current database and its WAL files together, and restore
+the copy with a compatible binary. A binary downgrade alone is not recovery.
