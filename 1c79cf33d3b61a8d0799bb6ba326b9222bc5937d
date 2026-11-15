@@ -1,0 +1,1 @@
+Keep the original smoke exit status and report failed service cleanup as a failed test. Preserve synthetic state for recovery on cleanup failure. Shell syntax passes; the real Linux smoke will run against the clean candidate.
