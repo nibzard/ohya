@@ -16,7 +16,7 @@ import (
 	"github.com/nibzard/ohya/internal/store"
 )
 
-const mixPinnedHash = "cf951188e411bf95b5ef6adf0194d82eb74eb0164ed0e6babe740299d2c89ab9"
+const mixPinnedHash = "aac095dab29ca675bbdbda700f6a690b02f691bd9b51a54ef515ac257d34db35"
 
 func filesHash(files []File) string {
 	h := sha256.New()
@@ -172,7 +172,7 @@ func TestAgentCorpusStableHash(t *testing.T) {
 		{"claude-code", Generate(c), "8dd7315f320af895e6a5e520287c00c43e286a9e0eda01fdc52cca70bdf057d7"},
 		{"codex", GenerateCodex(c), "5a501361f2a8dcd14416f20d444c4fc4f45f7ed5e7172d4fb19d1754af47ffd7"},
 		{"pi", GeneratePi(Corpus{Sessions: 3, MainMeanBytes: 64 << 10, Seed: 7}),
-			"3288ef37a7c0d81d208c888081303088fc984b36ed622a2cab5806db54632302"},
+			"0a5637fdaeb55e79a1669575dd6d929b1091c64e928a298389971351d457ce35"},
 	}
 	for _, tc := range cases {
 		if got := filesHash(tc.files); got != tc.want {

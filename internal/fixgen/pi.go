@@ -3,6 +3,7 @@ package fixgen
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"path/filepath"
 	"strings"
@@ -166,7 +167,7 @@ func (w *piWriter) usage() rec {
 		"cost": rec{
 			"input": float64(in) * 2e-7, "output": float64(out) * 3e-7,
 			"cacheRead": float64(cacheRead) * 2e-8, "cacheWrite": 0,
-			"total": float64(in)*2e-7 + float64(out)*3e-7 + float64(cacheRead)*2e-8,
+			"total": math.FMA(float64(cacheRead), 2e-8, math.FMA(float64(out), 3e-7, float64(in)*2e-7)),
 		},
 	}
 }

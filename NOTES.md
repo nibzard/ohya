@@ -1019,3 +1019,21 @@ How to use this file:
   (`-p 1`) rejected: tenant load fails a serialized run too, and it slows
   every check. Reopen condition: a loaded run above 120 s → raise the
   ceiling with that evidence, like any other allowed variation.
+
+- Pi fixture cost totals, FMA determinism, fixed 2026-11-15: the macOS CI
+  check (first arm64 exposure of the fixgen hash pins) failed
+  TestAgentCorpusStableHash and TestGenerateMixIsDeterministic while
+  check-linux passed. Root cause, proven bit-for-bit: Go contracts
+  `float64(in)*2e-7 + float64(out)*3e-7 + float64(cacheRead)*2e-8` into
+  fused multiply-adds on arm64 (one rounding, leftmost multiply kept
+  separate) while amd64 rounds each operation; json's shortest float
+  formatting then emits different bytes. The pi usage total now uses an
+  explicit `math.FMA` chain shaped exactly like the arm64 contraction —
+  `math.FMA(cacheRead, 2e-8, math.FMA(out, 3e-7, in*2e-7))` — which the
+  Go spec defines as the correctly-rounded fused result on every
+  platform. The fixed bytes reproduce the darwin output verbatim
+  (per-file ddaaa1bb…/121c5267…/8dc6a83f…); the mix and pi pins moved to
+  the darwin-observed corpus hashes, claude-code and codex pins are
+  unchanged, and only `total` cost fields differ from the old linux
+  fixtures (a few characters in some records; corpus shape and event
+  counts unchanged).
