@@ -449,6 +449,7 @@ func (ref promptRef) before(other promptRef) bool {
 func applySessionDelta(ctx context.Context, tx *sql.Tx, sid string, d *sessionDelta, sourceID string) error {
 	var (
 		count       int
+		deviceID    string
 		started     sql.NullInt64
 		last        sql.NullInt64
 		cwd         sql.NullString
@@ -459,9 +460,9 @@ func applySessionDelta(ctx context.Context, tx *sql.Tx, sid string, d *sessionDe
 		metadata    string
 	)
 	err := tx.QueryRowContext(ctx,
-		`SELECT event_count, started_at_ms, last_event_at_ms, cwd, branch, repo, model, first_prompt, metadata
+		`SELECT device_id, event_count, started_at_ms, last_event_at_ms, cwd, branch, repo, model, first_prompt, metadata
 		 FROM sessions WHERE id = ?`, sid).
-		Scan(&count, &started, &last, &cwd, &branch, &repo, &model, &firstPrompt, &metadata)
+		Scan(&deviceID, &count, &started, &last, &cwd, &branch, &repo, &model, &firstPrompt, &metadata)
 	if err != nil {
 		return fmt.Errorf("store: ingest session %s: read aggregates: %w", sid, err)
 	}
@@ -480,6 +481,11 @@ func applySessionDelta(ctx context.Context, tx *sql.Tx, sid string, d *sessionDe
 	}
 	if !repo.Valid && d.repo != "" {
 		repo = sql.NullString{String: d.repo, Valid: true}
+	}
+	if !repo.Valid && cwd.Valid {
+		if repo, err = workspaceRepo(ctx, tx, deviceID, cwd.String); err != nil {
+			return fmt.Errorf("store: ingest session %s: read workspace repository: %w", sid, err)
+		}
 	}
 	if !model.Valid && d.model != "" {
 		model = sql.NullString{String: d.model, Valid: true}

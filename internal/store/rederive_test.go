@@ -75,7 +75,7 @@ func dumpHub(t *testing.T, hub *DB) string {
 	}
 
 	srows, err := hub.Writer().Query(
-		`SELECT id, event_count, started_at_ms, last_event_at_ms, cwd, branch, model, first_prompt, metadata
+		`SELECT id, event_count, started_at_ms, last_event_at_ms, cwd, branch, repo, model, first_prompt, metadata
 		 FROM sessions ORDER BY id`)
 	if err != nil {
 		t.Fatal(err)
@@ -84,14 +84,14 @@ func dumpHub(t *testing.T, hub *DB) string {
 		var id string
 		var count int
 		var started, last any
-		var cwd, branch, model, prompt any
+		var cwd, branch, repo, model, prompt any
 		var metadata string
-		if err := srows.Scan(&id, &count, &started, &last, &cwd, &branch, &model, &prompt, &metadata); err != nil {
+		if err := srows.Scan(&id, &count, &started, &last, &cwd, &branch, &repo, &model, &prompt, &metadata); err != nil {
 			srows.Close()
 			t.Fatal(err)
 		}
-		fmt.Fprintf(&b, "session %s count=%d started=%v last=%v cwd=%v branch=%v model=%v prompt=%q md=%s\n",
-			id, count, started, last, cwd, branch, model, prompt, metadata)
+		fmt.Fprintf(&b, "session %s count=%d started=%v last=%v cwd=%v branch=%v repo=%v model=%v prompt=%q md=%s\n",
+			id, count, started, last, cwd, branch, repo, model, prompt, metadata)
 	}
 	srows.Close()
 	if err := srows.Err(); err != nil {

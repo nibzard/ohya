@@ -327,10 +327,17 @@ func rewriteEvent(ctx context.Context, tx *sql.Tx, src rederiveSource, p ParserD
 }
 
 func finalizeSession(ctx context.Context, tx *sql.Tx, st *rebuiltSession) error {
-	var metadata string
+	var metadata, deviceID string
 	if err := tx.QueryRowContext(ctx,
-		`SELECT metadata FROM sessions WHERE id = ?`, st.id).Scan(&metadata); err != nil {
+		`SELECT metadata, device_id FROM sessions WHERE id = ?`, st.id).Scan(&metadata, &deviceID); err != nil {
 		return fmt.Errorf("store: re-derive session %s: read metadata: %w", st.id, err)
+	}
+	repo := sql.NullString{String: st.repo, Valid: st.repo != ""}
+	if !repo.Valid && st.cwd != "" {
+		var err error
+		if repo, err = workspaceRepo(ctx, tx, deviceID, st.cwd); err != nil {
+			return fmt.Errorf("store: re-derive session %s: read workspace repository: %w", st.id, err)
+		}
 	}
 	md := map[string]json.RawMessage{}
 	if metadata != "" && metadata != "{}" {
@@ -366,7 +373,7 @@ func finalizeSession(ctx context.Context, tx *sql.Tx, st *rebuiltSession) error 
 		   cwd = ?, branch = ?, repo = ?, model = ?, first_prompt = ?, metadata = ?
 		 WHERE id = ?`,
 		st.count, started, last,
-		nullString(st.cwd), nullString(st.branch), nullString(st.repo), nullString(st.model),
+		nullString(st.cwd), nullString(st.branch), repo, nullString(st.model),
 		firstPrompt, string(encodedMetadata), st.id); err != nil {
 		return fmt.Errorf("store: re-derive session %s: update aggregates: %w", st.id, err)
 	}

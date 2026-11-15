@@ -10,7 +10,11 @@ adds `events.parser_version`, the parser output version marker (see "Re-derivati
 rekeys that deduplication by content (see the invariant below);
 [006_events_settled_view.sql](internal/store/migrations/006_events_settled_view.sql)
 creates `events_settled`, the view over sessions idle at least 10 minutes
-(see "Settled events").
+(see "Settled events");
+[007_workspaces.sql](internal/store/migrations/007_workspaces.sql)
+adds `workspaces`, the device-observed repository of each session working
+directory, and the `sessions (device_id, cwd)` index (see "Repository
+derivation").
 Do not duplicate the DDL here.
 There is no released database yet, so migrations 001 and 002 are the pre-release baseline; every later
 schema change arrives as a new migration file.
@@ -63,6 +67,7 @@ writer.
 | `event_annotations` | Agent-written JSON values keyed by event, namespace, key and writer |
 | `events_fts` | Search index over event text, maintained transactionally |
 | `events_settled` | View over `events` holding only records of sessions idle at least 10 minutes |
+| `workspaces` | Write-once repository observation for one session working directory on one device |
 
 Use Unix milliseconds; absent observations remain NULL. Ingestion JSON metadata contains
 only deterministic observations, not inferred outcomes. Raw JSON preserves the
@@ -71,19 +76,43 @@ offsets in the original file, including framing when calculating the next cursor
 
 ### Repository derivation
 
-`sessions.repo` holds the repository URL a session's own records carry,
-normalized to `host/path` by `workspace.NormalizeRemote`: the `https://`,
-`http://`, `ssh://` or `git://` scheme, all user information up to the last
-`@`, the port of a URL with a scheme, and trailing `.git` and `/` are
-stripped, an scp-style `git@host:path` separator becomes `/`, and the host is
-lowercased while the path keeps its case. A host other than a DNS-style name
-or a bracketed IPv6 address, an empty path, or a path with whitespace or
-control characters yields no repository. The result normalizes to itself. Codex derives it from `session_meta.git.repository_url`
-(embedded parent metas lend nothing); Claude Code and Pi records carry no
-repository URL, so their sessions keep NULL. The first non-empty observation
-in deterministic order wins, exactly like `cwd` and `branch`, and re-derivation
-recomputes it. Never decode the Claude Code project directory name — it is
-lossy — and never discover git roots from the filesystem at ingestion time.
+`sessions.repo` is the project key shared across devices. One project has a
+different `cwd` on each device, so cross-device recall filters on `repo`.
+
+`repo` comes from two stored inputs, in this order
+([ADR 0009](docs/adr/0009-workspace-repository-observations.md)):
+
+1. **The session's own records.** Codex derives it from
+   `session_meta.git.repository_url` (embedded parent metas lend nothing).
+   The first non-empty value in deterministic order wins, exactly like `cwd`
+   and `branch`. Claude Code and Pi records carry no repository URL.
+2. **The workspace observation for `(device_id, cwd)`.** It applies when the
+   records carry no repository. The device that ran the session resolves its
+   `cwd` against `.git` and sends the result. A `workspaces` row with a NULL
+   `repo` records that the directory had no usable repository.
+
+Ingestion, a new observation, and re-derivation apply the same rule, and all
+of them read only stored rows. An observation fills `repo` only where it is
+NULL. A record-carried URL arrives with the `cwd` in the same Codex
+`session_meta`, so the two orders cannot disagree. Observations are
+write-once: the first one for a `(device_id, path)` wins, and the hub stores
+one only for a path that is the `cwd` of a session on that device.
+`store.PendingWorkspaces` lists, per device and agent, the `cwd` values of
+sessions with a NULL `repo` and no observation yet.
+
+Every repository value, from records or from a device, is normalized to
+`host/path` by `workspace.NormalizeRemote`: the `https://`, `http://`,
+`ssh://` or `git://` scheme, all user information up to the last `@`, the
+port of a URL with a scheme, and trailing `.git` and `/` are stripped, an
+scp-style `git@host:path` separator becomes `/`, and the host is lowercased
+while the path keeps its case. A host other than a DNS-style name or a
+bracketed IPv6 address, an empty path, or a path with whitespace or control
+characters yields no repository. The result normalizes to itself, and the
+hub rejects an observation whose value does not.
+
+Never decode the Claude Code project directory name, because it is lossy.
+Parsers never read the filesystem: git discovery happens on the device, as
+an observation, never inside derivation.
 
 ### Settled events
 
