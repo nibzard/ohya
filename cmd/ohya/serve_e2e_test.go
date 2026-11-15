@@ -19,7 +19,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -28,6 +27,16 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+func transportTestDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "ohya-e2e-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
+}
 
 func freeTCPPort(t *testing.T) int {
 	t.Helper()
@@ -142,13 +151,10 @@ func waitServeReady(t *testing.T, lines <-chan string, serveLog *bytes.Buffer) {
 }
 
 func TestServeJoinEndToEnd(t *testing.T) {
-	if os.Getenv("CI") != "" && runtime.GOOS == "darwin" {
-		t.Skip("darwin CI: the pinned transport's macOS runtime behavior is unverified (backlog T046); the stack runs on the development platform")
-	}
 	if testing.Short() {
 		t.Skip("end-to-end stack test")
 	}
-	dir := t.TempDir()
+	dir := transportTestDir(t)
 	hubState := filepath.Join(dir, "hub-state")
 	hubDB := filepath.Join(dir, "hub", "hub.db")
 	devState := filepath.Join(dir, "dev-state")
@@ -434,13 +440,10 @@ func e2eSelfSignedCert(t *testing.T, dir string) (string, string) {
 }
 
 func TestServeJoinTLS(t *testing.T) {
-	if os.Getenv("CI") != "" && runtime.GOOS == "darwin" {
-		t.Skip("darwin CI: the pinned transport's macOS runtime behavior is unverified (backlog T046)")
-	}
 	if testing.Short() {
 		t.Skip("end-to-end stack test")
 	}
-	dir := t.TempDir()
+	dir := transportTestDir(t)
 	hubState := filepath.Join(dir, "hub-state")
 	hubDB := filepath.Join(dir, "hub", "hub.db")
 	devState := filepath.Join(dir, "dev-state")

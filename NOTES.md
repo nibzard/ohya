@@ -69,11 +69,10 @@ How to use this file:
   raw JSON, without source-file resync. Plan the version marker and a
   re-derive migration before the first parser ships.
 
-- Open decision, malformed complete lines: ARCHITECTURE.md stops the source
-  at the offending offset; agentsview skips the line, counts it, and surfaces
-  the count. Real archives contain junk lines, and a stopped source blocks all
-  later events for that session. Collect evidence during the Claude Code
-  spike, then confirm or revise the stop-at-offset rule.
+- Malformed complete lines: ADR 0004 accepts stopping at the offending
+  offset without skipping bytes. Repair the source file, or raise
+  `--max-record-bytes` for a size stop. A degraded `ingest --once` pass
+  exits 3 and reports each stopped source with its remedy.
 
 - Multi-machine ingestion may not need networking first: agentsview supports
   out-of-band transport (rsync/git/shared mount) into machine-labeled source
@@ -548,9 +547,10 @@ How to use this file:
     flag and default ohya-hub.tail.ohya:9027 as join) carries the address.
   - e2e (cmd/ohya/serve_e2e_test.go, fork-child pattern): serve ready in
     ~1 s, the 16-record fixture lands within ~10–20 s of join, the first
-    remote dial costs ~10 s (tsnet path discovery). Skips on darwin CI —
-    macOS runtime behavior of the pinned library is unverified (T046);
-    Linux is the development and CI platform (T043).
+    remote dial costs ~10 s (tsnet path discovery). The core serve/join
+    and TLS tests now run on darwin CI. Their state directories use a
+    short `/tmp/ohya-e2e-*` path to fit the control socket limit. Native
+    macOS execution still needs a new CI run; Linux checks cannot prove it.
   - darwin check-job facts (2026-11-14, T057, internal/control): headscale
     serves its gRPC API on a unix socket at <dir>/headscale.sock, and
     darwin's sun_path holds 104 bytes (Linux 108) — t.TempDir() on the

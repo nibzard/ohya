@@ -7,7 +7,10 @@ adds `events.ordinal` and `events.duplicate_of` for replay deduplication across 
 [004_parser_output_version.sql](internal/store/migrations/004_parser_output_version.sql)
 adds `events.parser_version`, the parser output version marker (see "Re-derivation");
 [005_ordinal_dedup_by_content.sql](internal/store/migrations/005_ordinal_dedup_by_content.sql)
-rekeys that deduplication by content (see the invariant below).
+rekeys that deduplication by content (see the invariant below);
+[006_events_settled_view.sql](internal/store/migrations/006_events_settled_view.sql)
+creates `events_settled`, the view over sessions idle at least 10 minutes
+(see "Settled events").
 Do not duplicate the DDL here.
 There is no released database yet, so migrations 001 and 002 are the pre-release baseline; every later
 schema change arrives as a new migration file.

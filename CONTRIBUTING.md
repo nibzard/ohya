@@ -26,6 +26,19 @@ between two saved runs; CI stores every run as an artifact and posts the
 diff against the main-branch baseline — see "Tracking across commits" in
 docs/performance.md.
 
+The core transport tests run on Linux and macOS, including pairing, remote
+queries, live appends, transport owner changes, revocation, and TLS.
+They keep synthetic state under `/tmp/ohya-e2e-*` so the control socket fits
+macOS's path limit. To run those tests directly:
+
+```sh
+go test -tags sqlite_fts5 -timeout 10m -count=1 -v ./cmd/ohya \
+  -run '^(TestServeJoinEndToEnd|TestServeJoinTLS)$'
+```
+
+The CI workflow also supports **Run workflow** for a manual verification run.
+A successful cross-build does not replace native execution.
+
 For individual Go commands use `-tags sqlite_fts5`, including tests and vet;
 without it the SQLite build lacks FTS5. CI runs these checks on macOS and
 on Linux (`ubuntu-latest`), the platform development executes on; the
