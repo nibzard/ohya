@@ -116,3 +116,9 @@ A binary downgrade cannot undo a schema migration or newer parser output.
 - Apple signing and notarization have not run; credentials and a native Mac
   are required. Homebrew native execution is also pending.
 - No GitHub release, tag, Homebrew tap, or installer URL has been published.
+
+The candidate workflow also tests the generated formula on both native macOS
+architectures. `scripts/homebrew-install-smoke.sh dist` creates a temporary local
+tap and rewrites download URLs to the verified local archives. It runs
+`brew install`, `brew test`, and removal. It refuses an existing ohya formula
+or test tap. This test does not publish a tap or run client setup.

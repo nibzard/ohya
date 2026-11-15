@@ -112,3 +112,21 @@ jobs:
           name: unpublished-release-candidates
           path: dist/
           if-no-files-found: error
+  homebrew:
+    needs: [assemble, resolve]
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.revision }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: unpublished-release-candidates
+          path: dist
+      - name: Verify archive installation through Homebrew
+        run: scripts/homebrew-install-smoke.sh dist
