@@ -1037,3 +1037,9 @@ How to use this file:
   unchanged, and only `total` cost fields differ from the old linux
   fixtures (a few characters in some records; corpus shape and event
   counts unchanged).
+
+- Installer proposal (2026-11-15): `docs/installer-plan.md` records the proposed
+  standalone installer, release archives, and later Homebrew path. No installer
+  exists yet. Native target baselines, Apple signing, and Linux bootstrap
+  signature policy remain open. Pi's current quickstart recommends a managed
+  installer with pinned dependencies; do not describe it as npm-only.
