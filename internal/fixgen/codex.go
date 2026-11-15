@@ -139,7 +139,7 @@ func (w *codexWriter) sessionMeta(id, parent string, tsMS int64) rec {
 
 func (g *codexGen) mainJSON(c Corpus) []byte {
 	w := &codexWriter{
-		textGen: textGen{rng: rand.New(rand.NewPCG(g.seed2(0), 0x726f6c6c))},
+		textGen: newTextGen(g.seed2(0), 0x726f6c6c, c),
 		g:       g, threadID: g.thread,
 	}
 	w.emit(w.sessionMeta(g.thread, "", g.baseMS))
@@ -156,7 +156,7 @@ func (g *codexGen) mainJSON(c Corpus) []byte {
 func (g *codexGen) subJSON(c Corpus, i int) []byte {
 	id := g.subagentID(i)
 	w := &codexWriter{
-		textGen: textGen{rng: rand.New(rand.NewPCG(g.seed2(i+1), 0x73756263))},
+		textGen: newTextGen(g.seed2(i+1), 0x73756263, c),
 		g:       g, threadID: id,
 	}
 	w.emit(w.sessionMeta(id, g.thread, g.baseMS+int64(i+1)*60_000))
