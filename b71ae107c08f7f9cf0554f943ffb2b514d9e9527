@@ -1,0 +1,1 @@
+The shared encoder preserves the existing frame bytes and caller-specific validation and error context.
