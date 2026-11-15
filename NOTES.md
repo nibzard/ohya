@@ -958,3 +958,22 @@ How to use this file:
   7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f after
   the comparison and a green run of every model. Upstream can rebuild the
   tag again; if this recurs, pin an immutable artifact or vendor the jar.
+- Perf budgets, Phase 1 selection, CI placement (2026-11-15, T072,
+  docs/performance.md "Budgets, thresholds, and the Phase 1 selection"):
+  freshness p95<2 s and idle RSS<150 MB kept (decision: if freshness needs
+  margin, change the 2 s upload interval, never the target); time-to-memory
+  and 1M-event query thresholds replaced (quiet-disk wall + unconditional
+  CPU per 3 GiB; scoped per-pattern query budgets plus a 1.6 ms/1,000-match
+  wide-BM25 rate); peak-memory/disk-growth/loaded-query budgets recorded
+  with allowed variation. NO Phase 1 candidate selected — after
+  re-scoping, no workload misses (wide-BM25 cost is per-match scoring;
+  contended import misses are tenant fsync load, and register/checkpoint
+  amortization recovers only ~a quarter) — so T073 closes empty per its
+  contract; batch sizing is first in line if the thin 8% quiet-disk
+  time-to-memory margin erodes. CI: the freshness smoke rides `make check`
+  on check-linux (re-measured 50.4 s, p95 2.062 s at 100 samples — above
+  2 s on a phase draw, why the smoke asserts no threshold); statistical
+  runs stay off CI; no new job (the bench job is darwin, where the harness
+  skips, and report-only); `make check` now passes `-timeout 20m` to go
+  test because the cmd/ohya child-process suite measured 229 s reference
+  and a 2–4x slower shared runner reaches the 10-minute per-binary default.
