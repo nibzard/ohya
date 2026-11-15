@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 356" width="860" height="356" role="img" aria-labelledby="title desc">
+  <title id="title">ohya in a terminal</title>
+  <desc id="desc">ohya ingest imports 51 events from Claude Code, Codex, and Pi fixture sessions, ohya doctor reports healthy checks, and the sql MCP tool returns sessions per agent as JSON.</desc>
+  <style>
+    text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; white-space: pre; }
+    .prompt { fill: #8b949e; } .cmd { fill: #e6edf3; font-weight: 600; } .out { fill: #c9d1d9; }
+    .muted { fill: #8b949e; font-style: italic; } .ok { fill: #3fb950; } .accent { fill: #d2a8ff; font-weight: 600; }
+    .bar { fill: #8b949e; font-family: ui-sans-serif, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 12px; }
+  </style>
+  <rect x="0.5" y="0.5" width="859" height="355" rx="12" fill="#0d1117" stroke="#30363d"/>
+  <path d="M0.5,36 H859.5" stroke="#30363d"/>
+  <circle cx="22" cy="18" r="6" fill="#ff5f57"/><circle cx="42" cy="18" r="6" fill="#febc2e"/><circle cx="62" cy="18" r="6" fill="#28c840"/>
+  <text class="bar" x="430" y="22" text-anchor="middle">ohya — synthetic fixtures from testdata/</text>
+  <text x="24" y="62" xml:space="preserve"><tspan class="prompt">$ </tspan><tspan class="cmd">ohya ingest --once</tspan></text>
+  <text x="24" y="82" xml:space="preserve"><tspan class="out">ohya: imported 51 events from 5 sources</tspan></text>
+  <text x="24" y="122" xml:space="preserve"><tspan class="prompt">$ </tspan><tspan class="cmd">ohya doctor</tspan></text>
+  <text x="24" y="142" xml:space="preserve"><tspan class="ok">ok    </tspan><tspan class="out">schema_version: database schema 6 matches this build's migrations</tspan></text>
+  <text x="24" y="162" xml:space="preserve"><tspan class="ok">ok    </tspan><tspan class="out">parser_versions: stored parser output versions: claude-code 1, codex 2, pi 2</tspan></text>
+  <text x="24" y="182" xml:space="preserve"><tspan class="ok">ok    </tspan><tspan class="out">fts_index: events_fts passes the FTS5 integrity-check</tspan></text>
+  <text x="24" y="202" xml:space="preserve"><tspan class="ok">ok    </tspan><tspan class="out">stopped_sources: no source is stopped at its checkpoint (5 watched)</tspan></text>
+  <text x="24" y="242" xml:space="preserve"><tspan class="muted"># any agent, through the sql MCP tool:</tspan></text>
+  <text x="24" y="262" xml:space="preserve"><tspan class="accent">sql </tspan><tspan class="cmd">SELECT agent, count(*) AS sessions, sum(event_count) AS events</tspan></text>
+  <text x="24" y="282" xml:space="preserve"><tspan class="cmd">    FROM sessions GROUP BY agent</tspan></text>
+  <text x="24" y="302" xml:space="preserve"><tspan class="out">{"columns":["agent","sessions","events"],"row_count":3,</tspan></text>
+  <text x="24" y="322" xml:space="preserve"><tspan class="out"> "rows":[["claude-code",2,22],["codex",1,14],["pi",2,15]],"truncated":false}</tspan></text>
+</svg>

@@ -1,0 +1,119 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 440" width="960" height="440" role="img" aria-labelledby="title desc">
+  <title id="title">ohya architecture</title>
+  <desc id="desc">Coding agents on each device write JSONL transcripts. ohya join uploads them in batches over an encrypted tailnet to the hub. ohya serve commits them to one SQLite WAL database with FTS5 search and serves the sql and annotate MCP tools to any agent.</desc>
+  <defs>
+    <style>
+      text { font-family: ui-sans-serif, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+      .ink { fill: #1f2328; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .muted { fill: #59636e; }
+      .h { font-size: 15px; font-weight: 600; }
+      .s { font-size: 12.5px; }
+      .xs { font-size: 11px; }
+      .label { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; fill: #59636e; }
+      .card { fill: rgba(130, 80, 223, 0.06); stroke: rgba(130, 80, 223, 0.55); stroke-width: 1.5; }
+      .hub { fill: rgba(130, 80, 223, 0.12); stroke: #8250df; stroke-width: 2; }
+      .box { fill: rgba(127, 127, 127, 0.08); stroke: rgba(127, 127, 127, 0.45); stroke-width: 1; }
+      .tool { fill: rgba(26, 127, 55, 0.08); stroke: rgba(26, 127, 55, 0.6); stroke-width: 1.5; }
+      .chip { fill: rgba(127, 127, 127, 0.12); }
+      .wire { stroke: #8250df; stroke-width: 2; fill: none; }
+      .wire2 { stroke: #1a7f37; stroke-width: 2; fill: none; }
+      .tunnel { stroke: #8250df; stroke-width: 1.5; stroke-dasharray: 5 5; fill: none; opacity: 0.7; }
+      .arrow { fill: #8250df; }
+      .arrow2 { fill: #1a7f37; }
+      .accent { fill: #8250df; }
+      .green { fill: #1a7f37; }
+      .ink { fill: #e6edf3; }
+      .muted, .label { fill: #9198a1; }
+      .card { fill: rgba(163, 113, 247, 0.08); stroke: rgba(163, 113, 247, 0.6); }
+      .hub { fill: rgba(163, 113, 247, 0.14); stroke: #a371f7; }
+      .tool { fill: rgba(63, 185, 80, 0.08); stroke: rgba(63, 185, 80, 0.6); }
+      .wire, .tunnel { stroke: #a371f7; }
+      .wire2 { stroke: #3fb950; }
+      .arrow, .accent { fill: #a371f7; }
+      .arrow2, .green { fill: #3fb950; }
+    </style>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrow" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrow2" d="M0,0 L10,5 L0,10 z"/></marker>
+  </defs>
+  <g class="ink">
+
+  <text class="label" x="20" y="28">DEVICES</text>
+  <text class="label" x="378" y="28">HUB</text>
+  <text class="label" x="712" y="28">ANY MCP AGENT</text>
+
+  <g transform="translate(20,44)">
+    <rect class="card" width="270" height="160" rx="12"/>
+    <text class="h" x="18" y="30">Laptop</text>
+    <rect class="chip" x="18" y="46" width="88" height="24" rx="12"/><text class="s" x="62" y="62" text-anchor="middle">Claude Code</text>
+    <rect class="chip" x="112" y="46" width="60" height="24" rx="12"/><text class="s" x="142" y="62" text-anchor="middle">Codex</text>
+    <rect class="chip" x="178" y="46" width="40" height="24" rx="12"/><text class="s" x="198" y="62" text-anchor="middle">Pi</text>
+    <text class="xs muted mono" x="18" y="94">~/.claude · ~/.codex · ~/.pi  *.jsonl</text>
+    <rect class="box" x="18" y="108" width="234" height="36" rx="8"/>
+    <text class="s mono" x="32" y="131">ohya join</text>
+    <text class="xs muted" x="118" y="131">tail · batch · retry</text>
+  </g>
+
+  <g transform="translate(20,232)">
+    <rect class="card" width="270" height="160" rx="12"/>
+    <text class="h" x="18" y="30">Workstation</text>
+    <rect class="chip" x="18" y="46" width="88" height="24" rx="12"/><text class="s" x="62" y="62" text-anchor="middle">Claude Code</text>
+    <rect class="chip" x="112" y="46" width="60" height="24" rx="12"/><text class="s" x="142" y="62" text-anchor="middle">Codex</text>
+    <text class="xs muted mono" x="18" y="94">offline? cursors wait, replay later</text>
+    <rect class="box" x="18" y="108" width="234" height="36" rx="8"/>
+    <text class="s mono" x="32" y="131">ohya join</text>
+    <text class="xs muted" x="118" y="131">tail · batch · retry</text>
+  </g>
+
+  <path class="wire" d="M272,170 C330,170 320,218 376,218" marker-end="url(#a)"/>
+  <path class="wire" d="M272,358 C330,358 320,262 376,262" marker-end="url(#a)"/>
+  <text class="xs muted" x="334" y="236" text-anchor="middle">encrypted</text>
+  <text class="xs muted" x="334" y="250" text-anchor="middle">tailnet</text>
+
+  <g transform="translate(378,44)">
+    <rect class="hub" width="270" height="348" rx="14"/>
+    <text class="h mono" x="18" y="32">ohya serve</text>
+    <text class="xs muted" x="18" y="50">one Go binary · no cloud account</text>
+
+    <rect class="box" x="18" y="66" width="234" height="52" rx="8"/>
+    <text class="s" x="32" y="88">Coordination plane + DERP relay</text>
+    <text class="xs muted" x="32" y="106">embedded Tailcat · pairing · revocation</text>
+
+    <rect class="box" x="18" y="130" width="234" height="52" rx="8"/>
+    <text class="s" x="32" y="152">Sync endpoint</text>
+    <text class="xs muted" x="32" y="170">dedupe · ack only after commit</text>
+
+    <path class="wire" d="M135,184 L135,204" marker-end="url(#a)"/>
+
+    <rect class="box" x="18" y="208" width="234" height="92" rx="8"/>
+    <text class="s" x="32" y="232">SQLite WAL database</text>
+    <text class="xs muted" x="32" y="252">raw JSONL records, preserved</text>
+    <text class="xs muted" x="32" y="270">sessions · events · annotations</text>
+    <text class="xs muted" x="32" y="288">FTS5 / BM25 full-text search</text>
+
+    <text class="xs muted" x="18" y="328">also local: </text>
+    <text class="xs mono" x="80" y="328">ohya ingest · ohya mcp</text>
+  </g>
+
+  <path class="wire2" d="M650,174 C690,174 680,128 710,128" marker-end="url(#g)"/>
+  <path class="wire2" d="M650,300 C690,300 680,252 710,252" marker-end="url(#g)"/>
+
+  <g transform="translate(712,84)">
+    <rect class="tool" width="228" height="88" rx="12"/>
+    <text class="h mono" x="18" y="30">sql(query)</text>
+    <text class="xs muted" x="18" y="52">read-only · one statement</text>
+    <text class="xs muted" x="18" y="70">5 s · 500 rows · 256 KiB</text>
+  </g>
+  <g transform="translate(712,208)">
+    <rect class="tool" width="228" height="88" rx="12"/>
+    <text class="h mono" x="18" y="30">annotate(ops)</text>
+    <text class="xs muted" x="18" y="52">tags, findings as JSON</text>
+    <text class="xs muted" x="18" y="70">atomic · ≤100 ops · originals intact</text>
+  </g>
+  <g transform="translate(712,322)">
+    <text class="s" x="0" y="16">Claude Code, Codex, Pi, or any</text>
+    <text class="s" x="0" y="36">MCP client: stdio, local or</text>
+    <text class="s" x="0" y="56"><tspan class="mono">--remote</tspan> through a joined device</text>
+  </g>
+  </g>
+</svg>
