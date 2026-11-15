@@ -8,11 +8,15 @@ tar -xzf "$archive" -C "$work/package"
 ohya="$work/package/ohya"
 state="$work/state"
 cleanup() {
+    result=$?
+    trap - EXIT HUP INT TERM
     if "$ohya" uninstall --state "$state" --json; then
         rm -rf "$work"
     else
         printf 'Cleanup incomplete; retained synthetic state at %s\n' "$work" >&2
+        exit 1
     fi
+    exit "$result"
 }
 trap cleanup EXIT HUP INT TERM
 "$ohya" setup --no-agents --no-modify-path --state "$state" --claude-root "$work/sessions" --codex-root '' --pi-root '' --json
