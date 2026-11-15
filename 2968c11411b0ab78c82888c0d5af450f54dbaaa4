@@ -1,0 +1,15 @@
+T069. Anchors from the corpus measured 2026-11-15 on this machine
+(1,042 claude mains 1.29 GiB + 1,280 subagents 0.59 GiB; 2,495
+codex rollouts 2.93 GiB; 74 pi files 2.1 MiB). Codex threads
+(1,600 at scale 1) are derived from bytes because the generator
+omits resumed pages; real threads ~511 over ~4.9 files each.
+Query fixture answers the perf plan's open question "one million
+events without a 3 GB input": text/8 + session-bytes/4 lands at
+765-889 B mean records (JSON envelope is the floor), 969,004
+events in 746.4 MiB vs ~3.5 GB at full record sizes.
+Key constraints honored: Corpus.Compact with div=1 keeps legacy
+bytes byte-identical (hashes captured pre-change and pinned);
+fixgen imports only the parser packages because importing
+internal/events cycles with events' in-package bench tests
+(records->events is structurally 1:1, so raw parsers count
+events exactly).
