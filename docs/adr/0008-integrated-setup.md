@@ -1,6 +1,6 @@
 # 0008: Integrated installation and setup
 
-Status: accepted design, implementation in progress, 2026-11-15.
+Status: implemented; native release qualification pending, 2026-11-15.
 
 ## Context
 
@@ -86,8 +86,8 @@ the operating system lock.
 agent opt-outs. The local flow serializes updates, applies service files,
 checks the memory protocol, and registers supported native clients. A failed
 component makes the command fail while preserving its completed result report.
-The CLI integration is incremental: remote join, legacy Pi, backups, PATH
-setup, and the bootstrap remain to implement before release.
+Remote join, legacy Pi, private backups, PATH setup, and the bootstrap use
+the same setup engine. Native release qualification remains pending.
 
 Managed ingestion uses `--allow-empty` so agents with no session files can
 start writing later. Missing roots remain absent and are polled without being
@@ -106,8 +106,10 @@ Owned ingestion is stopped before the recovery point, including on a setup
 rerun with unchanged service settings. External writers do not invalidate the
 online snapshot. Setup does not proceed to database opening when backup or
 service preparation fails. Backups are retained during removal. Restore with
-a compatible binary after stopping writers and preserving the old database
-and WAL files together; copying a live database file is not a backup procedure.
+a compatible binary and matching stopped device state and checkpoints. A
+database-only recovery point cannot safely replace a coordinated state backup.
+Never combine older hub data with newer acknowledgments. Preserve the failed
+database and its WAL files together. See `docs/release-operations.md`.
 
 ## Download bootstrap and executable ownership
 
@@ -256,3 +258,24 @@ manager executables remain under their existing owner. `--keep-binary` retains
 an installer-owned executable for repair. The install lock file and recovery
 copies are retained; deleting an advisory lock file could split lock ownership.
 An edited executable is preserved and reported as a failure.
+
+## Saved choices and failed attempts
+
+Setup saves only an allowlisted set of flags and client home overrides. It
+reuses agent selection, absolute session roots, disabled roots, service choices,
+and PATH choices on reruns. Explicit flags take precedence, including false
+booleans. An automatic agent selection stays automatic for new clients.
+Provider credentials and one-time invitations are excluded from preferences.
+
+Client adapters preserve exact original file bytes in private backups before
+changes. Backups stay beside the client receipts and remain after uninstall.
+They support selective recovery without replacing later user settings.
+
+Service ownership is checked before stopping a loaded service. Setup saves the
+SQLite recovery point before changing its service file. A failed attempt
+restores the prior owned service configuration and restarts it under a bounded
+cleanup context. It reports both the original error and any recovery failure.
+This does not restore an older database or executable.
+
+Setup reports when another ohya executable is selected by the current PATH.
+It keeps all service and client paths absolute and does not adopt that file.

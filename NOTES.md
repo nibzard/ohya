@@ -1083,3 +1083,11 @@ How to use this file:
   checkpoint/device backup. Restore matching stopped state as a set; do not
   pair an older hub database with newer acknowledgments. See the operations
   guide before a writable restore.
+
+- Clean installer candidate verification (2026-11-15): source `1c79cf3`,
+  version `v0.0.0-installer-candidate.2`, reports `dirty=false`. HTTPS install,
+  real systemd ingestion, full Source acknowledgment, doctor, and clean service
+  removal pass. Actual standalone version upgrade and binary removal preserve
+  memory and recovery copies with paths containing spaces. Preferences and
+  exact private client backups persist. Failed service changes restore the
+  prior owned service. macOS and Homebrew jobs remain unrun; no publication.

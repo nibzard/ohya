@@ -1,6 +1,8 @@
 # Installer plan
 
-Status: proposed, 2026-11-15. No installer or release is published by this plan.
+Status: implemented locally; native release qualification pending, 2026-11-15.
+No installer URL or release is published. See `docs/release-operations.md` for
+the candidate workflow, evidence, and remaining release gates.
 
 ## Recommendation
 
@@ -16,7 +18,7 @@ agents retain their own runtime requirements.
 A small shell bootstrap downloads and verifies the executable. It then invokes
 `ohya setup` by absolute path. Go owns service setup, client adapters, recovery,
 and verification. Users and coding agents get the same non-interactive flow.
-The commands and options in this document are proposed interfaces.
+The commands and options in this document define the implemented interface.
 
 Start with macOS arm64 and amd64, plus Linux amd64. Each target must pass
 native tests before publication. Linux arm64 is a later addition unless a
@@ -141,17 +143,19 @@ valid; unreadable or stopped sources produce a visible degraded status.
 
 ## Agent adapters
 
-Use supported client commands where possible. Read the effective existing
+Use structured client files with receipts to preserve unrelated settings and
+resume interrupted writes. The adapters use the documented client formats.
+Read the effective existing
 entry before changing it. Apply changes only to the owned ohya entry. Use
 bounded subprocess timeouts, argument arrays, and structured output when
 available. Do not run configuration commands in a repository that can load
 untrusted project settings; use a controlled working directory.
 
-| Agent | Proposed registration | Verification |
+| Agent | Registration | Verification |
 | --- | --- | --- |
-| Claude Code | `claude mcp add --scope user --transport stdio ohya -- /absolute/path/ohya mcp ...` | Inspect the user entry and connect through its exact command |
-| Codex | `codex mcp add ohya -- /absolute/path/ohya mcp ...` | Read `codex mcp get ohya --json` and connect through its exact command |
-| Pi with native MCP | `pi mcp add ohya -- /absolute/path/ohya mcp ...` | Inspect its user entry and verify the connection |
+| Claude Code | Owned `mcpServers.ohya` entry in the user JSON file | Inspect the user entry and connect through its exact command |
+| Codex | Owned `[mcp_servers.ohya]` table in the user TOML file | Read the owned table and connect through its exact command |
+| Pi with native MCP | Owned `mcpServers.ohya` entry after capability detection | Inspect its user entry and verify the connection |
 | Supported older Pi | Install a pinned, ohya-maintained user extension that exposes the same MCP tools | Load the extension in an isolated test session and call the same tools |
 
 Sources: [Claude Code MCP configuration](https://code.claude.com/docs/en/mcp),
