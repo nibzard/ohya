@@ -653,6 +653,16 @@ func WriteError(w io.Writer, code ErrorCode, msg string) error {
 	return nil
 }
 
+func writePayload(w io.Writer, marker byte, payload []byte) error {
+	head := []byte{marker, ProtocolVersion}
+	var length [4]byte
+	binary.BigEndian.PutUint32(length[:], uint32(len(payload)))
+	head = append(head, length[:]...)
+	head = append(head, payload...)
+	_, err := w.Write(head)
+	return err
+}
+
 func WriteQuery(w io.Writer, sql string) error {
 	if sql == "" {
 		return fmt.Errorf("hubsync: query has no SQL text")
@@ -661,12 +671,7 @@ func WriteQuery(w io.Writer, sql string) error {
 		return fmt.Errorf("%w: query holds %d bytes, want at most %d",
 			ErrTooLarge, len(sql), MaxQueryBytes)
 	}
-	head := []byte{markerQuery, ProtocolVersion}
-	var l [4]byte
-	binary.BigEndian.PutUint32(l[:], uint32(len(sql)))
-	head = append(head, l[:]...)
-	head = append(head, sql...)
-	if _, err := w.Write(head); err != nil {
+	if err := writePayload(w, markerQuery, []byte(sql)); err != nil {
 		return fmt.Errorf("hubsync: write query: %w", err)
 	}
 	return nil
@@ -680,12 +685,7 @@ func WriteAnnotate(w io.Writer, request []byte) error {
 		return fmt.Errorf("%w: annotate request holds %d bytes, want at most %d",
 			ErrTooLarge, len(request), MaxAnnotateRequestBytes)
 	}
-	head := []byte{markerAnnotate, ProtocolVersion}
-	var l [4]byte
-	binary.BigEndian.PutUint32(l[:], uint32(len(request)))
-	head = append(head, l[:]...)
-	head = append(head, request...)
-	if _, err := w.Write(head); err != nil {
+	if err := writePayload(w, markerAnnotate, []byte(request)); err != nil {
 		return fmt.Errorf("hubsync: write annotate request: %w", err)
 	}
 	return nil
@@ -700,12 +700,7 @@ func WriteQueryResult(w io.Writer, r mcpserver.Result) error {
 		return fmt.Errorf("%w: query result holds %d bytes, want at most %d; lower the engine's output limit",
 			ErrTooLarge, len(payload), MaxQueryResultBytes)
 	}
-	head := []byte{markerQueryResult, ProtocolVersion}
-	var l [4]byte
-	binary.BigEndian.PutUint32(l[:], uint32(len(payload)))
-	head = append(head, l[:]...)
-	head = append(head, payload...)
-	if _, err := w.Write(head); err != nil {
+	if err := writePayload(w, markerQueryResult, []byte(payload)); err != nil {
 		return fmt.Errorf("hubsync: write query result: %w", err)
 	}
 	return nil

@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
+	"github.com/nibzard/ohya/internal/mcpserver"
 	"github.com/nibzard/ohya/internal/store"
 )
 
@@ -442,5 +444,38 @@ func TestQueryAnnotateFrameRoundTrip(t *testing.T) {
 	hostile.Write(wide[:])
 	if _, _, err := ReadAnnotateReply(hostile); err == nil || !strings.Contains(err.Error(), "out of range") {
 		t.Fatalf("hostile annotate counts error = %v", err)
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
+
+func TestPayloadFramesWireFormatAndWriteErrors(t *testing.T) {
+	cases := []struct {
+		name    string
+		write   func(io.Writer) error
+		marker  byte
+		payload string
+	}{
+		{"query", func(w io.Writer) error { return WriteQuery(w, "SELECT 1") }, 'Q', "SELECT 1"},
+		{"annotate", func(w io.Writer) error { return WriteAnnotate(w, []byte("{}")) }, 'N', "{}"},
+		{"result", func(w io.Writer) error { return WriteQueryResult(w, mcpserver.Result{}) }, 'S', `{"columns":null,"rows":null,"row_count":0,"truncated":false}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var b bytes.Buffer
+			if err := tc.write(&b); err != nil {
+				t.Fatal(err)
+			}
+			want := []byte{tc.marker, ProtocolVersion, 0, 0, 0, byte(len(tc.payload))}
+			want = append(want, tc.payload...)
+			if !bytes.Equal(b.Bytes(), want) {
+				t.Fatalf("frame = %x, want %x", b.Bytes(), want)
+			}
+			if err := tc.write(failingWriter{}); !errors.Is(err, io.ErrClosedPipe) {
+				t.Fatalf("write error = %v", err)
+			}
+		})
 	}
 }
