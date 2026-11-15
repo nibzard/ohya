@@ -1,0 +1,1 @@
+First integrated installer increment: JSON client entries use durable writes and prepared ownership receipts. Tests cover reruns, upgrades, prepared-update recovery, unrelated settings, edited entries, malformed objects, and symlinks. Full Go tests and vet pass with sqlite_fts5. Setup orchestration and client adapters remain to implement.
