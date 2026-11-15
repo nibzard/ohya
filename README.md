@@ -365,12 +365,25 @@ setup accepts `--join-code-env` and saves the hub connection for reruns. The dow
 as `install.sh`, but no release assets are published yet. Existing agent sessions need a reload or a new session after
 registration. Native service verification remains a release gate.
 
+Setup keeps private copies of changed client files beside each client receipt
+under `STATE/setup/clients/*.json.backups/`. Each copy retains the original
+bytes. Uninstall preserves these copies. Restore only the needed settings;
+copying an old file over a current client file can remove later user edits.
+
+Setup saves your agent selection, session roots, client home overrides, and
+service and PATH choices. Reruns reuse them. Explicit flags override saved
+choices. For example, use `--agents auto` to resume automatic discovery, or
+`--no-service=false` to enable the service after a previous skipped setup.
+An empty root still disables that source. Provider secrets are never saved.
+
 Before local setup restarts ingestion or opens an existing database, it saves
 an owner-only SQLite recovery copy under `STATE/setup/backups/recovery-*/hub.db`.
 The copy includes committed WAL data. Setup stops if it cannot make the copy.
-Recovery files are retained; uninstall preserves them. To restore one, stop all
-writers, preserve the current database and its WAL files together, and restore
-the copy with a compatible binary. A binary downgrade alone is not recovery.
+Recovery files are retained; uninstall preserves them. A database copy is not
+a complete backup of device state and checkpoints. Stop all writers and
+restore matching state as a set. Never combine an older database with newer
+acknowledgments. See [the operations guide](docs/release-operations.md) before
+a writable restore. A binary downgrade alone is not recovery.
 
 Setup adds an owned PATH block for Bash, Zsh, and POSIX shells, or an owned Fish
 configuration file. Use `--no-modify-path` to leave shell files unchanged.
@@ -415,8 +428,3 @@ Release preparation is documented in [release and recovery operations](docs/rele
 The manual candidate workflow builds native archives, tests downloaded binaries,
 and exercises a real user service. It publishes no releases. Candidate packaging
 and formula generation are available under `scripts/`; no Homebrew tap exists yet.
-
-Setup keeps private copies of changed client files beside each client receipt
-under `STATE/setup/clients/*.json.backups/`. Each copy retains the original
-bytes. Uninstall preserves these copies. Restore only the needed settings;
-copying an old file over a current client file can remove later user edits.

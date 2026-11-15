@@ -101,6 +101,10 @@ func runSetupCommand(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	preferences, err := setupPreferences(c.fs, absState)
+	if err != nil {
+		return err
+	}
 	connection, err := setup.LoadConnection(absState)
 	if err != nil {
 		return err
@@ -164,7 +168,11 @@ func runSetupCommand(args []string, stdout, stderr io.Writer) error {
 				return err
 			}
 		}
+		preferences.Flags[root.name] = dir
 		serviceArgs = append(serviceArgs, "--"+root.name, dir)
+	}
+	if err := preferences.Validate(); err != nil {
+		return err
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -176,8 +184,11 @@ func runSetupCommand(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	options := setup.Options{WorkingDirectory: cwd, NoModifyPath: *noModifyPath, Shell: os.Getenv("SHELL"), Database: db, Clients: setup.ClientOptions{Home: home, State: absState, Binary: binary, Args: clientArgs, Agents: *agents}, ServiceArgs: serviceArgs, NoService: *noService, NoAgents: *noAgents, DryRun: *dry}
+	options := setup.Options{WorkingDirectory: cwd, NoModifyPath: *noModifyPath, Shell: os.Getenv("SHELL"), Database: db, Clients: setup.ClientOptions{Home: home, State: absState, Binary: binary, Args: clientArgs, Agents: *agents, Getenv: func(name string) string { return preferences.Homes[name] }}, ServiceArgs: serviceArgs, NoService: *noService, NoAgents: *noAgents, DryRun: *dry}
 	options.Prepare = func(ctx context.Context) error {
+		if err := setup.SavePreferences(absState, preferences); err != nil {
+			return err
+		}
 		if err := setup.SaveConnection(absState, connection); err != nil {
 			return err
 		}
