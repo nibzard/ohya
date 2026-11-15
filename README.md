@@ -37,8 +37,9 @@ One Go binary. No cloud account. No embeddings.
 Your agents produce decisions, debugging sessions, and unfinished work every
 day. That context stays in one tool on one machine, until it is lost.
 
-- **Shared:** Codex can read what Claude Code did on your other laptop
-  yesterday.
+- **Cross-agent handoffs:** start in Claude Code, continue in Codex or Pi,
+  and recover the earlier decisions, attempts, and unfinished work—even on
+  another machine.
 - **Local-first:** your transcripts stay on hardware that you own. Devices
   sync over an encrypted tailnet to a hub that you run.
 - **Plain SQL:** agents query with `SELECT` and FTS5/BM25. There is no
@@ -77,6 +78,30 @@ Install the latest release (macOS arm64/amd64, Linux amd64):
 curl -fsSL https://github.com/nibzard/ohya/releases/latest/download/install.sh | sh
 ```
 
+The release-hosted installer downloads the matching binary, verifies its
+archive checksum, installs it in `~/.local/bin`, and runs setup. Setup
+registers MCP integrations for detected agents and starts a user service
+that imports existing history and follows new records. No Go toolchain is
+needed.
+
+Open a new terminal, then check the installation:
+
+```sh
+ohya version
+ohya doctor
+```
+
+Start a new Claude Code, Codex, or Pi session and try:
+
+> Use ohya to find the last work on this repository. What did the previous
+> agent decide, what did it try, and what remains unfinished? Cite event IDs
+> and check the current files before continuing.
+
+The first history import can take time. For memory across machines, follow
+[Share memory across machines](#share-memory-across-machines) below.
+
+### Build from source
+
 Building from source requires Go 1.27.3 or later, CGO, and a C compiler
 (Xcode Command Line Tools on macOS, `build-essential` on Debian or Ubuntu).
 
@@ -87,10 +112,6 @@ make build
 ./bin/ohya setup             # ingestion service + MCP entries for detected agents
 ./bin/ohya doctor            # check the result
 ```
-
-Setup registers ohya with Claude Code, Codex, and Pi, and it starts a user
-service that imports your history and then follows new records. Start a new
-agent session and ask it about earlier work.
 
 <details>
 <summary>Manual setup (no service, no client changes)</summary>
@@ -116,12 +137,12 @@ Register the MCP server in your agent, for example in Claude Code:
 
 ```sh
 # On the hub
-./bin/ohya serve --tls-cert cert.pem --tls-key key.pem --control-url https://hub.example:9417
-./bin/ohya devices invite            # prints a one-time join code
+ohya serve --tls-cert cert.pem --tls-key key.pem --control-url https://hub.example:9417
+ohya devices invite            # prints a one-time join code
 
 # On each device: paste the code without echo, keep it out of shell history
 read -rs OHYA_JOIN_CODE && export OHYA_JOIN_CODE
-./bin/ohya setup --join-code-env OHYA_JOIN_CODE --control https://hub.example:9417
+ohya setup --join-code-env OHYA_JOIN_CODE --control https://hub.example:9417
 ```
 
 Joined agents use `ohya mcp --remote` and query the shared history on the
@@ -130,6 +151,21 @@ hub. Revoke a device at any time with `ohya devices revoke ID`. See
 directories.
 
 ## What agents can ask
+
+Use ohya to recover context across agents and sessions:
+
+- **Hand off work:** “Find what Claude Code last tried in this repository,
+  including failed approaches and remaining work.”
+- **Recall a fix:** “Have we seen this error before? Find the diagnosis and
+  how the fix was verified.”
+- **Understand a decision:** “Find the discussion behind this design and
+  the alternatives we considered.”
+- **Resume a project:** “Find the relevant prior sessions and summarize
+  where work stopped.”
+
+Agents should scope searches to the project, inspect the matching records,
+and cite event IDs. Historical plans and reports need checking against
+current files and tests before acting on them.
 
 The `sql` tool publishes the schema and examples to the agent when it
 connects. A typical recall query:
@@ -148,7 +184,9 @@ ORDER BY events_fts.rank LIMIT 10;
 | `annotate(operations)` | Upserts or deletes JSON annotations on events; originals stay unchanged | 100 operations, 64 KiB per value, atomic |
 
 `events_settled` omits sessions that were active in the last 10 minutes, so
-an agent does not read its own live transcript.
+an agent does not read its own live transcript through this view. For an
+immediate handoff from an active session, the receiving agent can query
+`events` explicitly; settled recall becomes available after 10 minutes idle.
 
 ## Commands
 

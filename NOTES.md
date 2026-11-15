@@ -1141,3 +1141,10 @@ How to use this file:
   setup; add it with the next schema migration. `doctor --deep` still copies
   the whole database into `:memory:` (`store.FTSIndexConsistent`), so RAM use
   equals database size; copying only the FTS shadow tables is unverified.
+
+- README recall trial (2026-11-15): release-hosted installer URL and its
+  `--help` verified by download. Quickstart now separates installed usage
+  from source builds and leads with cross-agent handoffs. Immediate handoffs
+  need explicit `events` queries: `events_settled` excludes sessions active
+  within 10 minutes. Broad recall also needs project scoping to avoid
+  attributing another project's decisions to the current repository.
