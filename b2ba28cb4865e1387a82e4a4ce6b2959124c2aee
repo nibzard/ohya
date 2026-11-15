@@ -1,0 +1,1 @@
+Research compares current official installation paths for Claude Code, Codex, Pi, uv, and GitHub CLI. The proposed installer uses verified release binaries and explicit updates. Native baselines, macOS signing, and Linux signature policy remain open. No installer or release is published.
