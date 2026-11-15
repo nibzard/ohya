@@ -1,0 +1,1 @@
+The first native user-service smoke exposed literal quotes in WorkingDirectory. Use raw path syntax there while keeping argument escaping in ExecStart. systemd-analyze accepts the corrected unit. The packaged binary started a real user service, imported 16 synthetic events, acknowledged the source, passed doctor, and removed its unit. Other platform baselines remain unverified.
