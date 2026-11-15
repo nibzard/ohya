@@ -19,7 +19,7 @@ All files are in [`docs/assets/brand/`](docs/assets/brand/).
 | `logo-dark.svg` | Mark and wordmark on dark backgrounds |
 | `icon.svg` | Mark on the purple tile, 32 px and larger |
 | `icon-small.svg` | Mark on the purple tile with a heavier line, smaller than 32 px |
-| `icon-512.png` | Avatar for GitHub and other services |
+| `icon-512.png` | Avatar for an ohya organization account |
 | `social-preview.svg` | Source of the social preview |
 | `social-preview.png` | Repository social preview, 1280 × 640 |
 
@@ -79,6 +79,8 @@ for written permission.
 
 ## Manual setup
 
-The social preview and the avatar are not set from files in the repository.
-Upload `social-preview.png` in the repository settings under **Social
-preview**, and upload `icon-512.png` as the avatar.
+The social preview is not set from files in the repository. Upload
+`social-preview.png` in the repository settings under **Social preview**.
+
+`icon-512.png` is the avatar for an ohya organization account, if one is
+made. Do not use it as a personal profile picture.
