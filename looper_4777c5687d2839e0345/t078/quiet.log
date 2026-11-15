@@ -1,5 +1,0 @@
-=== RUN   TestIngestPerformanceFloor
-    ingest_perf_test.go:58: ingested 6794 events from 20 files in 1.241314677s
---- PASS: TestIngestPerformanceFloor (1.52s)
-PASS
-ok  	github.com/nibzard/ohya/internal/events	1.529s

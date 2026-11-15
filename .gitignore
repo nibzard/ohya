@@ -13,6 +13,8 @@
 # looper backlog contract (runtime file owned by the looper tool)
 /to-do.json
 /to-do.schema.json
+# looper operation resource prefixes (private check-run output)
+looper_*/
 # regenerated benchmark corpora (docs/performance.md), never committed
 /testdata/bench/
 # local release candidates
