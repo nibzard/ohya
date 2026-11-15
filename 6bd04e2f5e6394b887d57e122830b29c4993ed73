@@ -1,0 +1,1 @@
+Prepare unpublished native candidates and archive-based Homebrew metadata. Python formula tests, shell syntax, and whitespace checks pass. Linux archive HTTPS and real systemd tests passed during development. Hosted native matrix, macOS signing, notarization, and Homebrew installation still need external validation; no assets were published.
