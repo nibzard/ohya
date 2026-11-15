@@ -13,6 +13,7 @@ import (
 	"github.com/nibzard/ohya/internal/device"
 	"github.com/nibzard/ohya/internal/hubsync"
 	"github.com/nibzard/ohya/internal/watch"
+	"github.com/nibzard/ohya/internal/workspace"
 )
 
 const DefaultRequestTimeout = 60 * time.Second
@@ -36,6 +37,7 @@ type Options struct {
 	Reconnect      hubsync.RetryPolicy
 	Interval       time.Duration
 	Log            io.Writer
+	Resolve        workspace.Resolver
 }
 
 type Stats struct {
@@ -59,6 +61,9 @@ type Uploader struct {
 	lossReported map[string]bool
 	gapReported  map[string]int64
 	offline      bool
+
+	workspacesDue bool
+	workspacesOff bool
 }
 
 type stopMark struct {
@@ -88,6 +93,9 @@ func New(w *watch.Watcher, cred device.Credential, dial Dialer, opts Options) (*
 	log := opts.Log
 	if log == nil {
 		log = io.Discard
+	}
+	if opts.Resolve == nil {
+		opts.Resolve = workspace.Resolve
 	}
 	return &Uploader{
 		watcher: w, credential: cred, dial: dial, opts: opts, log: log,
@@ -154,7 +162,58 @@ func (u *Uploader) Sync(ctx context.Context, candidates []string) (Stats, error)
 			return stats, err
 		}
 	}
-	return stats, nil
+	return stats, u.syncWorkspaces(ctx, stats.Inserted > 0)
+}
+
+func (u *Uploader) syncWorkspaces(ctx context.Context, inserted bool) error {
+	if u.workspacesOff || u.conn == nil || (!u.workspacesDue && !inserted) {
+		return nil
+	}
+	res, err := workspace.Sync(ctx, u.exchangeWorkspaces, u.opts.Resolve)
+	if n := len(res.Failures); n > 0 {
+		u.logf("%d session directories could not be read and stay pending: %v", n, res.Failures[0])
+	}
+	var perr *hubsync.Error
+	switch {
+	case err == nil:
+		u.workspacesDue = false
+	case errors.As(err, &perr) && perr.Code == hubsync.CodeUnsupported:
+		u.workspacesOff = true
+		u.logf("the hub refused workspace observations for agent %s: %v", u.opts.Agent, perr)
+	case errors.As(err, &perr) && perr.Code == hubsync.CodeRejected:
+		u.workspacesDue = false
+		u.logf("the hub rejected workspace observations: %v", perr)
+	case errors.As(err, &perr):
+		u.logf("workspace observations failed at the hub, retrying next pass: %v", perr)
+	case errors.Is(err, ErrIncompatible):
+		u.workspacesOff = true
+		u.logf("the hub does not accept workspace observations, so repositories of this device's sessions stay unknown until the hub is upgraded: %v", err)
+	default:
+		return err
+	}
+	return nil
+}
+
+func (u *Uploader) exchangeWorkspaces(ctx context.Context, observed []workspace.Observation) ([]string, error) {
+	var reply hubsync.WorkspacesReply
+	perr, err := u.roundTrip(ctx,
+		func(w io.Writer) error {
+			return hubsync.WriteWorkspaces(w, hubsync.Workspaces{
+				DeviceID: u.credential.DeviceID, Agent: u.opts.Agent, Observations: observed})
+		},
+		func(r io.Reader) (*hubsync.Error, error) {
+			var perr *hubsync.Error
+			var err error
+			reply, perr, err = hubsync.ReadWorkspacesReply(r)
+			return perr, err
+		})
+	if err != nil {
+		return nil, err
+	}
+	if perr != nil {
+		return nil, perr
+	}
+	return reply.Pending, nil
 }
 
 func (u *Uploader) noteLoss(o watch.Outcome) {
@@ -447,6 +506,7 @@ func (u *Uploader) connect(ctx context.Context) error {
 	}
 	u.conn = &conn{c: c, br: bufio.NewReaderSize(c, 64<<10)}
 	u.ready = map[string]bool{}
+	u.workspacesDue = true
 	if u.offline {
 		u.offline = false
 		u.logf("reconnected to the hub; catching up from the retained files")
@@ -455,6 +515,17 @@ func (u *Uploader) connect(ctx context.Context) error {
 }
 
 func (u *Uploader) exchange(ctx context.Context, write func(io.Writer) error) (hubsync.Ack, *hubsync.Error, error) {
+	var ack hubsync.Ack
+	perr, err := u.roundTrip(ctx, write, func(r io.Reader) (*hubsync.Error, error) {
+		var perr *hubsync.Error
+		var err error
+		ack, perr, err = hubsync.ReadReply(r)
+		return perr, err
+	})
+	return ack, perr, err
+}
+
+func (u *Uploader) roundTrip(ctx context.Context, write func(io.Writer) error, read func(io.Reader) (*hubsync.Error, error)) (*hubsync.Error, error) {
 	c := u.conn
 	deadline := time.Now().Add(u.opts.RequestTimeout)
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
@@ -473,24 +544,24 @@ func (u *Uploader) exchange(ctx context.Context, write func(io.Writer) error) (h
 		_ = c.c.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 		if _, perr, rerr := hubsync.ReadReply(c.br); rerr == nil && perr != nil {
 			u.Close()
-			return hubsync.Ack{}, nil, connError(perr)
+			return nil, connError(perr)
 		}
 		u.Close()
-		return hubsync.Ack{}, nil, u.disconnected(ctx, err)
+		return nil, u.disconnected(ctx, err)
 	}
-	ack, perr, err := hubsync.ReadReply(c.br)
+	perr, err := read(c.br)
 	if err != nil {
 		u.Close()
-		return hubsync.Ack{}, nil, u.disconnected(ctx, err)
+		return nil, u.disconnected(ctx, err)
 	}
 	if perr != nil {
 		switch perr.Code {
 		case hubsync.CodeAuth, hubsync.CodeVersion, hubsync.CodeMalformed, hubsync.CodeTooLarge, hubsync.CodeBusy:
 			u.Close()
-			return hubsync.Ack{}, nil, connError(perr)
+			return nil, connError(perr)
 		}
 	}
-	return ack, perr, nil
+	return perr, nil
 }
 
 func connError(perr *hubsync.Error) error {

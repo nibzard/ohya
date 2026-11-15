@@ -38,7 +38,7 @@ const (
 
 	MaxWorkspaces = 256
 
-	maxRepoLen = 1024
+	maxRepoLen = workspace.MaxRepoBytes
 )
 
 const (

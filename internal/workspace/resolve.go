@@ -15,6 +15,8 @@ const maxConfigBytes = 1 << 20
 
 const maxPointerBytes = 4 << 10
 
+const MaxRepoBytes = 1024
+
 type Observation struct {
 	Path string
 	Repo string
@@ -42,7 +44,9 @@ func Resolve(path string) (Observation, error) {
 	case err != nil:
 		return none, fmt.Errorf("workspace: %s: read git config: %w", path, err)
 	}
-	none.Repo = repoFromRemote(remoteURL(parseRemotes(string(config))))
+	if repo := repoFromRemote(remoteURL(parseRemotes(string(config)))); len(repo) <= MaxRepoBytes {
+		none.Repo = repo
+	}
 	return none, nil
 }
 
