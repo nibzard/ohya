@@ -173,6 +173,8 @@ func (e *Endpoint) serveConn(ctx context.Context, session *connSession) {
 			closeConn = e.handleQuery(ctx, conn, *frame.Query)
 		case frame.Annotate != nil:
 			closeConn = e.handleAnnotate(ctx, conn, deviceID, *frame.Annotate)
+		case frame.Workspaces != nil:
+			closeConn = e.handleWorkspaces(ctx, conn, deviceID, *frame.Workspaces)
 		}
 		if closeConn {
 			return
@@ -294,6 +296,38 @@ func (e *Endpoint) handleAnnotate(ctx context.Context, conn net.Conn, deviceID s
 	return false
 }
 
+func (e *Endpoint) handleWorkspaces(ctx context.Context, conn net.Conn, deviceID string, w Workspaces) bool {
+	if w.DeviceID != deviceID {
+		_ = WriteError(conn, CodeAuth, fmt.Sprintf(
+			"workspaces frame names device %s, but the connection belongs to %s", w.DeviceID, deviceID))
+		return true
+	}
+	if !events.Supported(w.Agent) {
+		_ = WriteError(conn, CodeUnsupported,
+			fmt.Sprintf("agent %q has no parser at this hub; this hub parses %q", w.Agent, events.Agents))
+		return false
+	}
+	var reply WorkspacesReply
+	err := Retry(ctx, e.opts.Retry, permanentStoreError, func() error {
+		var err error
+		reply.Result, err = e.db.ObserveWorkspaces(ctx, deviceID, w.Observations)
+		return err
+	})
+	if err == nil {
+		err = Retry(ctx, e.opts.Retry, permanentStoreError, func() error {
+			var err error
+			reply.Pending, err = e.db.PendingWorkspaces(ctx, deviceID, w.Agent, MaxWorkspaces)
+			return err
+		})
+	}
+	if err != nil {
+		_ = WriteError(conn, storeErrorCode(err), err.Error())
+		return false
+	}
+	_ = WriteWorkspacesReply(conn, reply)
+	return false
+}
+
 func queryErrorCode(err error) ErrorCode {
 	switch {
 	case errors.Is(err, mcpserver.ErrBusy):
@@ -372,6 +406,7 @@ func normalize(b Batch, st store.SourceState) (prefix []store.Event, stop *event
 
 func permanentStoreError(err error) bool {
 	return errors.Is(err, store.ErrBatchRejected) ||
+		errors.Is(err, store.ErrObservationRejected) ||
 		errors.Is(err, store.ErrSourceOwnership) ||
 		errors.Is(err, store.ErrSourceNotRegistered)
 }
@@ -382,7 +417,7 @@ func storeErrorCode(err error) ErrorCode {
 		return CodeOwnership
 	case errors.Is(err, store.ErrSourceNotRegistered):
 		return CodeUnknownSource
-	case errors.Is(err, store.ErrBatchRejected):
+	case errors.Is(err, store.ErrBatchRejected), errors.Is(err, store.ErrObservationRejected):
 		return CodeRejected
 	default:
 		return CodeInternal

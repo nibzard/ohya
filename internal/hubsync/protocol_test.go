@@ -10,6 +10,7 @@ import (
 
 	"github.com/nibzard/ohya/internal/mcpserver"
 	"github.com/nibzard/ohya/internal/store"
+	"github.com/nibzard/ohya/internal/workspace"
 )
 
 const (
@@ -220,6 +221,12 @@ func FuzzReadFrame(f *testing.F) {
 		f.Fatal(err)
 	}
 	f.Add(buf.Bytes())
+	buf.Reset()
+	if err := WriteWorkspaces(&buf, Workspaces{DeviceID: testDevice, Agent: "claude-code",
+		Observations: []workspace.Observation{{Path: "/p", Repo: "github.com/x/y"}, {Path: "/q"}}}); err != nil {
+		f.Fatal(err)
+	}
+	f.Add(buf.Bytes())
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		frame, err := ReadFrame(bytes.NewReader(data))
@@ -232,6 +239,12 @@ func FuzzReadFrame(f *testing.F) {
 			err = WriteRegistration(&out, *frame.Registration)
 		case frame.Batch != nil:
 			err = WriteBatch(&out, *frame.Batch)
+		case frame.Query != nil:
+			err = WriteQuery(&out, frame.Query.SQL)
+		case frame.Annotate != nil:
+			err = WriteAnnotate(&out, frame.Annotate.Request)
+		case frame.Workspaces != nil:
+			err = WriteWorkspaces(&out, *frame.Workspaces)
 		}
 		if err != nil {
 			return
@@ -241,7 +254,10 @@ func FuzzReadFrame(f *testing.F) {
 			t.Fatalf("re-decoding a re-encoded frame failed: %v", err)
 		}
 		if (frame.Registration == nil) != (again.Registration == nil) ||
-			(frame.Batch == nil) != (again.Batch == nil) {
+			(frame.Batch == nil) != (again.Batch == nil) ||
+			(frame.Query == nil) != (again.Query == nil) ||
+			(frame.Annotate == nil) != (again.Annotate == nil) ||
+			(frame.Workspaces == nil) != (again.Workspaces == nil) {
 			t.Fatal("frame kind changed across the round trip")
 		}
 	})

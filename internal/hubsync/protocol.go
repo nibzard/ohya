@@ -11,6 +11,7 @@ import (
 	"github.com/nibzard/ohya/internal/claudecode"
 	"github.com/nibzard/ohya/internal/mcpserver"
 	"github.com/nibzard/ohya/internal/store"
+	"github.com/nibzard/ohya/internal/workspace"
 )
 
 const ProtocolVersion = 1
@@ -34,6 +35,10 @@ const (
 	MaxQueryResultBytes = 4 << 20
 
 	MaxAnnotateRequestBytes = 1 << 20
+
+	MaxWorkspaces = 256
+
+	maxRepoLen = 1024
 )
 
 const (
@@ -48,6 +53,8 @@ const (
 	markerQueryResult  = 'S'
 	markerAnnotate     = 'N'
 	markerAnnotateRes  = 'K'
+	markerWorkspaces   = 'W'
+	markerPending      = 'D'
 )
 
 var ErrTooLarge = errors.New("hubsync: frame exceeds its bounds")
@@ -146,11 +153,23 @@ type Annotate struct {
 	Request []byte
 }
 
+type Workspaces struct {
+	DeviceID     string
+	Agent        string
+	Observations []workspace.Observation
+}
+
+type WorkspacesReply struct {
+	Result  store.ObserveResult
+	Pending []string
+}
+
 type Frame struct {
 	Registration *Registration
 	Batch        *Batch
 	Query        *Query
 	Annotate     *Annotate
+	Workspaces   *Workspaces
 }
 
 type frameReader struct {
@@ -261,6 +280,12 @@ func ReadFrame(r io.Reader) (Frame, error) {
 			return Frame{}, err
 		}
 		return Frame{Annotate: a}, nil
+	case markerWorkspaces:
+		w, err := readWorkspaces(fr)
+		if err != nil {
+			return Frame{}, err
+		}
+		return Frame{Workspaces: w}, nil
 	default:
 		return Frame{}, fmt.Errorf("hubsync: bad frame marker %q", marker)
 	}
@@ -381,6 +406,42 @@ func readAnnotate(fr *frameReader) (*Annotate, error) {
 		return nil, fmt.Errorf("hubsync: annotate frame has no request JSON")
 	}
 	return &Annotate{Request: request}, nil
+}
+
+func readWorkspaces(fr *frameReader) (*Workspaces, error) {
+	var w Workspaces
+	var err error
+	if w.DeviceID, err = fr.str16(maxDeviceIDLen, "device ID"); err != nil {
+		return nil, err
+	}
+	if w.Agent, err = fr.str16(maxAgentLen, "agent name"); err != nil {
+		return nil, err
+	}
+	count, err := fr.u16()
+	if err != nil {
+		return nil, err
+	}
+	if count > MaxWorkspaces {
+		return nil, fmt.Errorf("%w: frame carries %d workspaces, want at most %d", ErrTooLarge, count, MaxWorkspaces)
+	}
+	w.Observations = make([]workspace.Observation, 0, count)
+	for range count {
+		var o workspace.Observation
+		if o.Path, err = fr.str16(maxPathLen, "workspace path"); err != nil {
+			return nil, err
+		}
+		n, err := fr.u16()
+		if err != nil {
+			return nil, err
+		}
+		repo, err := fr.bytes(uint32(n), maxRepoLen, "repository")
+		if err != nil {
+			return nil, err
+		}
+		o.Repo = string(repo)
+		w.Observations = append(w.Observations, o)
+	}
+	return &w, nil
 }
 
 func replyHead(fr *frameReader) (byte, error) {
@@ -526,6 +587,109 @@ func ReadAnnotateReply(r io.Reader) (store.AnnotateResult, *Error, error) {
 	default:
 		return store.AnnotateResult{}, nil, fmt.Errorf("hubsync: bad annotate reply marker %q", marker)
 	}
+}
+
+func ReadWorkspacesReply(r io.Reader) (WorkspacesReply, *Error, error) {
+	fr := &frameReader{r: r}
+	marker, err := replyHead(fr)
+	if err != nil {
+		return WorkspacesReply{}, nil, err
+	}
+	switch marker {
+	case markerPending:
+		var reply WorkspacesReply
+		var counts [3]int64
+		for i := range counts {
+			if counts[i], err = fr.i64(); err != nil {
+				return WorkspacesReply{}, nil, err
+			}
+			if counts[i] < 0 || counts[i] > MaxWorkspaces {
+				return WorkspacesReply{}, nil, fmt.Errorf("hubsync: workspace result count %d is out of range", counts[i])
+			}
+		}
+		reply.Result = store.ObserveResult{Applied: int(counts[0]), Unchanged: int(counts[1]), Ignored: int(counts[2])}
+		count, err := fr.u16()
+		if err != nil {
+			return WorkspacesReply{}, nil, err
+		}
+		if count > MaxWorkspaces {
+			return WorkspacesReply{}, nil, fmt.Errorf("%w: reply carries %d pending workspaces, want at most %d",
+				ErrTooLarge, count, MaxWorkspaces)
+		}
+		for range count {
+			path, err := fr.str16(maxPathLen, "workspace path")
+			if err != nil {
+				return WorkspacesReply{}, nil, err
+			}
+			reply.Pending = append(reply.Pending, path)
+		}
+		return reply, nil, nil
+	case markerError:
+		perr, err := readErrorFrame(fr)
+		if err != nil {
+			return WorkspacesReply{}, nil, err
+		}
+		return WorkspacesReply{}, perr, nil
+	default:
+		return WorkspacesReply{}, nil, fmt.Errorf("hubsync: bad workspaces reply marker %q", marker)
+	}
+}
+
+func WriteWorkspaces(w io.Writer, ws Workspaces) error {
+	switch {
+	case ws.DeviceID == "" || ws.Agent == "":
+		return fmt.Errorf("hubsync: workspaces frame has an empty device ID or agent name")
+	case len(ws.DeviceID) > maxDeviceIDLen || len(ws.Agent) > maxAgentLen:
+		return fmt.Errorf("%w: workspaces frame identity exceeds its bound", ErrTooLarge)
+	case len(ws.Observations) > MaxWorkspaces:
+		return fmt.Errorf("%w: %d workspaces, want at most %d", ErrTooLarge, len(ws.Observations), MaxWorkspaces)
+	}
+	head := []byte{markerWorkspaces, ProtocolVersion}
+	head = appendLen16(head, ws.DeviceID)
+	head = append(head, ws.DeviceID...)
+	head = appendLen16(head, ws.Agent)
+	head = append(head, ws.Agent...)
+	head = binary.BigEndian.AppendUint16(head, uint16(len(ws.Observations)))
+	for _, o := range ws.Observations {
+		switch {
+		case o.Path == "":
+			return fmt.Errorf("hubsync: workspace observation has an empty path")
+		case len(o.Path) > maxPathLen:
+			return fmt.Errorf("%w: workspace path length %d exceeds %d", ErrTooLarge, len(o.Path), maxPathLen)
+		case len(o.Repo) > maxRepoLen:
+			return fmt.Errorf("%w: repository length %d exceeds %d", ErrTooLarge, len(o.Repo), maxRepoLen)
+		}
+		head = appendLen16(head, o.Path)
+		head = append(head, o.Path...)
+		head = appendLen16(head, o.Repo)
+		head = append(head, o.Repo...)
+	}
+	if _, err := w.Write(head); err != nil {
+		return fmt.Errorf("hubsync: write workspaces: %w", err)
+	}
+	return nil
+}
+
+func WriteWorkspacesReply(w io.Writer, r WorkspacesReply) error {
+	if len(r.Pending) > MaxWorkspaces {
+		return fmt.Errorf("%w: %d pending workspaces, want at most %d", ErrTooLarge, len(r.Pending), MaxWorkspaces)
+	}
+	head := []byte{markerPending, ProtocolVersion}
+	for _, v := range []int{r.Result.Applied, r.Result.Unchanged, r.Result.Ignored} {
+		head = binary.BigEndian.AppendUint64(head, uint64(v))
+	}
+	head = binary.BigEndian.AppendUint16(head, uint16(len(r.Pending)))
+	for _, p := range r.Pending {
+		if p == "" || len(p) > maxPathLen {
+			return fmt.Errorf("%w: pending workspace path length %d is outside 1-%d", ErrTooLarge, len(p), maxPathLen)
+		}
+		head = appendLen16(head, p)
+		head = append(head, p...)
+	}
+	if _, err := w.Write(head); err != nil {
+		return fmt.Errorf("hubsync: write workspaces reply: %w", err)
+	}
+	return nil
 }
 
 func WriteRegistration(w io.Writer, r Registration) error {
