@@ -1,0 +1,1 @@
+Generate user service files for systemd and launchd without activating real services in development. Owned-file receipts preserve user edits and prepared-update recovery. A state lock serializes setup. Focused tests and full vet pass. Native platform verification and orchestration remain required.
