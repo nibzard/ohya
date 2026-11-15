@@ -490,6 +490,10 @@ the batch bound extends the read.
 
 - `BenchmarkIngestCorpus` measures a first import. Each iteration opens a
   fresh database, so the rate includes `store.Open` and its migrations.
+- `BenchmarkIngestCorpusCodex`, `BenchmarkIngestCorpusPi`, and
+  `BenchmarkIngestCorpusMix` measure the same first import over Codex
+  rollouts, Pi sessions, and the mixed-agent T069 fixture shape, so every
+  agent format has a full write-path benchmark (T071).
 - `BenchmarkParseCorpus`, `BenchmarkParseCorpusCodex`, and
   `BenchmarkParseCorpusPi` measure the parser alone. The gap to
   `BenchmarkIngestCorpus` is the cost of the write path.
@@ -523,6 +527,205 @@ Extrapolation: a history the size of the verified real corpus (about 2 GB)
 imports in 4–13 minutes wall (about 2 minutes CPU) on comparable hardware.
 Ingestion work is linear in bytes: the per-byte rate is flat from 4 MiB to
 128 MiB corpora within measurement noise.
+
+## Ingestion stage attribution
+
+Measured 2026-11-15 (T071) per the performance plan's Phase 0 steps 3 to 5:
+profile `BenchmarkIngestCorpus` and its per-agent siblings at the current
+fixture scale (1x = the 32 MiB benchmark default) and at ten times that scale,
+attribute elapsed time to stages, and verify how much of it is durable-commit
+wait. All raw evidence is under `perf/t071/` (gitignored): benchmark outputs
+`bench-*.txt`, CPU profiles `cpu-*.prof` plus `test-bin`, stage logs
+`stage-*.txt`, per-call sync traces `strace-1x.txt` and `strace-10x.txt` with
+the summarizer `strace-report.py`, CLI runs `cli-*.txt`, and the driver scripts
+`run-bench.sh`, `run-stages.sh`, `run-cli.sh`. Same reference machine and
+shared-disk caveat as every fsync-bound number above.
+
+### Method
+
+Three instruments, each answering what the previous one cannot:
+
+- **Benchmarks with CPU profiles.** `BenchmarkIngestCorpus`,
+  `...Codex`, `...Pi`, and `...Mix` at `OHYA_BENCH_MIB=32` and `=320`,
+  `-benchtime 1x`, one CPU profile per invocation. The profile covers the
+  whole test process, so fixture generation (5–15% of samples) is separated
+  by function attribution, not by the timer.
+- **Stage harness.** `TestIngestStageAttribution`
+  (`internal/events/ingest_stage_test.go`, gated by `OHYA_STAGE_MIB`) replays
+  the exact benchmark loop with wall timers around each stage: `store.Open`
+  (migrations included), `RegisterSource`, `SourceState` reads, `Parse`, and
+  `store.Ingest` (writer wait, commit included). It also samples WAL size
+  every 50 ms and runs three controlled diagnostics on throwaway databases,
+  each verified by reading the pragma or catalog back:
+  `sync-off` (`PRAGMA synchronous=OFF` — removes durability syncs),
+  `fts-off` (drops `events_fts_insert` — removes all FTS index maintenance),
+  and `no-checkpoint` (`PRAGMA wal_autocheckpoint=0` — removes checkpoint
+  work from the commit path). Every database still opens through
+  `store.Open`, which verifies WAL and `synchronous=FULL`; a diagnostic
+  then changes its pragma or drops its trigger on the throwaway copy only,
+  so production durability settings are untouched.
+- **Platform tracing.** `strace -f -y -T -e trace=fsync,fdatasync,...` around
+  `ohya ingest --once` over the T069 import fixture at 1x (137.0 MiB,
+  191 files, 40,020 events) and 10x (1,344.2 MiB, 1,852 files, 391,931
+  events): every sync call with its duration and target file.
+
+Stages the plan names that this benchmark cannot contain: **transport** (the
+corpus is in memory; the device-to-hub leg belongs to the T070 freshness
+matrix) and **polling wait** (`--once` and the benchmark run no poller; the
+daemon interval is a fixed sleep measured by T070). **Discovery** is measured
+separately below through the CLI's no-op pass.
+
+### Elapsed time and rate at 1x and 10x
+
+`-benchtime 1x`, so ns/op is one full first import. Two samples exist for
+three of the 10x rows (a filter quirk ran the set twice — see NOTES.md);
+the spread is the disk, not the code.
+
+| Benchmark | 1x elapsed | 1x rate | 10x elapsed | 10x rate |
+|---|---|---|---|---|
+| `BenchmarkIngestCorpus` (claude-code) | 6.79 s | 4.2 MB/s | 48.1 s | 6.3 MB/s |
+| `BenchmarkIngestCorpusCodex` | 6.74 / 6.29 s | 5.7 / 6.1 MB/s | 67.1 / 63.4 s | 5.7 / 6.1 MB/s |
+| `BenchmarkIngestCorpusPi` | 6.42 / 4.59 s | 5.3 / 7.4 MB/s | 48.3 / 91.3 s | 7.0 / 3.7 MB/s |
+| `BenchmarkIngestCorpusMix` | 6.79 / 5.29 s | 5.2 / 6.7 MB/s | 57.4 / 82.6 s | 5.8 / 4.0 MB/s |
+
+The rate band is the same at 32 MiB and 320 MiB (3.7–7.4 MB/s): ingestion is
+linear in bytes at these scales; no term grows superlinearly. CPU stays a
+minority of wall everywhere — 18–31% of elapsed in every profiled run — so
+most elapsed time is off-CPU wait, quantified next.
+
+CPU profiles (`perf/t071/cpu-*.prof`, share of all process samples): at 1x
+6.83 s CPU over 29.3 s wall (23%), at 10x 67.3 s over 232.6 s (29%) for the
+four-benchmark invocations; per-agent 10x invocations show the same shape
+(codex 26%, pi 18%, mix 19%). `store.Ingest` accumulates 60–64% of samples,
+`events.Parse` 14–15% (`encoding/json` decode 11–13% inside it), and
+`runtime.cgocall` (SQLite executing SQL in C) is 55–65% flat. This extends
+the earlier 32 MiB finding to 320 MiB and to every agent format: no ohya Go
+function is hot at either scale.
+
+### Stage attribution
+
+Staged harness (`perf/t071/stage-*.txt`). Baseline rows are wall seconds for
+the whole import after `store.Open`; repeat spread at 1x was 3.84–4.23 s
+(claude, 3 runs) and 4.46–5.32 s (mix, 2 runs). MiB/s figures use actual
+corpus bytes (the `OHYA_STAGE_MIB` knob is nominal).
+
+| Stage | claude 1x | codex 1x | pi 1x | mix 1x | claude 10x | mix 10x |
+|---|---|---|---|---|---|---|
+| Corpus (bytes / files / commits) | 27.3 / 24 / 48 | 36.3 / 34 / 68 | 32.3 / 16 / 32 | 34.0 / 49 / 98 | 288.0 / 251 / 502 | 316.7 / 439 / 878 |
+| open+migrate | 0.17–0.22 s | 0.27 s | 0.26 s | 0.20–0.22 s | 0.27 s | 0.79 s |
+| register (one commit per source) | 0.63–0.71 s | 1.05 s | 0.79 s | 0.99–1.31 s | 7.70 s | 19.09 s |
+| SourceState reads | < 0.01 s | < 0.01 s | < 0.01 s | < 0.01 s | < 0.01 s | < 0.01 s |
+| parse | 0.24–0.26 s (106–114 MiB/s) | 0.26 s (142) | 0.23 s (140) | 0.24–0.28 s (121–139) | 2.58 s (112) | 2.56 s (124) |
+| ingest writer (commit inside) | 2.97–3.27 s | 3.51 s | 3.31 s | 3.22–3.77 s | 37.14 s | 70.57 s |
+| baseline wall total | 3.84–4.23 s | 4.81 s | 4.33 s | 4.46–5.32 s | 47.42 s | 92.23 s |
+| diagnostic `sync-off` wall | 1.18 s | 1.11 s | 1.18 s | 1.22 s | 13.36 s | 12.69 s |
+| **durable-sync wait** | **2.66–3.05 s (65–72%)** | **3.70 s (77%)** | **3.15 s (73%)** | **3.24–4.10 s (73–77%)** | **34.06 s (72%)** | **79.54 s (86%)** |
+| diagnostic `fts-off` wall (FTS share) | 2.72 s (1.1–1.5 s) | 3.40 s (1.4 s) | 3.31 s (1.0 s) | 4.14 s (0.3–1.2 s) | 76.48 s (n/a, see below) | 79.59 s (12.6 s) |
+| diagnostic `no-checkpoint` wall (checkpoint share) | 3.13 s (0.7–1.1 s) | 3.82 s (1.0 s) | 2.86 s (1.5 s) | 4.23 s (0.2–1.1 s) | 57.96 s (n/a) | 83.07 s (9.2 s) |
+| WAL peak (default / no-checkpoint) | 9.1 / 78.5 MiB | — / — | — / — | 7.1 / 86.6 MiB | 25.6 / 941.1 MiB | 12.6 / 863.2 MiB |
+| database after close | 65.6 MiB | — | — | 67.9 MiB | 685.4 MiB | 630.1 MiB |
+
+Reading of the decomposition (coherent runs; the claude 10x diagnostic triple
+sat in a tenant-load swing where `fts-off` ran slower than baseline, so its
+deltas are void — the mix 10x triple in the same campaign stayed coherent and
+carries the 10x decomposition):
+
+- **Durable-commit wait dominates.** With the shipped configuration (single
+  writer, WAL, `synchronous=FULL`), removing durability syncs collapses the
+  import to 1.1–1.2 s at 1x and 12.7–13.4 s at 10x: 65–86% of baseline wall
+  is sync wait. Splitting it, commit-only wait (no-checkpoint minus sync-off)
+  is 1.7–3.0 s at 1x and 70.4 s at 10x-mix; checkpoint work is 0.7–1.5 s at
+  1x and 9.2 s at 10x-mix. Everything that is not durability — parse, insert,
+  session aggregation, cursor updates — costs 1.1–1.2 s per 27–36 MiB at 1x
+  and about 12.7 s per 317 MiB at 10x, and scales linearly.
+- **Register commits are visible as their own stage.** One registration is
+  one transaction with one durable commit; at 439 sources it costs 19.1 s
+  (43 ms per fsync) against 0.04 s with syncs off. A first import pays one
+  register commit per file before its batch commits.
+- **Parsing is a stable, minor stage.** 106–147 MiB/s in every run and every
+  agent, matching the parser benchmarks; about 6% of baseline wall.
+- **State reads are free.** The `SourceState` lookup before each parse past
+  offset 0 never exceeded 10 ms per import at either scale.
+
+### FTS5 index maintenance, isolated experimentally
+
+Dropping the `events_fts_insert` trigger in a throwaway database (verified:
+zero trigger rows) removes all FTS maintenance from the write path:
+
+| Run | baseline wall | fts-off wall | FTS share of wall | DB size baseline / fts-off |
+|---|---|---|---|---|
+| claude 1x | 3.84–4.23 s | 2.72 s | 1.1–1.5 s (29–36%) | 65.6 / 60.0 MiB (index 8.5%) |
+| codex 1x | 4.81 s | 3.40 s | 1.4 s (29%) | — |
+| pi 1x | 4.33 s | 3.31 s | 1.0 s (24%) | — |
+| mix 1x | 4.46–5.32 s | 4.14 s | 0.3–1.2 s (7–22%) | 67.9 / 63.1 MiB (index 7.1%) |
+| mix 10x | 92.23 s | 79.59 s | 12.6 s (14%) | 630.1 / 588.8 MiB (index 6.6%) |
+
+The share includes the sync volume the trigger induces, not just CPU: with
+the trigger gone, each commit writes fewer WAL pages, so the fsync per commit
+shortens. The FTS5 index itself is 6.6–8.5% of database size. This is a
+diagnostic attribution, not an optimization proposal: the write path indexes
+on insert so search works at all times (the agentsview drop-and-rebuild
+import trick is recorded in NOTES.md as a bulk-import idea only).
+
+### Checkpoint activity
+
+Auto-checkpoint (default 1000 pages) bounds the WAL to 6.8–25.6 MiB during
+import; disabling it (`no-checkpoint`) lets the WAL grow to 78.5–86.6 MiB at
+1x and 863–941 MiB at 10x — 2.7–3.3x corpus size, matching the database
+multiplier — while removing 0.7–1.5 s (1x) and 9.2 s (10x-mix) of wall.
+Checkpoint cost is real but second-order next to commit syncs.
+
+### Synchronization syscalls, counted and timed
+
+`strace` on the end-to-end CLI import (per-call durations in
+`perf/t071/strace-*.txt`, summarized by target file). One commit does NOT
+equal one fsync:
+
+| Target | 1x calls | 1x total | p50 / p95 | 10x calls | 10x total | p50 / p95 |
+|---|---|---|---|---|---|---|
+| `hub.db-wal` (commit + checkpoint WAL syncs) | 541 | 11.75 s | 19.7 / 52.2 ms | 5,154 | 125.8 s | 20.0 / 63.9 ms |
+| `hub.db` (checkpoint main-db syncs) | 77 | 5.13 s | 65.8 / 103.6 ms | 731 | 59.3 s | 70.7 / 162.6 ms |
+| state files (durablefile temp + directory) | 372 | 6.82 s | 18.9 / 30.6 ms | 3,504 | 75.5 s | 20.4 / 39.6 ms |
+| total | 995 | 23.79 s | | 9,394 | 260.8 s | |
+
+Expected commits: 382 at 1x (191 register + 191 batch; every fixture file is
+one batch) and 3,704 at 10x. Measured WAL syncs are 541 and 5,154 — about 1.4
+per commit — because each auto-checkpoint adds roughly two WAL syncs plus one
+main-db sync: 3,704 + 2×731 = 5,166 predicted against 5,154 measured at 10x.
+The state-file syncs are `internal/durablefile`: every acknowledged source
+rewrites `sources/<agent>.json` through temp-file, fsync, rename, and a
+directory fsync — about two syncs per acknowledged file, 75.5 s (19% of
+wall) at 10x. Device-side cursor durability is therefore a first-cost
+component of end-to-end import, distinct from hub commit wait.
+
+End-to-end CLI walls for the same runs: 1x 56.5 s (8.7 s CPU, RSS 64 MiB,
+database 277.9 MiB = 2.03x input); 10x 393.3 s (99.2 s CPU, RSS 72 MiB,
+database 2,720.6 MiB = 2.02x input). A second, fully-indexed pass over the
+same trees (all cursors at end) costs **0.02 s at 191 files and 0.09 s at
+1,852 files** — discovery, stat, fingerprint, and state reads together are
+noise next to any commit.
+
+### Instrumentation overhead and unresolved attribution
+
+- Stage timers add four `time.Now` calls per batch (about 100 per run at 1x)
+  plus a 50 ms WAL sampler: structurally microseconds. The staged baseline
+  walls (3.84–4.23 s) and benchmark walls (4.6–6.8 s) for the same corpus
+  differ by more than the timers can explain; that gap is disk-state
+  variance between runs, bounded above by the repeat spread. `strace` added
+  4% wall at 1x and inflated CPU (user+sys 8.7 s to 19.7 s) at equal counts;
+  the 10x straced wall (648 s) also absorbed a contended window, so its
+  wall — not its counts or durations — is the inflated number. CPU profiling
+  did not move the rate band outside disk noise.
+- Not resolvable without new code: the split of writer wait into begin,
+  per-statement insert, session-delta update, cursor update, and COMMIT
+  inside one transaction (the SQLite driver exposes no commit or trace
+  callback); statement-level attribution inside the C library (CPU samples
+  land in `runtime.cgocall`); and FTS trigger CPU versus its induced sync
+  volume inside a single run (only the combined effect is measured).
+- The `register` stage and the state-file syncs are attributed above, but
+  the two register commits per source (register plus first batch) share one
+  fsync each; the harness counts them as separate commits because they are
+  separate transactions.
 
 ## Queries
 
@@ -625,14 +828,15 @@ are stable. Treat a CI delta as a signal to reproduce locally with
 
 - All fsync-sensitive numbers (import rate, append latency) vary several-fold
   with disk contention; treat the ranges, not the midpoints, as the limit.
-- Measurements cover one machine. End-to-end ingestion is benchmarked on the
-  Claude Code format (the largest verified corpus); Codex and Pi are
-  benchmarked at the parser (`BenchmarkParseCorpusCodex`,
-  `BenchmarkParseCorpusPi`) over corpora drawn from the same text
-  distribution: 173–178 and 156–159 MB/s against Claude Code's 127–132 —
-  the same order, JSON decode dominating. The write path behind the parser
-  is shared and fsync-bound, so the full-path numbers above apply to every
-  agent format.
+- Measurements cover one machine. End-to-end ingestion was first benchmarked
+  on the Claude Code format (the largest verified corpus); T071 added full
+  write-path benchmarks for Codex, Pi, and the mixed fixture
+  (`BenchmarkIngestCorpusCodex`, `...Pi`, `...Mix`) at 1x and 10x scale, with
+  the same conclusion: the write path behind the parser is shared and
+  fsync-bound (65–86% durable-sync wait in every attribution run), so
+  per-agent differences sit inside the disk swing. Parser-only rates stay
+  `BenchmarkParseCorpus*`: Claude Code 127–132, Codex 173–178, Pi 156–159
+  MB/s — the same order, JSON decode dominating.
 - Query latency is measured warm (page cache hot). A cold hub on a slow disk
   pays storage reads on first access; the 5 s deadline absorbs that at these
   volumes.

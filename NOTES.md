@@ -919,6 +919,36 @@ How to use this file:
   `OHYA_FRESH_PAIR_LEAD` before appends start. `fixgen` corpora size at
   sessions × ~3 MiB (main 2 MiB + two quarter-size subagents), so
   `OHYA_FRESH_DEVICE_MIB=192` yields ~285 MB per extra device.
+- Ingestion stage attribution (2026-11-15, T071): numbers and method in
+  docs/performance.md "Ingestion stage attribution"; raw evidence under
+  `perf/t071/` (gitignored). Durable findings:
+  - 65–86% of import wall is durable-sync wait (WAL, `synchronous=FULL`):
+    `PRAGMA synchronous=OFF` in a throwaway DB collapses a 320 MiB import
+    from 47–92 s to 12.7–13.4 s. Commit-only wait dominates; checkpoint
+    share 10–17%; FTS trigger maintenance 24–36% at 1x and 14% at 10x
+    (measured with the trigger dropped, so the number includes the sync
+    volume it induces; the index is 6.6–8.5% of DB size). The rate band is
+    flat 32→320 MiB in every agent format — nothing superlinear.
+  - Register commits are a separate, measurable stage: one fsync per source
+    (43 ms each at 439 sources, 19 s total; 0.04 s with syncs off). The
+    harness counts register and first batch as two commits (two
+    transactions).
+  - One commit is NOT one fsync: strace counted ~1.4 WAL fsyncs per commit
+    (each auto-checkpoint adds ~2 WAL + 1 main-db sync; 3,704 commits +
+    2×731 checkpoints = 5,166 predicted, 5,154 measured at 10x). State
+    durability (`internal/durablefile`: temp file + fsync + rename +
+    directory fsync per acknowledged source) costs ~2 fsyncs per file —
+    75.5 s, 19% of the 10x end-to-end wall. Device-side cursor durability,
+    not hub cost; future import-speed work must weigh it.
+  - Discovery is noise: a fully-acknowledged `ingest --once` pass costs
+    0.02 s over 191 files, 0.09 s over 1,852.
+  - Harness gotchas: `go test -bench '^BenchmarkIngestCorpus/32MiB$'` also
+    runs ...Codex/Pi/Mix — the first path element matches as a prefix
+    (verified 2026-11-15, Go 1.27.3); use the full sibling name in the
+    filter or expect the set. Single 10x diagnostic triples can be voided
+    by shared-disk swings (one claude 320 MiB triple went negative on
+    checkpoint share); keep 1x repeats for coherent decomposition and name
+    which 10x triple carries the numbers.
 - tla2tools 1.8.0 release asset replaced upstream (2026-11-15): GitHub now
   serves a rebuild of the same tag. Both jars have an identical file
   listing and builder metadata (Apache Ant 1.10.12, Eclipse Adoptium
