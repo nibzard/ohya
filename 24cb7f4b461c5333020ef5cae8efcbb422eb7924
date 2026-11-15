@@ -1,0 +1,25 @@
+# Context
+
+## Why This Way
+Phase 2's contract assumed a T073 change to evaluate, but T072 selected
+no Phase 1 candidate, so T073 closed empty and there was nothing to
+accept or discard. The matrix was still repeated at the integrated HEAD
+because production code had moved since the T070 baseline (the T075
+hub-restart transport fix); the repetition confirms the T072 budgets
+describe the shipped tree rather than comparing a candidate.
+
+## Gotchas
+- Steady p95 straddles the 2 s target on single runs (1.971/2.014 s here,
+  1.945/1.999 s in T070): a 1,000-sample draw moves p95 by more than the
+  margin. Do not read one side of the line as a regression; the p99 < 2.5 s
+  companion target is the stable check.
+- The mixed-read/write WAL high-water mark read 33-65 MiB against the
+  27-32 MiB T070 basis (one run 1 MiB over the 64 MiB ceiling, inside the
+  allowed +/-50%). The basis was a low draw; the mark races
+  auto-checkpoints against reader snapshots.
+
+## Related
+- Raw run logs: perf/t074/ (gitignored) and the looper task artifact
+  directory t074-workload-matrix/; verdict in docs/performance.md
+  "Phase 2 acceptance".
+- All four workloads need relay-path repetition after backlog T065.
