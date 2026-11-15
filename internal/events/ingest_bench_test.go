@@ -115,9 +115,21 @@ func benchIngestFile(b *testing.B, hub *store.DB, agent string, f fixgen.File, s
 }
 
 func BenchmarkIngestCorpus(b *testing.B) {
+	benchIngestCorpus(b, claudecode.AgentName, corpus)
+}
+
+func BenchmarkIngestCorpusCodex(b *testing.B) {
+	benchIngestCorpus(b, codex.AgentName, corpusCodex)
+}
+
+func BenchmarkIngestCorpusPi(b *testing.B) {
+	benchIngestCorpus(b, pi.AgentName, corpusPi)
+}
+
+func benchIngestCorpus(b *testing.B, agent string, gen func(int) []fixgen.File) {
 	for _, mib := range []int{4, benchMIB()} {
 		b.Run(fmt.Sprintf("%dMiB", mib), func(b *testing.B) {
-			files := corpus(mib)
+			files := gen(mib)
 			b.ReportAllocs()
 			b.SetBytes(corpusBytes(files))
 			b.ResetTimer()
@@ -126,7 +138,7 @@ func BenchmarkIngestCorpus(b *testing.B) {
 				hub := openBenchHub(b)
 				b.StartTimer()
 				for j, f := range files {
-					if err := benchIngestFile(b, hub, claudecode.AgentName, f, fmt.Sprintf("src-%03d", j)); err != nil {
+					if err := benchIngestFile(b, hub, agent, f, fmt.Sprintf("src-%03d", j)); err != nil {
 						b.Fatal(err)
 					}
 				}
