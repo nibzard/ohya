@@ -1,0 +1,1 @@
+Validate service ownership before stopping it. Save SQLite recovery before changing service content. On failure, restore the owned prior configuration and restart it under a bounded cleanup context. Tests simulate backup and new-service startup failures; setup package passes.
