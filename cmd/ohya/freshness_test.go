@@ -393,7 +393,7 @@ func procResources(pid int) (rssKB int64, cpuSec float64, ok bool) {
 
 func startFreshnessStack(t *testing.T, opts freshnessOptions) *freshnessStack {
 	t.Helper()
-	dir := t.TempDir()
+	dir := transportTestDir(t)
 	st := &freshnessStack{
 		hubState:    filepath.Join(dir, "hub-state"),
 		hubDB:       filepath.Join(dir, "hub", "hub.db"),

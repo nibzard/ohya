@@ -1092,12 +1092,6 @@ How to use this file:
   exact private client backups persist. Failed service changes restore the
   prior owned service. macOS and Homebrew jobs remain unrun; no publication.
 
-- 2026-11-15: `TestFreshnessSmoke` and `TestHubRestartReconnect` in `cmd/ohya`
-  fail on macOS with "setting up gRPC socket: bind: invalid argument". Both
-  host the hub state under `t.TempDir()` (`cmd/ohya/freshness_test.go:396`,
-  `cmd/ohya/hubrestart_test.go:27`), so `control/headscale.sock` exceeds the
-  104-byte darwin socket path. Use the short `/tmp/ohya-e2e-*` directory like
-  the other e2e tests.
 - README images: GitHub serves SVGs in `<img>`, so `prefers-color-scheme`
   inside an SVG follows the OS, not the GitHub theme. Keep two static files
   (`docs/assets/architecture-{light,dark}.svg`) and select them with

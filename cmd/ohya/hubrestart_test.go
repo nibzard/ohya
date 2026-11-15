@@ -24,7 +24,7 @@ func TestHubRestartReconnect(t *testing.T) {
 	if testing.Short() {
 		t.Skip("end-to-end stack test")
 	}
-	dir := t.TempDir()
+	dir := transportTestDir(t)
 	hubState := filepath.Join(dir, "hub-state")
 	hubDB := filepath.Join(dir, "hub", "hub.db")
 	devState := filepath.Join(dir, "dev-state")
