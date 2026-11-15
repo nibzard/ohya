@@ -243,3 +243,16 @@ systemd-analyze regression test parses the generated unit with spaces and
 expansion characters. The corrected native service imported 16 synthetic events,
 acknowledged the full Source cursor, passed doctor, and uninstalled cleanly.
 This verifies the current Linux host, not the unrun release baseline matrix.
+
+## Executable paths and removal
+
+Setup prefers the invoked executable path when it resolves to the running
+executable. This preserves a package manager's stable link rather than storing
+a version-specific Cellar path. An unrelated path cannot be adopted this way.
+
+Uninstall removes a standalone executable only after integration removal
+succeeds and its installer ownership hash still matches. Manual and package
+manager executables remain under their existing owner. `--keep-binary` retains
+an installer-owned executable for repair. The install lock file and recovery
+copies are retained; deleting an advisory lock file could split lock ownership.
+An edited executable is preserved and reported as a failure.

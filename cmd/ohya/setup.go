@@ -9,6 +9,7 @@ import (
 	"github.com/nibzard/ohya/internal/transport/tailcat"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"regexp"
@@ -16,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nibzard/ohya/internal/install"
 	"github.com/nibzard/ohya/internal/setup"
 )
 
@@ -27,7 +29,7 @@ var setupSpec = commandSpec{
 
 var uninstallSpec = commandSpec{
 	name: "ohya uninstall", synopsis: "remove owned services and agent integrations", usageLine: "ohya uninstall [flags]",
-	description: "Stops owned services and removes owned agent entries. Preserves databases, credentials, sessions, and entries edited after setup. Executable removal is handled by the installer or package manager.",
+	description: "Stops owned services and removes owned agent entries. Preserves databases, credentials, sessions, and entries edited after setup. An unchanged executable owned by the standalone installer is removed unless --keep-binary is set. Package manager and manual executables are preserved.",
 	argsTitle:   "Arguments", args: "(none)", examples: []string{"ohya uninstall --json"},
 }
 
@@ -39,7 +41,31 @@ func setupPaths() (string, string, error) {
 		return "", "", err
 	}
 	binary, err := os.Executable()
-	return home, binary, err
+	if err != nil {
+		return "", "", err
+	}
+	binary = stableBinaryPath(binary, os.Args[0])
+	return home, binary, nil
+}
+
+func stableBinaryPath(actual, invoked string) string {
+	candidate, err := exec.LookPath(invoked)
+	if err != nil {
+		return actual
+	}
+	candidate, err = filepath.Abs(candidate)
+	if err != nil {
+		return actual
+	}
+	current, err := os.Stat(actual)
+	if err != nil {
+		return actual
+	}
+	target, err := os.Stat(candidate)
+	if err == nil && os.SameFile(current, target) {
+		return candidate
+	}
+	return actual
 }
 
 func runSetupCommand(args []string, stdout, stderr io.Writer) error {
@@ -170,12 +196,13 @@ func runSetupCommand(args []string, stdout, stderr io.Writer) error {
 }
 
 func runUninstallCommand(args []string, stdout, stderr io.Writer) error {
-	home, _, err := setupPaths()
+	home, binary, err := setupPaths()
 	if err != nil {
 		return err
 	}
 	c := newCommandFlags(uninstallSpec)
 	state := c.fs.String("state", filepath.Join(home, ".ohya"), "memory state `directory`")
+	keepBinary := c.fs.Bool("keep-binary", false, "preserve an executable owned by the standalone installer")
 	asJSON := c.fs.Bool("json", false, "print one versioned JSON result")
 	if err := c.parse(args, stdout); err != nil {
 		return err
@@ -190,6 +217,18 @@ func runUninstallCommand(args []string, stdout, stderr io.Writer) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	report, err := setup.Remove(ctx, absState, nil)
+	if err == nil && report.Complete() && !*keepBinary {
+		changed, removeErr := install.Remove(ctx, filepath.Dir(binary))
+		result := setup.Result{Component: "binary", Status: "unmanaged", Changed: changed}
+		if changed {
+			result.Status = "removed"
+		}
+		if removeErr != nil {
+			result.Status = "failed"
+			result.Detail = removeErr.Error()
+		}
+		report.Results = append(report.Results, result)
+	}
 	return printSetupReport(stdout, uninstallSpec.name, *asJSON, report, err)
 }
 

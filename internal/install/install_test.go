@@ -63,3 +63,42 @@ func TestBinaryPreservesForeignDestinationAndSymlink(t *testing.T) {
 		}
 	}
 }
+
+func TestRemovalRespectsExecutableOwnership(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	dir := filepath.Join(root, "bin")
+	if err := os.WriteFile(source, []byte("installed"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Binary(context.Background(), source, dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ohya"), []byte("edited"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Remove(context.Background(), dir); err == nil {
+		t.Fatal("removed edited executable")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ohya"), []byte("installed"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := Remove(context.Background(), dir)
+	if err != nil || !changed {
+		t.Fatalf("remove %v %v", changed, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "ohya")); !os.IsNotExist(err) {
+		t.Fatal("executable remains")
+	}
+	changed, err = Remove(context.Background(), dir)
+	if err != nil || changed {
+		t.Fatalf("repeat removal %v %v", changed, err)
+	}
+	unmanaged := t.TempDir()
+	if err := os.WriteFile(filepath.Join(unmanaged, "ohya"), []byte("manual"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := Remove(context.Background(), unmanaged); err != nil || changed {
+		t.Fatalf("changed manual executable: %v %v", changed, err)
+	}
+}

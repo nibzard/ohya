@@ -83,3 +83,28 @@ func TestDoctorUnderstandsRemoteSetupWithoutCreatingLocalMemory(t *testing.T) {
 		t.Fatal("created remote state")
 	}
 }
+
+func TestSetupPreservesStablePackageManagerLink(t *testing.T) {
+	dir := t.TempDir()
+	actual := filepath.Join(dir, "Cellar", "ohya", "0.1.0", "ohya")
+	if err := os.MkdirAll(filepath.Dir(actual), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(actual, []byte("fixture"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "ohya")
+	if err := os.Symlink(actual, link); err != nil {
+		t.Fatal(err)
+	}
+	if got := stableBinaryPath(actual, link); got != link {
+		t.Fatalf("registered %s instead of stable link", got)
+	}
+	other := filepath.Join(dir, "other")
+	if err := os.WriteFile(other, []byte("different"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if got := stableBinaryPath(actual, other); got != actual {
+		t.Fatalf("adopted another executable: %s", got)
+	}
+}

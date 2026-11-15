@@ -70,15 +70,11 @@ func Binary(ctx context.Context, source, dir string) (Result, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return Result{}, err
 	}
-	lock, err := os.OpenFile(filepath.Join(dir, ".ohya-install.lock"), os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0600)
+	unlock, err := lockDirectory(dir)
 	if err != nil {
 		return Result{}, err
 	}
-	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		return Result{}, errors.New("another installer owns this destination")
-	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	defer unlock()
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
@@ -94,20 +90,9 @@ func Binary(ctx context.Context, source, dir string) (Result, error) {
 		return result, err
 	}
 	receiptPath := filepath.Join(dir, ".ohya-install.json")
-	var receipt Receipt
-	info, err := os.Lstat(receiptPath)
+	receipt, err := readReceipt(dir)
 	switch {
 	case err == nil:
-		if !info.Mode().IsRegular() {
-			return result, errors.New("installer receipt is not a regular file")
-		}
-		raw, err := os.ReadFile(receiptPath)
-		if err != nil {
-			return result, err
-		}
-		if err := json.Unmarshal(raw, &receipt); err != nil {
-			return result, err
-		}
 		if exists && current != receipt.Digest && current != receipt.Previous {
 			return result, errors.New("installed executable has changed; preserve it")
 		}
@@ -181,4 +166,93 @@ func Binary(ctx context.Context, source, dir string) (Result, error) {
 	}
 	result.Changed = true
 	return result, nil
+}
+
+func lockDirectory(dir string) (func(), error) {
+	lock, err := os.OpenFile(filepath.Join(dir, ".ohya-install.lock"), os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		lock.Close()
+		return nil, errors.New("another installer owns this destination")
+	}
+	return func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); _ = lock.Close() }, nil
+}
+
+func readReceipt(dir string) (Receipt, error) {
+	path := filepath.Join(dir, ".ohya-install.json")
+	info, err := os.Lstat(path)
+	if err != nil {
+		return Receipt{}, err
+	}
+	if !info.Mode().IsRegular() || info.Size() > 16384 {
+		return Receipt{}, errors.New("installer receipt is not a bounded regular file")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return Receipt{}, err
+	}
+	var receipt Receipt
+	if err := json.Unmarshal(raw, &receipt); err != nil {
+		return Receipt{}, err
+	}
+	for _, value := range []string{receipt.Digest, receipt.Previous} {
+		if value == "" {
+			continue
+		}
+		decoded, err := hex.DecodeString(value)
+		if err != nil || len(decoded) != sha256.Size {
+			return Receipt{}, errors.New("invalid installer ownership hash")
+		}
+	}
+	if receipt.Digest == "" {
+		return Receipt{}, errors.New("installer receipt has no ownership hash")
+	}
+	return receipt, nil
+}
+
+func Remove(ctx context.Context, dir string) (bool, error) {
+	if !filepath.IsAbs(dir) {
+		return false, errors.New("installation directory must be absolute")
+	}
+	if _, err := os.Lstat(filepath.Join(dir, ".ohya-install.json")); os.IsNotExist(err) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	unlock, err := lockDirectory(dir)
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+	receipt, err := readReceipt(dir)
+	if err != nil {
+		return false, err
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	path := filepath.Join(dir, "ohya")
+	current, err := digest(path)
+	if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+	if err == nil {
+		if current != receipt.Digest && current != receipt.Previous {
+			return false, errors.New("installed executable has changed; preserve it")
+		}
+		if err := os.Remove(path); err != nil {
+			return false, err
+		}
+	}
+	if err := os.Remove(filepath.Join(dir, ".ohya-install.json")); err != nil {
+		return false, err
+	}
+	parent, err := os.Open(dir)
+	if err != nil {
+		return false, err
+	}
+	defer parent.Close()
+	return true, parent.Sync()
 }
