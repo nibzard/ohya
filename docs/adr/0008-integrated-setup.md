@@ -130,3 +130,20 @@ revision metadata. After installation, setup registers the stable destination
 path, not the temporary download path. Installer diagnostics go to stderr so
 the setup JSON result remains parseable. Native platform validation and release
 publication are still required before users can run a hosted install command.
+
+## Shell PATH configuration
+
+Setup appends an owned PATH block for Bash, Zsh, and POSIX shells. Bash login
+setup chooses the first existing login file rather than creating a file that
+would hide an existing lower-priority profile. Fish gets a separate owned
+configuration file. Existing shell content stays byte-identical outside the
+owned block. Prepared receipts allow interrupted updates to resume. Repeated
+sourcing does not add duplicate PATH entries.
+
+Removal preserves edited blocks and later user content. New empty profiles
+are removed only when their receipt records that setup created them. Shell
+syntax uses literal quoting and does not interpolate executable paths into
+commands. Colons in executable directories are rejected because PATH uses
+colons as separators. Unsupported shells require `--no-modify-path` and an
+explicit PATH configuration. Existing processes cannot inherit changes made
+by a child installer; service and client entries use absolute paths.

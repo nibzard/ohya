@@ -33,16 +33,18 @@ func (r Report) Complete() bool {
 }
 
 type Options struct {
-	Database    string
-	Clients     ClientOptions
-	ServiceArgs []string
-	Platform    string
-	NoService   bool
-	NoAgents    bool
-	DryRun      bool
-	RunService  func(context.Context, []string) error
-	Verify      func(context.Context, Command) error
-	ProbePi     func(context.Context, string) error
+	NoModifyPath bool
+	Shell        string
+	Database     string
+	Clients      ClientOptions
+	ServiceArgs  []string
+	Platform     string
+	NoService    bool
+	NoAgents     bool
+	DryRun       bool
+	RunService   func(context.Context, []string) error
+	Verify       func(context.Context, Command) error
+	ProbePi      func(context.Context, string) error
 }
 
 func Run(ctx context.Context, o Options) (Report, error) {
@@ -66,7 +68,17 @@ func Run(ctx context.Context, o Options) (Report, error) {
 			return report, err
 		}
 	}
+	var profiles []Profile
+	if !o.NoModifyPath {
+		profiles, err = ProfilePlan(o.Clients.Home, o.Shell, filepath.Dir(o.Clients.Binary))
+		if err != nil {
+			return report, err
+		}
+	}
 	if o.DryRun {
+		for _, p := range profiles {
+			report.Results = append(report.Results, Result{Component: "path", Status: "planned", Detail: p.Path})
+		}
 		if !o.NoService {
 			report.Results = append(report.Results, Result{Component: "service", Status: "planned", Detail: service.Path})
 		}
@@ -88,6 +100,15 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	}
 	if o.ProbePi == nil {
 		o.ProbePi = ProbeNativePi
+	}
+	for _, p := range profiles {
+		changed, err := ApplyProfile(o.Clients.State, p)
+		result := Result{Component: "path", Status: "configured", Detail: p.Path, Changed: changed}
+		if err != nil {
+			result.Status = "failed"
+			result.Detail = err.Error()
+		}
+		report.Results = append(report.Results, result)
 	}
 	if !o.NoService {
 		result := Result{Component: "service", Status: "failed"}
@@ -230,6 +251,11 @@ func Remove(ctx context.Context, state string, run func(context.Context, []strin
 	} else if !isMissing(err) {
 		return report, fmt.Errorf("read service receipt: %w", err)
 	}
+	profiles, err := RemoveProfiles(state)
+	if err != nil {
+		return report, err
+	}
+	report.Results = append(report.Results, profiles...)
 	for _, name := range []string{"claude", "codex", "pi"} {
 		changed, err := RemoveClient(state, name)
 		result := Result{Component: name, Status: "removed", Changed: changed}

@@ -11,7 +11,7 @@ import (
 func engineOptions(t *testing.T) Options {
 	t.Helper()
 	dir := t.TempDir()
-	return Options{Clients: ClientOptions{Home: dir, State: filepath.Join(dir, "state"), Binary: "/bin/ohya", Args: []string{"mcp"}, Agents: "claude", Getenv: func(string) string { return "" }, LookPath: func(string) (string, error) { return "/bin/claude", nil }}, ServiceArgs: []string{"ingest"}, Platform: "linux", NoService: true, Verify: func(context.Context, Command) error { return nil }}
+	return Options{NoModifyPath: true, Clients: ClientOptions{Home: dir, State: filepath.Join(dir, "state"), Binary: "/bin/ohya", Args: []string{"mcp"}, Agents: "claude", Getenv: func(string) string { return "" }, LookPath: func(string) (string, error) { return "/bin/claude", nil }}, ServiceArgs: []string{"ingest"}, Platform: "linux", NoService: true, Verify: func(context.Context, Command) error { return nil }}
 }
 
 func TestSetupDryRunDoesNotCreateState(t *testing.T) {

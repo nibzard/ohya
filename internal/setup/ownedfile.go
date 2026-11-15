@@ -13,9 +13,10 @@ import (
 )
 
 type fileReceipt struct {
-	Path     string `json:"path"`
-	Content  []byte `json:"content"`
-	Previous []byte `json:"previous,omitempty"`
+	WholeFile bool   `json:"whole_file"`
+	Path      string `json:"path"`
+	Content   []byte `json:"content"`
+	Previous  []byte `json:"previous,omitempty"`
 }
 
 func Lock(state string) (func(), error) {
@@ -78,7 +79,7 @@ func ApplyFile(path, receiptPath string, content []byte) (bool, error) {
 	if bytes.Equal(current, content) {
 		return false, nil
 	}
-	r = fileReceipt{Path: path, Content: content, Previous: current}
+	r = fileReceipt{WholeFile: true, Path: path, Content: content, Previous: current}
 	raw, err := json.Marshal(r)
 	if err != nil {
 		return false, err

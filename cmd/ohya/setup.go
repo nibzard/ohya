@@ -47,6 +47,7 @@ func runSetupCommand(args []string, stdout, stderr io.Writer) error {
 	state := c.fs.String("state", filepath.Join(home, ".ohya"), "memory state `directory`")
 	agents := c.fs.String("agents", "auto", "agents to configure: auto or comma-separated claude,codex,pi")
 	noAgents := c.fs.Bool("no-agents", false, "skip agent configuration")
+	noModifyPath := c.fs.Bool("no-modify-path", false, "leave shell profiles unchanged")
 	noService := c.fs.Bool("no-service", false, "skip the background service")
 	dry := c.fs.Bool("dry-run", false, "report planned changes without writing files")
 	asJSON := c.fs.Bool("json", false, "print one versioned JSON result")
@@ -85,7 +86,7 @@ func runSetupCommand(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	options := setup.Options{Database: db, Clients: setup.ClientOptions{Home: home, State: absState, Binary: binary, Args: []string{"mcp", "--db", db, "--state", absState}, Agents: *agents}, ServiceArgs: serviceArgs, NoService: *noService, NoAgents: *noAgents, DryRun: *dry}
+	options := setup.Options{NoModifyPath: *noModifyPath, Shell: os.Getenv("SHELL"), Database: db, Clients: setup.ClientOptions{Home: home, State: absState, Binary: binary, Args: []string{"mcp", "--db", db, "--state", absState}, Agents: *agents}, ServiceArgs: serviceArgs, NoService: *noService, NoAgents: *noAgents, DryRun: *dry}
 	report, err := setup.Run(ctx, options)
 	return printSetupReport(stdout, setupSpec.name, *asJSON, report, err)
 }

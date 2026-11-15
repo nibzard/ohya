@@ -359,7 +359,7 @@ entries and service files use ownership receipts. Uninstall preserves memory,
 credentials, sessions, and entries edited after setup.
 
 This development version reports older Pi versions as unsupported. Remote
-setup and PATH setup are not yet implemented. The download bootstrap exists
+setup is not yet implemented. The download bootstrap exists
 as `install.sh`, but no release assets are published yet. Existing agent sessions need a reload or a new session after
 registration. Native service verification remains a release gate.
 
@@ -369,3 +369,10 @@ The copy includes committed WAL data. Setup stops if it cannot make the copy.
 Recovery files are retained; uninstall preserves them. To restore one, stop all
 writers, preserve the current database and its WAL files together, and restore
 the copy with a compatible binary. A binary downgrade alone is not recovery.
+
+Setup adds an owned PATH block for Bash, Zsh, and POSIX shells, or an owned Fish
+configuration file. Use `--no-modify-path` to leave shell files unchanged.
+Service and agent commands use absolute executable paths immediately. A newly
+opened shell reads the PATH change; the installer cannot change its parent
+shell environment. Uninstall removes only unchanged owned blocks and keeps
+later user settings.
