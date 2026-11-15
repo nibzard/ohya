@@ -174,7 +174,8 @@ from `ohya devices invite` on the hub and carries two halves: the one-time
 registry invitation and a single-use coordinator preauth key. Each half is
 consumable exactly once within the invitation's lifetime. Join enrolls the
 transport node (`tailcat/` in the state directory), pairs the device
-identity over the tailnet, and then watches the same agent roots as
+identity over the tailnet, checks the returned device ID, and then watches
+the same agent roots as
 `ohya ingest` (same `--claude-root`, `--codex-root`, `--pi-root` flags;
 `--control` names the hub's coordination URL; `--state` defaults to
 `~/.ohya/join`). Give it a state directory dedicated to the hub: its
