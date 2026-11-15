@@ -1,0 +1,1 @@
+Setup distinguishes loaded jobs from running processes and checks startup readiness twice. Doctor inspects owned integration files without writes and follows saved remote state without requiring a local hub database. Focused setup/doctor tests and full vet pass. The preceding full suite also passed. Native service-manager tests remain a release requirement.
