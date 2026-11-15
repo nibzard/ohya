@@ -806,6 +806,31 @@ How to use this file:
   problem, so an unknown Codex error still fails the gate. Extend
   `benignCodexErrorItem` only with a verified benign sample.
 
+- Freshness harness (2026-11-15, T068, cmd/ohya/freshness_test.go): measures
+  the north-star metric — append on the device to visibility through the
+  remote sql tool — over the real child-process stack (serve, join, remote
+  mcp observer on one host, local tailnet path). Contract kept: unique
+  `ohyafresh-<run>-<seq>` markers polled on the direct `events` table (never
+  `events_settled`); appender and observer share one process and one
+  monotonic clock; fixed-rate appends never wait for visibility, with a
+  random phase offset plus jitter against the upload interval
+  (`OHYA_FRESH_SEED` reproduces); timed-out samples stay in the distribution
+  at drain lower bounds, split into overdue-but-visible and
+  outstanding-at-drain, followed by a bounded health wait that reports
+  late deliveries and any records that never landed. Env knobs
+  (`OHYA_FRESH_SAMPLES/APPEND_EVERY/POLL_EVERY/TIMEOUT/UPLOAD_EVERY/SEED`)
+  make the same test the T070 workload-matrix vehicle. Smoke result on the
+  default configuration (2 s upload interval, 100 samples, 200 ms appends,
+  100 ms polling, 30 s budget, reference VM, Go 1.27.3): lag p50 1.178 s,
+  p95 2.043 s, p99 2.154 s, max 2.247 s; 223 polls, 0 errors, query p50
+  1.4 ms; 0 timeouts, 0 outstanding; hub 116 events; whole test 44 s. The
+  distribution sits just under the upload interval — the interval, not the
+  write path, dominates the budget. Gotchas: the observer warms its first
+  exchange before the first append (a cold first dial costs seconds and
+  would poison sample one; warm cost 2 ms because the shared device node
+  was already up), and the marker query pages by `id > last` so the 500-row
+  tool bound never truncates a backlog drain.
+
 - Shared device transport (2026-11-15, ADR 0006): `join` and remote MCP
   must use `tailcat.NewSharedDevice`. Independent nodes with the same state
   stall uploads. The shared adapter owns the node under `owner.lock` and

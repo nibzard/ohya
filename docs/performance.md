@@ -78,6 +78,67 @@ shipped durability configuration. The disk serves other tenants, so
 fsync-bound numbers vary between runs; every fsync-sensitive figure below
 states its observed spread.
 
+## Freshness
+
+Freshness lag is the steering metric: the wall-clock time from a complete,
+newline-terminated record appended on a device to that record being returned
+by a query through the remote `sql` tool. The harness lives in
+`cmd/ohya/freshness_test.go` (`TestFreshnessSmoke`). It drives the real
+stack with the child-process pattern of `cmd/ohya/serve_e2e_test.go`: a
+`child-serve` hub, a `child-join` uploader, and a remote `child-mcp` observer,
+all on one host over the local tailnet path.
+
+Measurement contract (performance plan of 2026-11-15, summarized in
+`NOTES.md`):
+
+- Every appended record carries a unique marker (`ohyafresh-<run>-<seq>`),
+  and the observer finds it by polling the direct `events` table — never
+  `events_settled`, which hides the last ten minutes by design.
+- The appender and the observer share one process and one monotonic clock.
+  The harness never subtracts wall-clock timestamps from different hosts.
+- The append workload runs at a fixed rate with bounded duration and never
+  waits for visibility, so queue growth cannot hide behind the measurement.
+  Append timing carries a random phase offset against the upload interval
+  plus ±10% jitter, reproducible through `OHYA_FRESH_SEED`.
+- Polling gives an upper bound on visibility. The report states the polling
+  resolution, query durations, sample count, per-sample budget, and both
+  timeout classes: samples that missed the budget while visible, and samples
+  still outstanding when the drain window closed. Timed-out samples stay in
+  the distribution at drain-window lower bounds and are never removed.
+
+Run the smoke check (default configuration, about 100 samples, roughly 45 s):
+
+```sh
+go test -tags sqlite_fts5 -run TestFreshnessSmoke -v ./cmd/ohya
+```
+
+The test skips under `-short` and on the darwin CI runners, like the serve
+end-to-end tests. Knobs, all optional environment variables:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `OHYA_FRESH_SAMPLES` | `100` | Records appended per run |
+| `OHYA_FRESH_APPEND_EVERY` | `200ms` | Fixed append period (±10% jitter) |
+| `OHYA_FRESH_POLL_EVERY` | `100ms` | Observer polling resolution |
+| `OHYA_FRESH_TIMEOUT` | `30s` | Per-sample visibility budget |
+| `OHYA_FRESH_UPLOAD_EVERY` | `2s` | Uploader `--interval` (the shipped default) |
+| `OHYA_FRESH_SEED` | random | Seed for phase offset and jitter |
+
+A run of roughly 100 samples is a smoke check only. Numbers used for p99
+claims need at least 1,000 samples and repeated runs (backlog T070); the
+in-test run exists to prove the harness and the stack, not to set baselines.
+
+Smoke result, 2026-11-15, reference machine, default configuration
+(2 s upload interval, 100 samples, 200 ms append period, 100 ms polling,
+30 s budget, random phase 1.59 s): lag p50 1.178 s, p95 2.043 s, p99 2.154 s,
+max 2.247 s; 223 poll queries, 0 errors, query duration p50 1.4 ms, max
+2.4 ms; 0 timeouts, 0 outstanding records; 116 hub events (16 fixture plus
+100 appended). The distribution sits just under the upload interval, which
+consumes most of the freshness budget before parsing, transport, and commit.
+The first exchange through the remote session cost 2 ms because the shared
+device node was already up; a cold first dial costs seconds (see the serve
+end-to-end notes in `NOTES.md`).
+
 ## Ingestion
 
 Benchmarks: `internal/events` (`make bench`), end-to-end run of
