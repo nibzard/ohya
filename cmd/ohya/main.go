@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -13,8 +12,6 @@ import (
 	"time"
 
 	"github.com/nibzard/ohya/internal/claudecode"
-	"github.com/nibzard/ohya/internal/codex"
-	"github.com/nibzard/ohya/internal/pi"
 )
 
 var rootSpec = commandSpec{
@@ -95,12 +92,7 @@ func runIngestCommand(args []string, stdout, stderr io.Writer) error {
 		"hub database `path`")
 	state := c.fs.String("state", "",
 		"state `directory` for the device identity and checkpoints; defaults to the database directory")
-	claudeRoot := c.fs.String("claude-root", filepath.Join(home, ".claude", "projects"),
-		"Claude Code projects `directory` to watch; empty disables Claude Code")
-	codexRoot := c.fs.String("codex-root", defaultCodexRoot(home),
-		"Codex sessions `directory` to watch; empty disables Codex")
-	piRoot := c.fs.String("pi-root", defaultPiRoot(home),
-		"Pi agent sessions `directory` to watch; empty disables Pi")
+	rootFlags := newAgentRootFlags(c.fs, home)
 	interval := c.fs.Duration("interval", 2*time.Second,
 		"polling `interval` in continuous mode")
 	once := c.fs.Bool("once", false, "run exactly one pass and exit")
@@ -123,20 +115,7 @@ func runIngestCommand(args []string, stdout, stderr io.Writer) error {
 	if *maxRecordBytes <= 0 {
 		return c.usageErrorf("--max-record-bytes must be positive")
 	}
-	explicit := map[string]bool{}
-	c.fs.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
-	var roots []agentRoot
-	for _, r := range []agentRoot{
-		{agent: claudecode.AgentName, dir: *claudeRoot, flag: "claude-root"},
-		{agent: codex.AgentName, dir: *codexRoot, flag: "codex-root"},
-		{agent: pi.AgentName, dir: *piRoot, flag: "pi-root"},
-	} {
-		if r.dir == "" {
-			continue
-		}
-		r.optional = !explicit[r.flag]
-		roots = append(roots, r)
-	}
+	roots := rootFlags.roots(c.fs)
 	stateDir := *state
 	if stateDir == "" {
 		stateDir = filepath.Dir(*db)

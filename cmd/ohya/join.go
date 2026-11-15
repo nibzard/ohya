@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"io/fs"
@@ -15,12 +14,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/nibzard/ohya/internal/claudecode"
-	"github.com/nibzard/ohya/internal/codex"
 	"github.com/nibzard/ohya/internal/control"
 	"github.com/nibzard/ohya/internal/device"
 	"github.com/nibzard/ohya/internal/hubsync"
-	"github.com/nibzard/ohya/internal/pi"
 	"github.com/nibzard/ohya/internal/transport"
 	"github.com/nibzard/ohya/internal/transport/tailcat"
 	"github.com/nibzard/ohya/internal/uploader"
@@ -60,12 +56,7 @@ func runJoinCommand(args []string, stdout, stderr io.Writer) error {
 		"coordination `URL` of the hub's tailnet")
 	hubAddr := c.fs.String("hub-addr", tailcat.DefaultHubAddr(),
 		"hub `address` inside the tailnet")
-	claudeRoot := c.fs.String("claude-root", filepath.Join(home, ".claude", "projects"),
-		"Claude Code projects `directory` to watch; empty disables Claude Code")
-	codexRoot := c.fs.String("codex-root", defaultCodexRoot(home),
-		"Codex sessions `directory` to watch; empty disables Codex")
-	piRoot := c.fs.String("pi-root", defaultPiRoot(home),
-		"Pi agent sessions `directory` to watch; empty disables Pi")
+	rootFlags := newAgentRootFlags(c.fs, home)
 	interval := c.fs.Duration("interval", 2*time.Second,
 		"polling `interval` between upload passes")
 	if err := c.parse(args, stdout); err != nil {
@@ -81,20 +72,7 @@ func runJoinCommand(args []string, stdout, stderr io.Writer) error {
 	if *interval <= 0 {
 		return c.usageErrorf("--interval must be positive")
 	}
-	explicit := map[string]bool{}
-	c.fs.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
-	var roots []agentRoot
-	for _, r := range []agentRoot{
-		{agent: claudecode.AgentName, dir: *claudeRoot, flag: "claude-root"},
-		{agent: codex.AgentName, dir: *codexRoot, flag: "codex-root"},
-		{agent: pi.AgentName, dir: *piRoot, flag: "pi-root"},
-	} {
-		if r.dir == "" {
-			continue
-		}
-		r.optional = !explicit[r.flag]
-		roots = append(roots, r)
-	}
+	roots := rootFlags.roots(c.fs)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return runJoin(ctx, joinOptions{
