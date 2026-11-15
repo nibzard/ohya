@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -94,27 +95,77 @@ func TestParseCodexTrace(t *testing.T) {
 		`{"type":"item.completed","item":{"type":"agent_message","text":"The bound is 8 MiB. evidence: 12"}}`,
 		`{"type":"turn.completed"}`,
 	}, "\n")+"\n")
-	msg, turnDone, calls, problems := parseCodexTrace(path)
+	msg, turnDone, calls, problems, notes := parseCodexTrace(path)
 	if !turnDone || msg != "The bound is 8 MiB. evidence: 12" {
 		t.Fatalf("turnDone=%v msg=%q", turnDone, msg)
 	}
 	if len(calls) != 1 || calls[0] != "ohya.sql" {
 		t.Fatalf("calls: %v", calls)
 	}
-	if len(problems) != 1 || !strings.Contains(problems[0], "WebSockets") {
+	if len(problems) != 0 {
 		t.Fatalf("problems: %v", problems)
+	}
+	if len(notes) != 1 || !strings.Contains(notes[0], "WebSockets") {
+		t.Fatalf("notes: %v", notes)
 	}
 }
 
 func TestParseCodexTraceNoTurn(t *testing.T) {
 	path := writeTemp(t, "events.jsonl",
 		`{"type":"item.completed","item":{"type":"agent_message","text":"partial"}}`+"\n")
-	msg, turnDone, _, _ := parseCodexTrace(path)
+	msg, turnDone, _, _, _ := parseCodexTrace(path)
 	if turnDone {
 		t.Fatal("turnDone without a turn.completed event")
 	}
 	if msg != "partial" {
 		t.Fatalf("msg=%q", msg)
+	}
+}
+
+func TestCheckCaseCodexErrorItems(t *testing.T) {
+	decision := caseDef{
+		key:            "explicit-decision",
+		answerContains: []string{"30 seconds", "jitter"},
+		evidenceMarker: backoffMarker,
+		requireSQL:     true,
+	}
+	resolve := fakeResolve("Decision recorded: the ohya device sync retry "+backoffMarker+", with jitter.", true)
+	trace := func(errorItem string) string {
+		return writeTemp(t, "events.jsonl", strings.Join([]string{
+			`{"type":"thread.started","thread_id":"t1"}`,
+			`{"type":"turn.started"}`,
+			`{"type":"item.completed","item":{"type":"mcp_tool_call","server":"ohya","tool":"sql","status":"completed"}}`,
+			`{"type":"item.completed","item":{"type":"error","message":` + strconv.Quote(errorItem) + `}}`,
+			`{"type":"item.completed","item":{"type":"agent_message","text":"The cap is 30 seconds, with jitter. evidence: 2"}}`,
+			`{"type":"turn.completed"}`,
+		}, "\n")+"\n")
+	}
+	runResultFor := func(path string) *runResult {
+		msg, turnDone, calls, problems, notes := parseCodexTrace(path)
+		return &runResult{
+			ok:        turnDone && msg != "",
+			answer:    msg,
+			toolCalls: calls,
+			problems:  problems,
+			notes:     notes,
+		}
+	}
+
+	benign := runResultFor(trace("Falling back from WebSockets to HTTPS transport. unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: wss://api.openai.com/v1/responses"))
+	if len(benign.notes) != 1 || len(benign.problems) != 0 {
+		t.Fatalf("fallback item must be a note, got problems=%v notes=%v", benign.problems, benign.notes)
+	}
+	if failures := checkCase(decision, benign, resolve); len(failures) != 0 {
+		t.Errorf("benign fallback error item failed a passing case: %v", failures)
+	}
+
+	unexpected := runResultFor(trace("stream error: connection reset"))
+	if len(unexpected.notes) != 0 || len(unexpected.problems) != 1 {
+		t.Fatalf("unexpected error item must stay a problem, got problems=%v notes=%v", unexpected.problems, unexpected.notes)
+	}
+	failures := checkCase(decision, unexpected, resolve)
+	if len(failures) != 1 || !strings.Contains(failures[0], "stream error") {
+		t.Errorf("an unexpected error item must fail the case: %v", failures)
 	}
 }
 
