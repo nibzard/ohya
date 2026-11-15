@@ -1,0 +1,39 @@
+# Context
+
+## Background
+T070's workload matrix (docs/performance.md, workload 4) found that a joined
+device with an established sync connection never re-uploaded after the hub
+process restarted: dials failed at the 60 s deadline in a backoff loop for
+at least three minutes, 5/5 reproductions. A fresh node connected to the
+restarted hub in about 20 s, and restarting only the join process reconnected
+in about 25 s — so the stale state lived in the long-lived device node, not
+in the hub or the sync layer.
+
+## Why This Way
+Live diagnosis during the failure window showed the device node's control
+connections to the coordination plane dead in CLOSE-WAIT with no re-poll
+ever issued: when the plane restarts inside the hub process, the tsnet
+control client in tailscale.com v1.104.4 never recovers on its own, and the
+cached peer endpoints stop matching the restarted hub. LocalAPI debug
+actions (force-netmap-update) only replay the cached netmap, so the only
+reliable recovery is a node rebuild from the same durable identity — the
+observed-good path. The rebuild triggers only when the coordination plane
+still answers an HTTP request, which distinguishes "hub restarted, node
+stale" from "hub down" (the plane and the hub live in one process), and the
+20 s internal dial deadline leaves enough of the uploader's 60 s budget for
+the rebuild to complete inside a single dial attempt.
+
+## Gotchas
+- A borrower never rebuilds the owner's node; an idle owner holding the lock
+  while wedged is documented as a limit in ADR 0006.
+- The uploader may still spend up to one 60 s exchange timeout on a
+  silently-dead connection before the first failing dial; recovery measured
+  30.7-31.2 s per restart cycle (36.2 s in the full workload-4 run).
+- The intermittent hub-side "panic: ipnlocal: watchdog timeout" (1 of 3
+  manual restarts during T070) did not recur in 10 post-fix restart cycles;
+  it is an upstream deadlock probe and stays monitored (NOTES.md).
+
+## Related
+- docs/adr/0006-shared-device-transport.md (rebuild rule)
+- docs/performance.md, workload 4 hub-restart rows
+- cmd/ohya/hubrestart_test.go (regression test)
