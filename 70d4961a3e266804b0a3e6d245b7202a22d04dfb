@@ -1,0 +1,1 @@
+Add native macOS jobs that install generated candidate formulas from local archive URLs through a temporary tap, run brew test, and remove the installation. Shell syntax passes. Homebrew and macOS execution remain unverified on this Linux host; the workflow has not been pushed or run.
