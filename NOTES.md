@@ -1056,7 +1056,13 @@ How to use this file:
   `internal/setup` implement verified bootstrap installation, owned JSON/TOML
   configuration, local and remote setup, user service templates, PATH blocks,
   SQLite recovery points, removal, and real MCP checks. No assets are published.
-  Older Pi, deeper service health checks, client policy/override checks, and
+  Deeper service health checks, client policy/override checks, and
   native release validation remain unfinished. The real remote setup test
   proves pairing and reruns against a hub without changing user services.
   Verified Claude override path: `CLAUDE_CONFIG_DIR/.claude.json`.
+
+- Pi compatibility verified (2026-11-15): the installed 0.84.2 extension loader
+  loaded the owned ohya extension and completed SQL plus Unicode annotation
+  round trips against a built ohya binary. No model or provider was used.
+  Native MCP stays preferred; compatibility fallback is gated to this verified
+  version. The bridge uses the existing Go MCP SDK and stdin for request data.

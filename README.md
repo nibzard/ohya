@@ -358,7 +358,9 @@ existing process manager, and `--no-agents` to skip client changes. Agent
 entries and service files use ownership receipts. Uninstall preserves memory,
 credentials, sessions, and entries edited after setup.
 
-This development version reports older Pi versions as unsupported. Remote
+Pi versions with native MCP use their user MCP settings. Pi 0.84.2 uses an
+owned compatibility extension; other versions without native MCP are reported
+as unsupported until verified. Remote
 setup accepts `--join-code-env` and saves the hub connection for reruns. The download bootstrap exists
 as `install.sh`, but no release assets are published yet. Existing agent sessions need a reload or a new session after
 registration. Native service verification remains a release gate.
@@ -394,3 +396,12 @@ is not stored in setup receipts or service files. Subsequent `ohya setup` runs
 reuse the saved connection and credential. Local memory stays separate from
 join checkpoints. Use `--local` to return to local memory. A join state cannot
 be moved to a different hub; use a new setup state directory for that hub.
+
+The Pi compatibility extension uses the same `sql` and `annotate` MCP tools
+through a bounded subprocess bridge. Requests go through stdin, not process
+arguments. It needs no npm package download. Setup removes its owned extension
+when switching to native Pi MCP. User edits to either integration are preserved.
+To repeat the native Pi loader test without model access, set
+`OHYA_PI_PACKAGE` to the installed Pi package directory and `OHYA_TEST_BINARY`
+to a built ohya executable, then run
+`go test -tags sqlite_fts5 ./internal/setup -run TestPiExtensionThroughInstalledLoader`.

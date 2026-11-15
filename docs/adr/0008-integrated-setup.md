@@ -176,3 +176,24 @@ protocol transitions are unchanged; all TLA+ models were checked successfully.
 An integration test starts a real hub, pairs through setup, checks the remote
 MCP tools, and reruns setup without the invitation. It disables user services,
 client configuration, and PATH changes in the test process.
+
+## Pi compatibility
+
+Pi 0.84.2 has no native MCP command but supports user extensions. Setup installs
+an owned extension and a private connection file for this verified version.
+Versions with native MCP keep the native path. Other versions without native
+MCP fail capability detection rather than receiving an unverified integration.
+
+The extension uses Pi's supplied TypeBox module and Node's process API. It
+registers memory tools and sends bounded JSON requests through stdin to the
+installed binary's bridge command. The bridge uses the existing official Go
+MCP client SDK to invoke the same MCP server. It permits only sql and annotate,
+requires its own executable's MCP command, and bounds request lifetime. It
+contains no SQL or annotation write implementation. Response decoding preserves
+UTF-8 across pipe chunks.
+
+The real installed Pi loader test registers both tools, queries memory, writes
+an annotation, and reads Unicode back. It uses isolated state and no provider
+credentials. Setup and removal preserve user-edited extension files. Switching
+to native MCP removes the unchanged owned compatibility extension first so
+agents do not get two copies of the tools.

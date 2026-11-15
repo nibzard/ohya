@@ -49,6 +49,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	cmd, rest := args[0], args[1:]
 	switch cmd {
+	case "bridge":
+		return runBridgeCommand(rest, os.Stdin, stdout)
 	case "install":
 		return runInstallCommand(rest, stdout, stderr)
 	case "setup":

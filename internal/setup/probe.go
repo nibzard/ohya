@@ -21,6 +21,8 @@ func (b *boundedOutput) Write(p []byte) (int, error) {
 	return b.Buffer.Write(p)
 }
 
+var ErrPiNeedsExtension = errors.New("Pi needs the ohya compatibility extension")
+
 func ProbeNativePi(ctx context.Context, path string) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -34,7 +36,18 @@ func ProbeNativePi(ctx context.Context, path string) error {
 	}
 	text := output.String()
 	if !strings.Contains(text, "pi mcp") || !strings.Contains(text, "add") {
-		return errors.New("this Pi version needs the ohya compatibility extension, which is not installed yet")
+		versionCmd := exec.CommandContext(ctx, path, "--version")
+		versionCmd.Dir = os.TempDir()
+		var version boundedOutput
+		versionCmd.Stdout = &version
+		versionCmd.Stderr = &version
+		if err := versionCmd.Run(); err != nil {
+			return errors.New("could not identify this Pi version")
+		}
+		if strings.TrimSpace(version.String()) != "0.84.2" {
+			return errors.New("native MCP is unavailable; the Pi compatibility extension is verified for version 0.84.2")
+		}
+		return ErrPiNeedsExtension
 	}
 	return nil
 }

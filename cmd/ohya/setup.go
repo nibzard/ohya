@@ -21,7 +21,7 @@ import (
 
 var setupSpec = commandSpec{
 	name: "ohya setup", synopsis: "configure local memory and installed agents", usageLine: "ohya setup [flags]",
-	description: "Configures a user service for local ingestion and registers ohya with installed agents. Preserves unrelated settings and reports each result. Rerun to repair owned configuration. Use --dry-run to inspect changes without writing files. Older Pi compatibility is still under development. Remote setup accepts --join-code-env and saves the hub settings for reruns.",
+	description: "Configures a user service for local ingestion and registers ohya with installed agents. Preserves unrelated settings and reports each result. Rerun to repair owned configuration. Use --dry-run to inspect changes without writing files. Pi 0.84.2 uses an owned compatibility extension when native MCP is unavailable. Remote setup accepts --join-code-env and saves the hub settings for reruns.",
 	argsTitle:   "Arguments", args: "(none)", examples: []string{"ohya setup", "ohya setup --dry-run --json"},
 }
 

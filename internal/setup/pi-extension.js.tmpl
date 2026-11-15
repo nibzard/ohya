@@ -1,0 +1,61 @@
+import { spawn } from "node:child_process";
+import { Type } from "@sinclair/typebox";
+
+const executable = {{.Executable}};
+const connection = {{.Connection}};
+const guidance = {{.Guidance}};
+
+function call(tool, args, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(new Error("Memory request cancelled")); return; }
+    const child = spawn(executable, ["bridge", "--connection", connection], { stdio: ["pipe", "pipe", "pipe"] });
+    child.stdout.setEncoding("utf8");
+    let output = "";
+    let failure = "";
+    let size = 0;
+    const abort = () => child.kill("SIGTERM");
+    const timer = setTimeout(abort, 20000);
+    signal?.addEventListener("abort", abort, { once: true });
+    child.stdout.on("data", data => {
+      size += Buffer.byteLength(data, "utf8");
+      if (size > 8 * 1024 * 1024) { failure = "Memory response exceeds its bound"; abort(); return; }
+      output += data;
+    });
+    child.stderr.on("data", () => {});
+    child.stdin.on("error", () => {});
+    child.on("error", error => { failure = error.message; });
+    child.on("close", code => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      if (code !== 0 || failure) { reject(new Error(failure || "Memory request failed; run ohya doctor")); return; }
+      try {
+        const result = JSON.parse(output);
+        if (result.isError) { reject(new Error("Memory tool rejected the request")); return; }
+        resolve({ content: result.content, details: result.structuredContent });
+      } catch (error) { reject(error); }
+    });
+    const request = JSON.stringify({ tool, arguments: args });
+    if (Buffer.byteLength(request, "utf8") > 1024 * 1024) { failure = "Memory request exceeds 1 MiB"; abort(); return; }
+    child.stdin.end(request);
+  });
+}
+
+export default function(pi) {
+  pi.registerTool({
+    name: "ohya_sql",
+    label: "Query agent memory",
+    description: guidance + "\nRun one bounded read-only SQL query against ohya. Use SELECT or read-only PRAGMA. Inspect columns with PRAGMA table_info when needed. Tables include events_settled, sessions, sources, event_annotations, and events_fts.",
+    parameters: Type.Object({ query: Type.String() }),
+    async execute(id, args, signal) { return call("sql", args, signal); }
+  });
+  pi.registerTool({
+    name: "ohya_annotate",
+    label: "Annotate memory events",
+    description: "Persist tags or interpretations on existing event IDs. Operations commit atomically. The hub assigns the writer. Original transcripts stay unchanged.",
+    parameters: Type.Object({ operations: Type.Array(Type.Object({
+      op: Type.Union([Type.Literal("upsert"), Type.Literal("delete")]),
+      event_id: Type.Integer(), namespace: Type.String(), key: Type.String(), value: Type.Optional(Type.Any())
+    }), { minItems: 1, maxItems: 100 }) }),
+    async execute(id, args, signal) { return call("annotate", args, signal); }
+  });
+}

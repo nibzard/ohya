@@ -3,6 +3,7 @@ package setup
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"github.com/nibzard/ohya/internal/store"
 	"os"
@@ -187,15 +188,34 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	for _, c := range clients {
 		result := Result{Component: c.Name, Status: c.Status, Detail: c.Detail}
 		if c.Status == "planned" {
+			legacyPi := false
 			if c.Name == "pi" {
 				if err := o.ProbePi(ctx, c.Executable); err != nil {
-					result.Status = "unsupported"
-					result.Detail = err.Error()
-					report.Results = append(report.Results, result)
-					continue
+					if errors.Is(err, ErrPiNeedsExtension) {
+						legacyPi = true
+					} else {
+						result.Status = "failed"
+						result.Detail = err.Error()
+						report.Results = append(report.Results, result)
+						continue
+					}
 				}
 			}
-			changed, err := ApplyClient(o.Clients, c)
+			var changed bool
+			var err error
+			if legacyPi {
+				_, err = RemoveClient(o.Clients.State, "pi")
+				if err == nil {
+					changed, err = ApplyPiExtension(o.Clients, c)
+				}
+			} else {
+				if c.Name == "pi" {
+					_, err = RemovePiExtension(o.Clients.State)
+				}
+				if err == nil {
+					changed, err = ApplyClient(o.Clients, c)
+				}
+			}
 			result.Changed = changed
 			if err != nil {
 				result.Status = "failed"
@@ -270,6 +290,12 @@ func Remove(ctx context.Context, state string, run func(context.Context, []strin
 			result.Detail = err.Error()
 		}
 		report.Results = append(report.Results, result)
+	}
+	changed, err := RemovePiExtension(state)
+	if err != nil {
+		report.Results = append(report.Results, Result{Component: "pi-extension", Status: "failed", Detail: err.Error()})
+	} else if changed {
+		report.Results = append(report.Results, Result{Component: "pi-extension", Status: "removed", Changed: true})
 	}
 	return report, nil
 }
