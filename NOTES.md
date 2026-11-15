@@ -977,3 +977,12 @@ How to use this file:
   skips, and report-only); `make check` now passes `-timeout 20m` to go
   test because the cmd/ohya child-process suite measured 229 s reference
   and a 2–4x slower shared runner reaches the 10-minute per-binary default.
+- T073 closed empty (2026-11-15): T072 selected no Phase 1 candidate, so per
+  its own contract T073 changed no code and no experiment ran. Re-verified at
+  the integrated HEAD: docs/performance.md "Phase 1 selection: none" (section
+  landed in 61a14f6) records that after the threshold re-scoping no workload
+  misses its target or budget and none of the plan's seven candidates meets
+  its trigger — a candidate must dominate a workload that misses; make check
+  green on the unchanged tree. A new miss reopens selection only through a
+  fresh task with new evidence; batch sizing stays first in line. T074
+  (Phase 2 accept-or-discard) therefore finds no T073 change to evaluate.
