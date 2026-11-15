@@ -148,52 +148,7 @@ func Run(ctx context.Context, o Options) (Report, error) {
 		report.Results = append(report.Results, result)
 	}
 	if !o.NoService {
-		result := Result{Component: "service", Status: "failed"}
-		receipt := filepath.Join(o.Clients.State, "setup", "service.json")
-		var changed bool
-		_, receiptErr := readRegular(receipt)
-		active := o.LoadedService(ctx, service.Loaded) == nil
-		var err error
-		if active && os.IsNotExist(receiptErr) {
-			err = fmt.Errorf("an unowned ohya service is already loaded")
-		} else {
-			changed, err = ApplyFile(service.Path, receipt, service.Content)
-		}
-		result.Changed = changed
-		if err == nil {
-			if active {
-				for _, cmd := range service.Stop {
-					if err = o.RunService(ctx, cmd); err != nil {
-						break
-					}
-				}
-				active = false
-			}
-			if err == nil {
-				var recovery Result
-				recovery, err = recoveryPoint(ctx, o.Database, o.Clients.State)
-				if recovery.Component != "" {
-					report.Results = append(report.Results, recovery)
-				}
-			}
-			if err == nil && !active {
-				for _, cmd := range service.Start {
-					if err = o.RunService(ctx, cmd); err != nil {
-						break
-					}
-				}
-			}
-			if err == nil {
-				err = waitService(ctx, service, o.RunService)
-			}
-		}
-		if err != nil {
-			result.Detail = err.Error()
-		} else {
-			result.Status = "running"
-			result.Detail = "History imports in the background; run ohya doctor to check sources."
-		}
-		report.Results = append(report.Results, result)
+		report.Results = append(report.Results, configureService(ctx, o, service)...)
 	}
 	if o.NoService {
 		recovery, err := recoveryPoint(ctx, o.Database, o.Clients.State)
