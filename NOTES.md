@@ -831,6 +831,39 @@ How to use this file:
   was already up), and the marker query pages by `id > last` so the 500-row
   tool bound never truncates a backlog drain.
 
+- Benchmark corpus fixtures (2026-11-15, T069, internal/fixgen/mix.go):
+  `fixgen.ImportMix`/`fixgen.QueryMix` + `genfixture -agent mix` emit the
+  two named fixtures; stats and commands live in docs/performance.md
+  ("Benchmark corpus fixtures"). Facts worth keeping:
+  - Observed corpus re-measured 2026-11-15: claude-code 1,042 main files
+    (1.29 GiB, mean 1.27 MiB) plus 1,280 subagent files (0.59 GiB, mean
+    480 KiB); codex 2,495 rollouts (2.93 GiB, mean 1.17 MiB); pi 74 files
+    (2.1 MiB). The 2026-11-13 NOTES numbers (895/2,646) counted differently;
+    the mix anchors use the fresh file-level counts.
+  - Codex thread count (1,600 at scale 1) is derived from bytes, not
+    observed: the generator omits resumed pages, so threads = observed
+    bytes / (main + mean two quarter-size subagent rollouts). Real threads
+    ≈ 511 spanning ~4.9 files each; the fixture keeps bytes and file sizes,
+    not the page fan-out.
+  - Records map 1:1 to events in all three formats (structural: every
+    adapter makes one event per parsed record), so `fixgen.MeasureMix`
+    counts events through the raw parsers — importing internal/events from
+    fixgen would create a test import cycle (events' in-package bench tests
+    import fixgen), and fixgen now imports only the parser packages.
+  - The query fixture answers the perf plan's "one million events without
+    a 3 GB input": compact records (text ÷8, session bytes ÷4) land at
+    765–889 B mean — the JSON envelope (usage objects, per-block metadata)
+    is the floor — giving 969,004 events in 746.4 MiB (4.4x per event).
+    Full-record 1M events would be ~3.5 GB.
+  - Determinism is pinned by SHA-256 hash tests (mix + all three single
+    agents, `TestAgentCorpusStableHash`); the single-agent hashes were
+    captured before the Compact knob landed, so they also prove Compact
+    leaves default (div=1) bytes identical — repin hashes and the
+    docs/performance.md tables together if generator output ever changes.
+  - `TestNamedFixtureStats` regenerates both fixtures at full scale only
+    under `OHYA_MIX_VERIFY=1` (about 1 GiB RAM, 22 s); the default check
+    stays small. genfixture's plain build needs no sqlite_fts5 tag.
+
 - Shared device transport (2026-11-15, ADR 0006): `join` and remote MCP
   must use `tailcat.NewSharedDevice`. Independent nodes with the same state
   stall uploads. The shared adapter owns the node under `owner.lock` and

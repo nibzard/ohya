@@ -12,3 +12,9 @@ exact offsets.
 - [claude-code/](claude-code/README.md) — verified against Claude Code 2.1.280.
 - [codex/](codex/README.md) — verified against codex-cli 0.166.0.
 - [pi/](pi/README.md) — verified against the Pi agent 0.84.2 and 1.5.2.
+
+Benchmark corpora are not stored here. They are synthesized deterministically
+by `internal/fixgen` and written by `cmd/genfixture` (see
+[docs/performance.md](../docs/performance.md) for the named import and query
+fixtures and their regeneration commands). `testdata/bench/` is gitignored, so
+a corpus regenerated there never reaches a commit.
