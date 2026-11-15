@@ -1,1 +1,3 @@
 Record the clean candidate identity, HTTPS/native Linux and upgrade/removal results, saved choices, configuration backups, and failed-service recovery. Keep macOS, Homebrew, signing, and public release gates explicit. No release or push is authorized by these local changes.
+
+Final verification: make check passes, including the full Go suite, vet, formatting, and comment policy. make tla passes all models. Python formula tests and shell syntax checks pass. Clean candidate 1c79cf3 passes HTTPS bootstrap, native Linux ingestion/doctor/removal, and actual standalone upgrade/removal with memory retained. Native macOS signing/notarization and Homebrew jobs remain pending.
