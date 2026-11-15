@@ -1,0 +1,1 @@
+Preserve exact client configuration bytes in private content-addressed backups before owned JSON or TOML changes. Keep backups on uninstall. Setup package tests pass, including permissions, idempotence, and removal coverage.
