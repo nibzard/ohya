@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"time"
 )
 
 type Result struct {
@@ -49,6 +51,23 @@ type Options struct {
 	Verify           func(context.Context, Command) error
 	ProbePi          func(context.Context, string) error
 	Prepare          func(context.Context) error
+	Notify           func(Result)
+	Progress         func(string)
+}
+
+func (o Options) progress(line string) {
+	if o.Progress != nil {
+		o.Progress(line)
+	}
+}
+
+func (r *Report) add(o Options, results ...Result) {
+	for _, result := range results {
+		r.Results = append(r.Results, result)
+		if o.Notify != nil {
+			o.Notify(result)
+		}
+	}
 }
 
 func Run(ctx context.Context, o Options) (Report, error) {
@@ -90,17 +109,17 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	}
 	if o.DryRun {
 		for _, p := range profiles {
-			report.Results = append(report.Results, Result{Component: "path", Status: "planned", Detail: p.Path})
+			report.add(o, Result{Component: "path", Status: "planned", Detail: p.Path})
 		}
 		if !o.NoService {
-			report.Results = append(report.Results, Result{Component: "service", Status: "planned", Detail: service.Path})
+			report.add(o, Result{Component: "service", Status: "planned", Detail: service.Path})
 		}
 		for _, c := range clients {
 			detail := c.Config
 			if c.Status == "blocked" {
 				detail = c.Detail
 			}
-			report.Results = append(report.Results, Result{Component: c.Name, Status: c.Status, Detail: detail})
+			report.add(o, Result{Component: c.Name, Status: c.Status, Detail: detail})
 		}
 		return report, nil
 	}
@@ -112,7 +131,7 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	}
 	if blocked {
 		for _, client := range clients {
-			report.Results = append(report.Results, Result{Component: client.Name, Status: client.Status, Detail: client.Detail})
+			report.add(o, Result{Component: client.Name, Status: client.Status, Detail: client.Detail})
 		}
 		return report, nil
 	}
@@ -149,15 +168,15 @@ func Run(ctx context.Context, o Options) (Report, error) {
 			result.Status = "failed"
 			result.Detail = err.Error()
 		}
-		report.Results = append(report.Results, result)
+		report.add(o, result)
 	}
 	if !o.NoService {
-		report.Results = append(report.Results, configureService(ctx, o, service)...)
+		report.add(o, configureService(ctx, o, service)...)
 	}
 	if o.NoService {
-		recovery, err := recoveryPoint(ctx, o.Database, o.Clients.State)
+		recovery, err := recoveryPoint(ctx, o)
 		if recovery.Component != "" {
-			report.Results = append(report.Results, recovery)
+			report.add(o, recovery)
 		}
 		if err != nil {
 			return report, err
@@ -173,7 +192,7 @@ func Run(ctx context.Context, o Options) (Report, error) {
 		check.Status = "failed"
 		check.Detail = verified.Error()
 	}
-	report.Results = append(report.Results, check)
+	report.add(o, check)
 	for _, c := range clients {
 		result := Result{Component: c.Name, Status: c.Status, Detail: c.Detail}
 		if c.Status == "planned" {
@@ -185,7 +204,7 @@ func Run(ctx context.Context, o Options) (Report, error) {
 					} else {
 						result.Status = "failed"
 						result.Detail = err.Error()
-						report.Results = append(report.Results, result)
+						report.add(o, result)
 						continue
 					}
 				}
@@ -217,7 +236,7 @@ func Run(ctx context.Context, o Options) (Report, error) {
 				result.Detail = "Open a new agent session to load ohya."
 			}
 		}
-		report.Results = append(report.Results, result)
+		report.add(o, result)
 	}
 	return report, nil
 }
@@ -289,7 +308,10 @@ func Remove(ctx context.Context, state string, run func(context.Context, []strin
 	return report, nil
 }
 
-func recoveryPoint(ctx context.Context, database, state string) (Result, error) {
+const recoveryPointsKept = 2
+
+func recoveryPoint(ctx context.Context, o Options) (Result, error) {
+	database := o.Database
 	if database == "" {
 		return Result{}, nil
 	}
@@ -303,7 +325,10 @@ func recoveryPoint(ctx context.Context, database, state string) (Result, error) 
 	if !info.Mode().IsRegular() {
 		return Result{}, fmt.Errorf("memory database is not a regular file")
 	}
-	dir := filepath.Join(state, "setup", "backups")
+	if current, err := store.SchemaCurrent(ctx, database); err == nil && current {
+		return Result{Component: "backup", Status: "not needed", Detail: "memory schema matches this build"}, nil
+	}
+	dir := filepath.Join(o.Clients.State, "setup", "backups")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return Result{}, err
 	}
@@ -313,11 +338,54 @@ func recoveryPoint(ctx context.Context, database, state string) (Result, error) 
 	}
 	path := filepath.Join(point, "hub.db")
 	result := Result{Component: "backup", Status: "saved", Detail: path, Changed: true}
+	o.progress(fmt.Sprintf("saving recovery point (%s)…", formatBytes(info.Size())))
 	if err := store.Backup(ctx, database, path); err != nil {
 		result.Status = "failed"
 		result.Detail = "could not create a consistent recovery point"
 		result.Changed = false
 		return result, err
 	}
+	if err := pruneRecoveryPoints(dir, recoveryPointsKept); err != nil {
+		result.Detail += "; older recovery points could not be removed: " + err.Error()
+	}
 	return result, nil
+}
+
+func pruneRecoveryPoints(dir string, keep int) error {
+	points, err := filepath.Glob(filepath.Join(dir, "recovery-*"))
+	if err != nil {
+		return err
+	}
+	type dated struct {
+		path     string
+		modified time.Time
+	}
+	var found []dated
+	for _, point := range points {
+		info, err := os.Lstat(point)
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			found = append(found, dated{point, info.ModTime()})
+		}
+	}
+	slices.SortFunc(found, func(a, b dated) int { return b.modified.Compare(a.modified) })
+	for _, old := range found[min(keep, len(found)):] {
+		if err := os.RemoveAll(old.path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func formatBytes(n int64) string {
+	switch {
+	case n >= 1<<30:
+		return fmt.Sprintf("%.1f GB", float64(n)/(1<<30))
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
+	default:
+		return fmt.Sprintf("%d KB", (n+1023)/1024)
+	}
 }

@@ -299,10 +299,12 @@ choices. For example, use `--agents auto` to resume automatic discovery, or
 `--no-service=false` to enable the service after a previous skipped setup.
 An empty root still disables that source. Provider secrets are never saved.
 
-Before local setup restarts ingestion or opens an existing database, it saves
-an owner-only SQLite recovery copy under `STATE/setup/backups/recovery-*/hub.db`.
+Before local setup restarts ingestion or opens an existing database whose
+schema is older or newer than this build, it saves an owner-only SQLite
+recovery copy under `STATE/setup/backups/recovery-*/hub.db`. When the schema
+already matches, setup reports `backup: not needed` and makes no copy.
 The copy includes committed WAL data. Setup stops if it cannot make the copy.
-Recovery files are retained; uninstall preserves them. A database copy is not
+Setup keeps the two newest recovery copies; uninstall preserves them. A database copy is not
 a complete backup of device state and checkpoints. Stop all writers and
 restore matching state as a set. Never combine an older database with newer
 acknowledgments. See [the operations guide](release-operations.md) before

@@ -83,8 +83,9 @@ checksum tests do not replace native Homebrew execution.
 
 ## Backup and restore
 
-Setup automatically saves a consistent SQLite recovery point before reopening
-an existing local database. It contains committed WAL pages, and remains private
+Setup automatically saves a consistent SQLite recovery point before a build
+with a different schema version reopens an existing local database, and keeps
+the two newest points. It contains committed WAL pages, and remains private
 and separate from agent transcript directories. This is a database recovery
 point, not a coordinated backup of every device and its checkpoints.
 

@@ -97,15 +97,23 @@ Uninstall preserves edited service files before sending any stop command.
 ## Recovery points
 
 Before setup starts a memory process against an existing local database, it
-creates an owner-only recovery directory and copies the database through
-SQLite's online backup API. The copy includes committed WAL pages and does not
+reads the applied schema version read-only. When that version matches the
+build's newest migration, the new process cannot migrate the database, so
+setup reports the backup as `not needed` and makes no copy. Otherwise, or when
+the version cannot be read, setup creates an owner-only recovery directory and
+copies the database through SQLite's online backup API. A copy of a large
+database takes minutes and stops ingestion for that time, so a copy on every
+rerun has a high cost and no benefit. After a successful copy, setup keeps the
+two newest recovery directories and removes older ones. The copy includes committed WAL pages and does not
 migrate the source. Each backup uses an exclusive destination and a bounded,
 context-aware copy loop. The backup is flushed before setup proceeds.
 
 Owned ingestion is stopped before the recovery point, including on a setup
 rerun with unchanged service settings. External writers do not invalidate the
 online snapshot. Setup does not proceed to database opening when backup or
-service preparation fails. Backups are retained during removal. Restore with
+service preparation fails. Backups are retained during removal. Setup prints
+a progress line on stderr before a copy and prints each component result
+when it completes. Restore with
 a compatible binary and matching stopped device state and checkpoints. A
 database-only recovery point cannot safely replace a coordinated state backup.
 Never combine older hub data with newer acknowledgments. Preserve the failed

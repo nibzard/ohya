@@ -5,7 +5,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/nibzard/ohya/internal/store"
 )
 
 func engineOptions(t *testing.T) Options {
@@ -98,5 +103,143 @@ func TestSetupRecoveryPrecedesMemoryOpen(t *testing.T) {
 	after, err := os.ReadFile(o.Database)
 	if err != nil || string(after) != "not a SQLite database" {
 		t.Fatal("changed original database")
+	}
+}
+
+func recoveryOptions(t *testing.T) Options {
+	t.Helper()
+	o := engineOptions(t)
+	o.NoAgents = true
+	o.Database = filepath.Join(o.Clients.State, "hub.db")
+	if err := os.MkdirAll(o.Clients.State, 0700); err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.Open(context.Background(), o.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return o
+}
+
+func recoveryPoints(t *testing.T, state string) []string {
+	t.Helper()
+	points, err := filepath.Glob(filepath.Join(state, "setup", "backups", "recovery-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return points
+}
+
+func backupResult(t *testing.T, report Report) Result {
+	t.Helper()
+	for _, r := range report.Results {
+		if r.Component == "backup" {
+			return r
+		}
+	}
+	t.Fatalf("no backup result in %+v", report)
+	return Result{}
+}
+
+func TestSetupSkipsRecoveryPointForCurrentSchema(t *testing.T) {
+	o := recoveryOptions(t)
+	report, err := Run(context.Background(), o)
+	if err != nil || !report.Complete() {
+		t.Fatalf("setup = %+v %v", report, err)
+	}
+	if r := backupResult(t, report); r.Status != "not needed" || r.Changed {
+		t.Fatalf("backup = %+v", r)
+	}
+	if points := recoveryPoints(t, o.Clients.State); len(points) != 0 {
+		t.Fatalf("recovery points = %v", points)
+	}
+}
+
+func TestSetupSavesRecoveryPointBeforeMigration(t *testing.T) {
+	o := recoveryOptions(t)
+	db, err := store.Open(context.Background(), o.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Writer().Exec(`DELETE FROM schema_migrations WHERE version = (SELECT max(version) FROM schema_migrations)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var progress []string
+	o.Progress = func(line string) { progress = append(progress, line) }
+	report, err := Run(context.Background(), o)
+	if err != nil || !report.Complete() {
+		t.Fatalf("setup = %+v %v", report, err)
+	}
+	if r := backupResult(t, report); r.Status != "saved" || !r.Changed {
+		t.Fatalf("backup = %+v", r)
+	}
+	if points := recoveryPoints(t, o.Clients.State); len(points) != 1 {
+		t.Fatalf("recovery points = %v", points)
+	}
+	if len(progress) != 1 || !strings.HasPrefix(progress[0], "saving recovery point (") {
+		t.Fatalf("progress = %q", progress)
+	}
+}
+
+func TestSetupKeepsNewestRecoveryPoints(t *testing.T) {
+	o := recoveryOptions(t)
+	dir := filepath.Join(o.Clients.State, "setup", "backups")
+	old := time.Now().Add(-time.Hour)
+	for i, name := range []string{"recovery-a", "recovery-b", "recovery-c"} {
+		point := filepath.Join(dir, name)
+		if err := os.MkdirAll(point, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(point, "hub.db"), []byte("old"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		stamp := old.Add(time.Duration(i) * time.Minute)
+		if err := os.Chtimes(point, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "unrelated"), []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.Open(context.Background(), o.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Writer().Exec(`DELETE FROM schema_migrations WHERE version = (SELECT max(version) FROM schema_migrations)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	report, err := Run(context.Background(), o)
+	if err != nil || !report.Complete() {
+		t.Fatalf("setup = %+v %v", report, err)
+	}
+	saved := filepath.Dir(backupResult(t, report).Detail)
+	points := recoveryPoints(t, o.Clients.State)
+	if len(points) != 2 || !slices.Contains(points, saved) || !slices.Contains(points, filepath.Join(dir, "recovery-c")) {
+		t.Fatalf("recovery points = %v, saved %s", points, saved)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "unrelated")); err != nil {
+		t.Fatalf("removed unrelated file: %v", err)
+	}
+}
+
+func TestSetupReportsResultsAsTheyFinish(t *testing.T) {
+	o := engineOptions(t)
+	var seen []Result
+	o.Notify = func(r Result) { seen = append(seen, r) }
+	report, err := Run(context.Background(), o)
+	if err != nil || !report.Complete() {
+		t.Fatalf("setup = %+v %v", report, err)
+	}
+	if !slices.Equal(seen, report.Results) {
+		t.Fatalf("notified %+v, reported %+v", seen, report.Results)
 	}
 }
