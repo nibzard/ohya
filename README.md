@@ -195,6 +195,7 @@ for the product vision.
 | [ADRs](docs/adr/) | Architecture decisions |
 | [MANIFESTO.md](MANIFESTO.md) | Engineering principles |
 | [BRAND.md](BRAND.md) | Logo, icon, colors, and usage |
+| [TRADEMARKS.md](TRADEMARKS.md) | Use of the ohya name and marks |
 
 ## Contributing
 
@@ -212,3 +213,7 @@ The code and documentation are MIT. See [LICENSE](LICENSE).
 The ohya logo, wordmark, and icons in [`docs/assets/brand/`](docs/assets/brand/)
 are not covered by the MIT License. They are copyright Niko, all rights
 reserved. See [BRAND.md](BRAND.md).
+
+"ohya"™ and the elephant mark are trademarks of Niko. You can fork the code,
+but a distributed fork must use a different name. See the
+[trademark policy](TRADEMARKS.md).

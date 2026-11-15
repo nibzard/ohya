@@ -1,6 +1,7 @@
 # ohya brand
 
-This document tells you how to use the ohya logo, icon, and colors.
+This document tells you how to use the ohya™ logo, icon, and colors. For the
+use of the name, see the [trademark policy](TRADEMARKS.md).
 
 ## The idea
 
@@ -60,7 +61,8 @@ In running text, write "ohya" in lowercase.
 
 The ohya logo, wordmark, icons, and social preview are not open source. They
 are copyright Niko, all rights reserved. The MIT License of this repository
-does not apply to them. See
+does not apply to them. The name and the marks are also trademarks; see
+[TRADEMARKS.md](TRADEMARKS.md). See
 [`docs/assets/brand/LICENSE`](docs/assets/brand/LICENSE). To use them, ask
 for written permission.
 
