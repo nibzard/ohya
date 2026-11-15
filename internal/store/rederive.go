@@ -32,10 +32,7 @@ type ReDeriveResult struct {
 }
 
 type rebuiltSession struct {
-	id     string
-	agent  string
-	device string
-	native string
+	id string
 
 	count          int
 	minMS, maxMS   int64
@@ -319,7 +316,7 @@ func rewriteEvent(ctx context.Context, tx *sql.Tx, src rederiveSource, p ParserD
 
 	st := states[sid]
 	if st == nil {
-		st = &rebuiltSession{id: sid, agent: p.Agent, device: src.device, native: ev.NativeID}
+		st = &rebuiltSession{id: sid}
 		states[sid] = st
 	}
 	st.count++
