@@ -294,10 +294,11 @@ How to use this file:
   cannot trip the table CHECK and permanently wedge an annotation.
 
 - TLA+/TLC tooling facts (2026-11-13, tla/, T015; relevant to T016's model):
-  - TLC 1.8.0 from the GitHub release asset
-    (github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar,
-    sha256 e1f11b75…cdbcd7f) differs from the tla2tools-1.8.0.jar kept by
-    other projects on this machine — pin the release URL, not a local copy.
+  - TLC 1.8.0 jars from different builds differ in embedded build metadata
+    only (identical file listing; the 2026-11-15 upstream rebuild moved only
+    the Build-TimeStamp). The exact bytes are vendored at `tla/vendor/` and
+    checksum-pinned (ADR 0007), so build drift between copies no longer
+    matters.
   - cfg files accept only scalar sets/numbers/strings/booleans as constant
     values; records, tuples, and per-element atoms are rejected. That is why
     Sync.tla models "each source is one device's uploader" structurally
@@ -956,8 +957,12 @@ How to use this file:
   (old 2026-11-06T22:23:57Z, new 2026-11-15T00:21:46Z). The old sha256 pin
   in tla/run-tlc.sh therefore failed every fresh download. Repinned to
   7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f after
-  the comparison and a green run of every model. Upstream can rebuild the
-  tag again; if this recurs, pin an immutable artifact or vendor the jar.
+  the comparison and a green run of every model. Resolved 2026-11-15 (T077):
+  the jar is now vendored at `tla/vendor/tla2tools-1.8.0.jar` and
+  `tla/run-tlc.sh` verifies its checksum on every run without downloading
+  (ADR 0007); no immutable artifact host exists for tla2tools (Maven Central
+  has none, and GitHub asset URLs die on re-upload). Upstream rebuilding the
+  tag again can no longer break a fresh run or CI.
 - Perf budgets, Phase 1 selection, CI placement (2026-11-15, T072,
   docs/performance.md "Budgets, thresholds, and the Phase 1 selection"):
   freshness p95<2 s and idle RSS<150 MB kept (decision: if freshness needs
