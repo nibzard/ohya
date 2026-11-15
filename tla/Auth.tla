@@ -7,7 +7,9 @@ CONSTANTS
   Invitations,
   Sessions,
   Sources,
-  Annotations
+  Annotations,
+  Workspaces,
+  Repos
 
 VARIABLES
   invState,
@@ -20,10 +22,13 @@ VARIABLES
   srcOwner,
   srcEverOwned,
   annRows,
-  annRowSes
+  annRowSes,
+  wsObs,
+  wsWriter
 
 vars == <<invState, invUsedBy, registry, pairedVia, revokedEver,
-          sesDevice, sesLive, srcOwner, srcEverOwned, annRows, annRowSes>>
+          sesDevice, sesLive, srcOwner, srcEverOwned, annRows, annRowSes,
+          wsObs, wsWriter>>
 
 None == "none"
 
@@ -46,17 +51,19 @@ Init ==
   /\ srcEverOwned = [s \in Sources |-> {}]
   /\ annRows      = [a \in Annotations |-> {}]
   /\ annRowSes    = [a \in Annotations |-> [d \in Devices |-> None]]
+  /\ wsObs        = [d \in Devices |-> [w \in Workspaces |-> None]]
+  /\ wsWriter     = [d \in Devices |-> [w \in Workspaces |-> None]]
 
 IssueInvitation(i) ==
   /\ invState[i] = "unissued"
   /\ invState'  = [invState EXCEPT ![i] = "open"]
-  /\ UNCHANGED <<invUsedBy, registry, pairedVia, revokedEver, sesDevice,
+  /\ UNCHANGED <<wsObs, wsWriter, invUsedBy, registry, pairedVia, revokedEver, sesDevice,
                  sesLive, srcOwner, srcEverOwned, annRows, annRowSes>>
 
 ExpireInvitation(i) ==
   /\ invState[i] = "open"
   /\ invState'  = [invState EXCEPT ![i] = "expired"]
-  /\ UNCHANGED <<invUsedBy, registry, pairedVia, revokedEver, sesDevice,
+  /\ UNCHANGED <<wsObs, wsWriter, invUsedBy, registry, pairedVia, revokedEver, sesDevice,
                  sesLive, srcOwner, srcEverOwned, annRows, annRowSes>>
 
 ConsumeInvitation(d, i) ==
@@ -66,7 +73,7 @@ ConsumeInvitation(d, i) ==
   /\ invUsedBy' = [invUsedBy EXCEPT ![i] = d]
   /\ registry'  = [registry EXCEPT ![d] = "active"]
   /\ pairedVia' = [pairedVia EXCEPT ![d] = i]
-  /\ UNCHANGED <<revokedEver, sesDevice, sesLive, srcOwner, srcEverOwned,
+  /\ UNCHANGED <<wsObs, wsWriter, revokedEver, sesDevice, sesLive, srcOwner, srcEverOwned,
                  annRows, annRowSes>>
 
 RevokeDevice(d) ==
@@ -77,7 +84,7 @@ RevokeDevice(d) ==
                       IF sesLive[c] /\ sesDevice[c] = d
                         THEN FALSE
                         ELSE sesLive[c]]
-  /\ UNCHANGED <<invState, invUsedBy, pairedVia, sesDevice, srcOwner,
+  /\ UNCHANGED <<wsObs, wsWriter, invState, invUsedBy, pairedVia, sesDevice, srcOwner,
                  srcEverOwned, annRows, annRowSes>>
 
 OpenSession(d, c) ==
@@ -85,13 +92,13 @@ OpenSession(d, c) ==
   /\ sesDevice[c] = None
   /\ sesDevice'  = [sesDevice EXCEPT ![c] = d]
   /\ sesLive'    = [sesLive EXCEPT ![c] = TRUE]
-  /\ UNCHANGED <<invState, invUsedBy, registry, pairedVia, revokedEver,
+  /\ UNCHANGED <<wsObs, wsWriter, invState, invUsedBy, registry, pairedVia, revokedEver,
                  srcOwner, srcEverOwned, annRows, annRowSes>>
 
 CloseSession(c) ==
   /\ sesLive[c]
   /\ sesLive' = [sesLive EXCEPT ![c] = FALSE]
-  /\ UNCHANGED <<invState, invUsedBy, registry, pairedVia, revokedEver,
+  /\ UNCHANGED <<wsObs, wsWriter, invState, invUsedBy, registry, pairedVia, revokedEver,
                  sesDevice, srcOwner, srcEverOwned, annRows, annRowSes>>
 
 Upload(c, s) ==
@@ -100,7 +107,7 @@ Upload(c, s) ==
      IN /\ srcOwner[s] \in {None, d}
         /\ srcOwner'     = [srcOwner EXCEPT ![s] = d]
         /\ srcEverOwned' = [srcEverOwned EXCEPT ![s] = srcEverOwned[s] \cup {d}]
-  /\ UNCHANGED <<invState, invUsedBy, registry, pairedVia, revokedEver,
+  /\ UNCHANGED <<wsObs, wsWriter, invState, invUsedBy, registry, pairedVia, revokedEver,
                  sesDevice, sesLive, annRows, annRowSes>>
 
 Annotate(c, a) ==
@@ -109,7 +116,7 @@ Annotate(c, a) ==
      IN /\ annRows'   = [annRows EXCEPT ![a] = annRows[a] \cup {d}]
         /\ annRowSes' = [annRowSes EXCEPT ![a] =
                            [annRowSes[a] EXCEPT ![d] = c]]
-  /\ UNCHANGED <<invState, invUsedBy, registry, pairedVia, revokedEver,
+  /\ UNCHANGED <<wsObs, wsWriter, invState, invUsedBy, registry, pairedVia, revokedEver,
                  sesDevice, sesLive, srcOwner, srcEverOwned>>
 
 DeleteAnnotation(c, a) ==
@@ -118,8 +125,18 @@ DeleteAnnotation(c, a) ==
      IN /\ annRows'   = [annRows EXCEPT ![a] = annRows[a] \ {d}]
         /\ annRowSes' = [annRowSes EXCEPT ![a] =
                            [annRowSes[a] EXCEPT ![d] = c]]
-  /\ UNCHANGED <<invState, invUsedBy, registry, pairedVia, revokedEver,
+  /\ UNCHANGED <<wsObs, wsWriter, invState, invUsedBy, registry, pairedVia, revokedEver,
                  sesDevice, sesLive, srcOwner, srcEverOwned>>
+
+Observe(c, w, r) ==
+  /\ Authorized(c)
+  /\ LET d == sesDevice[c]
+     IN IF wsObs[d][w] = None
+          THEN /\ wsObs'    = [wsObs EXCEPT ![d][w] = r]
+               /\ wsWriter' = [wsWriter EXCEPT ![d][w] = c]
+          ELSE UNCHANGED <<wsObs, wsWriter>>
+  /\ UNCHANGED <<invState, invUsedBy, registry, pairedVia, revokedEver,
+                 sesDevice, sesLive, srcOwner, srcEverOwned, annRows, annRowSes>>
 
 Next ==
   \/ \E i \in Invitations :
@@ -138,6 +155,8 @@ Next ==
   \/ \E c \in Sessions, a \in Annotations :
        \/ Annotate(c, a)
        \/ DeleteAnnotation(c, a)
+  \/ \E c \in Sessions, w \in Workspaces, r \in Repos :
+       Observe(c, w, r)
 
 Spec == Init /\ [][Next]_vars
 
@@ -153,6 +172,8 @@ TypeOK ==
   /\ srcEverOwned \in [Sources -> SUBSET Devices]
   /\ annRows      \in [Annotations -> SUBSET Devices]
   /\ annRowSes    \in [Annotations -> [Devices -> Sessions \cup {None}]]
+  /\ wsObs        \in [Devices -> [Workspaces -> Repos \cup {None}]]
+  /\ wsWriter     \in [Devices -> [Workspaces -> Sessions \cup {None}]]
 
 SessionLiveHasDevice ==
   \A c \in Sessions : sesLive[c] => sesDevice[c] # None
@@ -192,6 +213,20 @@ AnnotationWriterFromSession ==
 AnnotationRowTouched ==
   \A a \in Annotations, d \in Devices :
     d \in annRows[a] => annRowSes[a][d] # None
+
+ObservationWriterFromSession ==
+  \A d \in Devices, w \in Workspaces :
+    wsWriter[d][w] # None => sesDevice[wsWriter[d][w]] = d
+
+ObservationHasWriter ==
+  \A d \in Devices, w \in Workspaces :
+    (wsObs[d][w] # None) = (wsWriter[d][w] # None)
+
+ObservationWriteOnce ==
+  [][\A d \in Devices, w \in Workspaces :
+       wsObs[d][w] # None =>
+         /\ wsObs'[d][w] = wsObs[d][w]
+         /\ wsWriter'[d][w] = wsWriter[d][w]]_vars
 
 Quiescent ==
   /\ \A i \in Invitations : invState[i] # "open"

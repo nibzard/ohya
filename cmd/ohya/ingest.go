@@ -13,8 +13,10 @@ import (
 
 	"github.com/nibzard/ohya/internal/device"
 	"github.com/nibzard/ohya/internal/events"
+	"github.com/nibzard/ohya/internal/hubsync"
 	"github.com/nibzard/ohya/internal/store"
 	"github.com/nibzard/ohya/internal/watch"
+	"github.com/nibzard/ohya/internal/workspace"
 )
 
 const maxBatchBytes int64 = 8 << 20
@@ -151,12 +153,14 @@ type ingestor struct {
 	maxRecordBytes int64
 	stderr         io.Writer
 	reported       map[string]int64
+	workspacesDue  bool
 }
 
 func newIngestor(hub *store.DB, w *watch.Watcher, agent, deviceID string, maxRecordBytes int64, stderr io.Writer) *ingestor {
 	return &ingestor{
 		hub: hub, watcher: w, agent: agent, deviceID: deviceID,
 		maxRecordBytes: maxRecordBytes, stderr: stderr, reported: map[string]int64{},
+		workspacesDue: true,
 	}
 }
 
@@ -234,7 +238,27 @@ func (r *ingestor) poll(ctx context.Context, root string, optional bool) (passSt
 			stats.failed++
 		}
 	}
+	if r.workspacesDue || stats.inserted > 0 {
+		r.observeWorkspaces(ctx)
+	}
 	return stats, nil
+}
+
+func (r *ingestor) observeWorkspaces(ctx context.Context) {
+	res, err := workspace.Sync(ctx, func(ctx context.Context, observed []workspace.Observation) ([]string, error) {
+		if _, err := r.hub.ObserveWorkspaces(ctx, r.deviceID, observed); err != nil {
+			return nil, err
+		}
+		return r.hub.PendingWorkspaces(ctx, r.deviceID, r.agent, hubsync.MaxWorkspaces)
+	}, workspace.Resolve)
+	if n := len(res.Failures); n > 0 {
+		fmt.Fprintf(r.stderr, "ohya: %d %s session directories could not be read and stay pending: %v\n", n, r.agent, res.Failures[0])
+	}
+	if err != nil {
+		fmt.Fprintf(r.stderr, "ohya: observe %s workspaces, retrying next pass: %v\n", r.agent, err)
+		return
+	}
+	r.workspacesDue = false
 }
 
 func (r *ingestor) ingestSource(ctx context.Context, o watch.Outcome) (int, int64, *events.StopError, error) {

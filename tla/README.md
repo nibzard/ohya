@@ -219,6 +219,7 @@ fixed source ownership — this model is that assumption, checked.
 | Source ownership | `srcOwner[s]`, with history `srcEverOwned[s]` |
 | Annotation slot (event, namespace, key) | constant `Annotations`; the writer completes the identity |
 | Annotation rows and their writers | `annRows[a]`, `annRowSes[a][d]` |
+| Workspace observation (ADR 0009) | `wsObs[d][w]`, written once, and its writer session `wsWriter[d][w]` |
 
 | Constant | Meaning |
 |---|---|
@@ -227,6 +228,8 @@ fixed source ownership — this model is that assumption, checked.
 | `Sessions` | Session (connection) slot strings |
 | `Sources` | Source identity strings |
 | `Annotations` | Annotation slots: the `(event_id, namespace, key)` part of the annotation identity. The `writer_id` part is state (the row owner), not a constant |
+| `Workspaces` | Workspace paths. The device part of the `(device_id, path)` identity is state, not a constant |
+| `Repos` | Observed values, including the "no repository" value |
 
 `None` is one sentinel string for "no device", "no invitation", and "no
 session". The domains are disjoint, and no predicate compares sentinels
@@ -255,6 +258,7 @@ Actions and the scenarios they cover:
 | `CloseSession` | A session ends; the device binding survives |
 | `Upload` | The first accepted upload binds the source to the session's device; the same device's retries are accepted; any other device — stranger, paired, or the revoked former owner — is rejected |
 | `Annotate` / `DeleteAnnotation` | Upsert or delete of the session device's own row on a slot; the request carries no writer, so another device's row is not addressable. Deleting an absent row succeeds and removes nothing |
+| `Observe` | A workspace observation for the session device's own workspace. The first one is stored; a repeat, with the same or another value, changes nothing |
 
 A rejected request is the absence of a transition: the authorization
 guard fails and no state changes.
@@ -280,6 +284,12 @@ Every configuration checks all of these.
 - `AnnotationWriterFromSession` / `AnnotationRowTouched` — every recorded
   annotation write or delete went through a session bound to the row's
   writer. The writer comes from the session, never from the request.
+- `ObservationWriterFromSession` / `ObservationHasWriter` — every stored
+  workspace observation was written through a session of the device that
+  owns the workspace.
+
+The action property `ObservationWriteOnce` checks that a stored
+observation, and its writer, never change.
 
 ## Design decisions fixed by the model
 
@@ -330,8 +340,8 @@ Every configuration checks all of these.
 
 | Configuration | Bounds | What it exercises | Size (checked 2026-11-13) |
 |---|---|---|---|
-| `Auth.cfg` | 2 devices, 2 invitations, 3 sessions, 2 sources | Full interleaving: pairing races, revocation under live sessions, cross-writer annotations on one slot | 46,289 states, ~1 s |
-| `AuthWide.cfg` | 3 devices, 2 invitations, 3 sessions, 2 sources | Pairing scarcity: one device stays a stranger whatever happens; one device owning both sources while another owns none | 126,933 states, ~3 s |
+| `Auth.cfg` | 2 devices, 2 invitations, 3 sessions, 2 sources, 1 workspace, 2 values | Full interleaving: pairing races, revocation under live sessions, cross-writer annotations on one slot, competing observations of one workspace | 515,033 states, ~5 s (checked 2026-11-16) |
+| `AuthWide.cfg` | 3 devices, 2 invitations, 3 sessions, 2 sources, 1 workspace, 2 values | Pairing scarcity: one device stays a stranger whatever happens; one device owning both sources while another owns none | 1,480,461 states, ~12 s (checked 2026-11-16) |
 
 In `Auth.cfg`, three session slots let both devices hold live sessions
 and still close a session and open a new one on a fresh slot. In
@@ -359,6 +369,13 @@ invariant):
   `RevocationIrreversible` violated.
 - A session opens without the registry check:
   `NoLiveSessionForRevoked` violated.
+
+Two mutations of `Observe`, run on 2026-11-16, were also caught:
+
+- The hub overwrites a stored observation: `ObservationWriteOnce`
+  violated.
+- The hub writes the observation for any device instead of the session's
+  device: `ObservationWriterFromSession` violated.
 
 One further mutation survived by design: an already-active device
 consuming a second invitation violates no stated property (each
