@@ -18,10 +18,17 @@ make tla
 ```
 
 You can also run `./tla/run-tlc.sh` directly; it changes to its own
-directory first. The runner needs Java 11 or later. It downloads the pinned
-TLA+ tools jar (1.8.0), verifies its SHA-256 checksum, and checks every
-model below. TLC output ends with `Model checking completed. No error has
-been found.` per model.
+directory first. The runner needs Java 11 or later and nothing else: the
+TLA+ tools jar (1.8.0) is vendored at `tla/vendor/`, every run verifies its
+SHA-256 against the pin in the script, and no download happens — a fresh
+checkout cannot break when upstream rebuilds a release tag
+([ADR 0007](../docs/adr/0007-vendored-tlc-jar.md)). TLC output ends with
+`Model checking completed. No error has been found.` per model.
+
+To upgrade TLC, download the new release jar out of band, place it at
+`tla/vendor/tla2tools-<version>.jar`, update `TLA_VERSION` and `TLA_SHA256`
+in `tla/run-tlc.sh`, delete the superseded jar, and commit jar and pin
+together.
 
 # Sync protocol model
 
