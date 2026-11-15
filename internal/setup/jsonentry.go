@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/nibzard/ohya/internal/durablefile"
 )
@@ -50,7 +52,30 @@ func readRegular(path string) ([]byte, error) {
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("%s is not a regular file", path)
 	}
-	return os.ReadFile(path)
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !opened.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", path)
+	}
+	const limit = 8 << 20
+	if opened.Size() > limit {
+		return nil, fmt.Errorf("%s exceeds the 8 MiB setup file bound", path)
+	}
+	data, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > limit {
+		return nil, fmt.Errorf("%s exceeds the 8 MiB setup file bound", path)
+	}
+	return data, nil
 }
 
 func readEntry(e JSONEntry) (map[string]json.RawMessage, map[string]json.RawMessage, []byte, error) {

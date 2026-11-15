@@ -213,3 +213,25 @@ local hub database. Upload checkpoints can be checked for readability, while
 hub-side parser stops remain the uploader's diagnostic responsibility. Doctor
 never starts an MCP server merely to test a connection, because that could
 create or migrate state.
+
+## Client preflight
+
+Before changing configuration or consuming a remote invitation, setup checks
+project MCP entries in the current directory and its ancestors. A project
+entry named ohya requires review because it can shadow the user registration.
+Setup does not edit that entry. User configuration itself is excluded from
+project override checks.
+
+Claude preflight checks its documented local settings files and system managed
+MCP files. Exclusive managed MCP configuration blocks user registration.
+Allowlist command matching takes precedence over name matching, and denylist
+matches always block. No policy is loosened. Invalid or unreadable settings
+produce a diagnostic without printing their contents. Additional cloud or MDM
+policy remains under the client's control when it starts; setup does not claim
+to enumerate policy sources that are unavailable locally.
+
+Sources checked 2026-11-15:
+https://code.claude.com/docs/en/managed-mcp and
+https://learn.chatgpt.com/docs/extend/mcp?surface=cli.
+Setup reads regular configuration files with an 8 MiB bound and refuses final
+symlinks. It never executes project configuration to inspect it.

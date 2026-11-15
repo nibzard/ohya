@@ -146,7 +146,11 @@ func runSetupCommand(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	options := setup.Options{NoModifyPath: *noModifyPath, Shell: os.Getenv("SHELL"), Database: db, Clients: setup.ClientOptions{Home: home, State: absState, Binary: binary, Args: clientArgs, Agents: *agents}, ServiceArgs: serviceArgs, NoService: *noService, NoAgents: *noAgents, DryRun: *dry}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	options := setup.Options{WorkingDirectory: cwd, NoModifyPath: *noModifyPath, Shell: os.Getenv("SHELL"), Database: db, Clients: setup.ClientOptions{Home: home, State: absState, Binary: binary, Args: clientArgs, Agents: *agents}, ServiceArgs: serviceArgs, NoService: *noService, NoAgents: *noAgents, DryRun: *dry}
 	options.Prepare = func(ctx context.Context) error {
 		if err := setup.SaveConnection(absState, connection); err != nil {
 			return err

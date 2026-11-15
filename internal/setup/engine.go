@@ -34,20 +34,21 @@ func (r Report) Complete() bool {
 }
 
 type Options struct {
-	NoModifyPath  bool
-	Shell         string
-	Database      string
-	Clients       ClientOptions
-	ServiceArgs   []string
-	Platform      string
-	NoService     bool
-	NoAgents      bool
-	DryRun        bool
-	RunService    func(context.Context, []string) error
-	LoadedService func(context.Context, []string) error
-	Verify        func(context.Context, Command) error
-	ProbePi       func(context.Context, string) error
-	Prepare       func(context.Context) error
+	WorkingDirectory string
+	NoModifyPath     bool
+	Shell            string
+	Database         string
+	Clients          ClientOptions
+	ServiceArgs      []string
+	Platform         string
+	NoService        bool
+	NoAgents         bool
+	DryRun           bool
+	RunService       func(context.Context, []string) error
+	LoadedService    func(context.Context, []string) error
+	Verify           func(context.Context, Command) error
+	ProbePi          func(context.Context, string) error
+	Prepare          func(context.Context) error
 }
 
 func Run(ctx context.Context, o Options) (Report, error) {
@@ -58,6 +59,15 @@ func Run(ctx context.Context, o Options) (Report, error) {
 		clients, err = DiscoverClients(o.Clients)
 		if err != nil {
 			return report, err
+		}
+	}
+	for i, client := range clients {
+		if client.Status != "planned" {
+			continue
+		}
+		if err := PreflightClient(o.Clients, client, o.WorkingDirectory); err != nil {
+			clients[i].Status = "blocked"
+			clients[i].Detail = err.Error()
 		}
 	}
 	platform := o.Platform
@@ -87,6 +97,18 @@ func Run(ctx context.Context, o Options) (Report, error) {
 		}
 		for _, c := range clients {
 			report.Results = append(report.Results, Result{Component: c.Name, Status: c.Status, Detail: c.Config})
+		}
+		return report, nil
+	}
+	blocked := false
+	for _, client := range clients {
+		if client.Status == "blocked" {
+			blocked = true
+		}
+	}
+	if blocked {
+		for _, client := range clients {
+			report.Results = append(report.Results, Result{Component: client.Name, Status: client.Status, Detail: client.Detail})
 		}
 		return report, nil
 	}
