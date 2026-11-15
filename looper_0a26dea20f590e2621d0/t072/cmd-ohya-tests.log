@@ -1,0 +1,323 @@
+=== RUN   TestHelpIsSuccessOnStdout
+=== RUN   TestHelpIsSuccessOnStdout/ohya
+=== RUN   TestHelpIsSuccessOnStdout/ohya_--help
+=== RUN   TestHelpIsSuccessOnStdout/ohya_-h
+=== RUN   TestHelpIsSuccessOnStdout/ingest_--help
+=== RUN   TestHelpIsSuccessOnStdout/serve_--help
+=== RUN   TestHelpIsSuccessOnStdout/join_--help
+=== RUN   TestHelpIsSuccessOnStdout/mcp_--help
+=== RUN   TestHelpIsSuccessOnStdout/rederive_--help
+=== RUN   TestHelpIsSuccessOnStdout/doctor_--help
+=== RUN   TestHelpIsSuccessOnStdout/version_--help
+=== RUN   TestHelpIsSuccessOnStdout/devices
+=== RUN   TestHelpIsSuccessOnStdout/devices_--help
+=== RUN   TestHelpIsSuccessOnStdout/devices_-h
+=== RUN   TestHelpIsSuccessOnStdout/devices_invite_--help
+=== RUN   TestHelpIsSuccessOnStdout/devices_list_--help
+=== RUN   TestHelpIsSuccessOnStdout/devices_revoke_--help
+--- PASS: TestHelpIsSuccessOnStdout (0.00s)
+    --- PASS: TestHelpIsSuccessOnStdout/ohya (0.00s)
+    --- PASS: TestHelpIsSuccessOnStdout/ohya_--help (0.00s)
+    --- PASS: TestHelpIsSuccessOnStdout/ohya_-h (0.00s)
+    --- PASS: TestHelpIsSuccessOnStdout/ingest_--help (0.00s)
+    --- PASS: TestHelpIsSuccessOnStdout/serve_--help (0.00s)
+    --- PASS: TestHelpIsSuccessOnStdout/join_--help (0.00s)
+    --- PASS: TestHelpIsSuccessOnStdout/mcp_--help (0.00s)
+    --- PASS: TestHelpIsSuccessOnStdout/rederive_--help (0.00s)
+    --- PASS: TestHelpIsSuccessOnStdout/doctor_--help (0.00s)
+    --- PASS: TestHelpIsSuccessOnStdout/version_--help (0.00s)
+    --- PASS: TestHelpIsSuccessOnStdout/devices (0.00s)
+    --- PASS: TestHelpIsSuccessOnStdout/devices_--help (0.00s)
+    --- PASS: TestHelpIsSuccessOnStdout/devices_-h (0.00s)
+    --- PASS: TestHelpIsSuccessOnStdout/devices_invite_--help (0.00s)
+    --- PASS: TestHelpIsSuccessOnStdout/devices_list_--help (0.00s)
+    --- PASS: TestHelpIsSuccessOnStdout/devices_revoke_--help (0.00s)
+=== RUN   TestRootHelpStatesContract
+--- PASS: TestRootHelpStatesContract (0.00s)
+=== RUN   TestUsageErrorsExitTwoOnStderr
+=== RUN   TestUsageErrorsExitTwoOnStderr/unknown_subcommand
+=== RUN   TestUsageErrorsExitTwoOnStderr/unknown_devices_subcommand
+=== RUN   TestUsageErrorsExitTwoOnStderr/bad_flag
+=== RUN   TestUsageErrorsExitTwoOnStderr/bad_devices_flag
+=== RUN   TestUsageErrorsExitTwoOnStderr/bad_flag_value
+=== RUN   TestUsageErrorsExitTwoOnStderr/missing_flag_value
+=== RUN   TestUsageErrorsExitTwoOnStderr/missing_argument
+=== RUN   TestUsageErrorsExitTwoOnStderr/unexpected_argument
+--- PASS: TestUsageErrorsExitTwoOnStderr (0.00s)
+    --- PASS: TestUsageErrorsExitTwoOnStderr/unknown_subcommand (0.00s)
+    --- PASS: TestUsageErrorsExitTwoOnStderr/unknown_devices_subcommand (0.00s)
+    --- PASS: TestUsageErrorsExitTwoOnStderr/bad_flag (0.00s)
+    --- PASS: TestUsageErrorsExitTwoOnStderr/bad_devices_flag (0.00s)
+    --- PASS: TestUsageErrorsExitTwoOnStderr/bad_flag_value (0.00s)
+    --- PASS: TestUsageErrorsExitTwoOnStderr/missing_flag_value (0.00s)
+    --- PASS: TestUsageErrorsExitTwoOnStderr/missing_argument (0.00s)
+    --- PASS: TestUsageErrorsExitTwoOnStderr/unexpected_argument (0.00s)
+=== RUN   TestProcessExitCodes
+=== RUN   TestProcessExitCodes/bare_command
+=== RUN   TestProcessExitCodes/long_help
+=== RUN   TestProcessExitCodes/subcommand_help
+=== RUN   TestProcessExitCodes/devices_subcommand_help
+=== RUN   TestProcessExitCodes/unknown_subcommand
+=== RUN   TestProcessExitCodes/bad_flag
+=== RUN   TestProcessExitCodes/failure
+=== RUN   TestProcessExitCodes/version
+=== RUN   TestProcessExitCodes/long_version
+--- PASS: TestProcessExitCodes (0.11s)
+    --- PASS: TestProcessExitCodes/bare_command (0.01s)
+    --- PASS: TestProcessExitCodes/long_help (0.02s)
+    --- PASS: TestProcessExitCodes/subcommand_help (0.01s)
+    --- PASS: TestProcessExitCodes/devices_subcommand_help (0.01s)
+    --- PASS: TestProcessExitCodes/unknown_subcommand (0.01s)
+    --- PASS: TestProcessExitCodes/bad_flag (0.01s)
+    --- PASS: TestProcessExitCodes/failure (0.01s)
+    --- PASS: TestProcessExitCodes/version (0.01s)
+    --- PASS: TestProcessExitCodes/long_version (0.01s)
+=== RUN   TestIngestCodexThreadAcrossRolloutFiles
+--- PASS: TestIngestCodexThreadAcrossRolloutFiles (0.72s)
+=== RUN   TestIngestCodexReenumeratedPage
+--- PASS: TestIngestCodexReenumeratedPage (0.50s)
+=== RUN   TestIngestCodexIncompleteTail
+--- PASS: TestIngestCodexIncompleteTail (0.54s)
+=== RUN   TestIngestCodexMalformedLineStops
+--- PASS: TestIngestCodexMalformedLineStops (0.54s)
+=== RUN   TestIngestCodexReplacementAndTruncation
+--- PASS: TestIngestCodexReplacementAndTruncation (0.88s)
+=== RUN   TestIngestCodexLargeFileSpansBatches
+--- PASS: TestIngestCodexLargeFileSpansBatches (1.07s)
+=== RUN   TestIngestCodexCrashBetweenCommitAndAcknowledge
+--- PASS: TestIngestCodexCrashBetweenCommitAndAcknowledge (0.51s)
+=== RUN   TestIngestWatchesBothAgents
+--- PASS: TestIngestWatchesBothAgents (0.58s)
+=== RUN   TestIngestRootRules
+--- PASS: TestIngestRootRules (0.29s)
+=== RUN   TestDefaultCodexRoot
+--- PASS: TestDefaultCodexRoot (0.00s)
+=== RUN   TestDevicesLifecycle
+--- PASS: TestDevicesLifecycle (0.98s)
+=== RUN   TestDevicesRegistryIsSeparate
+--- PASS: TestDevicesRegistryIsSeparate (0.88s)
+=== RUN   TestDoctorHealthyFixtureExitsZero
+--- PASS: TestDoctorHealthyFixtureExitsZero (0.51s)
+=== RUN   TestDoctorNewerParserRowsAreAnError
+--- PASS: TestDoctorNewerParserRowsAreAnError (0.57s)
+=== RUN   TestDoctorSchemaBehindBinaryWarnsWithoutMigrating
+--- PASS: TestDoctorSchemaBehindBinaryWarnsWithoutMigrating (0.53s)
+=== RUN   TestDoctorSchemaAheadOfBinaryIsAnError
+--- PASS: TestDoctorSchemaAheadOfBinaryIsAnError (0.33s)
+=== RUN   TestDoctorStoppedSourceCarriesADR0004Remedy
+=== RUN   TestDoctorStoppedSourceCarriesADR0004Remedy/size_stop_names_--max-record-bytes
+=== RUN   TestDoctorStoppedSourceCarriesADR0004Remedy/malformed_record_names_the_repair
+=== RUN   TestDoctorStoppedSourceCarriesADR0004Remedy/a_growing_file_is_not_a_stop
+--- PASS: TestDoctorStoppedSourceCarriesADR0004Remedy (1.17s)
+    --- PASS: TestDoctorStoppedSourceCarriesADR0004Remedy/size_stop_names_--max-record-bytes (0.32s)
+    --- PASS: TestDoctorStoppedSourceCarriesADR0004Remedy/malformed_record_names_the_repair (0.46s)
+    --- PASS: TestDoctorStoppedSourceCarriesADR0004Remedy/a_growing_file_is_not_a_stop (0.39s)
+=== RUN   TestDoctorCoordinationPlaneProbe
+=== RUN   TestDoctorCoordinationPlaneProbe/unreachable_plane_warns
+=== RUN   TestDoctorCoordinationPlaneProbe/answering_plane_is_ok
+=== RUN   TestDoctorCoordinationPlaneProbe/unusable_credential_is_an_error
+--- PASS: TestDoctorCoordinationPlaneProbe (1.31s)
+    --- PASS: TestDoctorCoordinationPlaneProbe/unreachable_plane_warns (0.47s)
+    --- PASS: TestDoctorCoordinationPlaneProbe/answering_plane_is_ok (0.45s)
+    --- PASS: TestDoctorCoordinationPlaneProbe/unusable_credential_is_an_error (0.38s)
+=== RUN   TestDoctorMissingDeviceIdentityWarns
+--- PASS: TestDoctorMissingDeviceIdentityWarns (0.39s)
+=== RUN   TestDoctorUnusableDeviceIdentityIsAnError
+--- PASS: TestDoctorUnusableDeviceIdentityIsAnError (0.36s)
+=== RUN   TestDoctorFTSCorruptionIsAnError
+--- PASS: TestDoctorFTSCorruptionIsAnError (0.56s)
+=== RUN   TestDoctorMissingDatabaseWarns
+--- PASS: TestDoctorMissingDatabaseWarns (0.00s)
+=== RUN   TestDoctorJSONEnvelope
+=== RUN   TestDoctorJSONEnvelope/healthy_golden
+=== RUN   TestDoctorJSONEnvelope/error_findings_ride_in_data_with_exit_1
+=== RUN   TestDoctorJSONEnvelope/usage_errors_stay_text
+--- PASS: TestDoctorJSONEnvelope (0.88s)
+    --- PASS: TestDoctorJSONEnvelope/healthy_golden (0.40s)
+    --- PASS: TestDoctorJSONEnvelope/error_findings_ride_in_data_with_exit_1 (0.48s)
+    --- PASS: TestDoctorJSONEnvelope/usage_errors_stay_text (0.00s)
+=== RUN   TestDoctorReadonlyOath
+--- PASS: TestDoctorReadonlyOath (0.41s)
+=== RUN   TestFreshnessSmoke
+    freshness_test.go:1136: serve: ohya: serving devices at ohya-hub.tail.ohya:9027 (coordination http://127.0.0.1:36191)
+expires 2026-11-15T06:08:59Z (one device may use each half once); join with: ohya join <code>
+    freshness_test.go:1138: freshness 54f97bad: appended=100 visible=100 timedOut=0 overdue=0 outstandingAtDrain=0 deliveredLate=0 neverDelivered=0
+    freshness_test.go:1138: freshness 54f97bad: uploadInterval=2s appendEvery=200ms pollEvery=100ms timeout=30s phaseOffset=1.35614378s seed=16946935906967271020
+    freshness_test.go:1138: freshness 54f97bad: lag p50=1.125s p95=2.062s p99=2.094s max=2.096s (timed-out samples stay in the distribution at drain lower bounds)
+    freshness_test.go:1138: freshness 54f97bad: poll queries=229 errors=0 queryDur p50=1.415ms p95=1.808ms max=2.321ms warmup=2ms; pollEvery bounds visibility from above
+    freshness_test.go:1138: freshness 54f97bad: hub events=116; go1.27.3 linux/amd64
+    freshness_test.go:1138: freshness 54f97bad: hub idle over 5s: meanRSS=65MiB maxRSS=65MiB cpu=0.02s
+    freshness_test.go:1138: freshness 54f97bad: serve peakRSS=67MiB cpuSec=0.59
+    freshness_test.go:1138: freshness 54f97bad: join peakRSS=57MiB cpuSec=0.25
+    freshness_test.go:1138: freshness 54f97bad: db=0MiB walPeak=0MiB (sampler n=375 every 250ms)
+--- PASS: TestFreshnessSmoke (50.44s)
+=== RUN   TestHubRestartReconnect
+    hubrestart_test.go:73: serve: ohya: serving devices at ohya-hub.tail.ohya:9027 (coordination http://127.0.0.1:35677)
+expires 2026-11-15T06:09:49Z (one device may use each half once); join with: ohya join <code>
+    hubrestart_test.go:119: joined device's fixture sessions reached the hub; connection is established
+    hubrestart_test.go:152: hub stopped; restarting
+    hubrestart_test.go:155: serve: ohya: serving devices at ohya-hub.tail.ohya:9027 (coordination http://127.0.0.1:35677)
+    hubrestart_test.go:179: hubrestart-marker reached the hub 31.157s after the restart
+    hubrestart_test.go:185: second hub stop; restarting again
+    hubrestart_test.go:187: serve: ohya: serving devices at ohya-hub.tail.ohya:9027 (coordination http://127.0.0.1:35677)
+    hubrestart_test.go:195: hubrestart-again reached the hub 30.953s after the restart
+--- PASS: TestHubRestartReconnect (94.94s)
+=== RUN   TestIngestImportsHistoryThenPollsIncrementally
+--- PASS: TestIngestImportsHistoryThenPollsIncrementally (0.08s)
+=== RUN   TestIngestMainAndSubagentFilesShareOneSession
+--- PASS: TestIngestMainAndSubagentFilesShareOneSession (0.07s)
+=== RUN   TestIngestHardlinkedBackupKeepsCheckpoint
+--- PASS: TestIngestHardlinkedBackupKeepsCheckpoint (0.07s)
+=== RUN   TestIngestIncompleteTailCommitsOnlyCompleteRecords
+--- PASS: TestIngestIncompleteTailCommitsOnlyCompleteRecords (0.08s)
+=== RUN   TestIngestMalformedLineStopsSourceAndOthersContinue
+--- PASS: TestIngestMalformedLineStopsSourceAndOthersContinue (0.07s)
+=== RUN   TestIngestReportsPersistentDiagnosticOncePerRun
+--- PASS: TestIngestReportsPersistentDiagnosticOncePerRun (0.06s)
+=== RUN   TestIngestOversizedRecordStopRecoversWithLargerLimit
+--- PASS: TestIngestOversizedRecordStopRecoversWithLargerLimit (0.11s)
+=== RUN   TestIngestUnreadableSourceCountsFailed
+--- PASS: TestIngestUnreadableSourceCountsFailed (0.06s)
+=== RUN   TestIngestOnceDegradedReturnsErrDegraded
+--- PASS: TestIngestOnceDegradedReturnsErrDegraded (0.06s)
+=== RUN   TestIngestOnceExitCodes
+=== RUN   TestIngestOnceExitCodes/all_sources_import
+=== RUN   TestIngestOnceExitCodes/stopped_source
+=== RUN   TestIngestOnceExitCodes/unreadable_source
+--- PASS: TestIngestOnceExitCodes (0.23s)
+    --- PASS: TestIngestOnceExitCodes/all_sources_import (0.07s)
+    --- PASS: TestIngestOnceExitCodes/stopped_source (0.08s)
+    --- PASS: TestIngestOnceExitCodes/unreadable_source (0.08s)
+=== RUN   TestIngestRecordAboveBatchBoundStillIngests
+--- PASS: TestIngestRecordAboveBatchBoundStillIngests (0.27s)
+=== RUN   TestIngestReplacementAndTruncationReimportUnderNewSources
+--- PASS: TestIngestReplacementAndTruncationReimportUnderNewSources (0.10s)
+=== RUN   TestIngestCrashBetweenCommitAndAcknowledge
+--- PASS: TestIngestCrashBetweenCommitAndAcknowledge (0.09s)
+=== RUN   TestIngestCrashHelper
+    ingest_test.go:723: crash helper runs only under TestIngestCrashBetweenCommitAndAcknowledge
+--- SKIP: TestIngestCrashHelper (0.00s)
+=== RUN   TestIngestRunsUntilCanceled
+--- PASS: TestIngestRunsUntilCanceled (0.06s)
+=== RUN   TestIngestMissingClaudeRootFails
+--- PASS: TestIngestMissingClaudeRootFails (0.00s)
+=== RUN   TestDiscoverSessionFiles
+--- PASS: TestDiscoverSessionFiles (0.00s)
+=== RUN   TestVersionJSONGolden
+--- PASS: TestVersionJSONGolden (0.00s)
+=== RUN   TestVersionJSONUsageErrorStaysText
+--- PASS: TestVersionJSONUsageErrorStaysText (0.00s)
+=== RUN   TestRederiveJSONGolden
+=== RUN   TestRederiveJSONGolden/success_no-op
+=== RUN   TestRederiveJSONGolden/success_rebuilds_stale_rows
+=== RUN   TestRederiveJSONGolden/failure
+--- PASS: TestRederiveJSONGolden (0.11s)
+    --- PASS: TestRederiveJSONGolden/success_no-op (0.05s)
+    --- PASS: TestRederiveJSONGolden/success_rebuilds_stale_rows (0.05s)
+    --- PASS: TestRederiveJSONGolden/failure (0.00s)
+=== RUN   TestDevicesListJSONGolden
+=== RUN   TestDevicesListJSONGolden/success_empty
+=== RUN   TestDevicesListJSONGolden/success_populated
+=== RUN   TestDevicesListJSONGolden/success_revoked_device_carries_revoked_at
+=== RUN   TestDevicesListJSONGolden/failure
+--- PASS: TestDevicesListJSONGolden (1.29s)
+    --- PASS: TestDevicesListJSONGolden/success_empty (0.02s)
+    --- PASS: TestDevicesListJSONGolden/success_populated (0.63s)
+    --- PASS: TestDevicesListJSONGolden/success_revoked_device_carries_revoked_at (0.64s)
+    --- PASS: TestDevicesListJSONGolden/failure (0.00s)
+=== RUN   TestDevicesInviteJSONGolden
+=== RUN   TestDevicesInviteJSONGolden/success
+=== RUN   TestDevicesInviteJSONGolden/failure
+--- PASS: TestDevicesInviteJSONGolden (0.61s)
+    --- PASS: TestDevicesInviteJSONGolden/success (0.61s)
+    --- PASS: TestDevicesInviteJSONGolden/failure (0.00s)
+=== RUN   TestDevicesRevokeJSONGolden
+=== RUN   TestDevicesRevokeJSONGolden/success
+=== RUN   TestDevicesRevokeJSONGolden/failure_already_revoked
+=== RUN   TestDevicesRevokeJSONGolden/failure_unknown_device
+--- PASS: TestDevicesRevokeJSONGolden (0.64s)
+    --- PASS: TestDevicesRevokeJSONGolden/success (0.01s)
+    --- PASS: TestDevicesRevokeJSONGolden/failure_already_revoked (0.00s)
+    --- PASS: TestDevicesRevokeJSONGolden/failure_unknown_device (0.00s)
+=== RUN   TestIngestOnceJSONGolden
+=== RUN   TestIngestOnceJSONGolden/success
+=== RUN   TestIngestOnceJSONGolden/degraded_pass_reports_through_data_and_exits_3
+=== RUN   TestIngestOnceJSONGolden/failure_missing_root
+=== RUN   TestIngestOnceJSONGolden/--json_without_--once_is_a_usage_error
+--- PASS: TestIngestOnceJSONGolden (0.13s)
+    --- PASS: TestIngestOnceJSONGolden/success (0.06s)
+    --- PASS: TestIngestOnceJSONGolden/degraded_pass_reports_through_data_and_exits_3 (0.07s)
+    --- PASS: TestIngestOnceJSONGolden/failure_missing_root (0.00s)
+    --- PASS: TestIngestOnceJSONGolden/--json_without_--once_is_a_usage_error (0.00s)
+=== RUN   TestJSONSharedEnvelopeDecoder
+=== RUN   TestJSONSharedEnvelopeDecoder/version
+=== RUN   TestJSONSharedEnvelopeDecoder/rederive
+=== RUN   TestJSONSharedEnvelopeDecoder/devices_list
+=== RUN   TestJSONSharedEnvelopeDecoder/devices_invite
+=== RUN   TestJSONSharedEnvelopeDecoder/devices_revoke
+=== RUN   TestJSONSharedEnvelopeDecoder/ingest_--once
+=== RUN   TestJSONSharedEnvelopeDecoder/doctor
+=== RUN   TestJSONSharedEnvelopeDecoder/rederive_failure
+=== RUN   TestJSONSharedEnvelopeDecoder/devices_list_failure
+=== RUN   TestJSONSharedEnvelopeDecoder/devices_invite_failure
+=== RUN   TestJSONSharedEnvelopeDecoder/devices_revoke_failure
+=== RUN   TestJSONSharedEnvelopeDecoder/ingest_failure
+--- PASS: TestJSONSharedEnvelopeDecoder (1.47s)
+    --- PASS: TestJSONSharedEnvelopeDecoder/version (0.00s)
+    --- PASS: TestJSONSharedEnvelopeDecoder/rederive (0.05s)
+    --- PASS: TestJSONSharedEnvelopeDecoder/devices_list (0.02s)
+    --- PASS: TestJSONSharedEnvelopeDecoder/devices_invite (0.09s)
+    --- PASS: TestJSONSharedEnvelopeDecoder/devices_revoke (0.01s)
+    --- PASS: TestJSONSharedEnvelopeDecoder/ingest_--once (0.05s)
+    --- PASS: TestJSONSharedEnvelopeDecoder/doctor (0.00s)
+    --- PASS: TestJSONSharedEnvelopeDecoder/rederive_failure (0.00s)
+    --- PASS: TestJSONSharedEnvelopeDecoder/devices_list_failure (0.00s)
+    --- PASS: TestJSONSharedEnvelopeDecoder/devices_invite_failure (0.00s)
+    --- PASS: TestJSONSharedEnvelopeDecoder/devices_revoke_failure (0.00s)
+    --- PASS: TestJSONSharedEnvelopeDecoder/ingest_failure (0.00s)
+=== RUN   TestMcpRemoteBareFlagParses
+--- PASS: TestMcpRemoteBareFlagParses (0.01s)
+=== RUN   TestMCPStdioEndToEnd
+--- PASS: TestMCPStdioEndToEnd (0.08s)
+=== RUN   TestMCPStdioAnnotateEndToEnd
+--- PASS: TestMCPStdioAnnotateEndToEnd (0.08s)
+=== RUN   TestIngestPiSessions
+--- PASS: TestIngestPiSessions (0.09s)
+=== RUN   TestIngestPiIncompleteTail
+--- PASS: TestIngestPiIncompleteTail (0.08s)
+=== RUN   TestIngestPiMalformedLineStops
+--- PASS: TestIngestPiMalformedLineStops (0.06s)
+=== RUN   TestIngestPiReplacementAndTruncation
+--- PASS: TestIngestPiReplacementAndTruncation (0.12s)
+=== RUN   TestIngestPiLargeFileSpansBatches
+--- PASS: TestIngestPiLargeFileSpansBatches (0.30s)
+=== RUN   TestIngestPiCrashBetweenCommitAndAcknowledge
+--- PASS: TestIngestPiCrashBetweenCommitAndAcknowledge (0.09s)
+=== RUN   TestDefaultPiRoot
+--- PASS: TestDefaultPiRoot (0.00s)
+=== RUN   TestRederiveCommandIsNoOpWhenCurrent
+--- PASS: TestRederiveCommandIsNoOpWhenCurrent (0.04s)
+=== RUN   TestServeJoinEndToEnd
+    serve_e2e_test.go:196: serve: ohya: serving devices at ohya-hub.tail.ohya:9027 (coordination http://127.0.0.1:43793)
+expires 2026-11-15T06:11:30Z (one device may use each half once); join with: ohya join <code>
+    serve_e2e_test.go:239: joined device's fixture sessions reached the hub
+    serve_e2e_test.go:339: live append reached the hub while two remote MCP clients remained connected
+    serve_e2e_test.go:349: remote MCP recovered after the transport owner was killed
+    serve_e2e_test.go:374: the uploader recovered when the MCP transport owner stopped
+    serve_e2e_test.go:377: the remaining MCP client took ownership after the uploader stopped
+    serve_e2e_test.go:389: revocation still denies remote queries after transport ownership transfers
+--- PASS: TestServeJoinEndToEnd (51.21s)
+=== RUN   TestServeJoinTLS
+    serve_e2e_test.go:489: serve: ohya: serving devices at ohya-hub.tail.ohya:9027 (coordination https://127.0.0.1:44777)
+expires 2026-11-15T06:12:22Z (one device may use each half once); join with: ohya join <code>
+--- PASS: TestServeJoinTLS (11.34s)
+=== RUN   TestVersionAliasesPrintSameLine
+--- PASS: TestVersionAliasesPrintSameLine (0.00s)
+=== RUN   TestVersionRejectsArguments
+--- PASS: TestVersionRejectsArguments (0.00s)
+=== RUN   TestWorkloadImport
+    workload_import_test.go:29: set OHYA_WORKLOAD_IMPORT=1 to run the initial-import workload (generates the import fixture)
+--- SKIP: TestWorkloadImport (0.00s)
+PASS
+ok  	github.com/nibzard/ohya/cmd/ohya	229.143s
+exit=0

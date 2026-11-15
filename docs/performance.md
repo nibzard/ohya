@@ -472,7 +472,163 @@ Missed targets carry direct Phase 1 evidence: freshness is bounded by the
 wide-query latency is bounded by BM25 postings volume (the plan's "FTS5
 merge policy" and "settled queries" candidates). Selecting an optimization
 stays a separate decision on this recorded baseline; the hub-restart
-recovery regression above was a correctness fault and is fixed (T075).
+recovery regression above was a correctness fault and is fixed (T075). That
+decision is recorded next.
+
+## Budgets, thresholds, and the Phase 1 selection
+
+Decided 2026-11-15 (T072) per the performance plan's Phase 0 steps 6 and 7,
+on the T070 and T071 baselines above. This section is the standing decision
+record: which acceptance thresholds hold, which budgets any change must
+respect, which optimization Phase 1 may test, and where performance checks
+run in continuous integration (CI).
+
+### Threshold verdicts
+
+The plan proposed four thresholds as hypotheses to validate or replace
+against measured data:
+
+| Proposed threshold | Verdict | Decision |
+|---|---|---|
+| Freshness lag p95 < 2 s, steady, local tailnet | Kept, with a companion | Measured 1.945–1.999 s (W1, two 1,000-sample runs). The margin, 1–55 ms, sits within the 2.8% spread between the two runs: the target is met because the distribution sits just under the 2 s upload interval, not with room to spare. Companion target added: p99 < 2.5 s (measured 2.058–2.070 s, about 17% margin). Both hold at the shipped 2 s interval. |
+| Time-to-memory < 10 min for a 3 GB corpus | Replaced | An unconditional wall ceiling either fails on today's code under tenant disk load or sits above the worst observed load and catches nothing. Replacement: wall < 10 min per 3 GiB on a quiet disk (measured 24.6 s for 137 MiB, 9.2 min extrapolated) and, unconditionally, CPU < 8 min per 3 GiB for hub plus device (measured 4.4–5.8 min). |
+| Query p95 < 100 ms at one million events | Replaced | Failed for the wide BM25 term: 193 ms on the 969,004-event fixture, about 1.5 s projected for full-size records. Every other pattern measured at or below 13 ms p99. Replacement: p95 ≤ 100 ms for selective search, listings, aggregation, and paging; p95 ≤ 250 ms for a wide ranked match on the compact one-million fixture. The 5 s sql-tool deadline stays the absolute bound, and larger hubs are budgeted by the scaling rate below. |
+| Hub idle RSS < 150 MB | Kept | Measured 65–66 MiB in every workload (2.3x margin). |
+
+Wide-match scaling: about 1.6 ms p95 per 1,000 matching events. The
+fixture's wide term matches about one eighth of 969,004 events (about
+121,000 rows) at 193 ms p95. Budget a larger corpus as this rate times the
+expected match count.
+
+The 2 s upload interval consumes the freshness budget: steady p50 is about
+half the interval and p95 is the interval itself. The write path behind it
+has an order of magnitude of headroom — a pass that ingests one turn costs
+about 0.13 s, one live commit 5–33 ms, and the hub spent 2.31 s of CPU over
+a 200 s window. Decision: if freshness ever needs margin, change the
+interval, not the target. The mission is near-real-time memory; a relaxed
+target would certify latency the stack does not need to deliver. Nothing
+changes yet: steady freshness passes, the interval is a shipped default,
+and a default change is a product decision, not a Phase 1 code experiment.
+
+### Budgets and allowed variation
+
+A change accepted in Phase 2 must hold every budget, and a delta counts
+only beyond the allowed variation. Variation is the observed spread between
+same-configuration runs on the reference machine. Fsync-bound wall times
+are excluded: they swing up to 18x with tenant load and never decide an
+optimization without a same-disk-state comparison.
+
+Peak memory:
+
+| Budget | Ceiling | Measured basis | Allowed variation |
+|---|---|---|---|
+| Hub idle RSS | 150 MiB | 65–66 MiB, every workload | ±10% |
+| Hub peak RSS, any matrix workload | 192 MiB | 152–156 MiB (W3); 89–93 MiB import; 133–140 MiB backlog | ±15% (observed run spread within 3%) |
+| Uploader peak RSS | 128 MiB | 59–95 MiB across workloads | ±15% |
+
+Disk growth:
+
+| Budget | Ceiling | Measured basis | Allowed variation |
+|---|---|---|---|
+| Hub database size | ≤ 2.5x source-record bytes | 2.02–2.42x from 137 MiB to 1.3 GiB imports | ±5% on the same corpus; the multiplier moves with the record-size mix across corpora |
+| Peak WAL, sustained mixed read and write | ≤ 64 MiB | 27–32 MiB (W2, W3); import-only 4–14 MiB | ±50% (checkpoint completion races reader snapshots) |
+
+A `VACUUM INTO` backup needs about the same space again, temporarily.
+
+Loaded query (workload 3 shape: three devices uploading about 2 MB/s
+aggregate while the six-pattern search workload runs):
+
+| Budget | Ceiling | Measured | Allowed variation |
+|---|---|---|---|
+| Timeouts against the 5 s deadline | 0 | 0 in 181 and 184 queries | none; any timeout is a failure |
+| FTS selective p95 | ≤ 10 ms | 4 ms | ±25% |
+| FTS wide p95 (168k events) | ≤ 160 ms | 110–111 ms | ±25% |
+| Session token totals p95 | ≤ 60 ms | 38 ms | ±25% |
+| Recent sessions p95 | ≤ 10 ms | 3 ms | ±25% |
+| Session range p95 | ≤ 15 ms | 7 ms | ±25% |
+| Annotation paging p95 | ≤ 5 ms | 2 ms | ±25% |
+
+### Phase 1 selection: none
+
+No Phase 1 candidate is selected. After the verdicts above, no measured
+workload misses its target or budget, and the plan's rule is to select a
+candidate only when its measured cost dominates a workload that misses.
+The two failures behind the replaced thresholds, and why no candidate meets
+the plan's evidence trigger:
+
+- Wide BM25 above the proposed 100 ms. The cost is BM25 scoring over the
+  matching postings at a flat per-match rate; it is not index
+  fragmentation, not a costly filter, and not response encoding. Triggers
+  measured false: FTS5 merge policy requires index maintenance to dominate
+  writes, and maintenance is 14–36% of import wall against 65–86%
+  durable-sync wait; settled queries require a measured costly filter, and
+  every loaded pattern outside wide FTS answered at or below 38 ms p95;
+  query encoding requires encoding to dominate a bounded response, and
+  marker round trips run 1.4 ms p50. The re-scoped budget absorbs the cost,
+  and the 5 s deadline bounds the worst case.
+- Time-to-memory under disk contention. Durable-commit fsync wait dominates
+  at 65–86%, and it is the shipped durability choice, not an accident. The
+  code-addressable slice is small: one register commit per source (19.1 s
+  at 439 sources) and device-side checkpoint durability, about two fsyncs
+  per acknowledged source (75.5 s, 19% of the 10x wall). Amortizing both
+  recovers roughly a quarter of a wall that misses by 9–16x, and hub batch
+  commits are per source by wire contract, so a lone device's batches
+  cannot merge without a protocol change. On a quiet disk the workload
+  already passes. Batch sizing therefore has no miss it can close.
+- Steady freshness passes. Its dominant cost is the 2 s interval, a
+  configuration default; the decision above owns that tradeoff.
+- Group commit has no population: the uploader waits for its own
+  acknowledgment before the next batch, and workload 3 measured at most
+  three concurrent devices.
+- Transport compression requires transfer time to dominate a measured
+  path. On the direct path it does not — freshness is interval-bound and
+  import is fsync-bound — and the relay leg is unmeasured (blocked backlog
+  task T065).
+
+Backlog task T073 therefore closes empty per its own contract. The first
+candidates on fresh evidence, strongest measured trigger first: batch
+sizing, if the thin quiet-disk time-to-memory margin (8%) erodes — the
+register and checkpoint amortization above is
+already measured; the upload interval, if a freshness target is missed or
+tightened; an FTS5 merge comparison, if the wide-match budget is tightened.
+Each needs a new miss and a fresh measurement, per the plan's Phase 2.
+
+### CI placement
+
+- The smoke stays separate from statistical comparison. `TestFreshnessSmoke`
+  with its default 100 samples is the smoke: pass or fail, with no latency
+  threshold asserted, because shared runners swing fsync-bound numbers
+  several-fold and a 100-sample run is a stack check, not percentile
+  evidence (the measurement contract above).
+- Placement: the smoke rides `make check` in the `check-linux` CI job. The
+  suite runs without `-short`, and the darwin-only skip keeps it off the
+  macOS job, whose transport runtime is unverified (blocked backlog T046).
+  Re-measured at this revision (2026-11-15, reference machine, raw log
+  under `perf/t072/`): 50.4 s, lag p50 1.125 s, p95 2.062 s, p99 2.094 s,
+  229 poll queries with 0 errors, hub idle RSS 65 MiB. The smoke's p95
+  reads above 2 s because a 100-sample phase draw moves p95 by more than
+  the 1,000-sample margin — one more reason it asserts no threshold.
+- The order-of-magnitude guards stay in `make check`
+  (`TestIngestPerformanceFloor`, `TestRetrievalPerformanceCeiling`). Their
+  reliability under parallel package load is owned by backlog task T078.
+- Longer statistical comparison stays off CI: the 1,000-sample matrix runs
+  about an hour on the reference machine, and shared-runner noise makes its
+  percentile claims unfalsifiable there. Cross-commit comparison remains
+  the benchstat flow (`make bench-save`, `make bench-diff`, the report-only
+  `bench` job) on the same hardware.
+- The freshness harness does not join the existing bench job and needs no
+  job of its own. The bench job runs on macOS, where the harness skips,
+  and it reports without failing — the opposite of a smoke gate. By
+  runtime the smoke would fit (50 s reference, single-digit minutes at CI
+  speed, against the job's 45-minute timeout), but the darwin skip and the
+  philosophy mismatch rule it out, and a duplicate Linux lane would add
+  runner cost and an unvalidated failure surface without new signal.
+- One placement hardening lands with this decision: the child-process suite
+  in `cmd/ohya` measured 229.1 s for the whole package on the reference
+  machine, while `go test`'s default per-binary timeout is 10 minutes. A
+  shared runner at 2–4x reference speed reaches that ceiling while the
+  stack's first dials cost 20–25 s each, so the check target now passes an
+  explicit `-timeout 20m` to `go test`.
 
 ## Ingestion
 
