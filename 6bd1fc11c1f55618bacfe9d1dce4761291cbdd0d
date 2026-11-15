@@ -1,0 +1,1 @@
+MCP initialization now supplies memory guidance consistently to local and remote clients. It covers selective recall and untrusted transcripts without changing user instruction files. MCP tests and full vet pass.
