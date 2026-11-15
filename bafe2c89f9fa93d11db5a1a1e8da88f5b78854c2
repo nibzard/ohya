@@ -1,0 +1,1 @@
+Setup inspects project MCP definitions and documented local Claude policy files without executing or modifying them. Known blocks stop preparation before pairing or writes. Policy tests cover deny precedence, command allowlists, exclusive managed configuration, and unchanged project files. Focused tests and full vet pass. Remote or MDM policy remains under the client control.
