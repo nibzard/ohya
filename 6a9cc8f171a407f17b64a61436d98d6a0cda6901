@@ -1,0 +1,1 @@
+Resolve papercut records 0FT2QBJD and TKCZ8V74 by directing agents to make check with FTS5 enabled. Document the database-only scope of rederive for SZD0QV2H; no state flag is needed. Validation: make check passed, with cached Go test results. The TLC jar is already vendored under ADR 0007.
