@@ -7,6 +7,8 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -361,5 +363,132 @@ func TestSharedDeviceStartupFailure(t *testing.T) {
 	}
 	if started.Load() != 1 {
 		t.Fatalf("started %d nodes after retry; want 1", started.Load())
+	}
+}
+
+type staleDialNode struct {
+	listener net.Listener
+	fail     bool
+	closed   chan struct{}
+	running  *atomic.Int32
+}
+
+func (n *staleDialNode) Dial(ctx context.Context, addr string) (net.Conn, error) {
+	if n.fail {
+		return nil, errors.New("stale peer state")
+	}
+	return (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+}
+
+func (n *staleDialNode) proxy() (string, string, error) {
+	return n.listener.Addr().String(), strings.Repeat("a", 32), nil
+}
+
+func (n *staleDialNode) Close() error {
+	select {
+	case <-n.closed:
+	default:
+		close(n.closed)
+	}
+	if n.running != nil {
+		n.running.Add(-1)
+	}
+	return n.listener.Close()
+}
+
+func TestSharedDeviceRebuildsStaleNodeWhenPlaneAnswers(t *testing.T) {
+	plane := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer plane.Close()
+	opts := sharedTestOptions(t)
+	opts.ControlURL = plane.URL
+	var running, started atomic.Int32
+	device, err := NewSharedDevice(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { device.Close() })
+	var proxies []string
+	device.newNode = func(Options) (sharedNode, error) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return nil, err
+		}
+		if running.Add(1) != 1 {
+			t.Errorf("%d network stacks run for one device", running.Load()-1)
+		}
+		proxies = append(proxies, listener.Addr().String())
+		n := &staleDialNode{listener: listener, closed: make(chan struct{}), running: &running}
+		if started.Add(1) == 1 {
+			n.fail = true
+		}
+		return n, nil
+	}
+	target := sharedEchoTarget(t)
+	if err := sharedEcho(device, target); err != nil {
+		t.Fatal(err)
+	}
+	if started.Load() != 2 {
+		t.Fatalf("started %d nodes; want 2 (stale node rebuilt)", started.Load())
+	}
+	if running.Load() != 1 {
+		t.Fatalf("running %d network stacks after rebuild; want 1", running.Load())
+	}
+	if len(proxies) != 2 || proxies[0] == proxies[1] {
+		t.Fatalf("proxy addresses = %v; want a republished endpoint for the rebuilt node", proxies)
+	}
+	endpoint, err := device.readEndpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if endpoint.Address != proxies[1] {
+		t.Fatalf("published endpoint %q; want the rebuilt node's proxy %q", endpoint.Address, proxies[1])
+	}
+}
+
+func TestSharedDeviceKeepsNodeWhenPlaneIsDown(t *testing.T) {
+	deadPlane, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer deadPlane.Close()
+	go func() {
+		for {
+			conn, err := deadPlane.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+	opts := sharedTestOptions(t)
+	opts.ControlURL = "http://" + deadPlane.Addr().String()
+	var running, started atomic.Int32
+	device, err := NewSharedDevice(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { device.Close() })
+	var firstClosed = make(chan struct{})
+	device.newNode = func(Options) (sharedNode, error) {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return nil, err
+		}
+		running.Add(1)
+		started.Add(1)
+		return &staleDialNode{listener: listener, closed: firstClosed, fail: true}, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := device.Dial(ctx, "hub:9027"); err == nil || !strings.Contains(err.Error(), "stale peer state") {
+		t.Fatalf("dial error = %v; want the node's stale-peer failure", err)
+	}
+	if started.Load() != 1 {
+		t.Fatalf("started %d nodes; want 1 (no rebuild while the plane is down)", started.Load())
+	}
+	select {
+	case <-firstClosed:
+		t.Fatal("the node was closed while the plane was down")
+	default:
 	}
 }

@@ -386,6 +386,11 @@ events table through a read-only connection (the sql-tool path adds about
 | Device restart, recovery to visibility | 6.636 s | 20.149 s | 14.595 s |
 | Hub restart, recovery to visibility | no recovery ≤ 3m | no recovery ≤ 3m | no recovery ≤ 3m |
 
+The hub-restart rows record the pre-fix state (T070, 2026-11-15). The T075
+repair, verified by `TestHubRestartReconnect` (about 31 s per restart cycle)
+and by a post-fix workload-4 run (36.2 s with the full 191-source fixture,
+same idempotent final count), closes the gap.
+
 - **Time-to-memory swings with disk contention**, as every fsync-bound number
   in this document does: the same fixture imported in 24.6 s when the shared
   disk was quiet (5.57 MiB/s) and in 4–7.5 minutes under tenant load. CPU
@@ -396,18 +401,26 @@ events table through a read-only connection (the sql-tool path adds about
   events plus the delivered restart markers (40,021 when the hub-restart
   marker never landed); no duplicates, no losses. The device-restart pass
   re-probes all 191 sources and delivers one appended record in 6.6–20.1 s.
-- **Hub restart exposes a recovery regression** (consistent across every run,
+- **Hub restart exposed a recovery regression** (consistent across every run,
   2026-11-15): a device whose sync connection was established when the hub
-  process stopped never re-uploads — its dials time out at the 60 s deadline
+  process stopped never re-uploaded — its dials timed out at the 60 s deadline
   in a backoff loop for at least three minutes. A device that had not yet
-  exchanged with the hub connects to the restarted hub in about 20 s, and
-  restarting only the join process reconnects it in about 25 s while the
-  restarted hub stays healthy. Separately, the restarted hub itself
-  intermittently dies with `panic: ipnlocal: watchdog timeout` in
-  tailscale.com v1.104.4 (1 of 3 manual restarts). The fault sits in the
-  transport layer's reconnection after a peer restart, not in sync or
-  storage; it is tracked as the `hub-restart-reconnect` follow-up finding
-  from this matrix, with the manual reproduction commands in `NOTES.md`.
+  exchanged with the hub connected to the restarted hub in about 20 s, and
+  restarting only the join process reconnected it in about 25 s while the
+  restarted hub stayed healthy. Root cause (T075): the device node's control
+  connection to the coordination plane never re-polls after the plane
+  restarts inside the hub process, and the node's cached peer endpoints stop
+  matching the restarted hub. Fixed in the transport layer
+  ([ADR 0006](adr/0006-shared-device-transport.md)): the owner discards and
+  rebuilds its node when a dial fails while the coordination plane answers.
+  `TestHubRestartReconnect` (two stop/restart cycles with an established
+  join, 16-record fixture) recovers in 30.7–31.2 s per cycle, the
+  post-fix workload-4 run recovers in 36.2 s with the full fixture, and the
+  regression reproduced as "never within 2 minutes" before the fix. Separately,
+  the restarted hub intermittently died with `panic: ipnlocal: watchdog
+  timeout` in tailscale.com v1.104.4 (1 of 3 manual restarts during T070);
+  not reproduced across 10 further stop/restart cycles after the fix —
+  remains monitored, see NOTES.md.
 
 ### Query latency at one million events
 
@@ -459,7 +472,7 @@ Missed targets carry direct Phase 1 evidence: freshness is bounded by the
 wide-query latency is bounded by BM25 postings volume (the plan's "FTS5
 merge policy" and "settled queries" candidates). Selecting an optimization
 stays a separate decision on this recorded baseline; the hub-restart
-recovery regression above is a correctness fix, not a performance choice.
+recovery regression above was a correctness fault and is fixed (T075).
 
 ## Ingestion
 

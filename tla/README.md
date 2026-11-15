@@ -389,6 +389,10 @@ publishes the proxy after startup. Other processes borrow connections from
 that proxy. Shutdown withdraws the descriptor, stops the node, and then
 releases the lock. A crash stops its sockets and releases its lock, but may
 leave a stale descriptor. A new owner clears that descriptor before startup.
+An owner whose dial fails while its coordination plane still answers may
+rebuild: it stops its node and starts the same identity again without
+releasing the lock, then publishes again; the stack set and the endpoint
+owner are unchanged and borrowers keep waiting for the republication.
 
 The model checks:
 
@@ -405,5 +409,5 @@ cannot establish connections. Filesystem and SOCKS5 details are covered by
 Go tests. The model checks safety, with no liveness claim. Network recovery
 and retries retain the assumptions in the sync and authorization models.
 
-Verified with TLC 1.8.0 on 2026-11-15: 139 generated states, 40 distinct
+Verified with TLC 1.8.0 on 2026-11-15: 214 generated states, 52 distinct
 states, depth 7, no errors, with three processes.

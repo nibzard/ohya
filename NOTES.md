@@ -887,20 +887,29 @@ How to use this file:
   import-only figure, plan headroom accordingly. Guardrail verdict table in
   the doc.
 - Hub-restart recovery regression, found by the T070 matrix (2026-11-15,
-  follow-up key `hub-restart-reconnect`): when the hub process stops and
-  restarts, a device whose sync connection was established NEVER re-uploads
-  — `tailcat: dial ohya-hub.tail.ohya:9027: context deadline exceeded`
-  repeats past the 60 s dial deadline for minutes (reproduced 5/5 across
-  harness runs and manual repros). A device that had not yet exchanged
-  connects to the restarted hub in ~20 s, and restarting only the join
-  process reconnects in ~25 s — stale peer state in the long-lived device
-  node, plus an intermittent hub-side `panic: ipnlocal: watchdog timeout`
-  (tailscale.com v1.104.4, 1 of 3 manual restarts). Repro sketch: serve +
-  join + fixture, wait for events to land, SIGTERM serve, restart serve
-  (ready again), append a marker — it never arrives; kill/restart only the
-  join — it arrives in ~25 s. Device restart (clean SIGTERM of join) recovers
-  in 6.6-20.1 s including the 191-source re-probe. Fix belongs in
-  internal/transport/tailcat reconnection, not sync or storage.
+  follow-up key `hub-restart-reconnect`), fixed same day (T075): when the hub
+  process stopped and restarted, a device whose sync connection was
+  established never re-uploaded (dials timed out at the 60 s deadline for
+  3+ minutes, 5/5). Diagnosis: after the coordination plane restarts inside
+  the hub process, the long-lived device node's control connections sit dead
+  in CLOSE-WAIT and its control client never re-polls, so the cached peer
+  endpoints never pick up the restarted hub; tailscale.com v1.104.4 does not
+  recover by itself. Fix (internal/transport/tailcat, ADR 0006): the shared
+  device's owner treats "dial failed while the coordination plane still
+  answers an HTTP request" as stale node state — it closes the node, starts
+  the same durable identity again, republishes the proxy descriptor, and
+  retries once; the direct dial also carries its own 20 s deadline so the
+  rebuild fits inside the uploader's 60 s dial budget. A dial failure with an
+  unreachable plane keeps the node (ordinary downtime backoff).
+  `TestHubRestartReconnect` (two stop/restart cycles, established join)
+  recovers in ~31 s per cycle; a post-fix workload-4 run recovers in 36.2 s
+  with the full 191-source fixture and stays idempotent; unit tests pin the
+  rebuild decision. Open: the
+  intermittent hub-side `panic: ipnlocal: watchdog timeout` (tailscale.com
+  v1.104.4, 1 of 3 manual restarts during T070) was not reproduced across 10
+  post-fix stop/restart cycles (watch the serve stderr in the restart tests if it
+  returns; the panic is an ipnlocal deadlock probe, i.e. some watched lock
+  hung >30 s).
 - T070 harness facts worth keeping: the sql tool returns JSON numbers, which
   decode as float64 — `fmt.Sprint` renders ids ≥ 1e6 as `1.012834e+06`, so
   any harness that parses ids from tool output must `CAST(id AS TEXT)` in

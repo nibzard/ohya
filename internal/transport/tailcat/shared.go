@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -133,6 +134,18 @@ func (s *SharedDevice) Dial(ctx context.Context, addr string) (net.Conn, error) 
 }
 
 func (s *SharedDevice) dialOwned(ctx context.Context, addr string) (net.Conn, error) {
+	conn, err := s.dialNode(ctx, addr)
+	if err == nil {
+		return conn, nil
+	}
+	if ctx.Err() != nil || !s.planeReachable(ctx) {
+		return nil, err
+	}
+	s.resetNode()
+	return s.dialNode(ctx, addr)
+}
+
+func (s *SharedDevice) dialNode(ctx context.Context, addr string) (net.Conn, error) {
 	if s.node == nil {
 		node, err := s.newNode(s.options)
 		if err != nil {
@@ -165,6 +178,29 @@ func (s *SharedDevice) dialOwned(ctx context.Context, addr string) (net.Conn, er
 	}
 	s.published = true
 	return conn, nil
+}
+
+func (s *SharedDevice) resetNode() {
+	if s.node != nil {
+		_ = s.node.Close()
+		s.node = nil
+	}
+	s.published = false
+}
+
+func (s *SharedDevice) planeReachable(parent context.Context) bool {
+	ctx, cancel := context.WithTimeout(parent, 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.options.ControlURL, nil)
+	if err != nil {
+		return false
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return true
 }
 
 func (s *SharedDevice) readEndpoint() (proxyEndpoint, error) {
