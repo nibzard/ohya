@@ -1,0 +1,38 @@
+# Design: TestTimeoutRetries load-sensitivity remedy (T080)
+
+## Problem
+The recovery sync in TestTimeoutRetries inherited the fixture's
+300 ms RequestTimeout, which exists only so the injected stalled
+acknowledgment fails fast. One exchange past 300 ms under a
+concurrent make memory-e2e (real CLI processes) failed a full
+make check at 29b7774; isolated runs pass in 0.4 s.
+
+## Approach
+Two-part remedy, both levers named by the task: the recovery sync
+runs on a fresh uploader with the package-standard 10 s
+RequestTimeout (all other tests in the package already use it and
+held in the failing run), and retries ErrDisconnected for up to
+20 s, matching the production Run loop. The 300 ms fault timeout
+and every assertion are unchanged.
+
+## Alternatives Considered
+- Widen the 300 ms for the whole test — rejected: phase 1 would
+  wait the full timeout every run, slowing every check.
+- 10 s budget alone — rejected by measurement: under six CPU
+  spinners plus two continuous 256 MiB dsync writers, single
+  exchanges stall past 10 s (2 of 5 runs failed).
+- Serialize the package or calibrate make check to saturated-disk
+  load — rejected: the same saturation multiplies the cmd/ohya
+  child-process suite past the 20 m per-binary go test timeout,
+  so that load is outside the suite's survivable range.
+
+## Verification
+Reproducing load: pre-fix fails reliably at the recorded call;
+final remedy 10/10 plus whole-package runs. Full parallel
+go test ./... under an incident-comparable sustained load
+(1.7-2.6x): 19 packages, exit 0. Unloaded make check green.
+
+## References
+- docs/performance.md, section "Regression guards" (decision,
+  anchors, reopen condition)
+- Task artifact: t080/ evidence under the looper artifact dir
