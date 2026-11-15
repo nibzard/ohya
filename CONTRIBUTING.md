@@ -92,10 +92,14 @@ The gate (`cmd/memory-e2e`) works as follows:
 - Codex runs with `--trust` for the scratch case directory, because it
   gates project MCP servers behind project trust. The trust record stays
   inside the isolated `CODEX_HOME` (verified 2026-11-14).
-- Codex emits WebSocket fallback error items even on successful runs. The
-  trace parser records each error item and keeps reading. `checkCase`
-  currently counts every recorded problem as a case failure; see the open
-  item in NOTES.md.
+- Codex emits WebSocket fallback error items even on successful runs: the
+  wss endpoint rejects API-key auth, Codex falls back to HTTPS, and the
+  run completes. The observed message starts with "Falling back from
+  WebSockets to HTTPS transport." The trace parser records each error
+  item and keeps reading. That known fallback item is report-only — it
+  is printed in the report as a note and never fails a case. Any other
+  error item still fails the case, so an unexpected Codex error on a
+  release run stays visible.
 
 ## Command implementation
 
