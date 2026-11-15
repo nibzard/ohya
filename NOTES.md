@@ -1105,12 +1105,6 @@ How to use this file:
     `TestHubRestartReconnect` (serve, join, live appends, hub restart) pass
     on this Mac (`go test ./cmd/ohya`, 145 s). CI still skips them on darwin.
     One machine; not yet a CI result.
-  - `ohya setup` blocks Claude Code when `~/.claude/settings.json` is a
-    symlink (stow-style dotfiles): `readRegular` refuses symlinks for the
-    read-only policy check, and one blocked client stops the service, Codex,
-    and Pi setup too. Claude Code itself follows the symlink. Open decision:
-    follow symlinks for read-only policy files; keep `O_NOFOLLOW` for written
-    files.
   - Ingest of the full local history (3,292 files, 4.2 GB): 876,852 events in
     182 s, 130 MB peak RSS, 5.1 GB database (4.1 GB raw_json). 104 sources
     (3%) stopped on the 1 MiB `--max-record-bytes` default: oversized Codex

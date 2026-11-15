@@ -238,6 +238,14 @@ https://learn.chatgpt.com/docs/extend/mcp?surface=cli.
 Setup reads regular configuration files with an 8 MiB bound and refuses final
 symlinks. It never executes project configuration to inspect it.
 
+Local trial (2026-11-15): Claude settings managed as dotfiles are often
+symlinks, and Claude Code follows them. Refusing them blocked Claude setup,
+and the blocked client stopped the service and the other agents too. The
+read-only preflight inspections (Claude policy settings and project MCP
+entries) now follow symlinks to a regular file, with the same 8 MiB bound.
+A symlink to a directory or another non-regular file is still refused.
+Files that setup writes still refuse final symlinks.
+
 Native Linux service validation (2026-11-15) found that systemd treats quotes
 in WorkingDirectory as literal path characters. That field now uses the raw
 absolute path with specifiers escaped; ExecStart keeps argument quoting. A

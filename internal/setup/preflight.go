@@ -26,7 +26,7 @@ func ruleMatches(r mcpRule, command Command) bool {
 }
 
 func readPolicy(path string) (claudePolicy, bool, error) {
-	raw, err := readRegular(path)
+	raw, err := readFollowingSymlinks(path)
 	if os.IsNotExist(err) {
 		return claudePolicy{}, false, nil
 	}
@@ -121,7 +121,7 @@ func PreflightClient(o ClientOptions, c Client, cwd string) error {
 		if path == c.Config {
 			continue
 		}
-		raw, err := readRegular(path)
+		raw, err := readFollowingSymlinks(path)
 		if os.IsNotExist(err) {
 			continue
 		}

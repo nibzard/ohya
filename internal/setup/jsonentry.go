@@ -45,14 +45,26 @@ func sameJSON(a, b json.RawMessage) bool {
 }
 
 func readRegular(path string) ([]byte, error) {
-	info, err := os.Lstat(path)
+	return readBounded(path, false)
+}
+
+func readFollowingSymlinks(path string) ([]byte, error) {
+	return readBounded(path, true)
+}
+
+func readBounded(path string, followSymlinks bool) ([]byte, error) {
+	stat, flags := os.Lstat, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK
+	if followSymlinks {
+		stat, flags = os.Stat, os.O_RDONLY|syscall.O_NONBLOCK
+	}
+	info, err := stat(path)
 	if err != nil {
 		return nil, err
 	}
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("%s is not a regular file", path)
 	}
-	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	file, err := os.OpenFile(path, flags, 0)
 	if err != nil {
 		return nil, err
 	}

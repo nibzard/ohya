@@ -102,3 +102,62 @@ func TestDryRunReportsBlockReason(t *testing.T) {
 	}
 	t.Fatalf("dry run reported no blocked client: %+v", report.Results)
 }
+
+func TestClaudePolicyFollowsSymlinkedSettings(t *testing.T) {
+	dir := t.TempDir()
+	managed := filepath.Join(dir, "managed")
+	dotfiles := filepath.Join(dir, "dotfiles")
+	if err := os.MkdirAll(managed, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dotfiles, 0700); err != nil {
+		t.Fatal(err)
+	}
+	command := Command{Command: "/bin/ohya", Args: []string{"mcp"}}
+	target := filepath.Join(dotfiles, "settings.json")
+	link := filepath.Join(dir, "settings.json")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		text    string
+		allowed bool
+	}{
+		{`{}`, true},
+		{`{"deniedMcpServers":[{"serverName":"ohya"}]}`, false},
+	}
+	for _, c := range cases {
+		if err := os.WriteFile(target, []byte(c.text), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if allowed := CheckClaudePolicy([]string{link}, managed, command) == nil; allowed != c.allowed {
+			t.Fatalf("symlinked policy %s allowed=%v", c.text, allowed)
+		}
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(dotfiles, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckClaudePolicy([]string{link}, managed, command); err == nil {
+		t.Fatal("accepted a policy path that resolves to a directory")
+	}
+}
+
+func TestProjectOverrideCheckFollowsSymlinks(t *testing.T) {
+	o := engineOptions(t)
+	cwd := t.TempDir()
+	target := filepath.Join(t.TempDir(), "mcp.json")
+	if err := os.WriteFile(target, []byte(`{"mcpServers":{"ohya":{"command":"project-server"}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(cwd, ".mcp.json")); err != nil {
+		t.Fatal(err)
+	}
+	c := Client{Name: "claude", Config: filepath.Join(o.Clients.Home, ".claude.json")}
+	err := PreflightClient(o.Clients, c, cwd)
+	if err == nil || !strings.Contains(err.Error(), "defines ohya for this project") {
+		t.Fatalf("symlinked project override not inspected: %v", err)
+	}
+}
