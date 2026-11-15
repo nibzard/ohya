@@ -108,3 +108,25 @@ online snapshot. Setup does not proceed to database opening when backup or
 service preparation fails. Backups are retained during removal. Restore with
 a compatible binary after stopping writers and preserving the old database
 and WAL files together; copying a live database file is not a backup procedure.
+
+## Download bootstrap and executable ownership
+
+`install.sh` resolves one release and downloads its archive and checksum list
+from that exact version over HTTPS. It verifies SHA-256, the allowed archive
+entries, regular file types, and the executable's release identity before
+calling the staged binary's install command. A release root override remains
+HTTPS-only. Checksums share the release host's trust boundary.
+
+The staged executable streams its own bytes into a private staging directory
+on the destination filesystem. A destination lock serializes installations.
+A hash receipt rejects foreign files and edited executables. Upgrades save
+the prior executable in a private recovery directory before replacing the
+installed executable with a rename. The receipt retains the prior hash so an
+interrupted replacement is recoverable. Failed integrated setup leaves the
+installed binary available for repair; it does not attempt a database downgrade.
+
+Release builds set `main.releaseVersion` to the exact tag and retain Go build
+revision metadata. After installation, setup registers the stable destination
+path, not the temporary download path. Installer diagnostics go to stderr so
+the setup JSON result remains parseable. Native platform validation and release
+publication are still required before users can run a hosted install command.

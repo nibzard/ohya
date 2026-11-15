@@ -43,6 +43,7 @@ func runSetupCommand(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	c := newCommandFlags(setupSpec)
+	binaryPath := c.fs.String("binary", binary, "absolute executable `path` registered with services and agents")
 	state := c.fs.String("state", filepath.Join(home, ".ohya"), "memory state `directory`")
 	agents := c.fs.String("agents", "auto", "agents to configure: auto or comma-separated claude,codex,pi")
 	noAgents := c.fs.Bool("no-agents", false, "skip agent configuration")
@@ -80,6 +81,10 @@ func runSetupCommand(args []string, stdout, stderr io.Writer) error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	binary, err = filepath.Abs(*binaryPath)
+	if err != nil {
+		return err
+	}
 	options := setup.Options{Database: db, Clients: setup.ClientOptions{Home: home, State: absState, Binary: binary, Args: []string{"mcp", "--db", db, "--state", absState}, Agents: *agents}, ServiceArgs: serviceArgs, NoService: *noService, NoAgents: *noAgents, DryRun: *dry}
 	report, err := setup.Run(ctx, options)
 	return printSetupReport(stdout, setupSpec.name, *asJSON, report, err)

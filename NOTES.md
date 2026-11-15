@@ -1057,3 +1057,9 @@ How to use this file:
   The setup command, services, native Pi capability checks, older-Pi adapter,
   and bootstrap remain unfinished. Verified with isolated installed Claude:
   `CLAUDE_CONFIG_DIR` puts user MCP settings in `<dir>/.claude.json`.
+
+- Installer bootstrap implementation (2026-11-15): `install.sh` verifies an exact
+  release over HTTPS, checks archive layout and identity, then delegates binary
+  installation and setup to the executable. Local HTTPS fixtures and an isolated
+  real-binary install passed. No assets are published yet. PATH integration,
+  remote setup, older Pi, and native release validation remain unfinished.

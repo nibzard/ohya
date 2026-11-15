@@ -359,8 +359,8 @@ entries and service files use ownership receipts. Uninstall preserves memory,
 credentials, sessions, and entries edited after setup.
 
 This development version reports older Pi versions as unsupported. Remote
-setup, PATH setup, and the download bootstrap are not yet
-implemented. Existing agent sessions need a reload or a new session after
+setup and PATH setup are not yet implemented. The download bootstrap exists
+as `install.sh`, but no release assets are published yet. Existing agent sessions need a reload or a new session after
 registration. Native service verification remains a release gate.
 
 Before local setup restarts ingestion or opens an existing database, it saves

@@ -13,6 +13,8 @@ import (
 	"github.com/nibzard/ohya/internal/store"
 )
 
+var releaseVersion string
+
 var versionSpec = commandSpec{
 	name:      "ohya version",
 	synopsis:  "print the build, parser, and schema versions",
@@ -99,6 +101,9 @@ func buildIdentity() (version, revision, dirty, goVer string) {
 	goVer = info.GoVersion
 	if v := info.Main.Version; v != "" && v != "(devel)" {
 		version = v
+	}
+	if releaseVersion != "" {
+		version = releaseVersion
 	}
 	for _, s := range info.Settings {
 		switch s.Key {
