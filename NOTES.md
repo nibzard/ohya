@@ -1039,7 +1039,15 @@ How to use this file:
   counts unchanged).
 
 - Installer proposal (2026-11-15): `docs/installer-plan.md` records the proposed
-  standalone installer, release archives, and later Homebrew path. No installer
-  exists yet. Native target baselines, Apple signing, and Linux bootstrap
+  integrated installer: user services, agent MCP registration, verification,
+  repair, and later Homebrew support. No installer exists yet. User requires
+  one-command working setup, not a binary-only default. Native baselines, Apple
+  signing, and Linux bootstrap
   signature policy remain open. Pi's current quickstart recommends a managed
   installer with pinned dependencies; do not describe it as npm-only.
+
+- Installer client research (2026-11-15): current upstream Pi documents native
+  MCP commands, but installed `pi mcp --help` prints general help with no MCP
+  subcommands. Detect capabilities and test versions; the proposal includes an
+  owned extension for supported older Pi. Claude user scope and Codex MCP add
+  syntax were checked against installed help. Sources: installer plan.
