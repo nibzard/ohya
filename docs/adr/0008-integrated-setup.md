@@ -44,3 +44,25 @@ The bootstrap stays small. Native release testing and signing remain necessary
 before a public installer can claim support for a platform.
 
 No release is published by this decision.
+
+## Client formats and verification
+
+The Codex adapter appends an owned TOML table and preserves the rest of the
+file byte for byte. It uses the existing pinned TOML parser to reject malformed
+configuration, detect foreign entries, and detect fields added to an owned
+table. A prepared receipt retains the previous block for interrupted updates.
+The parser moves from an indirect dependency to a direct dependency; no module
+or version is added.
+
+Claude Code and native Pi use the JSON adapter. Client paths honor their home
+overrides. Claude Code's `CLAUDE_CONFIG_DIR` stores `.claude.json` directly in
+that directory, verified with the installed CLI in an isolated directory.
+Missing clients and missing explicitly requested clients have distinct results.
+Capability checks for older Pi remain required before invoking its native
+configuration adapter.
+
+Setup verification uses the existing MCP SDK as a client. It requires both
+memory tools and checks the exact result of `SELECT 1 AS ohya_setup_check`.
+It has a bounded lifetime and launches from a neutral working directory.
+The integration test launches the real application through its existing
+subprocess test entry point. It requires no model access.

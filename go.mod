@@ -6,6 +6,7 @@ require (
 	github.com/juanfont/headscale v0.29.7
 	github.com/mattn/go-sqlite3 v1.14.53
 	github.com/modelcontextprotocol/go-sdk v1.8.0
+	github.com/pelletier/go-toml/v2 v2.4.3
 	golang.org/x/net v0.60.0
 	tailscale.com v1.104.4
 )
@@ -71,7 +72,6 @@ require (
 	github.com/mitchellh/go-ps v1.0.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
-	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
 	github.com/petermattis/goid v0.0.0-20260330135022-df67b199bc81 // indirect
 	github.com/philip-bui/grpc-zerolog v1.0.1 // indirect
 	github.com/pires/go-proxyproto v0.15.0 // indirect

@@ -1051,3 +1051,9 @@ How to use this file:
   subcommands. Detect capabilities and test versions; the proposal includes an
   owned extension for supported older Pi. Claude user scope and Codex MCP add
   syntax were checked against installed help. Sources: installer plan.
+
+- Integrated setup implementation (2026-11-15): `internal/setup` now has owned
+  JSON/TOML entry updates, discovery paths, and a real MCP connection check.
+  The setup command, services, native Pi capability checks, older-Pi adapter,
+  and bootstrap remain unfinished. Verified with isolated installed Claude:
+  `CLAUDE_CONFIG_DIR` puts user MCP settings in `<dir>/.claude.json`.
