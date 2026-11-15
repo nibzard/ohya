@@ -1056,8 +1056,7 @@ How to use this file:
   `internal/setup` implement verified bootstrap installation, owned JSON/TOML
   configuration, local and remote setup, user service templates, PATH blocks,
   SQLite recovery points, removal, and real MCP checks. No assets are published.
-  Deeper service health checks, client policy/override checks, and
-  native release validation remain unfinished. The real remote setup test
+  Client policy/override checks and native release validation remain unfinished. The real remote setup test
   proves pairing and reruns against a hub without changing user services.
   Verified Claude override path: `CLAUDE_CONFIG_DIR/.claude.json`.
 
@@ -1066,3 +1065,10 @@ How to use this file:
   round trips against a built ohya binary. No model or provider was used.
   Native MCP stays preferred; compatibility fallback is gated to this verified
   version. The bridge uses the existing Go MCP SDK and stdin for request data.
+
+- Setup health checks (2026-11-15): loaded and running service states are
+  distinct; readiness requires a process and two successful status checks.
+  Doctor inspects owned integrations read-only and follows saved remote setup
+  state. Remote upload checkpoints are checked for readability, not reparsed
+  without the hub's Source state. Native service-manager validation remains
+  a release gate.

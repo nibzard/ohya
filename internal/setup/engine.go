@@ -34,19 +34,20 @@ func (r Report) Complete() bool {
 }
 
 type Options struct {
-	NoModifyPath bool
-	Shell        string
-	Database     string
-	Clients      ClientOptions
-	ServiceArgs  []string
-	Platform     string
-	NoService    bool
-	NoAgents     bool
-	DryRun       bool
-	RunService   func(context.Context, []string) error
-	Verify       func(context.Context, Command) error
-	ProbePi      func(context.Context, string) error
-	Prepare      func(context.Context) error
+	NoModifyPath  bool
+	Shell         string
+	Database      string
+	Clients       ClientOptions
+	ServiceArgs   []string
+	Platform      string
+	NoService     bool
+	NoAgents      bool
+	DryRun        bool
+	RunService    func(context.Context, []string) error
+	LoadedService func(context.Context, []string) error
+	Verify        func(context.Context, Command) error
+	ProbePi       func(context.Context, string) error
+	Prepare       func(context.Context) error
 }
 
 func Run(ctx context.Context, o Options) (Report, error) {
@@ -99,6 +100,13 @@ func Run(ctx context.Context, o Options) (Report, error) {
 			return report, err
 		}
 	}
+	if o.LoadedService == nil {
+		if o.RunService != nil {
+			o.LoadedService = o.RunService
+		} else {
+			o.LoadedService = RunServiceLoaded
+		}
+	}
 	if o.RunService == nil {
 		o.RunService = RunServiceCommand
 	}
@@ -122,7 +130,7 @@ func Run(ctx context.Context, o Options) (Report, error) {
 		receipt := filepath.Join(o.Clients.State, "setup", "service.json")
 		var changed bool
 		_, receiptErr := readRegular(receipt)
-		active := o.RunService(ctx, service.Check) == nil
+		active := o.LoadedService(ctx, service.Loaded) == nil
 		var err error
 		if active && os.IsNotExist(receiptErr) {
 			err = fmt.Errorf("an unowned ohya service is already loaded")
@@ -154,7 +162,7 @@ func Run(ctx context.Context, o Options) (Report, error) {
 				}
 			}
 			if err == nil {
-				err = o.RunService(ctx, service.Check)
+				err = waitService(ctx, service, o.RunService)
 			}
 		}
 		if err != nil {

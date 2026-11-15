@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"io/fs"
@@ -18,6 +19,7 @@ import (
 	"github.com/nibzard/ohya/internal/control"
 	"github.com/nibzard/ohya/internal/device"
 	"github.com/nibzard/ohya/internal/events"
+	"github.com/nibzard/ohya/internal/setup"
 	"github.com/nibzard/ohya/internal/store"
 	"github.com/nibzard/ohya/internal/watch"
 )
@@ -83,7 +85,29 @@ func runDoctorCommand(args []string, stdout, stderr io.Writer) error {
 	if stateDir == "" {
 		stateDir = filepath.Dir(*db)
 	}
+	setupState := stateDir
+	connection, err := setup.LoadConnection(setupState)
+	if err != nil {
+		return jsonFailurePrint(*asJSON, stdout, doctorSpec.name, err)
+	}
+	explicitDB, explicitControl := false, false
+	c.fs.Visit(func(f *flag.Flag) {
+		if f.Name == "db" {
+			explicitDB = true
+		}
+		if f.Name == "control" {
+			explicitControl = true
+		}
+	})
+	remote := connection.Mode == "remote" && !explicitDB
+	if connection.Mode == "remote" {
+		stateDir = filepath.Join(setupState, "join")
+		if !explicitControl {
+			*controlURL = connection.ControlURL
+		}
+	}
 	findings, err := runDoctor(context.Background(), doctorOptions{
+		remote:         remote,
 		dbPath:         *db,
 		stateDir:       stateDir,
 		controlURL:     *controlURL,
@@ -91,6 +115,24 @@ func runDoctorCommand(args []string, stdout, stderr io.Writer) error {
 	})
 	if err != nil {
 		return jsonFailurePrint(*asJSON, stdout, doctorSpec.name, err)
+	}
+	integrations, inspectErr := setup.Inspect(context.Background(), setupState, nil)
+	if inspectErr != nil {
+		return jsonFailurePrint(*asJSON, stdout, doctorSpec.name, inspectErr)
+	}
+	for _, item := range integrations {
+		severity := sevOK
+		if item.Status == "changed" {
+			severity = sevWarn
+		}
+		if item.Status == "failed" {
+			severity = sevError
+		}
+		detail := item.Detail
+		if detail == "" {
+			detail = "owned integration is configured"
+		}
+		findings = append(findings, finding{Check: "setup:" + item.Component, Severity: severity, Detail: detail, Remedy: "rerun ohya setup to repair owned configuration; preserve intentional user edits"})
 	}
 	if *asJSON {
 		if err := printJSON(stdout, doctorSpec.name, doctorJSONData{Findings: findings}); err != nil {
@@ -106,6 +148,7 @@ func runDoctorCommand(args []string, stdout, stderr io.Writer) error {
 }
 
 type doctorOptions struct {
+	remote         bool
 	dbPath         string
 	stateDir       string
 	controlURL     string
@@ -120,6 +163,8 @@ func runDoctor(ctx context.Context, o doctorOptions) ([]finding, error) {
 	}
 	var hub *store.DB
 	switch _, statErr := os.Stat(o.dbPath); {
+	case o.remote:
+		findings = append(findings, finding{Check: "database", Severity: sevOK, Detail: "remote memory uses the paired hub; no local database is required"})
 	case errors.Is(statErr, fs.ErrNotExist):
 		findings = append(findings, finding{
 			Check: "database", Severity: sevWarn,
@@ -148,7 +193,11 @@ func runDoctor(ctx context.Context, o doctorOptions) ([]finding, error) {
 		findings = append(findings, checkParserVersions(ctx, hub)...)
 		findings = append(findings, checkFTSIndex(ctx, hub)...)
 	}
-	findings = append(findings, checkStoppedSources(ctx, hub, o)...)
+	if o.remote {
+		findings = append(findings, checkUploadCheckpoints(o.stateDir)...)
+	} else {
+		findings = append(findings, checkStoppedSources(ctx, hub, o)...)
+	}
 	findings = append(findings, checkDeviceIdentity(o.stateDir))
 	findings = append(findings, checkJoinState(ctx, o)...)
 	return findings, nil
@@ -363,4 +412,21 @@ func hasError(findings []finding) bool {
 		}
 	}
 	return false
+}
+
+func checkUploadCheckpoints(state string) []finding {
+	count := 0
+	var out []finding
+	for _, agent := range events.Agents {
+		snapshots, err := watch.InspectSources(state, agent)
+		if err != nil {
+			out = append(out, finding{Check: "upload_checkpoints", Severity: sevError, Detail: "cannot read upload checkpoints for " + agent, Remedy: "restore the join state checkpoints from a backup"})
+		} else {
+			count += len(snapshots)
+		}
+	}
+	if len(out) == 0 {
+		out = append(out, finding{Check: "upload_checkpoints", Severity: sevOK, Detail: fmt.Sprintf("%d upload checkpoints readable; hub parser stops are reported by the uploader", count)})
+	}
+	return out
 }

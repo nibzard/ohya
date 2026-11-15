@@ -405,3 +405,8 @@ To repeat the native Pi loader test without model access, set
 `OHYA_PI_PACKAGE` to the installed Pi package directory and `OHYA_TEST_BINARY`
 to a built ohya executable, then run
 `go test -tags sqlite_fts5 ./internal/setup -run TestPiExtensionThroughInstalledLoader`.
+
+`ohya doctor` also inspects owned services and agent integrations. It reports
+changed or missing entries without modifying them. For remote setup, it follows
+the saved join state and coordination URL. It checks uploader checkpoints
+without claiming to reproduce the hub's parser decisions locally.

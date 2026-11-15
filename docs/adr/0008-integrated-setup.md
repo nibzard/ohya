@@ -197,3 +197,19 @@ an annotation, and reads Unicode back. It uses isolated state and no provider
 credentials. Setup and removal preserve user-edited extension files. Switching
 to native MCP removes the unchanged owned compatibility extension first so
 agents do not get two copies of the tools.
+
+## Readiness and read-only inspection
+
+Loaded service state is distinct from running process state. Setup uses loaded
+state when deciding whether an owned job needs to be stopped and reloaded.
+Readiness requires a positive process ID and the running state. Setup checks
+readiness twice within a bounded wait to reject immediate startup failures.
+
+Doctor reads ownership receipts and current client, profile, extension, and
+service files. It reports changes without rewriting them. Service inspection
+uses read-only status commands. Missing state stays missing. A remote setup
+selects its saved join state and coordination URL; doctor does not require a
+local hub database. Upload checkpoints can be checked for readability, while
+hub-side parser stops remain the uploader's diagnostic responsibility. Doctor
+never starts an MCP server merely to test a connection, because that could
+create or migrate state.

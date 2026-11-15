@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"github.com/nibzard/ohya/internal/setup"
 	"os"
 	"path/filepath"
 	"testing"
@@ -59,5 +60,26 @@ func TestRemoteSetupDryRunAndSecretHandling(t *testing.T) {
 	code = cliMain([]string{"setup", "--local", "--remote", "--dry-run", "--json"}, &stdout, &stderr)
 	if code != 2 {
 		t.Fatalf("conflicting mode exit %d", code)
+	}
+}
+
+func TestDoctorUnderstandsRemoteSetupWithoutCreatingLocalMemory(t *testing.T) {
+	state := t.TempDir()
+	if err := setup.SaveConnection(state, setup.Connection{Mode: "remote", ControlURL: "http://127.0.0.1:1", HubAddress: "hub:9027"}); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := cliMain([]string{"doctor", "--state", state, "--json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("remote doctor %d %s %s", code, stdout.String(), stderr.String())
+	}
+	if !bytes.Contains(stdout.Bytes(), []byte("no local database is required")) {
+		t.Fatal(stdout.String())
+	}
+	if _, err := os.Stat(filepath.Join(state, "hub.db")); !os.IsNotExist(err) {
+		t.Fatal("created local database")
+	}
+	if _, err := os.Stat(filepath.Join(state, "join")); !os.IsNotExist(err) {
+		t.Fatal("created remote state")
 	}
 }
