@@ -1,0 +1,13 @@
+The macOS CI guard skipped the very tests needed to verify transport
+runtime behavior. Removed the guard for the two core lifecycle tests.
+They use /tmp/ohya-e2e-* to avoid long macOS test paths at the control
+plane's Unix socket. The existing macOS check job now executes them.
+The workflow also gains a manual trigger.
+
+Both core transport tests pass on Linux in 63.79 seconds. This does not
+claim native macOS success. The host is Linux, and the updated workflow
+cannot run remotely until the changes are published. No push is made.
+
+Also adopted the existing migration 006 documentation update and closed
+the obsolete malformed-line decision in NOTES.md. Related documentation
+hunks were staged separately to preserve other uncommitted work.
