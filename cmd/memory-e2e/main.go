@@ -94,12 +94,18 @@ func run(args []string) error {
 			if len(problems) == 0 {
 				g.log.line("PASS %-12s %-17s (%.1fs, tool calls: %s)",
 					client.name, c.key, time.Since(start).Seconds(), callsOrNone(result.toolCalls))
+				for _, n := range result.notes {
+					g.log.line("     note: %s", n)
+				}
 				continue
 			}
 			failed++
 			g.log.line("FAIL %-12s %-17s (%.1fs)", client.name, c.key, time.Since(start).Seconds())
 			for _, p := range problems {
 				g.log.line("     %s", p)
+			}
+			for _, n := range result.notes {
+				g.log.line("     note: %s", n)
 			}
 			g.log.line("     answer: %s", oneLine(result.answer))
 			g.log.line("     traces: %s", result.traceDir)

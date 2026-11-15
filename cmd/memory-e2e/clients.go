@@ -19,6 +19,7 @@ type runResult struct {
 	answer    string
 	toolCalls []string
 	problems  []string
+	notes     []string
 	traceDir  string
 }
 
@@ -110,8 +111,8 @@ func (g *gate) runCodexCase(ctx context.Context, c caseDef) *runResult {
 	events.Close()
 	stderr.Close()
 
-	lastMsg, turnDone, calls, problems := parseCodexTrace(eventsPath)
-	res.toolCalls, res.problems = calls, problems
+	lastMsg, turnDone, calls, problems, notes := parseCodexTrace(eventsPath)
+	res.toolCalls, res.problems, res.notes = calls, problems, notes
 	res.answer = lastMsg
 	if data, err := os.ReadFile(lastPath); err == nil && strings.TrimSpace(string(data)) != "" {
 		res.answer = strings.TrimSpace(string(data))
@@ -209,10 +210,10 @@ func parseClaudeTrace(path string) (answer string, ok bool, calls []string, prob
 	return answer, ok, calls, problems
 }
 
-func parseCodexTrace(path string) (lastMessage string, turnDone bool, calls []string, problems []string) {
+func parseCodexTrace(path string) (lastMessage string, turnDone bool, calls []string, problems []string, notes []string) {
 	f, err := os.Open(path)
 	if err != nil {
-		return "", false, nil, []string{"open trace: " + err.Error()}
+		return "", false, nil, []string{"open trace: " + err.Error()}, nil
 	}
 	defer f.Close()
 	sc := bufio.NewScanner(f)
@@ -243,7 +244,12 @@ func parseCodexTrace(path string) (lastMessage string, turnDone bool, calls []st
 			case "agent_message":
 				lastMessage = ev.Item.Text
 			case "error":
-				problems = append(problems, "codex error item: "+truncate(ev.Item.Message, 160))
+				item := "codex error item: " + truncate(ev.Item.Message, 160)
+				if benignCodexErrorItem(ev.Item.Message) {
+					notes = append(notes, item)
+				} else {
+					problems = append(problems, item)
+				}
 			}
 		case "turn.completed":
 			turnDone = true
@@ -252,7 +258,13 @@ func parseCodexTrace(path string) (lastMessage string, turnDone bool, calls []st
 	if err := sc.Err(); err != nil {
 		problems = append(problems, "read trace: "+err.Error())
 	}
-	return lastMessage, turnDone, calls, problems
+	return lastMessage, turnDone, calls, problems, notes
+}
+
+const webSocketFallbackItem = "Falling back from WebSockets to HTTPS transport."
+
+func benignCodexErrorItem(message string) bool {
+	return strings.HasPrefix(message, webSocketFallbackItem)
 }
 
 var evidenceRe = regexp.MustCompile(`(?i)evidence"?:?\s*#?\s*(\d+)`)

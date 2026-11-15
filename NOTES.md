@@ -794,14 +794,17 @@ How to use this file:
     artifact upload is now `if: always()` so a failed run still ships its
     partial perf/bench.txt for diagnosis.
 
-- Open finding, memory gate (2026-11-14, found during the comment cleanup):
-  `parseCodexTrace` in `cmd/memory-e2e/clients.go` records Codex `error`
-  items as problems, and its former comment called them "not fatal"
-  because Codex emits benign WebSocket fallback errors on successful runs.
-  `runCodexCase` stores those problems in the run result, and `checkCase`
-  appends every run problem to the case failures, so one benign error item
-  fails the case. Decide whether benign error items should be report-only,
-  then add a regression test for `checkCase` with such an item.
+- Memory gate, benign Codex error items, decided 2026-11-15 (T067): Codex
+  0.169 emits an `error` item even on successful runs when it falls back
+  from the WebSocket transport to HTTPS (observed message: "Falling back
+  from WebSockets to HTTPS transport. unexpected status 401 …" — the wss
+  endpoint rejects API-key auth; the same episode also emits top-level
+  `{"type":"error","message":"Reconnecting… N/5 …"}` events, which the
+  trace parser never read). `parseCodexTrace` routes an item whose message
+  carries that verified prefix into report-only notes (`runResult.notes`,
+  printed under the case verdict); every other error item stays a case
+  problem, so an unknown Codex error still fails the gate. Extend
+  `benignCodexErrorItem` only with a verified benign sample.
 
 - Shared device transport (2026-11-15, ADR 0006): `join` and remote MCP
   must use `tailcat.NewSharedDevice`. Independent nodes with the same state
