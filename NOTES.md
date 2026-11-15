@@ -1056,7 +1056,7 @@ How to use this file:
   `internal/setup` implement verified bootstrap installation, owned JSON/TOML
   configuration, local and remote setup, user service templates, PATH blocks,
   SQLite recovery points, removal, and real MCP checks. No assets are published.
-  Client policy/override checks and native release validation remain unfinished. The real remote setup test
+  Native release validation remains unfinished; local policy preflight is implemented. The real remote setup test
   proves pairing and reruns against a hub without changing user services.
   Verified Claude override path: `CLAUDE_CONFIG_DIR/.claude.json`.
 
@@ -1072,3 +1072,14 @@ How to use this file:
   state. Remote upload checkpoints are checked for readability, not reparsed
   without the hub's Source state. Native service-manager validation remains
   a release gate.
+
+- Native Linux installer smoke (2026-11-15): a real systemd user service
+  imported 16 synthetic events, acknowledged the full Source cursor, passed
+  doctor, and uninstalled cleanly. The first run exposed literal quotes in
+  WorkingDirectory; the fix has a systemd-analyze regression test. This host
+  does not prove the proposed Ubuntu 22.04 or macOS baselines. Release candidate
+  scripts and a manual native matrix are prepared; nothing is published.
+- Recovery limit: an automatic SQLite recovery point is not a coordinated
+  checkpoint/device backup. Restore matching stopped state as a set; do not
+  pair an older hub database with newer acknowledgments. See the operations
+  guide before a writable restore.

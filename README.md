@@ -410,3 +410,8 @@ to a built ohya executable, then run
 changed or missing entries without modifying them. For remote setup, it follows
 the saved join state and coordination URL. It checks uploader checkpoints
 without claiming to reproduce the hub's parser decisions locally.
+
+Release preparation is documented in [release and recovery operations](docs/release-operations.md).
+The manual candidate workflow builds native archives, tests downloaded binaries,
+and exercises a real user service. It publishes no releases. Candidate packaging
+and formula generation are available under `scripts/`; no Homebrew tap exists yet.
