@@ -1203,3 +1203,20 @@ How to use this file:
   hub host had been upgraded by a hand copy, so `install.sh` refused it until
   the receipted v0.1.1 executable was restored; install hub builds through
   `install.sh` to keep the receipt valid.
+
+- Hub size breakdown (measured 2026-11-16, 16.3 GB hub, `dbstat` plus a
+  random sample of 40k events): the hub mirrors 9.85 GB of raw transcript
+  bytes (sum of `sources.cursor_bytes`; 5.38 GB from this VM, 4.47 GB from
+  the MacBook) at 1.66x. `events` is 14.9 GB; the FTS index is 0.83 GB; all
+  other indexes total under 0.6 GB; there are no free pages. In an event
+  row, `raw_json` holds about 60–73% of the bytes and `text` plus `metadata`
+  the rest. By kind, Codex `response_item` holds 43% and Codex `event_msg`
+  20%; `event_msg` largely repeats `response_item` content and has no text.
+  0.5% of rows (over 64 KiB: Codex `compacted` snapshots of about 113 KB,
+  `session_meta` of about 17 KB, large tool results) hold 27% of the bytes.
+  Codex `encrypted_content` is 7.5% of `raw_json`. Per-row deflate of
+  `raw_json` gives only 2.0x, because rows are small. Raw copies are the
+  durable memory: agents delete or rotate their own transcript files. Size
+  levers, none chosen: compress `raw_json` at rest (about 5 GB; agents'
+  SQL over `raw_json` needs a decompress function; ADR needed), or derive
+  `text` on demand (about 4 GB; costs query speed).
