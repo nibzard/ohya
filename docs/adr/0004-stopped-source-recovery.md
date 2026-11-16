@@ -102,3 +102,21 @@ no flag.
 - Hub and devices must run builds with the same bounds. A device with the
   larger bound can send a record that an older hub refuses. Upgrade the hub
   first. No release has shipped with the 1 MiB wire bound.
+
+## Amendment (2026-11-16): repair detection while a source stays stopped
+
+A stopped source that never grows (no later newline, no appended bytes)
+otherwise re-read and re-parsed its unconsumed range on every pass for no
+reason. `ohya ingest` and the uploader now cache, in process memory only,
+that a source made no progress and skip the read until something that could
+unblock it changes: the file grows past the previous end, the cursor moves,
+or replacement/truncation mints a new source ID. Because a user-applied
+repair at the stop offset can keep the file's size and identity unchanged
+(an in-place, same-length fix, for example `dd conv=notrunc` or an editor
+writing in place), the cache also keys on the file's modification time, so
+a repair is detected as soon as the write updates it. A repair that also
+restores the original modification time is detected only on the next
+process restart, which always re-reads once. This does not change the
+recovery contract above: resuming from the checkpointed offset and the
+named remedies are unchanged, only how promptly a long-running `ohya ingest`
+or device uploader notices a repair without a restart.

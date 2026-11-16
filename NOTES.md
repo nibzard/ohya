@@ -1194,13 +1194,18 @@ How to use this file:
   O(sources) file rewrite still dominates, move checkpoints into SQLite
   (ADR needed).
   Done (2026-11-16, cmd/ohya/ingestor, internal/uploader): the re-read/
-  re-parse skip, keyed in-process per source ID on the (end, cursor) pair
-  a no-progress pass left behind (`ingestor.noProgress`,
+  re-parse skip, keyed in-process per source ID on the (end, cursor,
+  mtime) triple a no-progress pass left behind (`ingestor.noProgress`,
   `Uploader.idle`/`.stops`); a cached stopped source still counts and
   reports in `stats.stopped`/`stats.stops` without re-reading. Retries on
-  growth (end changes), replacement/truncation (new source ID), or cursor
-  movement. Gap: an in-place rewrite that keeps the same inode, the same
-  file size, and touches only bytes at or after the cursor (fingerprint
-  verification in internal/watch only covers bytes before the cursor) goes
-  undetected — same as the uploader's pre-existing stop cache. The
-  checkpoint-save-once-per-pass item above is still open.
+  growth (end changes), replacement/truncation (new source ID), cursor
+  movement, or an in-place rewrite that changes the file's modification
+  time — `watch.Outcome.ModTime` now carries the probed mtime from
+  `internal/watch`'s `Poll` stat, added alongside the existing identity
+  and size probes, for exactly this: a same-size rewrite at the stop
+  offset (for example `dd conv=notrunc`) is invisible to `internal/watch`
+  itself (its fingerprint only covers bytes before the cursor) but bumps
+  mtime, which the skip key now compares. Remaining limit: a rewrite that
+  also restores the original mtime (explicit `utimes` back-dating) still
+  goes undetected. The checkpoint-save-once-per-pass item above is still
+  open.

@@ -662,6 +662,59 @@ func TestParseStopIsNotResent(t *testing.T) {
 	}
 }
 
+func TestStopCacheRetriesAfterInPlaceRepair(t *testing.T) {
+	f := newFixture(t, Options{})
+	db := openHubDB(t, filepath.Join(t.TempDir(), "hub.db"))
+	h := serve(t, db, f.reg, hubsync.Options{})
+	f.dialer.point(h.addr)
+	a := filepath.Join(f.dir, "a.jsonl")
+	good := line(sessA, "one")
+	validTail := line(sessA, "two")
+	brokenIdx := len(validTail) - 2
+	torn := validTail[:brokenIdx] + "X" + validTail[brokenIdx+1:]
+	writeFile(t, a, good+torn)
+
+	f.mustSync()
+	if got := f.checkpoint(a); got != int64(len(good)) {
+		t.Fatalf("checkpoint = %d; want the valid prefix %d", got, len(good))
+	}
+	f.mustSync()
+	if got := f.dialer.batches.Load(); got != 1 {
+		t.Fatalf("data batches = %d; want 1: the stop cache must not resend unchanged bytes", got)
+	}
+
+	info, err := os.Stat(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	priorModTime := info.ModTime()
+
+	fh, err := os.OpenFile(a, os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fh.WriteAt([]byte("}"), int64(len(good)+brokenIdx)); err != nil {
+		t.Fatal(err)
+	}
+	if err := fh.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(a, priorModTime.Add(time.Second), priorModTime.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(a); err != nil || info.Size() != int64(len(good)+len(torn)) {
+		t.Fatalf("repair changed the file size: %+v, %v", info, err)
+	}
+
+	f.mustSync()
+	if got := f.dialer.batches.Load(); got != 2 {
+		t.Fatalf("data batches = %d; want one resend after the same-size in-place repair", got)
+	}
+	if got := count(t, db, `SELECT count(*) FROM events`); got != 2 {
+		t.Fatalf("hub events = %d; want 2", got)
+	}
+}
+
 func TestIncompleteTailNotReReadUntilGrowth(t *testing.T) {
 	f := newFixture(t, Options{})
 	db := openHubDB(t, filepath.Join(t.TempDir(), "hub.db"))

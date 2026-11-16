@@ -69,6 +69,7 @@ type Uploader struct {
 
 type stopMark struct {
 	offset, end int64
+	modTime     time.Time
 }
 
 func New(w *watch.Watcher, cred device.Credential, dial Dialer, opts Options) (*Uploader, error) {
@@ -267,10 +268,10 @@ func (u *Uploader) syncSource(ctx context.Context, o watch.Outcome, stats *Stats
 		o.Cursor = cursor
 	}
 	for o.Cursor < o.End {
-		if s, ok := u.stops[o.SourceID]; ok && s.offset == o.Cursor && s.end == o.End {
+		if s, ok := u.stops[o.SourceID]; ok && s.offset == o.Cursor && s.end == o.End && s.modTime.Equal(o.ModTime) {
 			return nil
 		}
-		if s, ok := u.idle[o.SourceID]; ok && s.offset == o.Cursor && s.end == o.End {
+		if s, ok := u.idle[o.SourceID]; ok && s.offset == o.Cursor && s.end == o.End && s.modTime.Equal(o.ModTime) {
 			return nil
 		}
 		b, stop, err := u.buildBatch(o)
@@ -282,7 +283,7 @@ func (u *Uploader) syncSource(ctx context.Context, o watch.Outcome, stats *Stats
 			if stop != nil {
 				u.stopAt(o, stop.offset, stop.reason)
 			} else {
-				u.idle[o.SourceID] = stopMark{offset: o.Cursor, end: o.End}
+				u.idle[o.SourceID] = stopMark{offset: o.Cursor, end: o.End, modTime: o.ModTime}
 			}
 			return nil
 		}
@@ -444,7 +445,7 @@ func (u *Uploader) block(o watch.Outcome, reason string) {
 
 func (u *Uploader) stopAt(o watch.Outcome, offset int64, reason string) {
 	prev, seen := u.stops[o.SourceID]
-	u.stops[o.SourceID] = stopMark{offset: offset, end: o.End}
+	u.stops[o.SourceID] = stopMark{offset: offset, end: o.End, modTime: o.ModTime}
 	if !seen || prev.offset != offset {
 		u.logf("%s: source %s stops at offset %d: %s", o.Path, o.SourceID, offset, reason)
 	}

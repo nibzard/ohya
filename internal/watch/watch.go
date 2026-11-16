@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 )
 
 const DefaultFingerprintWindow int64 = 4096
@@ -33,6 +34,7 @@ type Outcome struct {
 	SourceID         string
 	Cursor           int64
 	End              int64
+	ModTime          time.Time
 	Fresh            bool
 	Reason           string
 	ReplacedSourceID string
@@ -59,6 +61,7 @@ func New(stateDir, agent string, o Options) (*Watcher, error) {
 type probe struct {
 	identity string
 	size     int64
+	modTime  time.Time
 }
 
 func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
@@ -75,7 +78,7 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 		if err != nil || !info.Mode().IsRegular() {
 			continue
 		}
-		probes[norm] = probe{identity: platformFileIdentity(info), size: info.Size()}
+		probes[norm] = probe{identity: platformFileIdentity(info), size: info.Size(), modTime: info.ModTime()}
 	}
 
 	byIdentity := make(map[string]string, len(probes))
@@ -164,7 +167,7 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 		if reason == "" {
 			outcomes = append(outcomes, Outcome{
 				Path: key, SourceID: entry.SourceID,
-				Cursor: entry.CursorBytes, End: pr.size,
+				Cursor: entry.CursorBytes, End: pr.size, ModTime: pr.modTime,
 				RenamedFrom: renamedFrom[key],
 			})
 			continue
@@ -252,7 +255,7 @@ func (w *Watcher) register(path string, pr probe, reason string) (Outcome, error
 		FileIdentity: pr.identity,
 		SizeBytes:    pr.size,
 	}
-	return Outcome{Path: path, SourceID: id, End: pr.size, Fresh: true, Reason: reason}, nil
+	return Outcome{Path: path, SourceID: id, End: pr.size, ModTime: pr.modTime, Fresh: true, Reason: reason}, nil
 }
 
 func (w *Watcher) ReadPending(o Outcome) ([]byte, error) {

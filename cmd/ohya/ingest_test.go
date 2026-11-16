@@ -1083,3 +1083,65 @@ func TestIngestReplacementRetriesDespiteCachedStop(t *testing.T) {
 		t.Fatalf("pass after replacement = %+v, want the new incarnation ingested, not skipped from the old source's cache", stats)
 	}
 }
+
+func TestIngestInPlaceRepairSameSizeRetriesViaModTime(t *testing.T) {
+	e := newSliceEnv(t)
+	session := e.session("same-size-repair.jsonl")
+	before := fmt.Sprintf(`{"type":"user","sessionId":%q,"message":{"role":"user","content":"before"}}`, fixtureNativeID) + "\n"
+	validTail := fmt.Sprintf(`{"type":"user","sessionId":%q,"message":{"role":"user","content":"after"}}`, fixtureNativeID) + "\n"
+	brokenIdx := len(validTail) - 2
+	torn := validTail[:brokenIdx] + "X" + validTail[brokenIdx+1:]
+	writeFile(t, session, before+torn)
+
+	var stderr bytes.Buffer
+	r, done := e.newRunner(t, &stderr)
+	defer done()
+
+	stats, err := r.poll(context.Background(), e.root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.inserted != 1 || stats.stopped != 1 {
+		t.Fatalf("first pass = %+v, want 1 inserted and 1 stopped", stats)
+	}
+
+	stats, err = r.poll(context.Background(), e.root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.stopped != 1 {
+		t.Fatalf("cache-priming pass = %+v, want the stop replayed from cache", stats)
+	}
+
+	info, err := os.Stat(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	priorModTime := info.ModTime()
+
+	f, err := os.OpenFile(session, os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteAt([]byte("}"), int64(len(before)+brokenIdx)); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(session, priorModTime.Add(time.Second), priorModTime.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	if info, err := os.Stat(session); err != nil || info.Size() != int64(len(before)+len(torn)) {
+		t.Fatalf("repair changed the file size: %+v, %v", info, err)
+	}
+
+	stats, err = r.poll(context.Background(), e.root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.inserted != 1 || stats.stopped != 0 {
+		t.Fatalf("pass after the same-size in-place repair = %+v, want the fixed record ingested", stats)
+	}
+}

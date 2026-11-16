@@ -160,6 +160,7 @@ type ingestor struct {
 type noProgressMark struct {
 	end            int64
 	cursor         int64
+	modTime        time.Time
 	stopped        bool
 	stopOffset     int64
 	recordTooLarge bool
@@ -232,7 +233,7 @@ func (r *ingestor) poll(ctx context.Context, root string, optional bool) (passSt
 		if o.End <= o.Cursor {
 			continue
 		}
-		if mark, cached := r.noProgress[o.SourceID]; cached && mark.end == o.End && mark.cursor == o.Cursor {
+		if mark, cached := r.noProgress[o.SourceID]; cached && mark.end == o.End && mark.cursor == o.Cursor && mark.modTime.Equal(o.ModTime) {
 			if mark.stopped {
 				stats.stopped++
 				stats.stops = append(stats.stops, stopReport{
@@ -250,7 +251,7 @@ func (r *ingestor) poll(ctx context.Context, root string, optional bool) (passSt
 			stats.failed++
 			continue
 		}
-		mark := noProgressMark{end: o.End, cursor: committed}
+		mark := noProgressMark{end: o.End, cursor: committed, modTime: o.ModTime}
 		if stop != nil {
 			stats.stopped++
 			stats.stops = append(stats.stops, stopReport{
