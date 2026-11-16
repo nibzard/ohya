@@ -1174,19 +1174,22 @@ How to use this file:
   everything sharing the disk; consider size-aware or incremental backup
   (or at minimum a progress log line and idle-time execution).
 
-- Ingest steady-state write amplification after the 2026-11-16 upgrade
-  (observed 2026-11-16, cause unverified): after catch-up finished, each
-  scan cycle (every 6–13 s over 5147 sources, importing only 1–20 events)
-  commits a ~60–100 MB burst of SQLite page writes — ~5 MB/s average, disk
-  %util spikes to ~85% per commit, WAL pinned at 168 MB being recycled.
-  Baseline with the previous binary (Nov 15 22:20–22:50, sar): ~0.13 MB/s
-  sustained writes. The jump appeared when the new binary was installed
-  (23:16) and the workspaces migration ran (00:25); which of the two causes
-  it is unverified. Suspect is per-cycle cursor/source-row commits touching
-  pages scattered across the now-16 GB database (workspaces layout may have
-  worsened locality). Verify with `strace -p <ingest pid> -e write,pwrite64`
-  around a cycle boundary or by inspecting the scan-commit path in
-  cmd/ohya/ingest.go; measurement recipe is `/proc/<pid>/io` deltas over 15 s
-  plus `iostat -x sda 1`. This is the standing I/O floor the migration storm
-  stacked on top of; until it is fixed, the host stays near its disk ceiling
-  whenever ingest runs alongside other workloads.
+- Ingest steady-state write amplification (observed and root-caused
+  2026-11-16): ingest writes ~9 MB/s while idle. `strace` over 15 s showed
+  99.9% of the bytes go to `sources/<agent>.json` checkpoint rewrites (45
+  rewrites, 71.7 MB); SQLite WAL writes were 0.09 MB. Cause: `poll` calls
+  `Watcher.Acknowledge` for every source with `End > Cursor`, and
+  `checkpoint` rewrites and fsyncs the whole checkpoint file (1.4–1.7 MB at
+  ~2.5k sources) even when the cursor did not move. 20 sources never
+  advance: stopped on agent-torn records (ADR 0004) or ending in an
+  abandoned line without a newline. Each pass re-reads, re-parses, and
+  rewrites the file once for each of them. The "0.13 MB/s before" baseline
+  was false: `ohya.service` was stopped from Nov 15 18:49 to 22:53, so
+  neither the new binary nor the workspaces layout caused a regression.
+  Proposed fix, smallest first: skip the save when the acknowledged cursor
+  is unchanged (`SizeBytes` is never read); skip re-reading a source whose
+  size did not change since a pass made no progress; save checkpoints once
+  per pass instead of once per source. Safe because the hub commits the
+  cursor in the event transaction and replay deduplicates. If the
+  O(sources) file rewrite still dominates, move checkpoints into SQLite
+  (ADR needed).
