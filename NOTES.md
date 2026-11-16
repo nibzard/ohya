@@ -1158,3 +1158,35 @@ How to use this file:
   Defines agent-facing status/metrics/logs/diagnose, precise cursor and latency
   semantics, bounded private telemetry, authenticated remote hub aggregates,
   phased delivery and overhead/failure-path acceptance gates. Proposed only.
+
+- Migration recovery copy cost on a slow single disk (observed 2026-11-16):
+  the workspaces migration's forced full recovery copy (see the 6.6 GB hub
+  note above) of a 13.1 GB hub took 8.5 h (00:25–09:01) on this VM's single
+  emulated QEMU disk (~10 MB/s write ceiling under load) and starved the
+  machine into an unresponsive state that needed a forced reboot: iowait
+  70–85% all night, journald in a 94-restart loop (SIGKILL could not remove
+  its D-state processes), kernel soft lockups on 5 of 8 CPUs plus RCU stalls.
+  Memory (9–11% used) and CPU steal (~0.1%) were fine — disk saturation
+  alone. Post-migration hub is 16.3 GB (was 13.1 GB). Full timeline with
+  sar/journalctl evidence:
+  /notes/2026-11-16-vm-hang-ohya-workspaces-migration.md. Implication: on
+  slow disks a full-copy migration is an hours-long denial of service against
+  everything sharing the disk; consider size-aware or incremental backup
+  (or at minimum a progress log line and idle-time execution).
+
+- Ingest steady-state write amplification after the 2026-11-16 upgrade
+  (observed 2026-11-16, cause unverified): after catch-up finished, each
+  scan cycle (every 6–13 s over 5147 sources, importing only 1–20 events)
+  commits a ~60–100 MB burst of SQLite page writes — ~5 MB/s average, disk
+  %util spikes to ~85% per commit, WAL pinned at 168 MB being recycled.
+  Baseline with the previous binary (Nov 15 22:20–22:50, sar): ~0.13 MB/s
+  sustained writes. The jump appeared when the new binary was installed
+  (23:16) and the workspaces migration ran (00:25); which of the two causes
+  it is unverified. Suspect is per-cycle cursor/source-row commits touching
+  pages scattered across the now-16 GB database (workspaces layout may have
+  worsened locality). Verify with `strace -p <ingest pid> -e write,pwrite64`
+  around a cycle boundary or by inspecting the scan-commit path in
+  cmd/ohya/ingest.go; measurement recipe is `/proc/<pid>/io` deltas over 15 s
+  plus `iostat -x sda 1`. This is the standing I/O floor the migration storm
+  stacked on top of; until it is fixed, the host stays near its disk ceiling
+  whenever ingest runs alongside other workloads.
