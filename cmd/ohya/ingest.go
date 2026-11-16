@@ -238,6 +238,9 @@ func (r *ingestor) poll(ctx context.Context, root string, optional bool) (passSt
 			stats.failed++
 		}
 	}
+	if err := r.watcher.Flush(); err != nil {
+		return stats, err
+	}
 	if r.workspacesDue || stats.inserted > 0 {
 		r.observeWorkspaces(ctx)
 	}

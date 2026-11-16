@@ -192,6 +192,9 @@ func TestPollThenAppendThenAcknowledge(t *testing.T) {
 	w := mustNew(t, dir)
 	first := sole(t, poll(t, w, path))
 	ingestAll(t, w, []Outcome{first})
+	if err := w.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
 
 	state, err := os.ReadFile(stateFilePath(dir))
 	if err != nil {
@@ -591,6 +594,48 @@ func TestRewindToSameCursorSkipsStateRewriteButVerifies(t *testing.T) {
 	}
 }
 
+func TestFlushPersistsAllPendingAcknowledgmentsAtOnce(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.jsonl")
+	b := filepath.Join(dir, "b.jsonl")
+	writeFile(t, a, "0123456789\n")
+	writeFile(t, b, "abcdefghij\n")
+
+	w := mustNew(t, dir)
+	outcomes := poll(t, w, a, b)
+	if len(outcomes) != 2 {
+		t.Fatalf("outcomes = %+v, want two fresh sources", outcomes)
+	}
+	before := stateFileIdentity(t, dir)
+
+	for _, o := range outcomes {
+		if err := w.Acknowledge(o.Path, o.SourceID, o.End); err != nil {
+			t.Fatalf("Acknowledge(%s): %v", o.Path, err)
+		}
+	}
+	if got := stateFileIdentity(t, dir); got != before {
+		t.Fatalf("an unflushed acknowledgment rewrote the state file: %s -> %s", before, got)
+	}
+
+	if err := w.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	after := stateFileIdentity(t, dir)
+	if after == before {
+		t.Fatal("Flush did not persist the accumulated acknowledgments")
+	}
+	if n := strings.Count(readState(t, dir), `"cursor_bytes": 11`); n != 2 {
+		t.Fatalf("state records %d acknowledged cursors at 11, want 2 from a single flush", n)
+	}
+
+	if err := w.Flush(); err != nil {
+		t.Fatalf("second Flush: %v", err)
+	}
+	if got := stateFileIdentity(t, dir); got != after {
+		t.Fatalf("a Flush with nothing dirty rewrote the state file: %s -> %s", after, got)
+	}
+}
+
 func fingerprintOf(t *testing.T, path string, from, to int64) string {
 	t.Helper()
 	sum, err := fingerprintFile(path, to, to-from)
@@ -895,6 +940,9 @@ func TestRewindReplaysRetainedBytes(t *testing.T) {
 
 	if err := w.Rewind(path, o.SourceID, 6); err != nil {
 		t.Fatalf("Rewind: %v", err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
 	}
 	again := sole(t, poll(t, mustNew(t, dir), path))
 	if again.Fresh || again.SourceID != o.SourceID || again.Cursor != 6 {

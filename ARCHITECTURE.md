@@ -63,7 +63,10 @@ rebind onto a path that another source already claims is refused — the refused
 source stays missing with its checkpoint retained, so a move never overwrites
 another source's acknowledged checkpoint. `ReadPending` re-verifies the incarnation before handing bytes
 to ingestion, and `Acknowledge` advances the checkpoint only after a durable
-commit. An existing but unusable checkpoint file stops the watcher with a
+commit. The advance happens in memory immediately; it reaches disk when the
+caller calls `Flush`. `Acknowledge` and `Rewind` are no-ops when the cursor
+does not move, so a stopped source that never advances costs no rewrite on
+later passes. An existing but unusable checkpoint file stops the watcher with a
 recovery error rather than a silent restart.
 
 Local state files:
@@ -130,6 +133,16 @@ Watcher rules (`internal/watch`):
   lost history.
 - A `Watcher` is not safe for concurrent use. One goroutine drives it, like
   the database writer.
+- `Acknowledge` and `Rewind` update the in-memory checkpoint and mark it
+  dirty; they do not write the state file. `Flush` saves it once if dirty,
+  so a pass with many acknowledgments costs one rewrite, not one per
+  source. `ohya ingest` flushes once after each pass's outcome loop; the
+  uploader flushes once at the end of each `Sync` call, after every
+  acknowledgment that call made, win or lose. A crash before a flush loses
+  only the unflushed acknowledgment, exactly as if it had never reached
+  the device — the next pass resumes from the older durable cursor and
+  replays the unacknowledged bytes, which the hub's deduplication makes
+  safe.
 
 ## Record handling
 

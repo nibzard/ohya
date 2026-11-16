@@ -151,10 +151,14 @@ String fields with a 2-byte length must not be empty, except `repo` in `workspac
 The uploader (`internal/uploader`) implements the `SendBatch` and
 `DeliverAck` actions of `tla/Sync.tla`:
 
-- A batch always starts at the durable checkpoint. One connection carries
-  strictly sequential exchanges, so each source has at most one batch in
-  flight. Only an acknowledgment moves the checkpoint; a timeout, reset, or
-  lost acknowledgment leaves it, and the next pass sends the same bytes.
+- A batch always starts at the checkpoint. One connection carries strictly
+  sequential exchanges, so each source has at most one batch in flight.
+  Only an acknowledgment moves the checkpoint; a timeout, reset, or lost
+  acknowledgment leaves it, and the next pass sends the same bytes. The
+  move happens in memory immediately and reaches disk once, at the end of
+  the `Sync` call that made it — a crash before that flush loses only the
+  unflushed acknowledgment, equivalent to one that never reached the
+  device, and the retained file replays it.
 - Offline catch-up needs no queue, because the retained source files are the
   backlog. On every new connection, each source is registered and probed with
   an empty batch. A hub cursor ahead of the checkpoint is a lost

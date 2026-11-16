@@ -25,6 +25,7 @@ type Watcher struct {
 	agent    string
 	window   int64
 	state    checkpointFile
+	dirty    bool
 }
 
 type Outcome struct {
@@ -204,12 +205,24 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 	}
 
 	if changed {
-		if err := saveState(w.stateDir, w.agent, w.state); err != nil {
-			return nil, err
-		}
+		w.dirty = true
+	}
+	if err := w.Flush(); err != nil {
+		return nil, err
 	}
 	slices.SortFunc(outcomes, func(a, b Outcome) int { return strings.Compare(a.Path, b.Path) })
 	return outcomes, nil
+}
+
+func (w *Watcher) Flush() error {
+	if !w.dirty {
+		return nil
+	}
+	if err := saveState(w.stateDir, w.agent, w.state); err != nil {
+		return err
+	}
+	w.dirty = false
+	return nil
 }
 
 func (w *Watcher) verifyFingerprint(path string, entry sourceCheckpoint) string {
@@ -341,7 +354,8 @@ func (w *Watcher) checkpoint(p string, entry sourceCheckpoint, end int64) error 
 	entry.FingerprintWindow = window
 	entry.FingerprintSHA256 = sum
 	w.state.Sources[p] = entry
-	return saveState(w.stateDir, w.agent, w.state)
+	w.dirty = true
+	return nil
 }
 
 func observe(path, identity string) (*os.File, fs.FileInfo, error) {

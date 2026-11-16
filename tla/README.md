@@ -135,9 +135,14 @@ must sync whatever has arrived, on any schedule.
   by probing every source on each new connection, then replays the retained
   file or reports the unrecoverable gap.
 - **Durable local checkpoints.** The device persists its acknowledged
-  cursor atomically (`internal/durablefile`), so a crash loses only
-  in-flight messages, never the checkpoint. The device keeps no volatile
-  protocol state beyond what is on the wire.
+  cursor atomically (`internal/durablefile`). An acknowledgment the device
+  has processed but not yet flushed (`internal/watch.Watcher.Flush`,
+  called once per upload pass) is exactly `wireAck` above, not `ackCursor`:
+  a crash before that flush loses it as if it had never left the wire, and
+  `DeliverAck` never ran. The device re-sends the batch, and the hub's
+  replay is idempotent. A crash after a flush loses only in-flight
+  messages, never the flushed checkpoint; the device keeps no other
+  volatile protocol state beyond what is on the wire.
 - **Immutable record content.** A record's bytes never change, so an
   overlapping retry always matches stored content. The hub's
   conflicting-content rejection (`internal/store` validation) guards the

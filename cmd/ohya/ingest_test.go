@@ -768,6 +768,102 @@ func TestIngestCrashHelper(t *testing.T) {
 	os.Exit(3)
 }
 
+func TestIngestCrashBetweenAcknowledgeAndFlush(t *testing.T) {
+	e := newSliceEnv(t)
+	copyFixture(t, e.session("main-session.jsonl"), "main-session.jsonl")
+
+	cmd := exec.Command(os.Args[0], "-test.run=TestIngestCrashAckHelper")
+	cmd.Env = append(os.Environ(),
+		"OHYA_SLICE_CRASH_DB="+e.dbPath,
+		"OHYA_SLICE_CRASH_STATE="+e.stateDir,
+		"OHYA_SLICE_CRASH_ROOT="+e.root,
+	)
+	if err := cmd.Run(); !errors.As(err, new(*exec.ExitError)) {
+		t.Fatalf("helper did not crash as intended: %v", err)
+	}
+
+	hub := openHub(t, e.dbPath)
+	if n := countRows(t, hub.Writer(), `SELECT count(*) FROM events`); n != 16 {
+		t.Fatalf("events after crash = %d, want 16", n)
+	}
+	_, dbCursor := soleSourceID(t, hub.Writer())
+	if dbCursor != 6528 {
+		t.Fatalf("database cursor after crash = %d, want 6528", dbCursor)
+	}
+	if _, cursor := soleCheckpoint(t, e.stateDir); cursor != 0 {
+		t.Fatalf("checkpoint cursor after an unflushed acknowledgment and crash = %d, want 0", cursor)
+	}
+
+	stats, stderr := e.runPass(t)
+	if stats.inserted != 0 {
+		t.Fatalf("restart after crash inserted %d events, want 0", stats.inserted)
+	}
+	if stderr != "" {
+		t.Fatalf("restart diagnostics: %s", stderr)
+	}
+	if n := countRows(t, hub.Writer(), `SELECT count(*) FROM events`); n != 16 {
+		t.Fatalf("events after restart = %d, want 16", n)
+	}
+	sid := store.SessionID(e.deviceID(t), claudecode.AgentName, fixtureNativeID)
+	if n := countRows(t, hub.Writer(), `SELECT event_count FROM sessions WHERE id = ?`, sid); n != 16 {
+		t.Fatalf("event_count after restart = %d, want 16", n)
+	}
+	if _, cursor := soleCheckpoint(t, e.stateDir); cursor != 6528 {
+		t.Fatalf("checkpoint cursor after restart = %d, want 6528", cursor)
+	}
+}
+
+func TestIngestCrashAckHelper(t *testing.T) {
+	db := os.Getenv("OHYA_SLICE_CRASH_DB")
+	if db == "" {
+		t.Skip("crash helper runs only under TestIngestCrashBetweenAcknowledgeAndFlush")
+	}
+	state := os.Getenv("OHYA_SLICE_CRASH_STATE")
+	root := os.Getenv("OHYA_SLICE_CRASH_ROOT")
+	ctx := context.Background()
+	if err := os.MkdirAll(filepath.Dir(db), 0o700); err != nil {
+		panic(err)
+	}
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		panic(err)
+	}
+	hub, err := store.Open(ctx, db)
+	if err != nil {
+		panic(err)
+	}
+	deviceID, err := device.LoadOrCreate(state)
+	if err != nil {
+		panic(err)
+	}
+	agent := claudecode.AgentName
+	w, err := watch.New(state, agent, watch.Options{})
+	if err != nil {
+		panic(err)
+	}
+	r := newIngestor(hub, w, agent, deviceID, 0, io.Discard)
+	candidates, err := discoverSessionFiles(root)
+	if err != nil {
+		panic(err)
+	}
+	outcomes, err := w.Poll(candidates)
+	if err != nil || len(outcomes) != 1 {
+		panic(fmt.Sprintf("poll: %v, %d outcomes", err, len(outcomes)))
+	}
+	o := outcomes[0]
+	if err := hub.RegisterSource(ctx, o.SourceID, deviceID, agent, o.Path); err != nil {
+		panic(err)
+	}
+	inserted, committed, stop, err := r.ingestSource(ctx, o)
+	if err != nil || stop != nil || inserted == 0 || committed != o.End {
+		panic(fmt.Sprintf("ingestSource = %d inserts, cursor %d, stopped %t, %v",
+			inserted, committed, stop != nil, err))
+	}
+	if err := w.Acknowledge(o.Path, o.SourceID, committed); err != nil {
+		panic(err)
+	}
+	os.Exit(3)
+}
+
 func TestIngestRunsUntilCanceled(t *testing.T) {
 	e := newSliceEnv(t)
 	copyFixture(t, e.session("main-session.jsonl"), "main-session.jsonl")

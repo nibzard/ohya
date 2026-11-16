@@ -145,20 +145,27 @@ func (u *Uploader) Run(ctx context.Context, discover func() ([]string, error)) e
 	}
 }
 
-func (u *Uploader) Sync(ctx context.Context, candidates []string) (Stats, error) {
-	var stats Stats
+func (u *Uploader) Sync(ctx context.Context, candidates []string) (stats Stats, err error) {
 	outcomes, err := u.watcher.Poll(candidates)
 	if err != nil {
 		return stats, err
 	}
+	defer func() {
+		if ferr := u.watcher.Flush(); ferr != nil {
+			u.logf("persist acknowledgments: %v", ferr)
+			if err == nil {
+				err = ferr
+			}
+		}
+	}()
 	for _, o := range outcomes {
 		u.noteLoss(o)
 	}
-	if err := u.connect(ctx); err != nil {
+	if err = u.connect(ctx); err != nil {
 		return stats, err
 	}
 	for _, o := range outcomes {
-		if err := u.syncSource(ctx, o, &stats); err != nil {
+		if err = u.syncSource(ctx, o, &stats); err != nil {
 			return stats, err
 		}
 	}
