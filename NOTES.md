@@ -1196,3 +1196,10 @@ How to use this file:
   `hub.db` page reads in 20 s). The cost is CPU, not disk. Possible fix:
   skip fingerprint checks and registration for sources whose identity,
   size, and mtime did not change since the last pass.
+
+- v0.1.2 release (2026-11-16): published from `6ed9fc3`; hosted macOS arm64
+  runners can fail to start a job ("not acquired by Runner ... capacity"),
+  which cancels it after ~15 min. `gh run rerun --failed` recovered it. The
+  hub host had been upgraded by a hand copy, so `install.sh` refused it until
+  the receipted v0.1.1 executable was restored; install hub builds through
+  `install.sh` to keep the receipt valid.

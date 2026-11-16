@@ -1,7 +1,7 @@
 # Release and recovery operations
 
-v0.1.0 was published on 2026-11-15 from commit `8fb3d2e` after the full
-candidate matrix passed; its macOS archives are unsigned. Apple signing and
+The newest release is v0.1.2, published on 2026-11-16 from commit `6ed9fc3`
+after the full candidate matrix passed; its macOS archives are unsigned. Apple signing and
 notarization must pass before a signed public release. Generated candidates
 are not qualified releases merely because packaging succeeds.
 
@@ -117,6 +117,15 @@ A binary downgrade cannot undo a schema migration or newer parser output.
 - v0.1.1 (commit `dab456e`) followed the same day: it fixes the launchctl
   readiness parse for logged-in GUI Macs and was verified end to end on
   macOS 27.2.1 arm64 through the released installer.
+- v0.1.2 (commit `6ed9fc3`, dirty=false) was published on 2026-11-16 after
+  the full hosted matrix passed (run 43844322695; the darwin-arm64 build ran
+  on attempt 2 because no hosted runner picked up attempt 1). It adds schema 7
+  (workspaces) and cuts idle ingest checkpoint writes. The released installer
+  upgraded the linux-amd64 hub host end to end; `ohya doctor` exited 0.
+- The installer refuses to replace an executable whose digest matches neither
+  its receipt entry nor the previous one ("installed executable has changed;
+  preserve it"). A copy installed by hand outside `install.sh` triggers this
+  refusal. Restore the receipted executable, then rerun the installer.
 - The published macOS archives are unsigned and not notarized
   (`signing=unverified`); Developer ID credentials are still required.
 - No Homebrew tap is published; the qualified formula from the candidate run
