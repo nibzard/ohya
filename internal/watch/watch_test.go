@@ -94,6 +94,15 @@ func stateFilePath(dir string) string {
 	return filepath.Join(dir, "sources", agent+".json")
 }
 
+func stateFileIdentity(t *testing.T, dir string) string {
+	t.Helper()
+	info, err := os.Stat(stateFilePath(dir))
+	if err != nil {
+		t.Fatalf("stat state file: %v", err)
+	}
+	return platformFileIdentity(info)
+}
+
 func TestNewRejectsInvalidAgentName(t *testing.T) {
 	for _, name := range []string{"", "Claude-Code", "../escape", "a b", strings.Repeat("x", 65)} {
 		if _, err := New(t.TempDir(), name, Options{}); err == nil {
@@ -515,6 +524,70 @@ func TestAcknowledgeRecordsFingerprintWindow(t *testing.T) {
 	want := fingerprintOf(t, path, 0, int64(len(content)))
 	if entry.FingerprintSHA256 != want {
 		t.Fatalf("fingerprint = %s, want %s", entry.FingerprintSHA256, want)
+	}
+}
+
+func TestAcknowledgeNoOpSkipsStateRewrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.jsonl")
+	writeFile(t, path, "0123456789\n")
+
+	w := mustNew(t, dir)
+	first := sole(t, poll(t, w, path))
+	if err := w.Acknowledge(path, first.SourceID, first.End); err != nil {
+		t.Fatalf("Acknowledge: %v", err)
+	}
+	before := stateFileIdentity(t, dir)
+
+	if err := w.Acknowledge(path, first.SourceID, first.End); err != nil {
+		t.Fatalf("no-op Acknowledge: %v", err)
+	}
+	if got := stateFileIdentity(t, dir); got != before {
+		t.Fatalf("no-op acknowledgment rewrote the state file: %s -> %s", before, got)
+	}
+
+	appendFile(t, path, "more\n")
+	grown := sole(t, poll(t, w, path))
+	if err := w.Acknowledge(path, first.SourceID, grown.End); err != nil {
+		t.Fatalf("Acknowledge after growth: %v", err)
+	}
+	if got := stateFileIdentity(t, dir); got == before {
+		t.Fatal("acknowledgment that advanced the cursor did not rewrite the state file")
+	}
+}
+
+func TestRewindToSameCursorSkipsStateRewriteButVerifies(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.jsonl")
+	writeFile(t, path, "0123456789\n")
+
+	w := mustNew(t, dir)
+	first := sole(t, poll(t, w, path))
+	if err := w.Acknowledge(path, first.SourceID, first.End); err != nil {
+		t.Fatalf("Acknowledge: %v", err)
+	}
+	before := stateFileIdentity(t, dir)
+
+	if err := w.Rewind(path, first.SourceID, first.End); err != nil {
+		t.Fatalf("Rewind to the same cursor: %v", err)
+	}
+	if got := stateFileIdentity(t, dir); got != before {
+		t.Fatalf("no-op rewind rewrote the state file: %s -> %s", before, got)
+	}
+
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteAt([]byte("X"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := w.Rewind(path, first.SourceID, first.End); err == nil {
+		t.Fatal("Rewind to the same cursor over rewritten bytes succeeded, want the fingerprint check to catch it")
 	}
 }
 

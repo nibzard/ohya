@@ -278,6 +278,9 @@ func (w *Watcher) Acknowledge(path, sourceID string, end int64) error {
 		return fmt.Errorf("watch: acknowledgment at %d is before the checkpoint cursor %d for %s",
 			end, entry.CursorBytes, p)
 	}
+	if end == entry.CursorBytes {
+		return nil
+	}
 	return w.checkpoint(p, entry, end)
 }
 
@@ -295,6 +298,9 @@ func (w *Watcher) Rewind(path, sourceID string, cursor int64) error {
 		if err != nil || sum != entry.FingerprintSHA256 {
 			return fmt.Errorf("watch: %s no longer holds the acknowledged bytes; they cannot be replayed", p)
 		}
+	}
+	if cursor == entry.CursorBytes {
+		return nil
 	}
 	return w.checkpoint(p, entry, cursor)
 }
