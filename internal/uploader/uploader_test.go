@@ -662,6 +662,54 @@ func TestParseStopIsNotResent(t *testing.T) {
 	}
 }
 
+func TestIncompleteTailNotReReadUntilGrowth(t *testing.T) {
+	f := newFixture(t, Options{})
+	db := openHubDB(t, filepath.Join(t.TempDir(), "hub.db"))
+	h := serve(t, db, f.reg, hubsync.Options{})
+	f.dialer.point(h.addr)
+	a := filepath.Join(f.dir, "a.jsonl")
+	good := line(sessA, "one")
+	full := line(sessA, "two")
+	partial := full[:len(full)-3]
+	writeFile(t, a, good+partial)
+
+	f.mustSync()
+	if got := f.checkpoint(a); got != int64(len(good)) {
+		t.Fatalf("checkpoint = %d; want the complete-record prefix %d", got, len(good))
+	}
+	if got := f.dialer.batches.Load(); got != 1 {
+		t.Fatalf("data batches = %d; want 1", got)
+	}
+
+	if err := os.Chmod(a, 0); err != nil {
+		t.Fatal(err)
+	}
+	if fh, err := os.Open(a); err == nil {
+		fh.Close()
+		t.Skipf("chmod 0 left %s readable", a)
+	}
+
+	f.mustSync()
+	if strings.Contains(f.log.String(), "permission denied") {
+		t.Fatalf("incomplete tail was re-read though nothing changed:\n%s", f.log)
+	}
+	if got := f.dialer.batches.Load(); got != 1 {
+		t.Fatalf("data batches = %d; want still 1: the unchanged partial tail must not resend", got)
+	}
+
+	if err := os.Chmod(a, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	appendFile(t, a, full[len(full)-3:])
+	f.mustSync()
+	if got := f.dialer.batches.Load(); got != 2 {
+		t.Fatalf("data batches = %d; want one resend after the tail completed", got)
+	}
+	if got := count(t, db, `SELECT count(*) FROM events`); got != 2 {
+		t.Fatalf("hub events = %d; want 2", got)
+	}
+}
+
 func TestOversizedRecordStopsLocally(t *testing.T) {
 	f := newFixture(t, Options{})
 	db := openHubDB(t, filepath.Join(t.TempDir(), "hub.db"))

@@ -57,6 +57,7 @@ type Uploader struct {
 	ready        map[string]bool
 	blocked      map[string]bool
 	stops        map[string]stopMark
+	idle         map[string]stopMark
 	seen         map[string]int64
 	lossReported map[string]bool
 	gapReported  map[string]int64
@@ -100,7 +101,7 @@ func New(w *watch.Watcher, cred device.Credential, dial Dialer, opts Options) (*
 	return &Uploader{
 		watcher: w, credential: cred, dial: dial, opts: opts, log: log,
 		ready: map[string]bool{}, blocked: map[string]bool{},
-		stops: map[string]stopMark{}, seen: map[string]int64{},
+		stops: map[string]stopMark{}, idle: map[string]stopMark{}, seen: map[string]int64{},
 		lossReported: map[string]bool{}, gapReported: map[string]int64{},
 	}, nil
 }
@@ -269,6 +270,9 @@ func (u *Uploader) syncSource(ctx context.Context, o watch.Outcome, stats *Stats
 		if s, ok := u.stops[o.SourceID]; ok && s.offset == o.Cursor && s.end == o.End {
 			return nil
 		}
+		if s, ok := u.idle[o.SourceID]; ok && s.offset == o.Cursor && s.end == o.End {
+			return nil
+		}
 		b, stop, err := u.buildBatch(o)
 		if err != nil {
 			u.logf("%s: %v", o.Path, err)
@@ -277,9 +281,12 @@ func (u *Uploader) syncSource(ctx context.Context, o watch.Outcome, stats *Stats
 		if len(b.Records) == 0 {
 			if stop != nil {
 				u.stopAt(o, stop.offset, stop.reason)
+			} else {
+				u.idle[o.SourceID] = stopMark{offset: o.Cursor, end: o.End}
 			}
 			return nil
 		}
+		delete(u.idle, o.SourceID)
 		ack, perr, err := u.exchange(ctx, func(w io.Writer) error { return hubsync.WriteBatch(w, b) })
 		if err != nil {
 			return err
