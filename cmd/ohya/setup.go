@@ -202,11 +202,19 @@ func runSetupCommand(args []string, stdout, stderr io.Writer) error {
 		}
 		return nil
 	}
+	options.Progress = func(line string) { fmt.Fprintf(stderr, "ohya: %s\n", line) }
+	printed := 0
+	if !*asJSON {
+		options.Notify = func(r setup.Result) {
+			printSetupResult(stdout, r)
+			printed++
+		}
+	}
 	report, err := setup.Run(ctx, options)
 	if conflict := setupPathConflict(binary); conflict != nil {
 		report.Results = append(report.Results, *conflict)
 	}
-	return printSetupReport(stdout, setupSpec.name, *asJSON, report, err)
+	return printSetupReport(stdout, setupSpec.name, *asJSON, report, printed, err)
 }
 
 func runUninstallCommand(args []string, stdout, stderr io.Writer) error {
@@ -243,10 +251,18 @@ func runUninstallCommand(args []string, stdout, stderr io.Writer) error {
 		}
 		report.Results = append(report.Results, result)
 	}
-	return printSetupReport(stdout, uninstallSpec.name, *asJSON, report, err)
+	return printSetupReport(stdout, uninstallSpec.name, *asJSON, report, 0, err)
 }
 
-func printSetupReport(stdout io.Writer, command string, asJSON bool, report setup.Report, err error) error {
+func printSetupResult(stdout io.Writer, r setup.Result) {
+	fmt.Fprintf(stdout, "ohya: %s: %s", r.Component, r.Status)
+	if r.Detail != "" {
+		fmt.Fprintf(stdout, " — %s", strings.ReplaceAll(r.Detail, "\n", " "))
+	}
+	fmt.Fprintln(stdout)
+}
+
+func printSetupReport(stdout io.Writer, command string, asJSON bool, report setup.Report, printed int, err error) error {
 	if err != nil {
 		return jsonFailurePrint(asJSON, stdout, command, err)
 	}
@@ -255,12 +271,8 @@ func printSetupReport(stdout io.Writer, command string, asJSON bool, report setu
 			return err
 		}
 	} else {
-		for _, r := range report.Results {
-			fmt.Fprintf(stdout, "ohya: %s: %s", r.Component, r.Status)
-			if r.Detail != "" {
-				fmt.Fprintf(stdout, " — %s", strings.ReplaceAll(r.Detail, "\n", " "))
-			}
-			fmt.Fprintln(stdout)
+		for _, r := range report.Results[printed:] {
+			printSetupResult(stdout, r)
 		}
 	}
 	if !report.Complete() {

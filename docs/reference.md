@@ -73,7 +73,7 @@ and schema a hub runs.
 answer, because it sits outside the database or is tied to this binary: the
 database schema against the binary's migrations, stored parser output
 versions above the binary's (`ohya rederive` refuses those), the FTS5
-integrity of `events_fts`, stopped sources in the local watch state with
+integrity of `events_fts` with `--deep`, stopped sources in the local watch state with
 their [ADR 0004](adr/0004-stopped-source-recovery.md) remedy, the
 device identity in the state directory, and — when that directory holds a
 pairing credential — whether the coordination URL answers within a short
@@ -82,6 +82,9 @@ one-line remedy; `--json` prints the same findings in the
 [ADR 0005](adr/0005-json-output.md) envelope. Doctor is read-only: it
 opens the database read-only — never migrates, repairs, or re-derives —
 creates no device identity, and prints no transcript content or secrets.
+The `--deep` FTS5 check copies the database into memory, so its time and
+memory use grow with the database; without `--deep`, doctor reports the
+check as skipped.
 Exit code 0 means no finding is an error; warnings alone do not fail. It
 takes the same `--db` and `--state` flags as `ingest`, `--control` for the
 coordination URL to probe when paired, and `--max-record-bytes` for the stop
@@ -299,10 +302,12 @@ choices. For example, use `--agents auto` to resume automatic discovery, or
 `--no-service=false` to enable the service after a previous skipped setup.
 An empty root still disables that source. Provider secrets are never saved.
 
-Before local setup restarts ingestion or opens an existing database, it saves
-an owner-only SQLite recovery copy under `STATE/setup/backups/recovery-*/hub.db`.
+Before local setup restarts ingestion or opens an existing database whose
+schema is older or newer than this build, it saves an owner-only SQLite
+recovery copy under `STATE/setup/backups/recovery-*/hub.db`. When the schema
+already matches, setup reports `backup: not needed` and makes no copy.
 The copy includes committed WAL data. Setup stops if it cannot make the copy.
-Recovery files are retained; uninstall preserves them. A database copy is not
+Setup keeps the two newest recovery copies; uninstall preserves them. A database copy is not
 a complete backup of device state and checkpoints. Stop all writers and
 restore matching state as a set. Never combine an older database with newer
 acknowledgments. See [the operations guide](release-operations.md) before

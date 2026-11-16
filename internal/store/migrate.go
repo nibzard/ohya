@@ -84,6 +84,23 @@ func SchemaVersion() (int, error) {
 	return ms[len(ms)-1].version, nil
 }
 
+func SchemaCurrent(ctx context.Context, path string) (bool, error) {
+	db, err := OpenReadOnly(path)
+	if err != nil {
+		return false, err
+	}
+	defer db.Close()
+	applied, _, err := db.AppliedSchemaVersion(ctx)
+	if err != nil {
+		return false, err
+	}
+	want, err := SchemaVersion()
+	if err != nil {
+		return false, err
+	}
+	return applied == want, nil
+}
+
 func migrate(ctx context.Context, db *sql.DB, fsys fs.FS) error {
 	ms, err := loadMigrations(fsys)
 	if err != nil {

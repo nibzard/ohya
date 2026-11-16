@@ -42,7 +42,7 @@ func configureService(ctx context.Context, o Options, service Service) (results 
 	}
 	if err == nil {
 		var recovery Result
-		recovery, err = recoveryPoint(ctx, o.Database, o.Clients.State)
+		recovery, err = recoveryPoint(ctx, o)
 		if recovery.Component != "" {
 			results = append(results, recovery)
 		}

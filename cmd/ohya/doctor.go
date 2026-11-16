@@ -38,8 +38,9 @@ var doctorSpec = commandSpec{
 	name:      "ohya doctor",
 	synopsis:  "run read-only health checks the sql tool cannot answer",
 	usageLine: "ohya doctor [flags]",
-	description: "Checks state outside the read-only sql tool's reach: the database schema against this build's migrations, stored parser output versions this build's rederive refuses, the FTS5 integrity of events_fts, stopped sources in the local watch state (ADR 0004), the device identity, and — when the state directory holds a pairing credential — whether the coordination plane answers within a short timeout. " +
+	description: "Checks state outside the read-only sql tool's reach: the database schema against this build's migrations, stored parser output versions this build's rederive refuses, the FTS5 integrity of events_fts with --deep, stopped sources in the local watch state (ADR 0004), the device identity, and — when the state directory holds a pairing credential — whether the coordination plane answers within a short timeout. " +
 		"Doctor opens the database read-only: it never migrates, repairs, or re-derives, and prints no transcript content or secrets.\n" +
+		"The --deep check copies the database into memory, so it takes time and memory in proportion to the database size.\n" +
 		"Every finding carries a severity and a one-line remedy. Exit codes: 0 when no finding is an error, 1 otherwise; warnings do not fail. A joined device checks its own state with --state ~/.ohya/join and its hub's coordination URL through --control.",
 	argsTitle: "Arguments",
 	args:      "(none)",
@@ -71,6 +72,7 @@ func runDoctorCommand(args []string, stdout, stderr io.Writer) error {
 		"coordination `URL` probed when the state directory holds a pairing credential")
 	maxRecordBytes := c.fs.Int64("max-record-bytes", claudecode.DefaultMaxRecordBytes,
 		"record size `bound` the stop check parses with; pass the bound ingestion last ran with (docs/adr/0004)")
+	deep := c.fs.Bool("deep", false, "also verify events_fts against the events table; copies the database into memory")
 	asJSON := c.fs.Bool("json", false, "print one JSON object instead of the text findings (docs/adr/0005)")
 	if err := c.parse(args, stdout); err != nil {
 		return err
@@ -112,6 +114,7 @@ func runDoctorCommand(args []string, stdout, stderr io.Writer) error {
 		stateDir:       stateDir,
 		controlURL:     *controlURL,
 		maxRecordBytes: *maxRecordBytes,
+		deep:           *deep,
 	})
 	if err != nil {
 		return jsonFailurePrint(*asJSON, stdout, doctorSpec.name, err)
@@ -153,6 +156,7 @@ type doctorOptions struct {
 	stateDir       string
 	controlURL     string
 	maxRecordBytes int64
+	deep           bool
 }
 
 func runDoctor(ctx context.Context, o doctorOptions) ([]finding, error) {
@@ -191,7 +195,7 @@ func runDoctor(ctx context.Context, o doctorOptions) ([]finding, error) {
 		defer hub.Close()
 		findings = append(findings, checkSchema(ctx, hub, o.dbPath, binSchema)...)
 		findings = append(findings, checkParserVersions(ctx, hub)...)
-		findings = append(findings, checkFTSIndex(ctx, hub)...)
+		findings = append(findings, checkFTSIndex(ctx, hub, o.deep)...)
 	}
 	if o.remote {
 		findings = append(findings, checkUploadCheckpoints(o.stateDir)...)
@@ -268,7 +272,11 @@ func checkParserVersions(ctx context.Context, hub *store.DB) []finding {
 	return []finding{{Check: "parser_versions", Severity: sevOK, Detail: detail}}
 }
 
-func checkFTSIndex(ctx context.Context, hub *store.DB) []finding {
+func checkFTSIndex(ctx context.Context, hub *store.DB, deep bool) []finding {
+	if !deep {
+		return []finding{{Check: "fts_index", Severity: sevOK,
+			Detail: "events_fts integrity-check skipped; run ohya doctor --deep to verify it"}}
+	}
 	if err := hub.FTSIndexConsistent(ctx); err != nil {
 		return []finding{{Check: "fts_index", Severity: sevError,
 			Detail: fmt.Sprintf("events_fts failed the FTS5 integrity-check: %v", err),

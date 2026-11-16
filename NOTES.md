@@ -27,6 +27,10 @@ How to use this file:
   - ChatGPT desktop: no reliable local transcripts; official export only — deferred.
   - Cowork local sessions may write JSONL under `~/Library/Application Support/Claude/local-agent-mode-sessions/` — absent on current install; check if usage starts.
 
+- Codex `archived_sessions/` ingestion gap (verified 2026-11-15): `~/.codex/archived_sessions` is a sibling of `sessions/` and holds rollouts moved out of it (6 plain-JSONL files, 1.5 MB, Feb–Sep 2026, none duplicated under `sessions/`). The default codex root is `$CODEX_HOME/sessions` (cmd/ohya/main.go:154) and `discoverSessionFiles` walks only that root (cmd/ohya/ingest.go:313), so archived files are silently never ingested. A watched file moved there stops producing outcomes without a diagnostic (internal/watch/watch.go:73 drops un-stattable paths): pre-move history stays in the hub, post-move appends are lost. Remedy when acted on: watch `archived_sessions` as a second default codex root — the watcher already follows moves by file identity (watch.go:80–97), so the transition is free. Watching all of `~/.codex` instead would wrongly ingest `session_index.jsonl`, `history.jsonl`, and vendor JSONL.
+
+- Competitive clock (observed 2026-11-15, openai/codex main): Codex is landing first-party memory (`memories/write`; `memories_1.sqlite` now present in `~/.codex`), a SQLite-backed `message-board` + message-board-mcp crate, and `external-agent-migration` importing Claude Code sessions. Cross-agent, local-first, shared remain ohya's wedge; factor into launch sequencing. Their session search still greps raw JSONL (ripgrep with JSON-escaped terms, search.rs) plus a bolted-on SQLite listing index — converging on ohya's design from both sides.
+
 - Parser format facts cross-checked against agentsview (2026-11-13, commit
   b262670; full study at /notes/agentsview-ingestion-study-2026-11-13.md):
   - Claude Code: session ID is the filename stem; a differing in-file
@@ -1133,3 +1137,24 @@ How to use this file:
   `internal/setup/service.go` plus a dump-shaped regression test; v0.1.1
   (commit dab456e) shipped the fix the same day and was verified through the
   released installer on the same machine.
+
+- Doctor cost on a 6.6 GB hub (2026-11-15): `parser_versions` scans all events
+  (1.3 s). An index `events(source_id, parser_version)` with a per-source
+  `max` subquery cuts it to 0.02 s (42 MB, 19 s build), measured on a clone.
+  Not added alone because each migration now forces a full recovery copy at
+  setup; add it with the next schema migration. `doctor --deep` still copies
+  the whole database into `:memory:` (`store.FTSIndexConsistent`), so RAM use
+  equals database size; copying only the FTS shadow tables is unverified.
+
+- README recall trial (2026-11-15): release-hosted installer URL and its
+  `--help` verified by download. Quickstart now separates installed usage
+  from source builds and leads with cross-agent handoffs. Immediate handoffs
+  need explicit `events` queries: `events_settled` excludes sessions active
+  within 10 minutes. Broad recall also needs project scoping to avoid
+  attributing another project's decisions to the current repository.
+
+- Runtime observability proposal (2026-11-15): full implementation spec in
+  [plans/001-runtime-observability.md](plans/001-runtime-observability.md).
+  Defines agent-facing status/metrics/logs/diagnose, precise cursor and latency
+  semantics, bounded private telemetry, authenticated remote hub aggregates,
+  phased delivery and overhead/failure-path acceptance gates. Proposed only.
