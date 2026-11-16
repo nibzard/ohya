@@ -1,0 +1,26 @@
+# Design: Two default Codex roots, one watcher
+
+## Problem
+Codex moves ended rollouts from sessions/ into archived_sessions/.
+Only sessions/ was watched, so archived rollouts were never ingested,
+and a file moved there stopped being watched without any report.
+
+## Approach
+An agent root now carries a list of directories. The Codex agent gets
+sessions/ (the --codex-root flag value) plus $CODEX_HOME/archived_sessions
+(always optional). Both paths feed one watcher and one checkpoint file
+per agent, so the existing move-by-file-identity rebind keeps the
+checkpoint across a move between the roots. Missing watched sources now
+print one diagnostic line per disappearance on both ingest and upload.
+
+## Key Trade-offs
+- The archived root is watched even when --codex-root is passed
+  explicitly. ohya setup writes an explicit --codex-root into the
+  service, so a conditional archived root would silently drop archived
+  capture for every installed user.
+- Watching all of ~/.codex was rejected: it would ingest
+  session_index.jsonl, history.jsonl, and vendor JSONL.
+
+## References
+- Evidence: NOTES.md "Codex archived_sessions/ ingestion gap"
+- Test pin: TestIngestCodexMoveBetweenDefaultRootsKeepsCheckpoint
