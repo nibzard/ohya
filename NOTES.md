@@ -1174,38 +1174,17 @@ How to use this file:
   everything sharing the disk; consider size-aware or incremental backup
   (or at minimum a progress log line and idle-time execution).
 
-- Ingest steady-state write amplification (observed and root-caused
-  2026-11-16): ingest writes ~9 MB/s while idle. `strace` over 15 s showed
-  99.9% of the bytes go to `sources/<agent>.json` checkpoint rewrites (45
-  rewrites, 71.7 MB); SQLite WAL writes were 0.09 MB. Cause: `poll` calls
-  `Watcher.Acknowledge` for every source with `End > Cursor`, and
-  `checkpoint` rewrites and fsyncs the whole checkpoint file (1.4–1.7 MB at
-  ~2.5k sources) even when the cursor did not move. 20 sources never
-  advance: stopped on agent-torn records (ADR 0004) or ending in an
-  abandoned line without a newline. Each pass re-reads, re-parses, and
-  rewrites the file once for each of them. The "0.13 MB/s before" baseline
-  was false: `ohya.service` was stopped from Nov 15 18:49 to 22:53, so
-  neither the new binary nor the workspaces layout caused a regression.
-  Proposed fix, smallest first: skip the save when the acknowledged cursor
-  is unchanged (`SizeBytes` is never read); skip re-reading a source whose
-  size did not change since a pass made no progress; save checkpoints once
-  per pass instead of once per source. Safe because the hub commits the
-  cursor in the event transaction and replay deduplicates. If the
-  O(sources) file rewrite still dominates, move checkpoints into SQLite
-  (ADR needed).
-  Done (2026-11-16, cmd/ohya/ingestor, internal/uploader): the re-read/
-  re-parse skip, keyed in-process per source ID on the (end, cursor,
-  mtime) triple a no-progress pass left behind (`ingestor.noProgress`,
-  `Uploader.idle`/`.stops`); a cached stopped source still counts and
-  reports in `stats.stopped`/`stats.stops` without re-reading. Retries on
-  growth (end changes), replacement/truncation (new source ID), cursor
-  movement, or an in-place rewrite that changes the file's modification
-  time — `watch.Outcome.ModTime` now carries the probed mtime from
-  `internal/watch`'s `Poll` stat, added alongside the existing identity
-  and size probes, for exactly this: a same-size rewrite at the stop
-  offset (for example `dd conv=notrunc`) is invisible to `internal/watch`
-  itself (its fingerprint only covers bytes before the cursor) but bumps
-  mtime, which the skip key now compares. Remaining limit: a rewrite that
-  also restores the original mtime (explicit `utimes` back-dating) still
-  goes undetected. The checkpoint-save-once-per-pass item above is still
-  open.
+- Ingest idle write amplification (root-caused and fixed 2026-11-16):
+  idle ingest wrote ~9 MB/s; 99.9% went to `sources/<agent>.json`
+  checkpoint rewrites, not SQLite. Each pass acknowledged ~20 sources that
+  never advance (records the agent tore, which stop the source under
+  ADR 0004, or an abandoned final line). Each acknowledgment rewrote and
+  fsynced the whole 1.5 MB file. The "0.13 MB/s before" baseline was false:
+  `ohya.service` was stopped from Nov 15 18:49 to 22:53. Fixes: no-op
+  acknowledgments do not save; `Watcher.Flush` saves once per pass (ingest
+  `poll`, uploader `Sync`); ingest and the uploader skip re-reading a
+  source while its (end, cursor, mtime) matches a pass without progress.
+  Remaining limits: a repair that keeps size and mtime needs a restart;
+  each pass with progress still rewrites the whole file, which grows with
+  the number of sources. If that dominates, move checkpoints into SQLite
+  (ADR needed). Live I/O after deployment is not yet measured.
