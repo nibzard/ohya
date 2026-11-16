@@ -1187,4 +1187,12 @@ How to use this file:
   Remaining limits: a repair that keeps size and mtime needs a restart;
   each pass with progress still rewrites the whole file, which grows with
   the number of sources. If that dominates, move checkpoints into SQLite
-  (ADR needed). Live I/O after deployment is not yet measured.
+  (ADR needed). Measured after deploying 6d464f1 (2026-11-16, 30 s
+  windows): ingest disk writes fell from 13.2 MB/s to 0.76 MB/s.
+- Ingest per-pass read cost (observed 2026-11-16, not fixed): every pass
+  still reads ~13 MB/s, nearly all from the page cache. Each pass reads a
+  4 KiB fingerprint window for every source (~5,250 `pread64` calls on
+  session files) and calls `RegisterSource` for every source (~25 MB of
+  `hub.db` page reads in 20 s). The cost is CPU, not disk. Possible fix:
+  skip fingerprint checks and registration for sources whose identity,
+  size, and mtime did not change since the last pass.
