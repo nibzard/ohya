@@ -1,0 +1,7 @@
+T117 closes the sql-engine-metrics boundary T091 left open: the
+engine now owns every sql_*/annotate_* series, so hubsync's
+handleQuery/handleAnnotate needed no metric calls (double-count
+avoided by construction). store.AnnotateResult gained json:"-"
+per-kind counters; wire and MCP contracts unchanged. Production
+CLI processes still pass no Observer (recorder wiring is T093);
+device-side remote metrics ride T108/T109.
