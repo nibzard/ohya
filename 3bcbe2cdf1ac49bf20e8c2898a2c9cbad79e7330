@@ -1,0 +1,50 @@
+# Design: Tailcat address transport adapter (T121)
+
+## Problem
+ADR 0011 replaces the tsnet+Headscale stack with the real
+github.com/tailscale/tailcat (v0.7.0). T121 adds only the adapter
+behind the existing transport.Hub/transport.Device interfaces; T122
+switches the callers and T123 deletes the old stack, so both adapters
+must coexist without name clashes.
+
+## Approach
+- New package internal/transport/address. The tsnet adapter keeps
+  internal/transport/tailcat untouched.
+- tailcat.Server.Start picks generated keys and the selected DERP
+  region into locals and never writes them back, so NewHub generates
+  the node key and pre-shared key itself and persists version, keys,
+  and region as JSON (owner-only, 0700 dir/0600 file) through
+  durablefile under <state>/tailcat-hub/identity.json. Listen starts
+  the server (ctx bounds startup), then saves once; a load failure is
+  terminal and never overwritten.
+- Region handling: ConnInfo.Addr() strips RegionID/code/name and node
+  names, and ParseAddr restores RegionID as index+1, so a parsed
+  region is not byte-identical to a configured one. A caller-provided
+  Region is saved verbatim; only a region Tailcat picked from the
+  default map is taken from ParseAddr of the started address. A
+  different configured RegionID on restart is refused because the
+  identity pins it.
+- The address is a secret (it embeds the pre-shared key): the adapter
+  never logs it, errors never echo address or key bytes
+  (PresharedKey.UnmarshalText echoes its input, so the identity
+  loader decodes through string fields and drops that detail), and
+  PublicKey() exposes the nodekey:... diagnostic form. Listen binds
+  only inside the tailcat stack on 9027; a regression asserts host
+  port 9027 stays free.
+- Device wraps tailcat.Client with key.NewNode() per process, binds to
+  one hub address for its lifetime, and dials port 9027 with a 20 s
+  cap when the caller deadline is later (uploader budget is 60 s).
+  Drain passthroughs expose the library's FIN-drain hygiene.
+
+## Key Trade-offs
+- Default Logf is discard: library diagnostics stay opt-in so no
+  uncontrolled sink can receive secret-bearing lines (TS_DEBUG_ADDR
+  would print the address).
+- Identity is saved after a successful start, not at construction: a
+  first start that never listens persists nothing; a failed save fails
+  Listen loudly rather than continue with an unpersisted identity.
+
+## References
+- docs/adr/0011-tailcat-address-transport.md
+- Spike evidence (ADR 0011) and /tmp/tcspike program
+- T122 (caller switch), T123 (tsnet/Headscale removal)
