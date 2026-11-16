@@ -1193,3 +1193,14 @@ How to use this file:
   cursor in the event transaction and replay deduplicates. If the
   O(sources) file rewrite still dominates, move checkpoints into SQLite
   (ADR needed).
+  Done (2026-11-16, cmd/ohya/ingestor, internal/uploader): the re-read/
+  re-parse skip, keyed in-process per source ID on the (end, cursor) pair
+  a no-progress pass left behind (`ingestor.noProgress`,
+  `Uploader.idle`/`.stops`); a cached stopped source still counts and
+  reports in `stats.stopped`/`stats.stops` without re-reading. Retries on
+  growth (end changes), replacement/truncation (new source ID), or cursor
+  movement. Gap: an in-place rewrite that keeps the same inode, the same
+  file size, and touches only bytes at or after the cursor (fingerprint
+  verification in internal/watch only covers bytes before the cursor) goes
+  undetected — same as the uploader's pre-existing stop cache. The
+  checkpoint-save-once-per-pass item above is still open.

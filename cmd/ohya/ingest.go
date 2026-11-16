@@ -153,13 +153,23 @@ type ingestor struct {
 	maxRecordBytes int64
 	stderr         io.Writer
 	reported       map[string]int64
+	noProgress     map[string]noProgressMark
 	workspacesDue  bool
+}
+
+type noProgressMark struct {
+	end            int64
+	cursor         int64
+	stopped        bool
+	stopOffset     int64
+	recordTooLarge bool
 }
 
 func newIngestor(hub *store.DB, w *watch.Watcher, agent, deviceID string, maxRecordBytes int64, stderr io.Writer) *ingestor {
 	return &ingestor{
 		hub: hub, watcher: w, agent: agent, deviceID: deviceID,
 		maxRecordBytes: maxRecordBytes, stderr: stderr, reported: map[string]int64{},
+		noProgress:    map[string]noProgressMark{},
 		workspacesDue: true,
 	}
 }
@@ -205,9 +215,14 @@ func (r *ingestor) poll(ctx context.Context, root string, optional bool) (passSt
 			continue
 		}
 		stats.sources++
-		if o.Fresh && o.Reason != "new file" {
-			fmt.Fprintf(r.stderr, "ohya: %s: new source %s re-imports from byte zero: %s\n",
-				o.Path, o.SourceID, o.Reason)
+		if o.Fresh {
+			if o.ReplacedSourceID != "" {
+				delete(r.noProgress, o.ReplacedSourceID)
+			}
+			if o.Reason != "new file" {
+				fmt.Fprintf(r.stderr, "ohya: %s: new source %s re-imports from byte zero: %s\n",
+					o.Path, o.SourceID, o.Reason)
+			}
 		}
 		if err := r.hub.RegisterSource(ctx, o.SourceID, r.deviceID, r.agent, o.Path); err != nil {
 			r.reportSource(o.Path, err)
@@ -217,12 +232,25 @@ func (r *ingestor) poll(ctx context.Context, root string, optional bool) (passSt
 		if o.End <= o.Cursor {
 			continue
 		}
+		if mark, cached := r.noProgress[o.SourceID]; cached && mark.end == o.End && mark.cursor == o.Cursor {
+			if mark.stopped {
+				stats.stopped++
+				stats.stops = append(stats.stops, stopReport{
+					SourceID: o.SourceID,
+					Path:     o.Path,
+					Offset:   mark.stopOffset,
+					Remedy:   stopRemedy(mark.recordTooLarge),
+				})
+			}
+			continue
+		}
 		inserted, committed, stop, err := r.ingestSource(ctx, o)
 		if err != nil {
 			r.reportSource(o.Path, err)
 			stats.failed++
 			continue
 		}
+		mark := noProgressMark{end: o.End, cursor: committed}
 		if stop != nil {
 			stats.stopped++
 			stats.stops = append(stats.stops, stopReport{
@@ -231,11 +259,20 @@ func (r *ingestor) poll(ctx context.Context, root string, optional bool) (passSt
 				Offset:   stop.Offset,
 				Remedy:   stopRemedy(stop.RecordTooLarge),
 			})
+			mark.stopped = true
+			mark.stopOffset = stop.Offset
+			mark.recordTooLarge = stop.RecordTooLarge
 		}
 		stats.inserted += inserted
 		if err := r.watcher.Acknowledge(o.Path, o.SourceID, committed); err != nil {
 			r.reportSource(o.Path, err)
 			stats.failed++
+			continue
+		}
+		if committed == o.Cursor {
+			r.noProgress[o.SourceID] = mark
+		} else {
+			delete(r.noProgress, o.SourceID)
 		}
 	}
 	if err := r.watcher.Flush(); err != nil {

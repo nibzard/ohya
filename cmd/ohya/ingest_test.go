@@ -939,3 +939,147 @@ func TestDiscoverSessionFiles(t *testing.T) {
 		}
 	}
 }
+
+func TestIngestStoppedSourceNotReReadWhileUnchanged(t *testing.T) {
+	e := newSliceEnv(t)
+	session := e.session("malformed-line.jsonl")
+	copyFixture(t, session, "malformed-line.jsonl")
+	var stderr bytes.Buffer
+	r, done := e.newRunner(t, &stderr)
+	defer done()
+
+	stats, err := r.poll(context.Background(), e.root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.sources != 1 || stats.stopped != 1 || stats.failed != 0 {
+		t.Fatalf("first pass = %+v, want 1 stopped source", stats)
+	}
+
+	stats, err = r.poll(context.Background(), e.root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.stopped != 1 {
+		t.Fatalf("cache-priming pass = %+v, want the stop still reported", stats)
+	}
+
+	if err := os.Chmod(session, 0); err != nil {
+		t.Fatal(err)
+	}
+	if f, err := os.Open(session); err == nil {
+		f.Close()
+		t.Skipf("chmod 0 left %s readable", session)
+	}
+	defer os.Chmod(session, 0o600)
+
+	stderr.Reset()
+	stats, err = r.poll(context.Background(), e.root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.sources != 1 || stats.stopped != 1 || stats.failed != 0 {
+		t.Fatalf("third pass = %+v, want the cached stop replayed with no failure", stats)
+	}
+	if len(stats.stops) != 1 || stats.stops[0].Offset != 1094 {
+		t.Fatalf("stops = %+v, want the cached offset 1094", stats.stops)
+	}
+	if stderr.String() != "" {
+		t.Fatalf("third pass re-read the unreadable, unchanged source: %s", stderr.String())
+	}
+}
+
+func TestIngestPartialTailNotReReadUntilGrowth(t *testing.T) {
+	e := newSliceEnv(t)
+	session := e.session("incomplete-tail.jsonl")
+	copyFixture(t, session, "incomplete-tail.jsonl")
+	var stderr bytes.Buffer
+	r, done := e.newRunner(t, &stderr)
+	defer done()
+
+	stats, err := r.poll(context.Background(), e.root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.inserted != 3 || stats.stopped != 0 || stats.failed != 0 {
+		t.Fatalf("first pass = %+v, want 3 complete records", stats)
+	}
+
+	stats, err = r.poll(context.Background(), e.root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.inserted != 0 || stats.failed != 0 {
+		t.Fatalf("cache-priming pass = %+v, want no new events and no failure", stats)
+	}
+
+	if err := os.Chmod(session, 0); err != nil {
+		t.Fatal(err)
+	}
+	if f, err := os.Open(session); err == nil {
+		f.Close()
+		t.Skipf("chmod 0 left %s readable", session)
+	}
+
+	stderr.Reset()
+	stats, err = r.poll(context.Background(), e.root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.inserted != 0 || stats.failed != 0 {
+		t.Fatalf("third pass = %+v, want no attempt on the unchanged partial tail", stats)
+	}
+	if stderr.String() != "" {
+		t.Fatalf("third pass re-read the unreadable, unchanged source: %s", stderr.String())
+	}
+
+	if err := os.Chmod(session, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	appendFile(t, session, `"}]}}`+"\n")
+	stats, err = r.poll(context.Background(), e.root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.inserted != 1 || stats.failed != 0 {
+		t.Fatalf("growth pass = %+v, want the completed record ingested", stats)
+	}
+}
+
+func TestIngestReplacementRetriesDespiteCachedStop(t *testing.T) {
+	e := newSliceEnv(t)
+	session := e.session("malformed-line.jsonl")
+	copyFixture(t, session, "malformed-line.jsonl")
+	var stderr bytes.Buffer
+	r, done := e.newRunner(t, &stderr)
+	defer done()
+
+	stats, err := r.poll(context.Background(), e.root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.stopped != 1 {
+		t.Fatalf("first pass = %+v, want 1 stopped source", stats)
+	}
+
+	stats, err = r.poll(context.Background(), e.root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.stopped != 1 {
+		t.Fatalf("cache-primed pass = %+v, want the stop replayed from cache", stats)
+	}
+
+	line := func(content, sid string) string {
+		return fmt.Sprintf(`{"type":"user","sessionId":%q,"message":{"role":"user","content":%q}}`+"\n", sid, content)
+	}
+	replaceFile(t, session, line("replacement", "sess-new"))
+
+	stats, err = r.poll(context.Background(), e.root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.inserted != 1 || stats.stopped != 0 {
+		t.Fatalf("pass after replacement = %+v, want the new incarnation ingested, not skipped from the old source's cache", stats)
+	}
+}
