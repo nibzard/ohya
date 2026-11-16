@@ -1220,3 +1220,16 @@ How to use this file:
   levers, none chosen: compress `raw_json` at rest (about 5 GB; agents'
   SQL over `raw_json` needs a decompress function; ADR needed), or derive
   `text` on demand (about 4 GB; costs query speed).
+
+- Usage evidence and instrumentation gap (measured 2026-11-16): the MCP
+  server logs no queries, latency, rows, or errors; `plans/001` is still a
+  proposal. Agent transcripts that ohya ingests already record its own use
+  (tool call, result, timestamps). Since 2026-11-13 the hub holds only 8
+  `sql()` calls, all from Claude Code in 4 sessions (both devices). The
+  tools were available in 26 sessions. No Codex call was found. Results:
+  1 of 8 hit the 5 s deadline, 1 took 4 s, the rest 19–942 ms; results
+  were up to 48 KB. None of the 8 read `raw_json`; all used `text`
+  previews or `sessions`. That is too little to choose a storage design,
+  for example how often agents read `raw_json`. Duplication on MacBook
+  data, FTS share by kind, and decode cost need offline analysis, not new
+  instrumentation.
