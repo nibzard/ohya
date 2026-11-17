@@ -24,6 +24,7 @@ var releasedSchemas = []releasedSchema{
 	{"v0.1.0", 6},
 	{"v0.1.1", 6},
 	{"v0.1.2", 7},
+	{"v0.2.0", 7},
 }
 
 const releasedSeedMs = 1731800000000
