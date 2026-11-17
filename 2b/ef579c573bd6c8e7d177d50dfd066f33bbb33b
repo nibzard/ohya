@@ -1,0 +1,27 @@
+# Context
+
+## Background
+T084. install.sh resolves the latest release by following the
+$OHYA_RELEASE_ROOT/latest redirect and taking the last path segment
+as the version.
+
+## Why This Way
+GitHub answers /releases/latest with a redirect to the bare
+/releases listing for a repository without a stable release
+(verified live against github.com/torvalds/linux; nibzard/ohya
+showed the same before v0.1.0). The stripped segment was then the
+literal string "releases", which tripped the generic v-prefix
+check and misreported the cause. Comparing the final URL with the
+release root detects exactly that redirect, on GitHub and on
+test fixtures, without guessing at tag names.
+
+## Gotchas
+- The check compares full URLs; a hypothetical tag named
+  "releases" resolves to <root>/tag/releases and still reaches
+  the generic version check.
+- A mirror serving 200 directly at <root>/latest does not match,
+  because url_effective stays <root>/latest.
+
+## Related
+- docs/adr/0008-integrated-setup.md, download bootstrap section
+- NOTES.md, v0.1.0 publication entry
