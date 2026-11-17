@@ -1,6 +1,6 @@
 # Demo
 
-`demo.gif` and `demo.mp4` show one handoff between two agents in about 58
+`demo.gif` and `demo.mp4` show one handoff between two agents in about 40
 seconds. The video opens with the ohya logo and closes with it:
 
 1. In Claude Code, a developer asks why a promotion test fails on CI every
@@ -19,8 +19,11 @@ show the logo or large type, so its cards are plain text.
 
 - Both agents run in their normal interactive terminal user interfaces
   (TUIs). Every prompt, tool call, and answer comes from the live session.
-- The recording speeds up agent work 6 times and typing 2 times. The cards
-  between scenes say so.
+- The recording speeds up agent work 6 times and typing 3 times. It also
+  shortens the pauses after each agent finishes. The cards between scenes
+  say that agent work is sped up.
+- After Codex answers, the video zooms in on the `Called ohya.sql` tool
+  call, then zooms back out to the full answer.
 - The build replaces non-breaking spaces with spaces, because `agg` draws
   them as a visible glyph.
 - The Claude Code scene loads project and local settings only. User hooks
@@ -61,6 +64,10 @@ it.
 
 ## Recording notes
 
+- `agg` holds the last frame of a GIF for 3 seconds by default. The build
+  sets `--last-frame-duration 0` and adds its own holds.
+- The build finds the row of the zoom target by replaying the Codex output
+  into a tmux pane and reading the screen back.
 - `ffmpeg` shows the last frame of a GIF for only one frame. The build
   holds each scene's last frame with the `tpad` filter instead.
 - The cards take their background color from the `github-dark` terminal

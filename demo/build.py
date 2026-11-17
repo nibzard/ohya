@@ -2,9 +2,11 @@
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -13,12 +15,14 @@ HERE = Path(__file__).resolve().parent
 LOGO = HERE.parent / "docs/assets/brand/logo-dark.svg"
 WIDTH, HEIGHT = 100, 30
 WORK_SPEED = 6
-TYPING_SPEED = 2
+TYPING_SPEED = 3
 FPS = 30
+ZOOM = 2
+ZOOM_SECONDS = (0.4, 1.6, 0.4)
 INK, MUTED = "#e6edf3", "#9198a1"
 FONTS = Path("/usr/share/fonts/truetype/liberation")
 AGG = [os.environ.get("AGG", "agg"), "--theme", "github-dark", "--font-family", "DejaVu Sans Mono",
-       "--font-size", "20", "--idle-time-limit", "10"]
+       "--font-size", "20", "--idle-time-limit", "10", "--last-frame-duration", "0"]
 ANSI = re.compile(r"\x1b\[[0-9;?<>=]*[ -/]*[@-~]|\x1b[\]P].*?(?:\x07|\x1b\\)|\x1b.")
 
 STYLES = {
@@ -32,24 +36,24 @@ CARDS = {
         ("logo", 0.5), ("gap", 0.1),
         ("title", "One memory for all your coding agents."),
         ("note", "Claude Code · Codex · Pi"),
-    ], 4.0),
+    ], 3.5),
     "claude": ([
         ("title", "Earlier, in Claude Code"), ("gap", 0.03),
         ("body", "A test fails on CI every evening."),
         ("body", "Claude finds out why."), ("gap", 0.03),
         ("note", "Agent work runs at 6× speed."),
-    ], 4.0),
+    ], 3.5),
     "codex": ([
         ("title", "Later, in a new Codex session"), ("gap", 0.03),
         ("body", "Codex never saw that chat."),
         ("body", "It asks ohya."),
-    ], 3.5),
+    ], 2.5),
     "closing": ([
         ("title", "Claude Code fixed the bug."),
         ("title", "Codex remembered why."), ("gap", 0.06),
         ("logo", 0.28), ("gap", 0.06),
         ("note", "github.com/nibzard/ohya"),
-    ], 5.0),
+    ], 4.0),
 }
 
 
@@ -86,15 +90,15 @@ def scenes(work):
         ("scene", retime(claude, [
             (0, claude_sent, TYPING_SPEED),
             (claude_sent, claude_done, WORK_SPEED),
-            (claude_done, claude_done + 1.0, 1),
-        ]), 5.0),
+            (claude_done, claude_done + 0.5, 1),
+        ]), 2.0, None),
         ("card", "codex"),
         ("scene", retime(codex, [
             (0, codex_idle, 1000),
             (codex_idle, codex_sent, TYPING_SPEED),
             (codex_sent, codex_done, WORK_SPEED),
             (codex_done, codex_done + 1.0, 1),
-        ]), 8.0),
+        ]), 4.0, r"Called\s*ohya\.sql"),
         ("card", "closing"),
     ]
 
@@ -132,9 +136,9 @@ def build_cast(parts, path):
             events.append([clock, "o", text_card(items)])
             clock += seconds
         else:
-            (moved, length), hold = part[1], part[2]
+            (moved, length), hold, focus = part[1:]
             events.extend([clock + t, kind, data] for t, kind, data in moved)
-            clock += length + hold
+            clock += length + hold + (sum(ZOOM_SECONDS) if focus else 0)
     events.append([clock, "o", "\x1b[0m"])
     write_cast(path, events)
 
@@ -175,20 +179,72 @@ def image_card(items, size, background, tmp, path):
     card.save(path)
 
 
+def screen_lines(events, tmp):
+    stream = tmp / "screen.out"
+    stream.write_text("".join(data for _, _, data in events))
+    tmux = ["tmux", "-L", f"ohya-demo-build-{os.getpid()}", "-f", "/dev/null"]
+    command = f"sleep 1; cat {shlex.quote(str(stream))}; sleep 60"
+    subprocess.run([*tmux, "new-session", "-d", "-s", "screen", "-x", str(WIDTH), "-y", str(HEIGHT), command],
+                   check=True)
+    subprocess.run([*tmux, "set", "-t", "screen", "window-size", "manual"], check=True)
+    subprocess.run([*tmux, "resize-window", "-t", "screen", "-x", str(WIDTH), "-y", str(HEIGHT)], check=True)
+    time.sleep(3)
+    lines = subprocess.run([*tmux, "capture-pane", "-p", "-t", "screen"], check=True,
+                           capture_output=True, text=True).stdout.splitlines()
+    subprocess.run([*tmux, "kill-server"], check=True)
+    return lines
+
+
+def last_frame(gif):
+    image = Image.open(gif)
+    image.seek(image.n_frames - 1)
+    return image.convert("RGB")
+
+
+def zoom_frames(frame, row, tmp):
+    width, height = frame.size
+    row_height = height / HEIGHT
+    box_width, box_height = width / ZOOM, height / ZOOM
+    top = min(max(0.0, (row - 1.5) * row_height), height - box_height)
+    target = (0.0, top, box_width, top + box_height)
+    full = (0.0, 0.0, float(width), float(height))
+    zoom_in, hold, zoom_out = (round(seconds * FPS) for seconds in ZOOM_SECONDS)
+
+    def box(progress):
+        eased = progress * progress * (3 - 2 * progress)
+        return tuple(a + (b - a) * eased for a, b in zip(full, target))
+
+    boxes = [box(i / zoom_in) for i in range(1, zoom_in + 1)]
+    boxes += [target] * hold
+    boxes += [box(1 - i / zoom_out) for i in range(1, zoom_out + 1)]
+    for i, crop in enumerate(boxes):
+        frame.resize((width, height), Image.LANCZOS, box=crop).save(tmp / f"zoom-{i:03d}.png")
+    return str(tmp / "zoom-%03d.png")
+
+
 def build_video(parts, out):
     with tempfile.TemporaryDirectory() as name:
         tmp = Path(name)
         clips = []
         for i, part in enumerate(parts):
-            if part[0] == "scene":
-                cast, gif = tmp / f"scene-{i}.cast", tmp / f"scene-{i}.gif"
-                write_cast(cast, part[1][0])
-                subprocess.run([*AGG, str(cast), str(gif)], check=True, capture_output=True)
-                clips.append(("scene", gif, part[2]))
-            else:
+            if part[0] == "card":
                 clips.append(part)
-        size = Image.open(next(c[1] for c in clips if c[0] == "scene")).size
-        background = Image.open(next(c[1] for c in clips if c[0] == "scene")).convert("RGB").getpixel((2, 2))
+                continue
+            (events, _), hold, focus = part[1:]
+            cast, gif = tmp / f"scene-{i}.cast", tmp / f"scene-{i}.gif"
+            write_cast(cast, events)
+            subprocess.run([*AGG, str(cast), str(gif)], check=True, capture_output=True)
+            if not focus:
+                clips.append(("scene", gif, hold))
+                continue
+            row = next(n for n, line in enumerate(screen_lines(events, tmp)) if re.search(focus, line))
+            final = tmp / f"final-{i}.png"
+            last_frame(gif).save(final)
+            clips += [("scene", gif, 0), ("frames", zoom_frames(last_frame(gif), row, tmp)), ("still", final, hold)]
+
+        first_scene = next(c[1] for c in clips if c[0] == "scene")
+        size = Image.open(first_scene).size
+        background = Image.open(first_scene).convert("RGB").getpixel((2, 2))
 
         inputs, filters = [], []
         for i, clip in enumerate(clips):
@@ -197,6 +253,12 @@ def build_video(parts, out):
                 png = tmp / f"card-{i}.png"
                 image_card(items, size, background, tmp, png)
                 inputs += ["-loop", "1", "-framerate", str(FPS), "-t", str(seconds), "-i", str(png)]
+                filters.append(f"[{i}]fps={FPS},format=yuv420p,setsar=1[v{i}]")
+            elif clip[0] == "still":
+                inputs += ["-loop", "1", "-framerate", str(FPS), "-t", str(clip[2]), "-i", str(clip[1])]
+                filters.append(f"[{i}]fps={FPS},format=yuv420p,setsar=1[v{i}]")
+            elif clip[0] == "frames":
+                inputs += ["-framerate", str(FPS), "-i", clip[1]]
                 filters.append(f"[{i}]fps={FPS},format=yuv420p,setsar=1[v{i}]")
             else:
                 inputs += ["-i", str(clip[1])]
