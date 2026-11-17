@@ -46,6 +46,7 @@ type EngineOptions struct {
 	DenyTables              []string
 	Usage                   UsageSink
 	Observer                observe.Observer
+	Events                  observe.EventSink
 }
 
 func (o EngineOptions) withDefaults() EngineOptions {
@@ -88,6 +89,7 @@ type Engine struct {
 	writer     *sql.DB
 	options    EngineOptions
 	observer   observe.Observer
+	events     observe.EventSink
 	traced     bool
 	deniedTbls map[string]bool
 	slots      chan struct{}
@@ -110,7 +112,8 @@ func NewEngine(readers, writer *sql.DB, o EngineOptions) *Engine {
 		writer:     writer,
 		options:    o,
 		observer:   observer,
-		traced:     o.Usage != nil || o.Observer != nil,
+		events:     o.Events,
+		traced:     o.Usage != nil || o.Observer != nil || o.Events != nil,
 		deniedTbls: denied,
 		slots:      make(chan struct{}, o.MaxConcurrency),
 	}

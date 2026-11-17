@@ -96,7 +96,7 @@ func runMcp(ctx context.Context, dbPath, stateDir string, observeOn bool) error 
 	if err != nil {
 		return err
 	}
-	server := mcpserver.New(mcpserver.NewEngine(readers, hub.Writer(), mcpserver.EngineOptions{WriterID: deviceID, Usage: telem.usageSink(), Observer: telem.observer()}),
+	server := mcpserver.New(mcpserver.NewEngine(readers, hub.Writer(), mcpserver.EngineOptions{WriterID: deviceID, Usage: telem.usageSink(), Observer: telem.observer(), Events: telem.eventsSink()}),
 		mcpserver.EngineOptions{WriterID: deviceID})
 	return mcpserver.Run(ctx, server)
 }

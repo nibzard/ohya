@@ -14,13 +14,16 @@ import (
 )
 
 type Service struct {
-	Path    string
-	Content []byte
-	Start   [][]string
-	Stop    [][]string
-	Loaded  []string
-	Check   []string
+	Path       string
+	Content    []byte
+	Start      [][]string
+	Stop       [][]string
+	Loaded     []string
+	Check      []string
+	StderrPath string
 }
+
+const StderrLogMaxBytes int64 = 8 << 20
 
 func systemdQuote(value string) string {
 	value = strings.ReplaceAll(value, "%", "%%")
@@ -28,12 +31,12 @@ func systemdQuote(value string) string {
 	return strconv.Quote(value)
 }
 
-func ServicePlan(platform, home, binary string, args []string) (Service, error) {
-	return planService(serviceTemplate{unit: "ohya.service", label: "com.nibzard.ohya", description: "ohya agent memory"}, platform, home, binary, args)
+func ServicePlan(platform, home, state, binary string, args []string) (Service, error) {
+	return planService(serviceTemplate{unit: "ohya.service", label: "com.nibzard.ohya", description: "ohya agent memory"}, platform, home, state, binary, args)
 }
 
-func HubServicePlan(platform, home, binary string, args []string) (Service, error) {
-	return planService(serviceTemplate{unit: "ohya-serve.service", label: "com.nibzard.ohya.serve", description: "ohya memory hub for devices"}, platform, home, binary, args)
+func HubServicePlan(platform, home, state, binary string, args []string) (Service, error) {
+	return planService(serviceTemplate{unit: "ohya-serve.service", label: "com.nibzard.ohya.serve", description: "ohya memory hub for devices"}, platform, home, state, binary, args)
 }
 
 type serviceTemplate struct {
@@ -42,11 +45,11 @@ type serviceTemplate struct {
 	description string
 }
 
-func planService(t serviceTemplate, platform, home, binary string, args []string) (Service, error) {
-	if !filepath.IsAbs(home) || !filepath.IsAbs(binary) {
+func planService(t serviceTemplate, platform, home, state, binary string, args []string) (Service, error) {
+	if !filepath.IsAbs(home) || !filepath.IsAbs(state) || !filepath.IsAbs(binary) {
 		return Service{}, fmt.Errorf("service paths must be absolute")
 	}
-	for _, s := range append([]string{home, binary}, args...) {
+	for _, s := range append([]string{home, state, binary}, args...) {
 		if strings.ContainsAny(s, "\n\r\x00") {
 			return Service{}, fmt.Errorf("service arguments contain control characters")
 		}
@@ -60,6 +63,7 @@ func planService(t serviceTemplate, platform, home, binary string, args []string
 		content := "[Unit]\nDescription=" + t.description + "\nStartLimitIntervalSec=60\nStartLimitBurst=5\n\n[Service]\nType=simple\nExecStart=" + strings.Join(words, " ") + "\nWorkingDirectory=" + strings.ReplaceAll(home, "%", "%%") + "\nRestart=on-failure\nRestartSec=5\nUMask=0077\nStandardOutput=journal\nStandardError=journal\nLogRateLimitIntervalSec=60\nLogRateLimitBurst=20\n\n[Install]\nWantedBy=default.target\n"
 		return Service{Path: filepath.Join(home, ".config", "systemd", "user", t.unit), Content: []byte(content), Start: [][]string{{"systemctl", "--user", "daemon-reload"}, {"systemctl", "--user", "enable", t.unit}, {"systemctl", "--user", "restart", t.unit}}, Stop: [][]string{{"systemctl", "--user", "disable", "--now", t.unit}}, Loaded: []string{"systemctl", "--user", "show", "--property=LoadState", "--value", t.unit}, Check: []string{"systemctl", "--user", "show", "--property=ActiveState,SubState,MainPID", t.unit}}, nil
 	case "darwin":
+		stderrPath := filepath.Join(state, "logs", t.label+".stderr.log")
 		var b strings.Builder
 		b.WriteString("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict><key>Label</key><string>" + t.label + "</string><key>ProgramArguments</key><array>")
 		for _, arg := range append([]string{binary}, args...) {
@@ -69,13 +73,51 @@ func planService(t serviceTemplate, platform, home, binary string, args []string
 			}
 			b.WriteString("</string>")
 		}
-		b.WriteString("</array><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>5</integer><key>Umask</key><integer>63</integer></dict></plist>\n")
+		b.WriteString("</array><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>5</integer><key>Umask</key><integer>63</integer><key>StandardErrorPath</key><string>")
+		if err := xml.EscapeText(&b, []byte(stderrPath)); err != nil {
+			return Service{}, err
+		}
+		b.WriteString("</string></dict></plist>\n")
 		path := filepath.Join(home, "Library", "LaunchAgents", t.label+".plist")
 		domain := "gui/" + strconv.Itoa(os.Getuid())
-		return Service{Path: path, Content: []byte(b.String()), Start: [][]string{{"launchctl", "bootstrap", domain, path}, {"launchctl", "kickstart", "-k", domain + "/" + t.label}}, Stop: [][]string{{"launchctl", "bootout", domain + "/" + t.label}}, Loaded: []string{"launchctl", "print", domain + "/" + t.label}, Check: []string{"launchctl", "print", domain + "/" + t.label}}, nil
+		return Service{Path: path, Content: []byte(b.String()), StderrPath: stderrPath, Start: [][]string{{"launchctl", "bootstrap", domain, path}, {"launchctl", "kickstart", "-k", domain + "/" + t.label}}, Stop: [][]string{{"launchctl", "bootout", domain + "/" + t.label}}, Loaded: []string{"launchctl", "print", domain + "/" + t.label}, Check: []string{"launchctl", "print", domain + "/" + t.label}}, nil
 	default:
 		return Service{}, fmt.Errorf("user services are not supported on %s", platform)
 	}
+}
+
+func PrepareStderrLog(path string) error {
+	if path == "" {
+		return nil
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create service log directory: %w", err)
+	}
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return fmt.Errorf("service log %s is not a regular file", path)
+	}
+	if info.Size() <= StderrLogMaxBytes {
+		return nil
+	}
+	rotated := path + ".1"
+	if old, err := os.Lstat(rotated); err == nil && old.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("service log rotation target %s is a symlink", rotated)
+	}
+	if err := os.Remove(rotated); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("drop rotated service log: %w", err)
+	}
+	if err := os.Rename(path, rotated); err != nil {
+		return fmt.Errorf("rotate service log: %w", err)
+	}
+	return nil
 }
 
 func serviceOutput(ctx context.Context, args []string) (string, error) {

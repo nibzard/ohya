@@ -110,14 +110,14 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	}
 	var service Service
 	if !o.NoService {
-		service, err = ServicePlan(platform, o.Clients.Home, o.Clients.Binary, o.ServiceArgs)
+		service, err = ServicePlan(platform, o.Clients.Home, o.Clients.State, o.Clients.Binary, o.ServiceArgs)
 		if err != nil {
 			return report, err
 		}
 	}
 	var hubService Service
 	if !o.NoService && o.HubServiceArgs != nil {
-		hubService, err = HubServicePlan(platform, o.Clients.Home, o.Clients.Binary, o.HubServiceArgs)
+		hubService, err = HubServicePlan(platform, o.Clients.Home, o.Clients.State, o.Clients.Binary, o.HubServiceArgs)
 		if err != nil {
 			return report, err
 		}
@@ -335,12 +335,12 @@ func Remove(ctx context.Context, state string, run func(context.Context, []strin
 	return report, nil
 }
 
-func removeOwnedService(ctx context.Context, r fileReceipt, run func(context.Context, []string) error, component, receiptPath string, plan func(string, string, string, []string) (Service, error)) (Result, error) {
+func removeOwnedService(ctx context.Context, r fileReceipt, run func(context.Context, []string) error, component, receiptPath string, plan func(string, string, string, string, []string) (Service, error)) (Result, error) {
 	platform := "linux"
 	if filepath.Ext(r.Path) == ".plist" {
 		platform = "darwin"
 	}
-	service, err := plan(platform, "/", "/ohya", nil)
+	service, err := plan(platform, "/", "/", "/ohya", nil)
 	if err != nil {
 		return Result{}, err
 	}

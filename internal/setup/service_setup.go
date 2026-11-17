@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/nibzard/ohya/internal/observe"
 )
 
 func configureService(ctx context.Context, o Options, service Service) []Result {
@@ -17,6 +19,13 @@ func configureService(ctx context.Context, o Options, service Service) []Result 
 func configureOwnedService(ctx context.Context, o Options, service Service, component, receiptName string, withRecovery bool) (results []Result) {
 	result := Result{Component: component, Status: "failed"}
 	receipt := filepath.Join(o.Clients.State, "setup", receiptName)
+	if service.StderrPath != "" {
+		if err := PrepareStderrLog(service.StderrPath); err != nil {
+			result.Detail = err.Error()
+			return append(results, result)
+		}
+	}
+	_ = observe.CleanStaleInstances(filepath.Join(o.Clients.State, "observe"), observe.NewSystemClock())
 	active := o.LoadedService(ctx, service.Loaded) == nil
 	original, readErr := readRegular(service.Path)
 	owned, receiptErr := loadFileReceipt(receipt)

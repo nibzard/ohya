@@ -21,7 +21,7 @@ var rootSpec = commandSpec{
 	usageLine: "ohya <command> [flags]",
 	description: "ohya captures Claude Code, Codex, and Pi agent sessions into one hub-owned SQLite database with full-text search, serves the read-only sql and bounded annotate MCP tools to coding agents, and synchronizes devices over an encrypted tailnet through serve and join. " +
 		"No command prompts for input: ohya is non-interactive by design.\n" +
-		"Exit codes: 0 success, 1 failure, 2 usage error, 3 degraded (ingest --once: at least one source failed or stopped; status and metrics: partial, stale, or degraded observation).",
+		"Exit codes: 0 success, 1 failure, 2 usage error, 3 degraded (ingest --once: at least one source failed or stopped; status, metrics, logs, and diagnose: partial, stale, or degraded observation).",
 	argsTitle: "Commands",
 	args: `setup      configure memory services and installed agents
 uninstall  remove owned integrations and services; preserve memory
@@ -34,6 +34,8 @@ rederive   rebuild normalized rows and events_fts after a parser upgrade
 doctor     run read-only health checks the sql tool cannot answer
 status     report runtime state from published local snapshots
 metrics    report counter rates and durations over a time window
+logs       read structured application logs from local instances
+diagnose   export one private, sanitized diagnostics artifact
 usage      report how agents use the sql and annotate tools
 version    print the build, parser, and schema versions`,
 	examples: []string{"ohya ingest --once", "ohya mcp"},
@@ -79,6 +81,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runStatusCommand(rest, stdout, stderr)
 	case "metrics":
 		return runMetricsCommand(rest, stdout, stderr)
+	case "logs":
+		return runLogsCommand(rest, stdout, stderr)
+	case "diagnose":
+		return runDiagnoseCommand(rest, stdout, stderr)
 	case "usage":
 		return runUsageCommand(rest, stdout, stderr)
 	case "version":
@@ -166,6 +172,7 @@ func runIngestCommand(args []string, stdout, stderr io.Writer) error {
 		stdout:         stdout,
 		stderr:         stderr,
 		observer:       telem.observer(),
+		events:         telem.eventsSink(),
 	})
 	if err != nil && *asJSON && !errors.Is(err, errDegraded) {
 		return printJSONError(stdout, ingestSpec.name, err)

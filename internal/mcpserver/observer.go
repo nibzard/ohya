@@ -33,13 +33,27 @@ func (e *Engine) reportQuery(trace *queryTrace, result Result, err error) {
 	observePhase(e.observer, "sql_first_row_duration", phases.FirstRowMS)
 	observePhase(e.observer, "sql_iteration_duration", phases.IterationMS)
 	if err != nil {
+		switch {
+		case errors.Is(err, ErrDeadline):
+			e.event(observe.LevelWarn, observe.EventQueryTimeout, "sql", nil)
+		case errors.Is(err, ErrBusy):
+			e.event(observe.LevelWarn, observe.EventQueryBusy, "sql", nil)
+		}
 		return
 	}
 	e.observer.Add("sql_rows", uint64(rows))
 	e.observer.Add("sql_result_bytes", uint64(resultBytes))
 	if result.Truncated {
 		e.observer.Add("sql_truncations", 1, result.TruncationReason)
+		e.event(observe.LevelInfo, observe.EventQueryTruncated, result.TruncationReason, nil)
 	}
+}
+
+func (e *Engine) event(level observe.Level, code observe.EventCode, outcome string, counts map[string]int64) {
+	if e.events == nil {
+		return
+	}
+	e.events.Event("mcp", level, code, outcome, counts)
 }
 
 func (e *Engine) reportAnnotate(result store.AnnotateResult, err error) {

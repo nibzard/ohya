@@ -132,7 +132,7 @@ func (e *sliceEnv) newRunner(t *testing.T, stderr io.Writer) (*ingestor, func())
 		hub.Close()
 		t.Fatal(err)
 	}
-	return newIngestor(hub, w, e.agent, deviceID, e.maxRecordBytes, stderr, nil), func() { hub.Close() }
+	return newIngestor(hub, w, e.agent, deviceID, e.maxRecordBytes, stderr, nil, nil), func() { hub.Close() }
 }
 
 func (e *sliceEnv) runPass(t *testing.T) (passStats, string) {
@@ -752,7 +752,7 @@ func TestIngestCrashHelper(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	r := newIngestor(hub, w, agent, deviceID, 0, io.Discard, nil)
+	r := newIngestor(hub, w, agent, deviceID, 0, io.Discard, nil, nil)
 	candidates, err := discoverSessionFiles([]agentDir{{dir: root}}, false)
 	if err != nil {
 		panic(err)
@@ -845,7 +845,7 @@ func TestIngestCrashAckHelper(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	r := newIngestor(hub, w, agent, deviceID, 0, io.Discard, nil)
+	r := newIngestor(hub, w, agent, deviceID, 0, io.Discard, nil, nil)
 	candidates, err := discoverSessionFiles([]agentDir{{dir: root}}, false)
 	if err != nil {
 		panic(err)

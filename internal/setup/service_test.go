@@ -15,7 +15,7 @@ import (
 
 func TestServicePlans(t *testing.T) {
 	for _, platform := range []string{"linux", "darwin"} {
-		s, err := ServicePlan(platform, "/home/a b", "/home/a b/ohya", []string{"ingest", "--state", "/a&b/<state>", "--codex-root", ""})
+		s, err := ServicePlan(platform, "/home/a b", "/a&b/<state>", "/home/a b/ohya", []string{"ingest", "--state", "/a&b/<state>", "--codex-root", ""})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -56,10 +56,10 @@ func TestServicePlans(t *testing.T) {
 	if systemdQuote("/a%/$x") != `"/a%%/$$x"` {
 		t.Fatal("systemd expansion not escaped")
 	}
-	if _, err := ServicePlan("linux", "/home", "/bin/ohya", []string{"bad\narg"}); err == nil {
+	if _, err := ServicePlan("linux", "/home", "/state", "/bin/ohya", []string{"bad\narg"}); err == nil {
 		t.Fatal("accepted newline")
 	}
-	if _, err := ServicePlan("windows", "/home", "/ohya", nil); err == nil {
+	if _, err := ServicePlan("windows", "/home", "/state", "/ohya", nil); err == nil {
 		t.Fatal("accepted unsupported platform")
 	}
 }
@@ -122,7 +122,7 @@ func TestSystemdAcceptsGeneratedUnit(t *testing.T) {
 	if err := os.MkdirAll(home, 0700); err != nil {
 		t.Fatal(err)
 	}
-	s, err := ServicePlan("linux", home, "/bin/true", []string{"argument with spaces", "$HOME", "%literal", ""})
+	s, err := ServicePlan("linux", home, filepath.Join(home, ".ohya"), "/bin/true", []string{"argument with spaces", "$HOME", "%literal", ""})
 	if err != nil {
 		t.Fatal(err)
 	}

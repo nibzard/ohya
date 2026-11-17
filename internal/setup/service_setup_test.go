@@ -16,7 +16,7 @@ func TestSetupRestoresServiceAfterFailedUpgrade(t *testing.T) {
 			o := engineOptions(t)
 			o.NoService = false
 			o.NoAgents = true
-			old, err := ServicePlan("linux", o.Clients.Home, o.Clients.Binary, []string{"ingest", "--state", "/previous"})
+			old, err := ServicePlan("linux", o.Clients.Home, o.Clients.State, o.Clients.Binary, []string{"ingest", "--state", "/previous"})
 			if err != nil {
 				t.Fatal(err)
 			}

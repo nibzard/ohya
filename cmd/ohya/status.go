@@ -413,7 +413,7 @@ func statusServices(ctx context.Context, o statusOptions) []statusService {
 		if label == "hub-service" {
 			plan = setup.HubServicePlan
 		}
-		service, err := plan(platform, "/", "/ohya", nil)
+		service, err := plan(platform, "/", "/", "/ohya", nil)
 		if err != nil {
 			entry.Detail = err.Error()
 			out = append(out, entry)

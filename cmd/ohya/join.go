@@ -160,6 +160,7 @@ func runJoin(ctx context.Context, o joinOptions) error {
 			Agent:    root.agent,
 			Interval: o.interval,
 			Observer: telem.observer(),
+			Events:   telem.eventsSink(),
 			Log:      o.stderr,
 		})
 		if err != nil {
