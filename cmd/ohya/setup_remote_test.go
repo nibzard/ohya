@@ -1,11 +1,8 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
-	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,40 +14,16 @@ func TestRemoteSetupPairsAndResumes(t *testing.T) {
 	}
 	dir := transportTestDir(t)
 	hubState := filepath.Join(dir, "hub-state")
-	ctrl := fmt.Sprintf("127.0.0.1:%d", freeTCPPort(t))
-	stun := fmt.Sprintf("127.0.0.1:%d", freeUDPPort(t))
-	var serveLog bytes.Buffer
-	server := exec.Command(os.Args[0], "child-serve", "--state", hubState, "--db", filepath.Join(dir, "hub.db"), "--control-listen", ctrl, "--stun-listen", stun)
-	server.Stderr = &serveLog
-	pipe, err := server.StdoutPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := server.Start(); err != nil {
-		t.Fatal(err)
-	}
+	hubDB := filepath.Join(dir, "hub.db")
+	regionFile := writeDERPRegionFile(t, startLocalDERP(t))
+	serveCmd, _, _, _ := startServeChild(t, hubDB, hubState, regionFile)
 	defer func() {
-		if server.ProcessState == nil {
-			_ = server.Process.Kill()
-			_ = server.Wait()
+		if serveCmd.ProcessState == nil {
+			_ = serveCmd.Process.Kill()
+			serveCmd.Wait()
 		}
 	}()
-	lines := make(chan string, 16)
-	go func() {
-		s := bufio.NewScanner(pipe)
-		for s.Scan() {
-			select {
-			case lines <- s.Text():
-			default:
-			}
-		}
-	}()
-	waitServeReady(t, lines, &serveLog)
-	var invitation bytes.Buffer
-	if err := runDevicesInvite([]string{"--state", hubState}, &invitation, os.Stderr); err != nil {
-		t.Fatal(err)
-	}
-	code := strings.SplitN(strings.TrimSpace(invitation.String()), "\n", 2)[0]
+	code := inviteCode(t, hubState)
 	t.Setenv("OHYA_SETUP_TEST_CODE", code)
 	wrapper := filepath.Join(dir, "ohya-wrapper")
 	quoted := "'" + strings.ReplaceAll(os.Args[0], "'", "'\\''") + "'"
@@ -59,8 +32,8 @@ func TestRemoteSetupPairsAndResumes(t *testing.T) {
 	}
 	state := filepath.Join(dir, "setup-state")
 	base := []string{"--state", state, "--binary", wrapper, "--no-agents", "--no-service", "--no-modify-path", "--json"}
-	first := append(append([]string{}, base...), "--join-code-env", "OHYA_SETUP_TEST_CODE", "--control", "http://"+ctrl)
 	var stdout, stderr bytes.Buffer
+	first := append(append([]string{}, base...), "--join-code-env", "OHYA_SETUP_TEST_CODE")
 	if err := runSetupCommand(first, &stdout, &stderr); err != nil {
 		t.Fatalf("remote setup: %v; %s %s", err, stdout.String(), stderr.String())
 	}
@@ -79,6 +52,12 @@ func TestRemoteSetupPairsAndResumes(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(state, "hub.db")); !os.IsNotExist(err) {
 		t.Fatal("remote setup created local memory")
+	}
+	if _, err := os.Stat(filepath.Join(state, "join", "credential.json")); err != nil {
+		t.Fatal("remote setup paired no device")
+	}
+	if _, err := os.Stat(filepath.Join(state, "join", "hub-address.json")); err != nil {
+		t.Fatal("remote setup saved no hub address")
 	}
 	stdout.Reset()
 	stderr.Reset()

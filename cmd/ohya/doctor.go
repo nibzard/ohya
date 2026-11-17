@@ -8,7 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"maps"
-	"net/http"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -16,11 +16,12 @@ import (
 	"time"
 
 	"github.com/nibzard/ohya/internal/claudecode"
-	"github.com/nibzard/ohya/internal/control"
 	"github.com/nibzard/ohya/internal/device"
 	"github.com/nibzard/ohya/internal/events"
+	"github.com/nibzard/ohya/internal/hubsync"
 	"github.com/nibzard/ohya/internal/setup"
 	"github.com/nibzard/ohya/internal/store"
+	"github.com/nibzard/ohya/internal/transport/address"
 	"github.com/nibzard/ohya/internal/watch"
 )
 
@@ -32,19 +33,18 @@ const (
 
 var errDoctorFailed = errors.New("doctor found one or more error findings")
 
-const probeTimeout = 3 * time.Second
-
 var doctorSpec = commandSpec{
 	name:      "ohya doctor",
 	synopsis:  "run read-only health checks the sql tool cannot answer",
 	usageLine: "ohya doctor [flags]",
-	description: "Checks state outside the read-only sql tool's reach: the database schema against this build's migrations, stored parser output versions this build's rederive refuses, the FTS5 integrity of events_fts with --deep, stopped sources in the local watch state (ADR 0004), the device identity, and — when the state directory holds a pairing credential — whether the coordination plane answers within a short timeout. " +
+	description: "Checks state outside the read-only sql tool's reach: the database schema against this build's migrations, stored parser output versions this build's rederive refuses, the FTS5 integrity of events_fts with --deep, stopped sources in the local watch state (ADR 0004), the device identity, and — when the state directory holds a pairing credential — that the saved hub address is present and readable. A state directory with an owned ohya serve service also reports whether the hub identity exists. " +
+		"On a paired device, doctor also dials the hub through the tailcat transport and reports whether it answers, the path type (direct or relay), the relay region, the round-trip time, and the compatibility of sync protocol versions; a value the transport library does not report is printed as unknown, and the hub address itself never appears.\n" +
 		"Doctor opens the database read-only: it never migrates, repairs, or re-derives, and prints no transcript content or secrets.\n" +
 		"The --deep check copies the database into memory, so it takes time and memory in proportion to the database size.\n" +
-		"Every finding carries a severity and a one-line remedy. Exit codes: 0 when no finding is an error, 1 otherwise; warnings do not fail. A joined device checks its own state with --state ~/.ohya/join and its hub's coordination URL through --control.",
+		"Every finding carries a severity and a one-line remedy. Exit codes: 0 when no finding is an error, 1 otherwise; warnings do not fail. A joined device checks its own state with --state ~/.ohya/join.",
 	argsTitle: "Arguments",
 	args:      "(none)",
-	examples:  []string{"ohya doctor", "ohya doctor --state ~/.ohya/join --control http://hub:9417"},
+	examples:  []string{"ohya doctor", "ohya doctor --state ~/.ohya/join"},
 }
 
 type finding struct {
@@ -55,8 +55,20 @@ type finding struct {
 }
 
 type doctorJSONData struct {
-	Findings []finding `json:"findings"`
+	Findings  []finding           `json:"findings"`
+	Transport *doctorTransportSum `json:"transport,omitempty"`
 }
+
+type doctorTransportSum struct {
+	HubAnswers         *bool    `json:"hub_answers"`
+	Path               string   `json:"path"`
+	RelayRegion        *string  `json:"relay_region"`
+	RoundTripMS        *float64 `json:"round_trip_ms"`
+	ProtocolVersion    int      `json:"protocol_version"`
+	ProtocolCompatible *bool    `json:"protocol_compatible"`
+}
+
+const doctorProbeTimeout = 45 * time.Second
 
 func runDoctorCommand(args []string, stdout, stderr io.Writer) error {
 	home, err := os.UserHomeDir()
@@ -68,8 +80,6 @@ func runDoctorCommand(args []string, stdout, stderr io.Writer) error {
 		"hub database `path`")
 	state := c.fs.String("state", "",
 		"state `directory` to inspect: device identity, pairing credential, source checkpoints; defaults to the database directory")
-	controlURL := c.fs.String("control", control.DefaultURL(),
-		"coordination `URL` probed when the state directory holds a pairing credential")
 	maxRecordBytes := c.fs.Int64("max-record-bytes", claudecode.DefaultMaxRecordBytes,
 		"record size `bound` the stop check parses with; pass the bound ingestion last ran with (docs/adr/0004)")
 	deep := c.fs.Bool("deep", false, "also verify events_fts against the events table; copies the database into memory")
@@ -92,34 +102,36 @@ func runDoctorCommand(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return jsonFailurePrint(*asJSON, stdout, doctorSpec.name, err)
 	}
-	explicitDB, explicitControl := false, false
+	explicitDB := false
 	c.fs.Visit(func(f *flag.Flag) {
 		if f.Name == "db" {
 			explicitDB = true
-		}
-		if f.Name == "control" {
-			explicitControl = true
 		}
 	})
 	remote := connection.Mode == "remote" && !explicitDB
 	if connection.Mode == "remote" {
 		stateDir = filepath.Join(setupState, "join")
-		if !explicitControl {
-			*controlURL = connection.ControlURL
-		}
 	}
-	findings, err := runDoctor(context.Background(), doctorOptions{
+	findings, transport, err := runDoctor(context.Background(), doctorOptions{
 		remote:         remote,
 		dbPath:         *db,
 		stateDir:       stateDir,
-		controlURL:     *controlURL,
 		maxRecordBytes: *maxRecordBytes,
 		deep:           *deep,
 	})
 	if err != nil {
 		return jsonFailurePrint(*asJSON, stdout, doctorSpec.name, err)
 	}
-	integrations, inspectErr := setup.Inspect(context.Background(), setupState, nil)
+	if _, err := os.Stat(filepath.Join(setupState, "setup", "hub-service.json")); err == nil {
+		findings = append(findings, checkHubIdentity(setupState))
+	} else if !os.IsNotExist(err) {
+		return jsonFailurePrint(*asJSON, stdout, doctorSpec.name, err)
+	}
+	inspectRun := func(ctx context.Context, args []string) error { return setup.RunServiceCommand(ctx, args) }
+	if run, _ := serviceRunners(); run != nil {
+		inspectRun = run
+	}
+	integrations, inspectErr := setup.Inspect(context.Background(), setupState, inspectRun)
 	if inspectErr != nil {
 		return jsonFailurePrint(*asJSON, stdout, doctorSpec.name, inspectErr)
 	}
@@ -138,7 +150,7 @@ func runDoctorCommand(args []string, stdout, stderr io.Writer) error {
 		findings = append(findings, finding{Check: "setup:" + item.Component, Severity: severity, Detail: detail, Remedy: "rerun ohya setup to repair owned configuration; preserve intentional user edits"})
 	}
 	if *asJSON {
-		if err := printJSON(stdout, doctorSpec.name, doctorJSONData{Findings: findings}); err != nil {
+		if err := printJSON(stdout, doctorSpec.name, doctorJSONData{Findings: findings, Transport: transport}); err != nil {
 			return err
 		}
 	} else {
@@ -154,16 +166,16 @@ type doctorOptions struct {
 	remote         bool
 	dbPath         string
 	stateDir       string
-	controlURL     string
 	maxRecordBytes int64
 	deep           bool
+	probeTimeout   time.Duration
 }
 
-func runDoctor(ctx context.Context, o doctorOptions) ([]finding, error) {
+func runDoctor(ctx context.Context, o doctorOptions) ([]finding, *doctorTransportSum, error) {
 	findings := make([]finding, 0)
 	binSchema, err := store.SchemaVersion()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var hub *store.DB
 	switch _, statErr := os.Stat(o.dbPath); {
@@ -203,8 +215,15 @@ func runDoctor(ctx context.Context, o doctorOptions) ([]finding, error) {
 		findings = append(findings, checkStoppedSources(ctx, hub, o)...)
 	}
 	findings = append(findings, checkDeviceIdentity(o.stateDir))
-	findings = append(findings, checkJoinState(ctx, o)...)
-	return findings, nil
+	join, joinFindings := checkJoinState(o)
+	findings = append(findings, joinFindings...)
+	transport := (*doctorTransportSum)(nil)
+	if join.paired {
+		var tFindings []finding
+		tFindings, transport = checkHubTransport(ctx, o, join)
+		findings = append(findings, tFindings...)
+	}
+	return findings, transport, nil
 }
 
 func checkSchema(ctx context.Context, hub *store.DB, dbPath string, binSchema int) []finding {
@@ -372,35 +391,128 @@ func checkDeviceIdentity(stateDir string) finding {
 	}
 }
 
-func checkJoinState(ctx context.Context, o doctorOptions) []finding {
+type doctorJoinState struct {
+	paired     bool
+	credential device.Credential
+	hubAddr    string
+}
+
+func checkJoinState(o doctorOptions) (doctorJoinState, []finding) {
 	cred, err := device.LoadCredential(o.stateDir)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return []finding{{Check: "join_state", Severity: sevOK,
+		return doctorJoinState{}, []finding{{Check: "join_state", Severity: sevOK,
 			Detail: fmt.Sprintf("no %s in %s; this state directory is not paired with a hub", device.CredentialFileName, o.stateDir)}}
 	case err != nil:
-		return []finding{{Check: "join_state", Severity: sevError,
+		return doctorJoinState{}, []finding{{Check: "join_state", Severity: sevError,
 			Detail: err.Error(),
 			Remedy: "restore credential.json from a backup, or have the hub revoke this device identity and re-pair with a new one"}}
 	}
-	unreachable := func(detail, remedy string) []finding {
-		return []finding{{Check: "join_state", Severity: sevWarn, Detail: detail, Remedy: remedy}}
+	hubAddr, err := device.LoadHubAddress(o.stateDir)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return doctorJoinState{}, []finding{{Check: "join_state", Severity: sevWarn,
+			Detail: fmt.Sprintf("paired as device %s, but no %s in %s", cred.DeviceID, device.HubAddressFileName, o.stateDir),
+			Remedy: "run ohya join with a fresh ohya1 code; a still-valid credential keeps its identity and the invitation stays unused"}}
+	case err != nil:
+		return doctorJoinState{}, []finding{{Check: "join_state", Severity: sevError,
+			Detail: err.Error(),
+			Remedy: "run ohya join with a fresh ohya1 code to save the hub's address again"}}
+	case !address.ValidHubAddr(hubAddr):
+		return doctorJoinState{}, []finding{{Check: "join_state", Severity: sevError,
+			Detail: fmt.Sprintf("%s in %s holds no valid tailcat address", device.HubAddressFileName, o.stateDir),
+			Remedy: "run ohya join with a fresh ohya1 code to save the hub's address again"}}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, o.controlURL, nil)
+	return doctorJoinState{paired: true, credential: cred, hubAddr: hubAddr},
+		[]finding{{Check: "join_state", Severity: sevOK,
+			Detail: fmt.Sprintf("paired as device %s; %s holds the hub address", cred.DeviceID, device.HubAddressFileName)}}
+}
+
+func checkHubTransport(ctx context.Context, o doctorOptions, join doctorJoinState) ([]finding, *doctorTransportSum) {
+	timeout := o.probeTimeout
+	if timeout <= 0 {
+		timeout = doctorProbeTimeout
+	}
+	pctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	sum := &doctorTransportSum{Path: address.PathUnknown, ProtocolVersion: hubsync.ProtocolVersion}
+	node := address.NewDevice(address.DeviceOptions{})
+	defer node.Close()
+
+	report, err := node.PathInfo(pctx, join.hubAddr)
 	if err != nil {
-		return unreachable(
-			fmt.Sprintf("paired as device %s, but the coordination URL %s is not valid: %v", cred.DeviceID, o.controlURL, err),
-			"pass the coordination URL ohya join uses, through --control")
+		answers := false
+		sum.HubAnswers = &answers
+		return []finding{{Check: "hub_transport", Severity: sevWarn,
+			Detail: fmt.Sprintf("the hub did not answer: %v", err),
+			Remedy: "check that ohya serve runs on the hub and this device can reach a relay (outbound HTTPS, TCP 443)"}}, sum
 	}
-	resp, err := (&http.Client{Timeout: probeTimeout}).Do(req)
-	if err != nil {
-		return unreachable(
-			fmt.Sprintf("paired as device %s, but the coordination plane at %s did not answer: %v", cred.DeviceID, o.controlURL, err),
-			"check that ohya serve runs on the hub and --control names its coordination URL")
+	answers := true
+	sum.HubAnswers = &answers
+	sum.Path = report.Path
+	sum.RoundTripMS = &report.RoundTripMS
+	if report.Path == address.PathRelay {
+		region := relayRegionText(report.RegionID, report.RegionCode)
+		sum.RelayRegion = &region
 	}
-	resp.Body.Close()
-	return []finding{{Check: "join_state", Severity: sevOK,
-		Detail: fmt.Sprintf("paired as device %s; the coordination plane at %s answered", cred.DeviceID, o.controlURL)}}
+	detail := fmt.Sprintf("hub answers through a %s path, round trip %.1f ms", report.Path, report.RoundTripMS)
+	if sum.RelayRegion != nil {
+		detail = fmt.Sprintf("hub answers through a relay path (region %s), round trip %.1f ms", *sum.RelayRegion, report.RoundTripMS)
+	}
+	findings := []finding{{Check: "hub_transport", Severity: sevOK, Detail: detail}}
+
+	session := hubsync.NewRemoteSession(
+		func(ctx context.Context) (net.Conn, error) { return node.Dial(ctx, join.hubAddr) },
+		join.credential.Secret, hubsync.RemoteSessionOptions{})
+	defer session.Close()
+	if _, qerr := session.Query(pctx, "SELECT 1"); qerr == nil {
+		compatible := true
+		sum.ProtocolCompatible = &compatible
+		findings = append(findings, finding{Check: "hub_protocol", Severity: sevOK,
+			Detail: fmt.Sprintf("this build's sync protocol %d is compatible with the hub", hubsync.ProtocolVersion)})
+		return findings, sum
+	} else if isVersionMismatch(qerr) {
+		compatible := false
+		sum.ProtocolCompatible = &compatible
+		findings = append(findings, finding{Check: "hub_protocol", Severity: sevError,
+			Detail: fmt.Sprintf("the hub and this device speak different sync protocol versions: this build speaks %d (%v)", hubsync.ProtocolVersion, qerr),
+			Remedy: "upgrade ohya on the older machine with: " + upgradeCommand})
+	} else if errors.Is(qerr, hubsync.ErrRemoteUnauthorized) {
+		findings = append(findings, finding{Check: "hub_protocol", Severity: sevError,
+			Detail: fmt.Sprintf("the hub refused this device's credential: %v", qerr),
+			Remedy: "the device identity was revoked or the address names a different hub; have the hub revoke this identity and re-pair with a new one"})
+	} else {
+		findings = append(findings, finding{Check: "hub_protocol", Severity: sevWarn,
+			Detail: fmt.Sprintf("cannot check the sync protocol against the hub: %v", qerr),
+			Remedy: "check that ohya serve runs on the hub; the versions are unknown until the hub answers"})
+	}
+	return findings, sum
+}
+
+func relayRegionText(id int64, code string) string {
+	if id != 0 && code != "" {
+		return fmt.Sprintf("%d %s", id, code)
+	}
+	if code != "" {
+		return code
+	}
+	return fmt.Sprintf("%d", id)
+}
+
+func checkHubIdentity(state string) finding {
+	info, err := address.LoadHubInfo(state)
+	switch {
+	case errors.Is(err, address.ErrNoIdentity):
+		return finding{Check: "hub_identity", Severity: sevWarn,
+			Detail: fmt.Sprintf("the hub service is configured but %s holds no hub identity", filepath.Join(state, "tailcat-hub")),
+			Remedy: "the ohya serve service creates the identity on first start; check the service, then rerun ohya setup --hub"}
+	case err != nil:
+		return finding{Check: "hub_identity", Severity: sevError,
+			Detail: err.Error(),
+			Remedy: "restore tailcat-hub/identity.json from a backup; a new identity changes the hub address, so devices then need a fresh code"}
+	}
+	return finding{Check: "hub_identity", Severity: sevOK,
+		Detail: fmt.Sprintf("hub identity present (node key %s, relay region %d %s)", info.NodeKey, info.RegionID, info.RegionCode)}
 }
 
 func writeFindings(w io.Writer, findings []finding) {

@@ -1,13 +1,8 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
-	"context"
 	"database/sql"
-	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -15,6 +10,8 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+
+	"github.com/nibzard/ohya/internal/device"
 )
 
 func TestHubRestartReconnect(t *testing.T) {
@@ -42,81 +39,18 @@ func TestHubRestartReconnect(t *testing.T) {
 	}
 	const wantEvents = 16
 
-	ctrlAddr := fmt.Sprintf("127.0.0.1:%d", freeTCPPort(t))
-	stunAddr := fmt.Sprintf("127.0.0.1:%d", freeUDPPort(t))
+	regionFile := writeDERPRegionFile(t, startLocalDERP(t))
+	serveCmd, serveLog, _, firstReady := startServeChild(t, hubDB, hubState, regionFile)
+	code := inviteCode(t, hubState)
+	firstNodeKey := readyNodeKey(t, firstReady)
 
-	startServe := func() (*exec.Cmd, *bytes.Buffer, <-chan string) {
-		t.Helper()
-		log := &bytes.Buffer{}
-		cmd := exec.Command(os.Args[0], "child-serve",
-			"--db", hubDB, "--state", hubState,
-			"--control-listen", ctrlAddr, "--stun-listen", stunAddr)
-		cmd.Stderr = log
-		serveOut, err := cmd.StdoutPipe()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := cmd.Start(); err != nil {
-			t.Fatal(err)
-		}
-		lines := make(chan string, 16)
-		go func() {
-			sc := bufio.NewScanner(serveOut)
-			for sc.Scan() {
-				lines <- sc.Text()
-			}
-		}()
-		waitServeReady(t, lines, log)
-		return cmd, log, lines
-	}
-
-	serveCmd, serveLog, _ := startServe()
-	t.Cleanup(func() {
-		if serveCmd.ProcessState == nil {
-			_ = serveCmd.Process.Kill()
-			serveCmd.Wait()
-		}
-	})
-
-	var invOut bytes.Buffer
-	if err := runDevicesInvite([]string{"--state", hubState}, &invOut, os.Stderr); err != nil {
-		t.Fatal(err)
-	}
-	code := strings.SplitN(strings.TrimSpace(invOut.String()), "\n", 2)[0]
-
-	joinLog := &bytes.Buffer{}
-	joinCmd := exec.Command(os.Args[0], "child-join",
-		"--control", "http://"+ctrlAddr,
-		"--state", devState,
-		"--claude-root", claudeRoot, "--codex-root", "", "--pi-root", "",
-		"--interval", "500ms",
-		code)
-	joinCmd.Stderr = joinLog
-	if err := joinCmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if joinCmd.ProcessState == nil {
-			_ = joinCmd.Process.Kill()
-			joinCmd.Wait()
-		}
-	})
-
-	upCtx, upCancel := context.WithTimeout(context.Background(), 180*time.Second)
-	defer upCancel()
-	for {
-		events, _, _ := hubCounts(t, hubDB)
-		if events >= wantEvents {
-			break
-		}
-		select {
-		case <-upCtx.Done():
-			t.Fatalf("joined events never reached the hub (have %d of %d); serve stderr:\n%s\njoin stderr:\n%s",
-				events, wantEvents, serveLog.String(), joinLog.String())
-		case <-time.After(500 * time.Millisecond):
-		}
-	}
+	joinCmd, joinLog := startJoinChild(t, devState, claudeRoot, code)
+	waitForEvents(t, hubDB, wantEvents, serveLog, joinLog)
 	t.Log("joined device's fixture sessions reached the hub; connection is established")
+	savedAddr, err := device.LoadHubAddress(devState)
+	if err != nil {
+		t.Fatal(err)
+	}
 	time.Sleep(3 * time.Second)
 
 	appendMarker := func(marker string) {
@@ -125,12 +59,12 @@ func TestHubRestartReconnect(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		record := fmt.Sprintf(`{"type":"user","uuid":%q,"sessionId":"00000000-0000-4000-8000-0000000000a1","message":{"role":"user","content":%q},"timestamp":"2026-11-13T10:00:00Z"}`+"\n",
-			marker, marker)
-		_, werr := f.WriteString(record)
-		cerr := f.Close()
-		if werr != nil || cerr != nil {
-			t.Fatalf("append marker: write %v, close %v", werr, cerr)
+		record := `{"type":"user","uuid":"` + marker + `","sessionId":"00000000-0000-4000-8000-0000000000a1","message":{"role":"user","content":"` + marker + `"},"timestamp":"2026-11-13T10:00:00Z"}` + "\n"
+		if _, err := f.WriteString(record); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
 		}
 	}
 	markerVisible := func(marker string) bool {
@@ -152,13 +86,13 @@ func TestHubRestartReconnect(t *testing.T) {
 	t.Log("hub stopped; restarting")
 	appendMarker("hubrestart-marker")
 
-	serveCmd, serveLog, _ = startServe()
-	t.Cleanup(func() {
-		if serveCmd.ProcessState == nil {
-			_ = serveCmd.Process.Kill()
-			serveCmd.Wait()
-		}
-	})
+	serveCmd, serveLog, _, secondReady := startServeChild(t, hubDB, hubState, regionFile)
+	if key := readyNodeKey(t, secondReady); key != firstNodeKey {
+		t.Fatalf("restarted hub reports node key %q; want the saved %q", key, firstNodeKey)
+	}
+	if addr, err := device.LoadHubAddress(devState); err != nil || addr != savedAddr {
+		t.Fatalf("device hub address changed across the restart: %q, %v; want %q", addr, err, savedAddr)
+	}
 
 	const bound = 2 * time.Minute
 	waitForMarker := func(marker string, restartStart time.Time) {
@@ -184,13 +118,7 @@ func TestHubRestartReconnect(t *testing.T) {
 	stopChild(t, serveCmd, serveLog, 30*time.Second)
 	t.Log("second hub stop; restarting again")
 	appendMarker("hubrestart-again")
-	serveCmd, serveLog, _ = startServe()
-	t.Cleanup(func() {
-		if serveCmd.ProcessState == nil {
-			_ = serveCmd.Process.Kill()
-			serveCmd.Wait()
-		}
-	})
+	serveCmd, serveLog, _, _ = startServeChild(t, hubDB, hubState, regionFile)
 	restartStart = time.Now()
 	waitForMarker("hubrestart-again", restartStart)
 	if strings.Contains(serveLog.String(), "panic") {
@@ -203,4 +131,13 @@ func TestHubRestartReconnect(t *testing.T) {
 	}
 	stopChild(t, joinCmd, joinLog, 30*time.Second)
 	stopChild(t, serveCmd, serveLog, 30*time.Second)
+}
+
+func readyNodeKey(t *testing.T, readyLine string) string {
+	t.Helper()
+	_, after, ok := strings.Cut(readyLine, "node key ")
+	if !ok {
+		t.Fatalf("ready line names no node key: %q", readyLine)
+	}
+	return strings.TrimSpace(after)
 }

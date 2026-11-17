@@ -12,15 +12,13 @@ are next; both write append-only JSONL session logs that fit the cursor model
 sessions globally under `~/.pi/agent/sessions/`, not in project-local `.pi/`.
 OpenCode is a planned phase 2 source, pending a parser spike for its
 SQLite storage (v2 replaced per-message JSON files with `opencode.db`). Networking
-uses an isolated Tailcat adapter: the T014 feasibility spike validated two
-processes exchanging encrypted batches against a self-hosted Headscale
-coordination server (ADR 0002, `cmd/tailcat-spike`), and all transport code
-stays behind the `internal/transport` interfaces consumed by the sync layer.
-The production control plane is decided and ships embedded in `ohya serve`
-(ADR 0002). Forced-relay (DERP-only) behavior is validated between isolated
-network peers (T032, 2026-11-14). The open relay item is to re-measure the
-relay leg over TLS in the two-host isolated-network setup (T065, blocked).
-See BACKLOG.md for implementation order.
+uses the isolated Tailcat address transport
+([ADR 0011](docs/adr/0011-tailcat-address-transport.md)): the hub holds a
+saved node key, pre-shared key, and relay region, and devices dial the
+hub's address — the two peers meet through a DERP relay and try a direct
+UDP path. There is no coordination server, no certificate, and no open
+port. All transport code stays behind the `internal/transport` interfaces
+consumed by the sync layer. See BACKLOG.md for implementation order.
 
 The hub also ingests its own files through the same transactional write path.
 All writes use one writer. Readers use separate restricted connections.
@@ -116,6 +114,17 @@ Watcher rules (`internal/watch`):
   were never acknowledged, so an uploader that had not sent them lost them.
   A fingerprint window that cannot be read right now keeps the checkpoint;
   `ReadPending` surfaces a real read failure.
+- The fingerprint read runs only when the platform identity, size, or
+  modification time changed since the watcher's previous poll. The watcher
+  keeps the observed triple in memory only, so a restarted watcher
+  re-verifies every source once. An in-place rewrite that restores the
+  exact size and modification time of the previous poll is therefore
+  invisible until a restart — the same accepted edge as the ingestor's
+  pending-tail cache. Local ingestion also calls `RegisterSource` only for
+  a source this process has not registered at that path: new, replaced, and
+  moved sources, and every source once after a restart. A write-path
+  `ErrSourceNotRegistered` drops that memory, so the next pass re-registers
+  a source the hub lost, for example after a restored backup.
 - A tracked incarnation that is live under another candidate path is
   rebound to that path. All moves are computed from the unchanged state and
   applied together, so two files that swap paths both keep their sources.
@@ -124,7 +133,9 @@ Watcher rules (`internal/watch`):
   refused source stays missing with its checkpoint, and a later poll
   rebinds it once the conflict is gone.
 - A path that is not observable is reported as missing, and its checkpoint
-  stays. A new path whose identity matches a source that is live at its own
+  stays. The consumers turn that outcome into one diagnostic line per
+  disappearance — never a silent stop — and clear it when the file returns.
+  A new path whose identity matches a source that is live at its own
   path is a hardlink and is not registered.
 - `Rewind` moves a checkpoint back to an earlier cursor. It answers a hub
   cursor regression, for example after the hub restored a backup. It is
@@ -242,7 +253,13 @@ the thread really wrote is suppressed. `event_msg` records mirror the
 transcript and add no search text; `event_msg/user_message` marks the human
 prompt for `sessions.first_prompt`, because Codex also sends injected
 context as `user` messages. `ohya ingest` runs one watcher and checkpoint
-file per agent.
+file per agent; the Codex agent watches two default roots, `sessions/` and
+`archived_sessions/` under `$CODEX_HOME` (or `~/.codex`), through that one
+watcher, because Codex moves ended rollouts into `archived_sessions`. A
+rollout moved between the two roots keeps its source and checkpoint — the
+watcher rebinds by file identity — while watching all of `~/.codex` would
+wrongly ingest `session_index.jsonl`, `history.jsonl`, and vendor JSONL,
+so only the two named roots are watched.
 
 Implemented (T037): `internal/pi` parses Pi agent session files, which are
 global — one append-only JSONL per session under
@@ -376,34 +393,36 @@ write-once in `workspaces` and fills the NULL `sessions.repo` values.
 runs the same `workspace.Sync` loop against its own database.
 Re-derivation reads the stored observations, so it stays file-free.
 
-Implemented (T034): the deployment commands. `ohya serve` runs the hub: it
-provisions the self-hosted coordination plane in-process (ADR 0002 — own
-SQLite database under `control/` in the state directory, a generated
-configuration regenerated from its flags on every start, an embedded DERP
-relay; no external service and no second admin surface), enrolls the hub's
-own durable transport node — a single-use coordinator key on first start
-only — and serves the endpoint on the encrypted tailnet behind the registry
-authenticator, with the bounded engine attached as the `RemoteEngine`.
-`ohya devices invite` mints the registry invitation and a single-use
-coordinator preauth key together and prints them as one join code;
-`ohya join` spends both halves, pairs its identity over the tailnet, and
-runs one uploader per agent from a state directory dedicated to the hub.
+Implemented (T034; moved to the Tailcat address transport in T122): the
+deployment commands. `ohya serve` runs the hub: on the first start it
+creates the transport identity — node key, pre-shared key, and selected
+DERP region — and saves it owner-only under `tailcat-hub/` in the state
+directory, so the hub's address stays the same across restarts
+([ADR 0011](docs/adr/0011-tailcat-address-transport.md)). The endpoint
+listens on port 9027 inside the Tailcat network stack — the hub opens no
+port on the host — behind the registry authenticator, with the bounded
+engine attached as the `RemoteEngine`. `ohya devices invite` recomputes
+the hub address from the saved identity and prints it with the registry
+invitation as one `ohya1.<invitation>.<address>` code; the address holds
+the pre-shared key, so the code is a secret and is never logged.
+`ohya join` spends the invitation, pairs its identity, saves the hub
+address in its join state next to `credential.json`, and runs one
+uploader per agent from a state directory dedicated to the hub.
 `ohya mcp --remote` speaks the same MCP stdio surface through
 `hubsync.RemoteSession` (`internal/hubsync/session.go`): one authenticated
 connection, the writer derived from the paired credential, reconnect and
 one retry on transport failure, and a terminal error on a refused
-credential. The end-to-end test (`cmd/ohya/serve_e2e_test.go`) drives real
-serve, join and remote-MCP child processes over free loopback ports.
+credential. The end-to-end tests (`cmd/ohya/serve_e2e_test.go`,
+`cmd/ohya/tailcat_join_test.go`) drive real serve, join, and remote-MCP
+child processes over a local DERP relay.
 
-Device commands share one enrolled transport node per state directory
-([ADR 0006](docs/adr/0006-shared-device-transport.md)). The first dialing
-process holds a filesystem lock for the node's lifetime. Other processes
-use the owner's authenticated tsnet loopback proxy. They do not load another
-network stack with the same identity. The proxy descriptor is an atomic,
-owner-only file; no LocalAPI credential is shared. A new owner discards stale
-proxy state after acquiring the lock. Shutdown closes the node before it
-releases the lock. Borrowers reconnect and can become owners after a crash.
-Hub authentication, source ownership, commit ordering, and annotation writers
+Each device process dials the hub independently with its own fresh
+transport key ([ADR 0011](docs/adr/0011-tailcat-address-transport.md)):
+the registry credential, not the transport key, carries identity, so
+`ohya join` and every `ohya mcp --remote` process connect with no shared
+node and no owner lock. Transport admission is the pre-shared key inside
+the hub address; authorization stays in the device registry. Hub
+authentication, source ownership, commit ordering, and annotation writers
 remain governed by the existing sync and authorization protocols.
 
 Offline replay relies on retained source files. Replacement or deletion before
@@ -464,7 +483,7 @@ cancels their in-flight request contexts (revocations from another process
 reach the endpoint within the poll interval; a request that already
 returned its data cannot be recalled). `ohya serve` (T034) runs the
 endpoint behind exactly this authenticator; the registry decides admission
-and revocation, and the coordination plane only carries transport.
+and revocation, and the transport only carries traffic.
 
 Registry details (`internal/registry`):
 
@@ -489,9 +508,9 @@ Registry details (`internal/registry`):
   because another process such as the operator CLI can revoke. It reports
   only devices revoked after the watch starts, because earlier revocations
   cannot hold connections. A transient read failure does not stop the watch.
-- A Tailcat `WhoIs`-based authenticator can implement the same endpoint
-  interfaces with transport-level identity; the registry would still decide
-  admission and revocation.
+- Transport admission is the pre-shared key in the hub address; a revoked
+  device can still complete a handshake, and the registry rejects its hello.
+  The registry alone decides admission and revocation.
 
 SQL runs with a read-only connection, SQLite authorizer, one statement, execution
 deadline, row/byte limits and bounded concurrency. Deny attachment, extension

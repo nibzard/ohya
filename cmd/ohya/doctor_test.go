@@ -6,16 +6,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/tailscale/tailcat"
+	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
+
 	"github.com/nibzard/ohya/internal/claudecode"
 	"github.com/nibzard/ohya/internal/device"
 	"github.com/nibzard/ohya/internal/store"
+	"github.com/nibzard/ohya/internal/transport/address"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -68,8 +72,8 @@ func rawOpen(t *testing.T, path string) *sql.DB {
 func TestDoctorHealthyFixtureExitsZero(t *testing.T) {
 	e := newDoctorEnv(t)
 
-	findings, err := runDoctor(context.Background(), doctorOptions{
-		dbPath: e.dbPath, stateDir: e.stateDir, controlURL: "http://127.0.0.1:1",
+	findings, _, err := runDoctor(context.Background(), doctorOptions{
+		dbPath: e.dbPath, stateDir: e.stateDir,
 	})
 	if err != nil {
 		t.Fatalf("healthy run returned %v", err)
@@ -79,8 +83,8 @@ func TestDoctorHealthyFixtureExitsZero(t *testing.T) {
 			t.Fatalf("check %s = %+v; want ok", check, f)
 		}
 	}
-	deep, err := runDoctor(context.Background(), doctorOptions{
-		dbPath: e.dbPath, stateDir: e.stateDir, controlURL: "http://127.0.0.1:1", deep: true,
+	deep, _, err := runDoctor(context.Background(), doctorOptions{
+		dbPath: e.dbPath, stateDir: e.stateDir, deep: true,
 	})
 	if err != nil {
 		t.Fatalf("deep run returned %v", err)
@@ -259,7 +263,38 @@ func TestDoctorStoppedSourceCarriesADR0004Remedy(t *testing.T) {
 	})
 }
 
-func TestDoctorCoordinationPlaneProbe(t *testing.T) {
+func fakeHubAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	region := &tailcfg.DERPRegion{
+		RegionID:   9,
+		RegionCode: "closedport",
+		Nodes: []*tailcfg.DERPNode{{
+			Name:             "closedport1",
+			RegionID:         9,
+			HostName:         "127.0.0.1",
+			IPv4:             "127.0.0.1",
+			IPv6:             "none",
+			DERPPort:         port,
+			InsecureForTests: true,
+		}},
+	}
+	node := key.NewNode()
+	ci := tailcat.ConnInfo{
+		ServerPublic:      tailcat.NodePublic{NodePublic: node.Public()},
+		ServerDiscoPublic: tailcat.DiscoPublicForNode(node),
+		PresharedKey:      tailcat.NewPresharedKey(),
+		Region:            []*tailcfg.DERPRegion{region},
+	}
+	return string(ci.Addr())
+}
+
+func TestDoctorJoinState(t *testing.T) {
 	const deviceID = "0123456789abcdef0123456789abcdef"
 	pairedEnv := func(t *testing.T) *doctorEnv {
 		e := newDoctorEnv(t)
@@ -269,40 +304,77 @@ func TestDoctorCoordinationPlaneProbe(t *testing.T) {
 		return e
 	}
 
-	t.Run("unreachable plane warns", func(t *testing.T) {
+	t.Run("missing hub address warns", func(t *testing.T) {
 		e := pairedEnv(t)
-		code, out, _ := doctorRun(t, e, "--control", "http://127.0.0.1:1")
+		code, out, _ := doctorRun(t, e)
 		if code != 0 {
-			t.Fatalf("exit code %d; want 0 — an unreachable plane warns (stdout %q)", code, out)
+			t.Fatalf("exit code %d; want 0 — a missing hub address warns (stdout %q)", code, out)
 		}
 		f := soleFinding(t, parseDoctorFindings(t, out), "join_state")
 		if f.Severity != sevWarn {
 			t.Fatalf("severity = %s; want warn", f.Severity)
 		}
-		if !strings.Contains(f.Detail, "did not answer") || !strings.Contains(f.Detail, deviceID) {
-			t.Fatalf("detail misses the plane or the device: %s", f.Detail)
+		if !strings.Contains(f.Detail, "no "+device.HubAddressFileName) || !strings.Contains(f.Detail, deviceID) {
+			t.Fatalf("detail misses the address file or the device: %s", f.Detail)
 		}
-		if !strings.Contains(f.Remedy, "ohya serve") || !strings.Contains(f.Remedy, "--control") {
-			t.Fatalf("remedy misses the serve control hint: %s", f.Remedy)
+		if !strings.Contains(f.Remedy, "ohya join") || !strings.Contains(f.Remedy, "ohya1") {
+			t.Fatalf("remedy misses the rejoin hint: %s", f.Remedy)
 		}
 		if strings.Contains(out, "s3cret") {
 			t.Fatalf("report leaks the credential secret:\n%s", out)
 		}
 	})
 
-	t.Run("answering plane is ok", func(t *testing.T) {
-		plane := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			http.NotFound(w, r)
-		}))
-		defer plane.Close()
+	t.Run("saved hub address is ok and never printed", func(t *testing.T) {
 		e := pairedEnv(t)
-		code, out, _ := doctorRun(t, e, "--control", plane.URL)
+		addr := fakeHubAddr(t)
+		if !address.ValidHubAddr(addr) {
+			t.Fatal("test address must be a valid tailcat address")
+		}
+		if err := device.SaveHubAddress(e.stateDir, addr); err != nil {
+			t.Fatal(err)
+		}
+		code, out, _ := doctorRun(t, e)
 		if code != 0 {
-			t.Fatalf("exit code %d; want 0 (stdout %q)", code, out)
+			t.Fatalf("exit code %d; want 0 — an unreachable hub warns (stdout %q)", code, out)
 		}
 		f := soleFinding(t, parseDoctorFindings(t, out), "join_state")
-		if f.Severity != sevOK || !strings.Contains(f.Detail, "answered") {
-			t.Fatalf("finding = %+v; want ok with an answered plane", f)
+		if f.Severity != sevOK || !strings.Contains(f.Detail, "holds the hub address") {
+			t.Fatalf("finding = %+v; want ok with a saved hub address", f)
+		}
+		if strings.Contains(out, addr) {
+			t.Fatalf("report leaks the hub address, which is a secret:\n%s", out)
+		}
+	})
+
+	t.Run("unparseable hub address is an error", func(t *testing.T) {
+		e := pairedEnv(t)
+		if err := device.SaveHubAddress(e.stateDir, "ohya2.abcdef.secret-address"); err != nil {
+			t.Fatal(err)
+		}
+		code, out, _ := doctorRun(t, e)
+		if code != 1 {
+			t.Fatalf("exit code %d; want 1 (stdout %q)", code, out)
+		}
+		f := soleFinding(t, parseDoctorFindings(t, out), "join_state")
+		if f.Severity != sevError || !strings.Contains(f.Detail, "no valid tailcat address") {
+			t.Fatalf("finding = %+v; want error naming the invalid address", f)
+		}
+		if !strings.Contains(f.Remedy, "ohya join") {
+			t.Fatalf("remedy misses the rejoin remedy: %s", f.Remedy)
+		}
+	})
+
+	t.Run("unusable hub address is an error", func(t *testing.T) {
+		e := pairedEnv(t)
+		writeFile(t, filepath.Join(e.stateDir, device.HubAddressFileName), "{not json}")
+		code, out, _ := doctorRun(t, e)
+		if code != 1 {
+			t.Fatalf("exit code %d; want 1 (stdout %q)", code, out)
+		}
+		f := soleFinding(t, parseDoctorFindings(t, out), "join_state")
+		if f.Severity != sevError || !strings.Contains(f.Remedy, "ohya join") {
+			t.Fatalf("finding = %+v; want error with the rejoin remedy", f)
 		}
 	})
 
@@ -316,6 +388,71 @@ func TestDoctorCoordinationPlaneProbe(t *testing.T) {
 		f := soleFinding(t, parseDoctorFindings(t, out), "join_state")
 		if f.Severity != sevError || !strings.Contains(f.Remedy, "revoke this device identity") {
 			t.Fatalf("finding = %+v; want error with the revoke remedy", f)
+		}
+	})
+}
+
+func TestDoctorHubTransport(t *testing.T) {
+	const deviceID = "0123456789abcdef0123456789abcdef"
+
+	t.Run("unpaired state reports no transport object", func(t *testing.T) {
+		e := newDoctorEnv(t)
+		code, out, stderr := doctorRun(t, e, "--json")
+		if code != 0 || stderr != "" {
+			t.Fatalf("code %d, stderr %q", code, stderr)
+		}
+		env := decodeEnvelope(t, out)
+		var data doctorJSONData
+		if err := json.Unmarshal(env.Data, &data); err != nil {
+			t.Fatal(err)
+		}
+		if data.Transport != nil {
+			t.Fatalf("unpaired state must not report transport: %+v", *data.Transport)
+		}
+	})
+
+	t.Run("unreachable hub reports unknown values in JSON", func(t *testing.T) {
+		e := newDoctorEnv(t)
+		if err := device.SaveCredential(e.stateDir, device.Credential{DeviceID: deviceID, Secret: "s3cret"}); err != nil {
+			t.Fatal(err)
+		}
+		addr := fakeHubAddr(t)
+		if err := device.SaveHubAddress(e.stateDir, addr); err != nil {
+			t.Fatal(err)
+		}
+		code, out, _ := doctorRun(t, e, "--json")
+		if code != 0 {
+			t.Fatalf("exit code %d; want 0 — an unreachable hub warns (stdout %q)", code, out)
+		}
+		env := decodeEnvelope(t, out)
+		var data doctorJSONData
+		if err := json.Unmarshal(env.Data, &data); err != nil {
+			t.Fatal(err)
+		}
+		if data.Transport == nil {
+			t.Fatalf("paired state must report transport: %s", out)
+		}
+		got := *data.Transport
+		if got.HubAnswers == nil || *got.HubAnswers {
+			t.Fatalf("hub_answers = %v; want false", got.HubAnswers)
+		}
+		if got.Path != "unknown" {
+			t.Fatalf("path = %q; want unknown", got.Path)
+		}
+		if got.RelayRegion != nil {
+			t.Fatalf("relay_region = %v; want null", *got.RelayRegion)
+		}
+		if got.RoundTripMS != nil {
+			t.Fatalf("round_trip_ms = %v; want null", *got.RoundTripMS)
+		}
+		if got.ProtocolCompatible != nil {
+			t.Fatalf("protocol_compatible = %v; want null", *got.ProtocolCompatible)
+		}
+		if got.ProtocolVersion != 1 {
+			t.Fatalf("protocol_version = %d; want 1", got.ProtocolVersion)
+		}
+		if strings.Contains(out, addr) {
+			t.Fatalf("report leaks the hub address, which is a secret:\n%s", out)
 		}
 	})
 }

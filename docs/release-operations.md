@@ -9,6 +9,10 @@ are not qualified releases merely because packaging succeeds.
 
 1. Select the release version and exact source commit. Start with a clean tree.
    Run `make check` and `make tla`. Do not create a public tag during preparation.
+   The release change adds the schema the release ships (`store.SchemaVersion()`) to
+   `releasedSchemas` in `internal/store/migrate_released_test.go` and to the released-schema
+   list in DB.md's upgrade policy item 5, so the released-schema upgrade tests cover the new
+   release before the tag is published (see DB.md, "Migrations").
 2. Run `scripts/package.sh --version vMAJOR.MINOR.PATCH --out dist/candidate`
    on each target architecture. The script refuses cross-compilation and
    existing output archives. `--allow-dirty` is only for local experiments;
@@ -92,7 +96,8 @@ point, not a coordinated backup of every device and its checkpoints.
 For a full writable restore, stop ingestion, serving, uploading, and MCP writer
 processes before backing up the complete ohya state directory. Include custom
 database locations, matching checkpoint files, device identities, registry,
-coordination state, and credentials. Keep that archive private. Agent source
+the hub's saved transport identity, and credentials. Keep that archive
+private. Agent source
 logs remain on their original devices and must remain available for replay.
 Never copy only a live SQLite database file and omit its WAL.
 
@@ -106,6 +111,35 @@ Use automatic database-only recovery points for evidence recovery in an
 isolated directory unless you also have matching state and a verified restore
 procedure. Keep the failed database and its WAL files together for diagnosis.
 A binary downgrade cannot undo a schema migration or newer parser output.
+
+## Recovery point cost
+
+Before a recovery copy, setup checks free space on the filesystem holding
+`<state>/setup/backups` and refuses without writing anything when free space is
+below the database size plus its WAL, a 10 percent margin, and 64 MiB. The
+failure names the free and required bytes and the remedy: remove old recovery
+points under that directory (each kept point holds one full copy), free space,
+or run setup with `--state` on a disk with more room.
+
+Budget the copy itself from the database size, because the copy writes about
+one database in pages:
+
+- Fast SSD: the stepped copy loop moves at most about 100 MiB/s, so expect
+  about 10 s per GB at the ceiling.
+- Busy emulated or spinning disks: minutes per GB.
+- Measured worst case: a 13.1 GB recovery point on a saturated single-disk VM
+  took 8.5 h, about 39 min per GB, and starved every other process on the
+  machine (2026-11-16, NOTES.md). Schedule migrations on such disks for idle
+  time; while the copy runs, setup holds the setup lock and owned ingestion is
+  stopped.
+
+Setup reports the estimated copy size before starting and a progress line on
+stderr at every further 10 percent of the copy. A copy whose average rate
+stays below 256 KiB/s is aborted; the deadline scales with the database size,
+so the measured worst case above still completes. An interrupted or refused
+copy leaves no partial recovery point behind: the copy is staged under a
+hidden directory and renamed into place only after it succeeds, and staging
+left by a killed run is removed on the next run.
 
 ## Current verification limits
 

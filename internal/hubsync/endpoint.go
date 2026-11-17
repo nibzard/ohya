@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 	"time"
 
 	"github.com/nibzard/ohya/internal/events"
 	"github.com/nibzard/ohya/internal/mcpserver"
+	"github.com/nibzard/ohya/internal/observe"
 	"github.com/nibzard/ohya/internal/store"
 )
 
@@ -45,21 +47,23 @@ type Options struct {
 	Retry       RetryPolicy
 	AuthTimeout time.Duration
 	Remote      RemoteEngine
+	Observer    observe.Observer
 }
 
 type Endpoint struct {
-	db     *store.DB
-	auth   Authenticator
-	authz  SessionAuthorizer
-	remote RemoteEngine
-	opts   Options
-	slots  chan struct{}
-	gates  sourceGates
-	mu     sync.Mutex
-	conns  map[*connSession]struct{}
-	byDev  map[string]map[*connSession]struct{}
-	closed bool
-	wg     sync.WaitGroup
+	db       *store.DB
+	auth     Authenticator
+	authz    SessionAuthorizer
+	remote   RemoteEngine
+	opts     Options
+	observer observe.Observer
+	slots    chan struct{}
+	gates    sourceGates
+	mu       sync.Mutex
+	conns    map[*connSession]struct{}
+	byDev    map[string]map[*connSession]struct{}
+	closed   bool
+	wg       sync.WaitGroup
 }
 
 type connSession struct {
@@ -84,15 +88,20 @@ func NewEndpoint(db *store.DB, auth Authenticator, opts Options) (*Endpoint, err
 		opts.AuthTimeout = DefaultAuthTimeout
 	}
 	authz, _ := auth.(SessionAuthorizer)
+	observer := opts.Observer
+	if observer == nil {
+		observer = observe.Disabled
+	}
 	return &Endpoint{
-		db:     db,
-		auth:   auth,
-		authz:  authz,
-		remote: opts.Remote,
-		opts:   opts,
-		slots:  make(chan struct{}, maxConns),
-		conns:  map[*connSession]struct{}{},
-		byDev:  map[string]map[*connSession]struct{}{},
+		db:       db,
+		auth:     auth,
+		authz:    authz,
+		remote:   opts.Remote,
+		opts:     opts,
+		observer: observer,
+		slots:    make(chan struct{}, maxConns),
+		conns:    map[*connSession]struct{}{},
+		byDev:    map[string]map[*connSession]struct{}{},
 	}, nil
 }
 
@@ -108,7 +117,10 @@ func (e *Endpoint) Serve(ctx context.Context, ln net.Listener) error {
 		e.wg.Add(1)
 		go func() {
 			defer e.wg.Done()
-			_ = e.authz.WatchRevocations(ctx, e.closeDevice)
+			_ = e.authz.WatchRevocations(ctx, func(deviceID string) {
+				e.observer.Add("hub_authorization", 1, "revoked")
+				e.closeDevice(deviceID)
+			})
 		}()
 	}
 	for {
@@ -122,7 +134,9 @@ func (e *Endpoint) Serve(ctx context.Context, ln net.Listener) error {
 		}
 		select {
 		case e.slots <- struct{}{}:
+			e.observer.Add("hub_connections", 1, "admitted")
 		default:
+			e.observer.Add("hub_connections", 1, "rejected")
 			_ = WriteError(conn, CodeBusy,
 				fmt.Sprintf("hub is serving its limit of %d connections", e.opts.MaxConns))
 			_ = conn.Close()
@@ -146,22 +160,29 @@ func (e *Endpoint) serveConn(ctx context.Context, session *connSession) {
 	defer conn.Close()
 	deviceID, err := e.authenticate(ctx, conn)
 	if err != nil {
+		e.observer.Add("hub_authorization", 1, "rejected")
 		_ = WriteError(conn, CodeAuth, err.Error())
 		return
 	}
+	e.observer.Add("hub_connections", 1, "active")
 	e.bind(session, deviceID)
 	br := bufio.NewReaderSize(conn, 64<<10)
 	for {
 		frame, err := ReadFrame(br)
 		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				e.observer.Add("hub_failures", 1, "read")
+			}
 			e.replyDecodeError(conn, err)
 			return
 		}
 		if e.authz != nil {
 			if err := e.authz.Authorize(ctx, deviceID); err != nil {
+				e.observer.Add("hub_authorization", 1, "rejected")
 				_ = WriteError(conn, CodeAuth, err.Error())
 				return
 			}
+			e.observer.Add("hub_authorization", 1, "ok")
 		}
 		var closeConn bool
 		switch {
@@ -170,7 +191,7 @@ func (e *Endpoint) serveConn(ctx context.Context, session *connSession) {
 		case frame.Batch != nil:
 			closeConn = e.handleBatch(ctx, conn, deviceID, *frame.Batch)
 		case frame.Query != nil:
-			closeConn = e.handleQuery(ctx, conn, *frame.Query)
+			closeConn = e.handleQuery(ctx, conn, deviceID, *frame.Query)
 		case frame.Annotate != nil:
 			closeConn = e.handleAnnotate(ctx, conn, deviceID, *frame.Annotate)
 		case frame.Workspaces != nil:
@@ -199,10 +220,13 @@ func (e *Endpoint) handleRegistration(ctx context.Context, conn net.Conn, device
 			fmt.Sprintf("agent %q has no parser at this hub; this hub parses %q", reg.Agent, events.Agents))
 		return false
 	}
+	storeStart := time.Now()
 	err := Retry(ctx, e.opts.Retry, permanentStoreError, func() error {
 		return e.db.RegisterSource(ctx, reg.SourceID, deviceID, reg.Agent, reg.Path)
 	})
+	e.observer.Observe("hub_store_duration", time.Since(storeStart))
 	if err != nil {
+		e.observer.Add("hub_failures", 1, "commit")
 		_ = WriteError(conn, storeErrorCode(err), err.Error())
 		return false
 	}
@@ -221,7 +245,9 @@ func (e *Endpoint) handleBatch(ctx context.Context, conn net.Conn, deviceID stri
 		return false
 	}
 
+	gateStart := time.Now()
 	release := e.gates.acquire(b.SourceID)
+	e.observer.Observe("hub_gate_wait_duration", time.Since(gateStart))
 	defer release()
 
 	var st store.SourceState
@@ -231,15 +257,17 @@ func (e *Endpoint) handleBatch(ctx context.Context, conn net.Conn, deviceID stri
 		return err
 	})
 	if err != nil {
+		e.observer.Add("hub_failures", 1, "commit")
 		_ = WriteError(conn, storeErrorCode(err), err.Error())
 		return false
 	}
-	prefix, stop, err := normalize(b, st)
+	prefix, stop, err := e.normalize(b, st)
 	if err != nil {
 		_ = WriteError(conn, CodeRejected, err.Error())
 		return false
 	}
 	var res store.IngestResult
+	storeStart := time.Now()
 	err = Retry(ctx, e.opts.Retry, permanentStoreError, func() error {
 		var err error
 		res, err = e.db.Ingest(ctx, store.Batch{
@@ -249,7 +277,9 @@ func (e *Endpoint) handleBatch(ctx context.Context, conn net.Conn, deviceID stri
 		})
 		return err
 	})
+	e.observer.Observe("hub_store_duration", time.Since(storeStart))
 	if err != nil {
+		e.observer.Add("hub_failures", 1, "commit")
 		_ = WriteError(conn, storeErrorCode(err), err.Error())
 		return false
 	}
@@ -259,22 +289,30 @@ func (e *Endpoint) handleBatch(ctx context.Context, conn net.Conn, deviceID stri
 		ack.StopOffset = stop.Offset
 		ack.Stop = stop.Error()
 	}
+	ackStart := time.Now()
 	_ = WriteAck(conn, ack)
+	e.observer.Observe("hub_ack_write_duration", time.Since(ackStart))
 	return false
 }
 
-func (e *Endpoint) handleQuery(ctx context.Context, conn net.Conn, q Query) bool {
+func (e *Endpoint) handleQuery(ctx context.Context, conn net.Conn, deviceID string, q Query) bool {
 	if e.remote == nil {
 		_ = WriteError(conn, CodeNoRemote,
 			"this endpoint serves the upload protocol only; query and annotate frames are not enabled")
 		return false
 	}
+	ctx = mcpserver.WithOrigin(ctx, mcpserver.Origin{
+		Path:     observe.UsagePathRemote,
+		DeviceID: deviceID,
+	})
 	result, err := e.remote.Query(ctx, q.SQL)
 	if err != nil {
+		e.observer.Add("hub_failures", 1, "other")
 		_ = WriteError(conn, queryErrorCode(err), err.Error())
 		return false
 	}
 	if err := WriteQueryResult(conn, result); err != nil {
+		e.observer.Add("hub_failures", 1, "write")
 		_ = WriteError(conn, CodeInternal, err.Error())
 		return false
 	}
@@ -287,8 +325,13 @@ func (e *Endpoint) handleAnnotate(ctx context.Context, conn net.Conn, deviceID s
 			"this endpoint serves the upload protocol only; query and annotate frames are not enabled")
 		return false
 	}
+	ctx = mcpserver.WithOrigin(ctx, mcpserver.Origin{
+		Path:     observe.UsagePathRemote,
+		DeviceID: deviceID,
+	})
 	result, err := e.remote.AnnotateAs(ctx, deviceID, a.Request)
 	if err != nil {
+		e.observer.Add("hub_failures", 1, "other")
 		_ = WriteError(conn, annotateErrorCode(err), err.Error())
 		return false
 	}
@@ -374,18 +417,33 @@ func validateBoundaries(b Batch) error {
 	return nil
 }
 
-func normalize(b Batch, st store.SourceState) (prefix []store.Event, stop *events.StopError, err error) {
+func (e *Endpoint) normalize(b Batch, st store.SourceState) (prefix []store.Event, stop *events.StopError, err error) {
 	opts := events.Options{
 		SourceScope: b.SourceID, FirstNative: st.FirstNativeID, MaxRecordBytes: MaxRecordBytes}
+	normalizeStart := time.Now()
+	var parseBytes, normalized uint64
+	defer func() {
+		e.observer.Observe("hub_normalize_duration", time.Since(normalizeStart))
+		e.observer.Add("parse_bytes", parseBytes)
+		e.observer.Add("parse_records", normalized, "normalized")
+	}()
+	e.observer.Add("parse_records", uint64(len(b.Records)), "attempted")
 	prefix = make([]store.Event, 0, len(b.Records))
 	for i, r := range b.Records {
 		line := make([]byte, 0, len(r.JSON)+1)
 		line = append(line, r.JSON...)
 		line = append(line, '\n')
+		parseBytes += uint64(len(line))
 		res, perr := events.Parse(st.Agent, line, r.Offset, opts)
 		var parseStop *events.StopError
 		if perr != nil {
 			if errors.As(perr, &parseStop) {
+				e.observer.Add("parse_records", 1, "stopped")
+				if parseStop.RecordTooLarge {
+					e.observer.Add("parse_stops", 1, "oversize")
+				} else {
+					e.observer.Add("parse_stops", 1, "invalid")
+				}
 				return prefix, parseStop, nil
 			}
 			return nil, nil, fmt.Errorf("hubsync: record %d at offset %d: %w", i, r.Offset, perr)
@@ -400,7 +458,9 @@ func normalize(b Batch, st store.SourceState) (prefix []store.Event, stop *event
 			opts.FirstNative = res.Events[0].NativeID
 		}
 		prefix = append(prefix, res.Events[0])
+		normalized++
 	}
+	e.observer.Observe("parse_duration", time.Since(normalizeStart), st.Agent)
 	return prefix, nil, nil
 }
 
@@ -438,12 +498,15 @@ func (e *Endpoint) replyDecodeError(conn net.Conn, err error) {
 func (e *Endpoint) track(s *connSession) {
 	e.mu.Lock()
 	e.conns[s] = struct{}{}
+	open := len(e.conns)
 	e.mu.Unlock()
+	e.observer.Set("hub_active_connections", float64(open))
 }
 
 func (e *Endpoint) untrack(s *connSession) {
 	e.mu.Lock()
 	delete(e.conns, s)
+	open := len(e.conns)
 	if s.deviceID != "" {
 		if set := e.byDev[s.deviceID]; set != nil {
 			delete(set, s)
@@ -453,6 +516,7 @@ func (e *Endpoint) untrack(s *connSession) {
 		}
 	}
 	e.mu.Unlock()
+	e.observer.Set("hub_active_connections", float64(open))
 }
 
 func (e *Endpoint) bind(s *connSession, deviceID string) {

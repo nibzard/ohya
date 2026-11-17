@@ -29,6 +29,45 @@ func TestSetupRejectsArguments(t *testing.T) {
 	}
 }
 
+func TestSetupHubFlagValidation(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state")
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"remote", []string{"setup", "--hub", "--remote", "--state", state}, "cannot be combined with remote setup"},
+		{"code env", []string{"setup", "--hub", "--join-code-env", "OHYA_X", "--state", state}, "cannot be combined with remote setup"},
+		{"no service", []string{"setup", "--hub", "--no-service", "--state", state}, "omit --no-service"},
+		{"bad ttl", []string{"setup", "--hub", "--ttl", "0s", "--state", state}, "--ttl must be positive"},
+	}
+	for _, tc := range cases {
+		var stdout, stderr bytes.Buffer
+		if code := cliMain(tc.args, &stdout, &stderr); code != 2 || !bytes.Contains(stderr.Bytes(), []byte(tc.want)) {
+			t.Fatalf("%s: code %d stderr %q; want usage error naming %q", tc.name, code, stderr.String(), tc.want)
+		}
+	}
+}
+
+func TestSetupHubDryRunPlansServeService(t *testing.T) {
+	dir := t.TempDir()
+	state := filepath.Join(dir, "state")
+	var stdout, stderr bytes.Buffer
+	code := cliMain([]string{"setup", "--hub", "--dry-run", "--no-agents", "--no-modify-path", "--state", state, "--json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("hub dry run %d %s %s", code, stdout.String(), stderr.String())
+	}
+	if !bytes.Contains(stdout.Bytes(), []byte("ohya-serve.service")) && !bytes.Contains(stdout.Bytes(), []byte("com.nibzard.ohya.serve")) {
+		t.Fatalf("dry run planned no hub service: %s", stdout.String())
+	}
+	if bytes.Contains(stdout.Bytes(), []byte("code_secret")) {
+		t.Fatalf("dry run issued a join code: %s", stdout.String())
+	}
+	if _, err := os.Stat(state); !os.IsNotExist(err) {
+		t.Fatalf("dry run created state: %v", err)
+	}
+}
+
 func TestManagedIngestWaitsForMissingRoots(t *testing.T) {
 	dir := t.TempDir()
 	var stdout, stderr bytes.Buffer
@@ -43,7 +82,7 @@ func TestManagedIngestWaitsForMissingRoots(t *testing.T) {
 
 func TestRemoteSetupDryRunAndSecretHandling(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "state")
-	t.Setenv("OHYA_TEST_JOIN_CODE", "synthetic-one-time:code")
+	t.Setenv("OHYA_TEST_JOIN_CODE", "ohya1.synthetic-one-time-code.tcaddress")
 	var stdout, stderr bytes.Buffer
 	code := cliMain([]string{"setup", "--dry-run", "--no-agents", "--no-service", "--no-modify-path", "--state", state, "--join-code-env", "OHYA_TEST_JOIN_CODE", "--json"}, &stdout, &stderr)
 	if code != 0 {
@@ -55,6 +94,13 @@ func TestRemoteSetupDryRunAndSecretHandling(t *testing.T) {
 	if _, err := os.Stat(state); !os.IsNotExist(err) {
 		t.Fatal("dry run created state")
 	}
+	t.Setenv("OHYA_TEST_JOIN_CODE", "retired-format:code")
+	stdout.Reset()
+	stderr.Reset()
+	code = cliMain([]string{"setup", "--no-agents", "--no-service", "--no-modify-path", "--state", state, "--join-code-env", "OHYA_TEST_JOIN_CODE", "--json"}, &stdout, &stderr)
+	if code != 2 || !bytes.Contains(stderr.Bytes(), []byte("ohya1")) {
+		t.Fatalf("retired code format exit %d: %s %s", code, stdout.String(), stderr.String())
+	}
 	stdout.Reset()
 	stderr.Reset()
 	code = cliMain([]string{"setup", "--local", "--remote", "--dry-run", "--json"}, &stdout, &stderr)
@@ -65,7 +111,7 @@ func TestRemoteSetupDryRunAndSecretHandling(t *testing.T) {
 
 func TestDoctorUnderstandsRemoteSetupWithoutCreatingLocalMemory(t *testing.T) {
 	state := t.TempDir()
-	if err := setup.SaveConnection(state, setup.Connection{Mode: "remote", ControlURL: "http://127.0.0.1:1", HubAddress: "hub:9027"}); err != nil {
+	if err := setup.SaveConnection(state, setup.Connection{Mode: "remote"}); err != nil {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer

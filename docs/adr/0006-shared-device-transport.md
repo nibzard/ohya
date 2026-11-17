@@ -1,6 +1,6 @@
 # 0006: Share one transport node per device state
 
-Status: accepted, 2026-11-15.
+Status: superseded by ADR 0011, 2026-11-16.
 
 ## Context
 

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/nibzard/ohya/internal/observe"
 	"github.com/nibzard/ohya/internal/store"
 )
 
@@ -37,7 +38,7 @@ func New(backend Backend, o EngineOptions) *mcp.Server {
 		Description: ToolDescription(o),
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args sqlArgs) (*mcp.CallToolResult, Result, error) {
-		result, err := backend.Query(ctx, args.Query)
+		result, err := backend.Query(WithOrigin(ctx, requestOrigin(req)), args.Query)
 		if err != nil {
 			return nil, Result{}, fmt.Errorf("sql tool: %w", err)
 		}
@@ -53,13 +54,25 @@ func New(backend Backend, o EngineOptions) *mcp.Server {
 			OpenWorldHint:  boolPtr(false),
 		},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ annotateArgs) (*mcp.CallToolResult, store.AnnotateResult, error) {
-		result, err := backend.AnnotateAs(ctx, o.WriterID, req.Params.Arguments)
+		result, err := backend.AnnotateAs(WithOrigin(ctx, requestOrigin(req)), o.WriterID, req.Params.Arguments)
 		if err != nil {
 			return nil, store.AnnotateResult{}, fmt.Errorf("annotate tool: %w", err)
 		}
 		return nil, result, nil
 	})
 	return server
+}
+
+func requestOrigin(req *mcp.CallToolRequest) Origin {
+	origin := Origin{Path: observe.UsagePathLocal}
+	if info := req.ClientInfo(); info != nil {
+		origin.Client = info.Name
+		origin.ClientVersion = info.Version
+	}
+	if req.Session != nil {
+		origin.SessionHint = req.Session.ID()
+	}
+	return origin
 }
 
 func Run(ctx context.Context, server *mcp.Server) error {
@@ -99,6 +112,14 @@ SELECT id, agent, first_prompt, last_event_at_ms, event_count FROM sessions ORDE
 Example — one project's sessions on every device (find your project's repo with SELECT repo FROM workspaces WHERE path = '<your cwd>', or normalize your git origin URL to host/path):
 SELECT device_id, agent, cwd, first_prompt, last_event_at_ms FROM sessions
 WHERE repo = 'github.com/owner/name' ORDER BY last_event_at_ms DESC LIMIT 10;
+
+Example — a project's recent events. Select the newest IDs in a subquery over events_settled first: the subquery sorts on the covering events_session_time index and the outer query reads only the rows it returns. A plain events-to-sessions join with ORDER BY e.time_ms reads every matching event row before the sort and can exceed the deadline on a large hub:
+SELECT e.id, e.session_id, e.time_ms, e.kind, e.role, substr(e.text, 1, 300) AS excerpt
+FROM events e WHERE e.id IN (
+  SELECT ev.id FROM sessions s JOIN events_settled ev ON ev.session_id = s.id
+  WHERE s.repo = 'github.com/owner/name'
+  ORDER BY ev.time_ms DESC LIMIT 5)
+ORDER BY e.time_ms DESC;
 
 Example — full-text search (BM25 rank):
 SELECT e.id, s.cwd, e.time_ms, substr(e.text, 1, 300) AS excerpt

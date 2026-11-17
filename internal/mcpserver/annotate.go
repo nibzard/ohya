@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
+	"github.com/nibzard/ohya/internal/observe"
 	"github.com/nibzard/ohya/internal/store"
 )
 
@@ -45,6 +47,32 @@ func (e *Engine) Annotate(ctx context.Context, raw json.RawMessage) (store.Annot
 }
 
 func (e *Engine) AnnotateAs(ctx context.Context, writerID string, raw json.RawMessage) (store.AnnotateResult, error) {
+	if !e.traced {
+		return e.annotateAs(ctx, writerID, raw, &observe.AnnotateOps{})
+	}
+	origin := OriginFromContext(ctx)
+	if origin.Path == "" {
+		origin.Path = observe.UsagePathLocal
+	}
+	if origin.DeviceID == "" && origin.Path == observe.UsagePathLocal {
+		origin.DeviceID = writerID
+	}
+	trace := newQueryTrace()
+	ops := &observe.AnnotateOps{}
+	start := time.Now()
+	result, err := e.annotateAs(ctx, writerID, raw, ops)
+	trace.mu.Lock()
+	trace.phases.TotalMS = elapsedMS(time.Since(start))
+	trace.mu.Unlock()
+	trace.finish()
+	if e.options.Usage != nil {
+		e.options.Usage.Record(trace.usageRecord(e, origin, Result{}, err, ops))
+	}
+	e.reportAnnotate(result, err)
+	return result, err
+}
+
+func (e *Engine) annotateAs(ctx context.Context, writerID string, raw json.RawMessage, ops *observe.AnnotateOps) (store.AnnotateResult, error) {
 	if len(raw) == 0 {
 		return store.AnnotateResult{}, fmt.Errorf("%w: missing arguments", ErrAnnotateRejected)
 	}
@@ -62,15 +90,24 @@ func (e *Engine) AnnotateAs(ctx context.Context, writerID string, raw json.RawMe
 	if request.Operations == nil {
 		return store.AnnotateResult{}, fmt.Errorf("%w: arguments: missing operations", ErrAnnotateRejected)
 	}
-	ops := make([]store.AnnotationOp, 0, len(request.Operations))
+	operations := make([]store.AnnotationOp, 0, len(request.Operations))
 	for i, rawOp := range request.Operations {
 		op, err := e.decodeOperation(i, rawOp)
 		if err != nil {
 			return store.AnnotateResult{}, err
 		}
-		ops = append(ops, op)
+		switch op.Op {
+		case store.AnnotationUpsert:
+			ops.Upsert++
+		case store.AnnotationDelete:
+			ops.Delete++
+		}
+		operations = append(operations, op)
 	}
-	return store.Annotate(ctx, e.writer, writerID, ops)
+	storeStart := time.Now()
+	result, err := store.Annotate(ctx, e.writer, writerID, operations)
+	e.observer.Observe("annotate_duration", time.Since(storeStart))
+	return result, err
 }
 
 func (e *Engine) decodeOperation(index int, raw json.RawMessage) (store.AnnotationOp, error) {

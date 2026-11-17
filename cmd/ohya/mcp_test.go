@@ -13,18 +13,27 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"tailscale.com/envknob"
+	"tailscale.com/net/netcheck"
+	"tailscale.com/syncs"
+	"tailscale.com/tailcfg"
+
 	"github.com/nibzard/ohya/internal/device"
 	"github.com/nibzard/ohya/internal/store"
 )
 
 func TestMain(m *testing.M) {
+	envknob.Setenv("IN_TS_TEST", "true")
+	netcheck.HookStartCaptivePortalDetection.SetForTest(func(ctx context.Context, c *netcheck.Client, dm *tailcfg.DERPMap, preferredDERP tailcfg.DERPRegionID, setCaptivePortal func(bool)) (done <-chan struct{}, stop func()) {
+		return syncs.ClosedChan(), func() {}
+	})
 	if len(os.Args) > 1 && strings.HasPrefix(os.Args[1], "child-") {
 		var err error
 		switch os.Args[1] {
 		case "child-run":
 			os.Exit(cliMain(os.Args[2:], os.Stdout, os.Stderr))
 		case "child-serve":
-			err = runServeCommand(os.Args[2:], os.Stdout, os.Stderr)
+			err = runChildServe(os.Args[2:])
 		case "child-join":
 			err = runJoinCommand(os.Args[2:], os.Stdout, os.Stderr)
 		case "child-mcp":

@@ -21,6 +21,26 @@ func inspected(component string, err error, ready bool) Result {
 	return result
 }
 
+func inspectServiceReceipt(ctx context.Context, r fileReceipt, run func(context.Context, []string) error, component string, plan func(string, string, string, []string) (Service, error)) Result {
+	raw, readErr := readRegular(r.Path)
+	result := inspected(component, readErr, bytes.Equal(raw, r.Content))
+	if result.Status == "ready" {
+		platform := "linux"
+		if filepath.Ext(r.Path) == ".plist" {
+			platform = "darwin"
+		}
+		s, err := plan(platform, "/", "/ohya", nil)
+		if err == nil {
+			err = run(ctx, s.Check)
+		}
+		if err != nil {
+			result.Status = "failed"
+			result.Detail = err.Error()
+		}
+	}
+	return result
+}
+
 func Inspect(ctx context.Context, state string, run func(context.Context, []string) error) ([]Result, error) {
 	if run == nil {
 		run = RunServiceCommand
@@ -28,25 +48,15 @@ func Inspect(ctx context.Context, state string, run func(context.Context, []stri
 	var results []Result
 	servicePath := filepath.Join(state, "setup", "service.json")
 	if r, err := loadFileReceipt(servicePath); err == nil {
-		raw, readErr := readRegular(r.Path)
-		result := inspected("service", readErr, bytes.Equal(raw, r.Content))
-		if result.Status == "ready" {
-			platform := "linux"
-			if filepath.Ext(r.Path) == ".plist" {
-				platform = "darwin"
-			}
-			s, err := ServicePlan(platform, "/", "/ohya", nil)
-			if err == nil {
-				err = run(ctx, s.Check)
-			}
-			if err != nil {
-				result.Status = "failed"
-				result.Detail = err.Error()
-			}
-		}
-		results = append(results, result)
+		results = append(results, inspectServiceReceipt(ctx, r, run, "service", ServicePlan))
 	} else if !os.IsNotExist(err) {
 		results = append(results, inspected("service", err, false))
+	}
+	hubServicePath := filepath.Join(state, "setup", "hub-service.json")
+	if r, err := loadFileReceipt(hubServicePath); err == nil {
+		results = append(results, inspectServiceReceipt(ctx, r, run, "hub-service", HubServicePlan))
+	} else if !os.IsNotExist(err) {
+		results = append(results, inspected("hub-service", err, false))
 	}
 	for _, name := range []string{"claude", "codex", "pi"} {
 		path := filepath.Join(state, "setup", "clients", name+".json")

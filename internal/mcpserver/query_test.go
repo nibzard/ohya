@@ -245,7 +245,7 @@ func TestQueryLimitsAndExplicitTruncation(t *testing.T) {
 	t.Run("row limit", func(t *testing.T) {
 		e := newTestEngine(t, EngineOptions{MaxRows: 5})
 		r := mustQuery(t, e, countUpTo(100))
-		if len(r.Rows) != 5 || !r.Truncated || r.TruncationReason != truncatedByRows {
+		if len(r.Rows) != 5 || !r.Truncated || r.TruncationReason != TruncationReasonRows {
 			t.Fatalf("result = %d rows, truncated=%v reason=%q", len(r.Rows), r.Truncated, r.TruncationReason)
 		}
 		if fmt.Sprint(r.Rows[4]) != "[5]" {
@@ -264,13 +264,13 @@ func TestQueryLimitsAndExplicitTruncation(t *testing.T) {
 	t.Run("byte limit drops the crossing row whole", func(t *testing.T) {
 		e := newTestEngine(t, EngineOptions{MaxOutputBytes: 30})
 		r := mustQuery(t, e, `SELECT 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' AS wide`)
-		if len(r.Rows) != 0 || !r.Truncated || r.TruncationReason != truncatedByBytes {
+		if len(r.Rows) != 0 || !r.Truncated || r.TruncationReason != TruncationReasonBytes {
 			t.Fatalf("result = %d rows, truncated=%v reason=%q", len(r.Rows), r.Truncated, r.TruncationReason)
 		}
 		e2 := newTestEngine(t, EngineOptions{MaxOutputBytes: 30})
 		r = mustQuery(t, e2, `WITH RECURSIVE c(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM c WHERE n < 10)
 			SELECT 'aaaaaaaaaa' FROM c`)
-		if len(r.Rows) != 2 || !r.Truncated || r.TruncationReason != truncatedByBytes {
+		if len(r.Rows) != 2 || !r.Truncated || r.TruncationReason != TruncationReasonBytes {
 			t.Fatalf("result = %d rows (%v), truncated=%v reason=%q", len(r.Rows), r.Rows, r.Truncated, r.TruncationReason)
 		}
 		if r.RowCount != 2 {

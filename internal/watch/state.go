@@ -98,17 +98,18 @@ func loadState(stateDir, agent string) (checkpointFile, error) {
 	return state, nil
 }
 
-func saveState(stateDir, agent string, state checkpointFile) error {
+func saveState(stateDir, agent string, state checkpointFile) (int64, error) {
 	path := statePath(stateDir, agent)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return fmt.Errorf("watch: create state directory: %w", err)
+		return 0, fmt.Errorf("watch: create state directory: %w", err)
 	}
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
-		return fmt.Errorf("watch: encode state: %w", err)
+		return 0, fmt.Errorf("watch: encode state: %w", err)
 	}
-	if err := durablefile.Write(path, append(data, '\n')); err != nil {
-		return err
+	payload := append(data, '\n')
+	if err := durablefile.Write(path, payload); err != nil {
+		return 0, err
 	}
-	return nil
+	return int64(len(payload)), nil
 }

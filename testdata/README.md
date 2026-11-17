@@ -12,6 +12,8 @@ exact offsets.
 - [claude-code/](claude-code/README.md) — verified against Claude Code 2.1.280.
 - [codex/](codex/README.md) — verified against codex-cli 0.166.0.
 - [pi/](pi/README.md) — verified against the Pi agent 0.84.2 and 1.5.2.
+- [recall/](recall/README.md) — synthetic recall evaluation set (plan 003 R5);
+  questions with marker-identified known answers, run by `internal/recalleval`.
 
 Benchmark corpora are not stored here. They are synthesized deterministically
 by `internal/fixgen` and written by `cmd/genfixture` (see

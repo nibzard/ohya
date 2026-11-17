@@ -25,12 +25,13 @@ var rootSpec = commandSpec{
 	args: `setup      configure memory services and installed agents
 uninstall  remove owned integrations and services; preserve memory
 ingest     import agent session history, then poll for new records
-serve      run the hub for devices: coordination, sync, remote tools
+serve      run the hub for devices: transport, sync, remote tools
 join       pair a device with a hub and upload its agent sessions
 mcp        serve the sql and annotate MCP tools on stdio
 devices    manage device pairing and revocation
 rederive   rebuild normalized rows and events_fts after a parser upgrade
 doctor     run read-only health checks the sql tool cannot answer
+usage      report how agents use the sql and annotate tools
 version    print the build, parser, and schema versions`,
 	examples: []string{"ohya ingest --once", "ohya mcp"},
 }
@@ -71,6 +72,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runRederiveCommand(rest, stdout, stderr)
 	case "doctor":
 		return runDoctorCommand(rest, stdout, stderr)
+	case "usage":
+		return runUsageCommand(rest, stdout, stderr)
 	case "version":
 		return runVersionCommand(rest, stdout, stderr)
 	default:
@@ -151,11 +154,19 @@ func runIngestCommand(args []string, stdout, stderr io.Writer) error {
 	return err
 }
 
-func defaultCodexRoot(home string) string {
+func codexHome(home string) string {
 	if dir := os.Getenv("CODEX_HOME"); dir != "" {
-		return filepath.Join(dir, "sessions")
+		return dir
 	}
-	return filepath.Join(home, ".codex", "sessions")
+	return filepath.Join(home, ".codex")
+}
+
+func defaultCodexRoot(home string) string {
+	return filepath.Join(codexHome(home), "sessions")
+}
+
+func defaultCodexArchivedRoot(home string) string {
+	return filepath.Join(codexHome(home), "archived_sessions")
 }
 
 func defaultPiRoot(home string) string {

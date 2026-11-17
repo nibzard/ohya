@@ -7,7 +7,8 @@ overview and a quick start, see the [README](../README.md).
 
 ```sh
 make build
-./bin/ohya serve               # run the hub: coordination, transport, sync endpoint
+./bin/ohya setup --hub          # local setup plus the serve service, a relay check, and a join code
+./bin/ohya serve               # run the hub: transport, sync endpoint, remote tools
 ./bin/ohya devices invite      # issue a one-time join code (run on the hub)
 ./bin/ohya join <code>         # pair this device and upload its sessions
 ./bin/ohya ingest              # import history, then poll until stopped
@@ -18,6 +19,7 @@ make build
 ./bin/ohya devices revoke ID   # revoke a device, final for its identity
 ./bin/ohya rederive            # rebuild normalized rows after a parser upgrade
 ./bin/ohya doctor              # run read-only health checks and report findings
+./bin/ohya usage               # report how agents use the sql and annotate tools
 ./bin/ohya version             # print the build, parser, and schema versions
 ```
 
@@ -32,15 +34,16 @@ exits 3 when the pass completed but at least one source failed or stopped,
 so a script or agent that checks the exit code does not read missing data
 as success; the stdout summary carries the failed and stopped counts and
 stderr keeps the per-source diagnostics. Flags
-are spelled with two dashes (`--db`); the parser also accepts one dash. Pass
-flags before positional arguments — `ohya join --state DIR CODE`, not
-`ohya join CODE --state DIR` — because parsing stops at the first
-positional. No
+are spelled with two dashes (`--db`); the parser also accepts one dash.
+Flags may appear before or after positional arguments:
+`ohya join --state DIR CODE` and `ohya join CODE --state DIR` both parse.
+A bare `--` ends flag parsing; every argument after it is positional. No
 command prompts for input: ohya is non-interactive by design.
 
 The commands that report facts also print machine-readable output:
 `ingest --once`, `devices list`, `devices invite`, `devices revoke`,
-`rederive`, `doctor`, and `version` take `--json` (text stays the default)
+`rederive`, `doctor`, `usage`, and `version` take `--json` (text stays the
+default)
 and print exactly one JSON object on stdout, for example
 
 ```json
@@ -75,9 +78,11 @@ database schema against the binary's migrations, stored parser output
 versions above the binary's (`ohya rederive` refuses those), the FTS5
 integrity of `events_fts` with `--deep`, stopped sources in the local watch state with
 their [ADR 0004](adr/0004-stopped-source-recovery.md) remedy, the
-device identity in the state directory, and — when that directory holds a
-pairing credential — whether the coordination URL answers within a short
-timeout. Every finding prints a severity (`ok`, `warn`, `error`) and a
+device identity in the state directory, the saved hub address when that
+directory holds a pairing credential, whether a paired hub answers and
+over which transport path, and the hub identity when it holds
+an owned hub service.
+Every finding prints a severity (`ok`, `warn`, `error`) and a
 one-line remedy; `--json` prints the same findings in the
 [ADR 0005](adr/0005-json-output.md) envelope. Doctor is read-only: it
 opens the database read-only — never migrates, repairs, or re-derives —
@@ -86,24 +91,42 @@ The `--deep` FTS5 check copies the database into memory, so its time and
 memory use grow with the database; without `--deep`, doctor reports the
 check as skipped.
 Exit code 0 means no finding is an error; warnings alone do not fail. It
-takes the same `--db` and `--state` flags as `ingest`, `--control` for the
-coordination URL to probe when paired, and `--max-record-bytes` for the stop
-check — pass the bound ingestion last ran with. Check a joined device's own
-state with `--state ~/.ohya/join` and its hub's coordination URL through
-`--control`.
+takes the same `--db` and `--state` flags as `ingest`, and
+`--max-record-bytes` for the stop check — pass the bound ingestion last
+ran with. Check a joined device's own state with `--state ~/.ohya/join`.
 
 The stop check parses the first pending record at each source's
 acknowledged cursor with the given bound and reports a stop only when the
 parser stops exactly there. A source whose pending bytes parse is not
-stopped; it only waits for the next pass. The coordination check passes
-when the URL returns any HTTP response within 3 s, because the plane can
-answer 404 on its bare URL.
+stopped; it only waits for the next pass. The join-state check never
+prints the hub address — it is a secret because it holds the pre-shared
+key — and rejects an address that is not a valid tailcat address.
+
+On a paired device — a credential and a valid saved hub address — doctor
+also dials the hub and adds two checks. `hub_transport` sends disco pings
+(`tailcat.Client.DiscoPing`) and reports whether the hub answers, the path
+type (`direct` or `relay`), the relay region on a relay path, and the
+round-trip time; a hub that does not answer is a warning naming whether
+`ohya serve` runs and outbound HTTPS. `hub_protocol` runs one `SELECT 1`
+through the sync protocol and reports whether this build's sync protocol
+version is compatible with the hub; a version mismatch is an error naming
+both versions and the upgrade command, and a refused credential names
+revocation or a different hub. In `--json`, a `transport` object carries
+the same facts (`hub_answers`, `path`, `relay_region`, `round_trip_ms`,
+`protocol_version`, `protocol_compatible`); the object appears only on a
+paired device, and a value the library did not report is `unknown` or
+`null`, never invented. An unreachable hub makes the whole probe take up
+to 45 seconds.
 
 `ohya ingest` watches `~/.claude/projects` (override with `--claude-root`),
-the Codex sessions directory, `$CODEX_HOME/sessions` or
-`~/.codex/sessions` (override with `--codex-root`), and the Pi agent
+two Codex directories, `$CODEX_HOME/sessions` and
+`$CODEX_HOME/archived_sessions`, or `~/.codex/sessions` and
+`~/.codex/archived_sessions` (`--codex-root` overrides the sessions
+directory; the archived root is watched in addition), and the Pi agent
 sessions root, `$PI_CODING_AGENT_SESSION_DIR`, `$PI_CODING_AGENT_DIR/sessions`
-or `~/.pi/agent/sessions` (override with `--pi-root`). It stores everything in
+or `~/.pi/agent/sessions` (override with `--pi-root`). Codex moves ended
+rollouts into `archived_sessions`, so both directories are default roots;
+`ohya join` watches the same roots. It stores everything in
 `~/.ohya/hub.db` (override with `--db`; the state directory defaults to the
 database directory and can be set with `--state`). A default directory that
 does not exist holds no sessions, so an agent you do not use costs nothing.
@@ -111,7 +134,13 @@ A directory you pass must exist, and an empty value disables that agent.
 Every regular `*.jsonl` file under a root is a session file; spilled tool
 output and memory files use other extensions. A replaced or truncated file
 starts a new source that re-imports from byte zero, and ingest prints one
-line about it; new files stay silent.
+line about it; new files stay silent. The watcher follows moves by file
+identity, so a rollout moved between the two Codex roots keeps its
+checkpoint and continues where it left off. A watched file that stops being
+statable — deleted, or moved to a place no root watches — prints one
+diagnostic line per disappearance and keeps its checkpoint; it resumes if
+the file returns, and appends written to the new place stay uncaptured
+until that place is a root.
 `--max-record-bytes` (default 32 MiB) bounds one record's JSON text — also a
 memory bound, since one record is held in memory up to it.
 The state directory holds `device.json`, the stable device identity,
@@ -121,64 +150,75 @@ checkpoint file per agent (`sources/claude-code.json`,
 of every watched file.
 
 `ohya serve` runs the hub side of device sync until it receives SIGINT or
-SIGTERM. It provisions the self-hosted coordination plane in-process —
-own SQLite database under `control/`, a generated configuration, and an
-embedded DERP relay — with no external service and no second admin surface
-([ADR 0002](adr/0002-tailcat-transport.md)). It also enrolls the hub's
-own durable transport node (`tailcat-hub/`) and serves the sync endpoint on
-the encrypted tailnet. Flags override the addresses: `--control-listen`
-(TCP), `--stun-listen` (UDP), `--tailnet-port`, and `--control-url`, the
-URL devices reach the coordination plane at. The defaults bind loopback for
-the single-machine deployment; binding every interface requires
-`--control-url`, because serve cannot guess the address devices should use.
-`--tls-cert` and `--tls-key` serve the coordination plane and its embedded
-DERP over TLS; the default `--control-url` becomes https, and every device
-must trust the certificate's CA. Cross-machine hubs need this for the
-relay path: the tailscale client never falls back to a plain-HTTP DERP
-relay ([ADR 0002](adr/0002-tailcat-transport.md)). A hub already on a
-Tailscale tailnet can bind its Tailscale address and use a `tailscale cert`
-certificate:
+SIGTERM. On its first start it creates the Tailcat hub identity — node key,
+pre-shared key, relay region — and saves it owner-only under `tailcat-hub/`
+in the state directory, so the hub's address stays the same across
+restarts. The sync endpoint listens on TCP port 9027 inside the Tailcat
+network stack and opens no port on the host: devices meet the hub through a
+DERP relay (outbound HTTPS, TCP 443, and for a direct path outbound UDP)
+and negotiate a direct encrypted path when NAT traversal succeeds
+([ADR 0011](adr/0011-tailcat-address-transport.md)). The address is a
+secret — it carries the pre-shared key — so serve prints the relay region
+and the hub's public node key, never the address. Serve records each
+device's last transport path (`direct` or `relay`) and last sync time in
+the device registry when a device connects and at least every 30 seconds
+while it stays connected; `ohya devices list` reports both. A value the
+transport library does not report appears as `unknown`. Flags: `--db` for
+the hub database, `--state` for the state directory (default: the database
+directory).
 
 ```sh
-ohya serve --control-listen 100.x.y.z:9417 --stun-listen 100.x.y.z:3478 \
-  --tls-cert cert.pem --tls-key key.pem \
-  --control-url https://hub.example.ts.net:9417
+ohya serve --db /srv/ohya/hub.db --state /srv/ohya
 ```
 
 `ohya join CODE` pairs a device and uploads its sessions. The code comes
-from `ohya devices invite` on the hub and carries two halves: the one-time
-registry invitation and a single-use coordinator preauth key. Each half is
-consumable exactly once within the invitation's lifetime. Join enrolls the
-transport node (`tailcat/` in the state directory), pairs the device
-identity over the tailnet, checks the returned device ID, and then watches
-the same agent roots as
-`ohya ingest` (same `--claude-root`, `--codex-root`, `--pi-root` flags;
-`--control` names the hub's coordination URL; `--state` defaults to
-`~/.ohya/join`). Give it a state directory dedicated to the hub: its
-checkpoints hold that hub's acknowledgments, not local ingestion's. Revoke
-a device with `ohya devices revoke` on the hub; its connections close and
+from `ohya devices invite` on the hub and has the form
+`ohya1.<invitation>.<tailcat-address>`: the invitation admits exactly one
+device before it expires (`--ttl`, default 15 minutes), and the address
+holds the hub's pre-shared key, so the whole code is a secret — do not put
+it in shell history or tickets. The previous
+`<invitation>:<preauth-key>` format is refused with a message that names
+the `ohya1.` format. Join dials the hub on its own (a fresh transport key
+per process; no shared node), pairs the device identity, checks the
+returned device ID, saves the hub address next to `credential.json` in the
+join state, and then watches the same agent roots as `ohya ingest` (same
+`--claude-root`, `--codex-root`, `--pi-root` flags; `--state` defaults to
+`~/.ohya/join`). A device that already holds a credential sends its hello
+to the address in the new code first: when the hub accepts, the device
+keeps its identity, credential, and checkpoints, and the invitation stays
+unused; when the hub rejects the credential — revoked, or a different hub —
+join fails with the reason and never pairs as a new device
+([ADR 0012](adr/0012-two-step-multi-machine-setup.md)). Give it a state
+directory dedicated to the hub: its checkpoints hold that hub's
+acknowledgments, not local ingestion's. After pairing, join reports the
+measured path to the hub — path type, relay region, round-trip time in
+milliseconds, both read from the transport library's disco ping, and this
+build's sync protocol version — plus the upload backlog in bytes across
+the watched roots; a value the library does not report is printed as
+unknown. While a backlog of at least 1 MiB exists, the uploader reports
+bytes acknowledged, bytes left, the current rate, and an estimated finish
+time on stderr every 10 seconds, and publishes the same four values as
+metrics (`upload_backlog_*`, labeled by agent) for `ohya status`. Revoke a
+device with `ohya devices revoke` on the hub; its connections close and
 its sources stay bound to the revoked identity. Hub-side commands (`serve`,
 `devices invite`, `devices list`, `devices revoke`) take `--state` and not
-`--db`: the device registry and the coordination plane live in the state
-directory, beside the hub database. `serve` defaults its state directory to
-the `--db` directory, so the single-machine deployment needs one path.
+`--db`: the device registry and the hub identity live in the state
+directory, beside the hub database.
 
 `ohya mcp --remote` serves the same `sql` and `annotate` tools over stdio,
 but executes them on the hub through the joined device: `--remote` selects
-the joined hub, `--hub-addr` its address inside the tailnet (default
-`ohya-hub.tail.ohya:9027`), `--control` the coordination URL, `--state`
-the join state directory. The hub derives the annotation writer from the
-authenticated device, so a caller cannot choose it. A transport failure
-drops the connection; the next call reconnects and retries once.
+the joined hub and `--state` names the join state directory, which holds
+the device identity, pairing credential, and the saved hub address. The hub
+derives the annotation writer from the authenticated device, so a caller
+cannot choose it. A transport failure drops the connection; the next call
+reconnects and retries once.
 
-`join` and all remote MCP processes with the same state directory share one
-transport node. The first process to dial owns it; other processes use its
-authenticated loopback proxy. When the owner stops, another process takes
-over on its next dial. Remote MCP works without a running uploader. All
-processes must use the same `--control` URL. The state directory must be on
-a local filesystem and must not be shared between machines. When upgrading
-from a version without transport sharing, stop all old `join` and remote
-MCP processes first. See [ADR 0006](adr/0006-shared-device-transport.md).
+`join` and every remote MCP process dial the hub independently with their
+own transport key — there is no shared node and no owner lock, so any
+number of uploaders and remote MCP processes with the same state directory
+run side by side, and one stopping never disturbs the others
+([ADR 0011](adr/0011-tailcat-address-transport.md)). The state directory
+must be on a local filesystem and must not be shared between machines.
 
 The first pass imports existing session files; later polls read only the
 bytes past each checkpoint. All writes commit through one transactional
@@ -266,6 +306,72 @@ the result reports `applied` and `unchanged` counts. Identical retries
 change nothing, not even timestamps. Agents query annotations through the
 `sql` tool like any other table.
 
+### Usage records
+
+Every `sql` and `annotate` call writes one usage record to
+`<state>/observe/<instance>/usage.jsonl` — one record on the machine that
+runs the call, and a second, client-side record on the machine that asked
+for it. A joined device's remote calls are recorded by the hub, with the
+calling device named as `device_id` and the client as `unknown` because
+the sync frame carries no client name; `ohya mcp --remote` also records
+its own client-side outcome under the join state directory's `observe/`
+tree, keeping the MCP client name and version bucket, `path` `remote`, the
+device identity, the client-observed total time in `phase_ms.total_ms`,
+the returned row count, and the outcome as the client saw it (a hub
+refusal maps to `busy` or `rejected`, a lost transport to `sql_error`,
+its own deadline to `timeout`). Hub-only facts — phase breakdown, result
+bytes, `sqlite_code`, column reads, functions, the FTS flag, and annotate
+operation counts — stay zero in the device-side record; `ohya usage
+--state <join-state>` reads device-side records the same way it reads
+server records, and joining the two across machines needs the remote
+aggregates of [plan 001](../plans/001-runtime-observability.md) milestone
+5. Each record holds the tool, the MCP client name and version bucket,
+the call path (`local` or `remote`), an outcome code (`ok`, `timeout`,
+`busy`, `sql_error`, `rejected`, `truncated_rows`, `truncated_bytes`,
+`cancelled`), the primary SQLite result code, phase durations, returned
+rows and bytes, the `table.column` reads and SQL functions the authorizer
+saw — normalized against the fixed schema catalogue, everything else
+folded into `other` — an FTS flag, and for `annotate` the operation
+counts. Records carry per-field export classes
+([ADR 0010](adr/0010-usage-export-boundary.md)); they never hold SQL text,
+literals, paths, transcript content, annotation values, or error messages,
+on either side of a remote call. The writer is a bounded asynchronous
+queue: full queues drop and count records rather than block a call, files
+rotate at 8 MiB with two rotated files kept, directories are `0700` and
+files `0600`, and nothing is written on the query path itself.
+
+### The usage report
+
+`ohya usage` reports how agents use the `sql` and `annotate` tools. It
+combines two evidence sources: the server usage records above, when the
+`--state` directory holds them, and transcript evidence already committed in
+the hub. Transcript evidence covers calls the server records cannot see —
+calls made before instrumentation, and the latency and outcome the agent
+itself observed. For Claude Code it pairs `mcp__ohya__sql` and
+`mcp__ohya__annotate` `tool_use` blocks with their `tool_result` blocks,
+found through `events_fts`. For Codex it reads
+`item_completed` records that carry an `McpToolCall` item for the `ohya`
+server and the older `mcp_tool_call_end` records. A call counts as a
+timeout when the result is an error that names the execution deadline.
+
+The report lists calls per agent, tool, device, and ISO week; outcomes;
+agent-observed latency and result sizes; how many `sql` queries read
+`raw_json` columns; and, for Claude Code, sessions where the tools were
+available but never called (prompt snapshots and deferred tool deltas list
+the tools; Codex transcripts record no availability).
+
+The report is deterministic and bounded. It runs under a deadline
+(`--deadline`, default 120 s) with caps on sessions and calls per agent; a
+report that hits a bound or the deadline is marked partial and lists what
+was skipped, and the command exits 1 only when it collected nothing. It
+prints no SQL text, query text, or transcript excerpts: the JSON envelope
+carries counts and aggregates only. Pass `--local-detail` to add one row
+per call with the local query text; result text is never printed. The
+window defaults to the last 30 days and ends now; `--since` and `--until`
+move it (`--since` takes `30d` or a Go duration, `--until` an RFC 3339
+time). The command takes the same `--db` and `--state` flags as `ingest`
+and opens the database read-only.
+
 ## Setup and installer
 
 The integrated installer is under development; see
@@ -290,6 +396,60 @@ as unsupported until verified. Remote
 setup accepts `--join-code-env` and saves the hub connection for reruns. The download bootstrap exists
 as `install.sh`, but no release assets are published yet. Existing agent sessions need a reload or a new session after
 registration. Native service verification remains a release gate.
+
+### Hub setup
+
+`ohya setup --hub` ([ADR 0012](adr/0012-two-step-multi-machine-setup.md))
+runs the whole local flow above and then adds the hub side: a second owned
+user service running `ohya serve` (`ohya-serve.service` on systemd,
+`com.nibzard.ohya.serve.plist` on launchd) with its own receipt and the
+same ownership rules as the ingestion service. After the service starts,
+setup waits for the Tailcat identity the serve process creates, checks
+that the hub reaches its relay and answers a device dial, issues a one-time
+join code (`--ttl`, default 15 minutes), and prints the device command:
+
+```sh
+curl -fsSL https://github.com/nibzard/ohya/releases/latest/download/install.sh | sh -s -- --join
+```
+
+In `--json` the code sits in one field marked secret
+(`data.hub.code_secret`) next to its expiry, the relay region, the hub's
+public node key, and the device command. `--hub` cannot be combined with
+remote setup or `--no-service`, and a setup state bound to a remote hub
+cannot become a hub. Reruns keep both services and the identity, and issue
+a fresh code each time. Every hub-setup failure names its cause and one
+next step:
+
+- No relay reachable — the machine needs outbound HTTPS (TCP 443) to its
+  DERP relay; allow it, then rerun `ohya setup --hub`.
+- Hub not answering through its relay — check whether the
+  `ohya serve` service runs, then rerun `ohya setup --hub`.
+- The serve service never created the identity — check its logs, then
+  rerun `ohya setup --hub`.
+
+The installer's `--join` reads the join code from the terminal
+(`/dev/tty`) without echo, so the code never enters shell history or the
+screen. Without a terminal it requires `--join-code-env NAME` with the
+code already in that variable. Under `--json` nothing prompts: a missing
+code is a usage error. Agents use the same two flags with
+`ohya setup` directly.
+
+### Join failures
+
+Each device-side failure names its cause and one next step:
+
+- Expired or used invitation — ask the hub for a fresh code from
+  `ohya devices invite`.
+- Old `<invitation>:<preauth-key>` code format — refused with a message
+  naming the `ohya1.` format and `ohya devices invite`.
+- No relay reachable — the device needs outbound HTTPS (TCP 443); also
+  check that `ohya serve` runs on the hub.
+- Hub not answering through the relay — check that `ohya serve` runs on
+  the hub.
+- Protocol version mismatch — the message names both versions and the
+  upgrade command; upgrade ohya on the older machine and rerun the join.
+- Credential rejected on rebind — the device identity was revoked, or the
+  code names a different hub; join never pairs such a device as new.
 
 Setup keeps private copies of changed client files beside each client receipt
 under `STATE/setup/clients/*.json.backups/`. Each copy retains the original
@@ -325,10 +485,12 @@ selective recall, bounded queries, and event citations. It treats transcript
 content as data and leaves your agent instruction files and permissions intact.
 
 For a joined device, set a one-time invitation in an environment variable and
-pass its name to setup:
+pass its name to setup, or let the installer's `--join` read it from the
+terminal:
 
 ```sh
-./bin/ohya setup --join-code-env OHYA_JOIN_CODE --control https://your-hub.example
+curl -fsSL <release>/install.sh | sh -s -- --join
+./bin/ohya setup --join-code-env OHYA_JOIN_CODE
 ```
 
 Setup pairs once and configures the uploader and agents for the remote hub.
@@ -348,9 +510,13 @@ to a built ohya executable, then run
 `go test -tags sqlite_fts5 ./internal/setup -run TestPiExtensionThroughInstalledLoader`.
 
 `ohya doctor` also inspects owned services and agent integrations. It reports
-changed or missing entries without modifying them. For remote setup, it follows
-the saved join state and coordination URL. It checks uploader checkpoints
-without claiming to reproduce the hub's parser decisions locally.
+changed or missing entries without modifying them — the ingestion service and,
+when present, the hub service. A state directory with an owned hub service
+also reports whether the hub identity exists and names its public node key.
+For remote setup, it follows
+the saved join state (`credential.json` and `hub-address.json`). It checks
+uploader checkpoints without claiming to reproduce the hub's parser decisions
+locally.
 
 Release preparation is documented in [release and recovery operations](release-operations.md).
 The manual candidate workflow builds native archives, tests downloaded binaries,
@@ -364,12 +530,10 @@ See [CONTRIBUTING.md](../CONTRIBUTING.md) for build requirements and checks,
 [dependency decisions](adr/0001-dependencies.md) for tradeoffs, and
 [docs/performance.md](performance.md) for the measured performance
 limits (ingestion rate, query latency, database size, memory) and the
-benchmarks behind them. The
-Tailcat transport spike lives in `cmd/tailcat-spike`; the hub sync endpoint
-lives in `internal/hubsync`; the embedded coordination plane lives in
-`internal/control`. The spike's measurements and
-the selection decision are in
-[ADR 0002](adr/0002-tailcat-transport.md). The sync cursor and
+benchmarks behind them. The Tailcat address transport lives in
+`internal/transport/address`; the hub sync endpoint
+lives in `internal/hubsync`. The transport selection decision is
+[ADR 0011](adr/0011-tailcat-address-transport.md). The sync cursor and
 acknowledgment protocol and the authorization, pairing, and revocation
 rules are model-checked with TLA+/TLC in `tla/`
 (`make tla`; see [tla/README.md](../tla/README.md)). The memory verification

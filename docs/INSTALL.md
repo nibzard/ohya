@@ -11,10 +11,21 @@ Run `ohya setup --dry-run --json` to inspect the planned changes. Use
 `--agents claude,codex,pi` to select clients. Existing agent sessions may need
 a reload. Run `ohya doctor` to inspect integration health.
 
-To join an existing hub, set a one-time invitation in a private environment
-variable and run `ohya setup --join-code-env OHYA_JOIN_CODE --control URL`.
-Do not put the code in a command argument. Setup saves the connection for
-later runs and keeps joined-device checkpoints separate from local memory.
+To join an existing hub, run the installer with `--join`:
+
+```sh
+curl -fsSL <release>/install.sh | sh -s -- --join
+```
+
+The installer reads the join code from the terminal (`/dev/tty`) without
+echo, so the code stays out of shell history and the screen. The code comes
+from `ohya setup --hub` or `ohya devices invite` on the hub and carries the
+hub's address; treat it as a secret and never put it in a command argument.
+Without a terminal — and always under `--json`, which prompts for nothing —
+the code must arrive through a variable: pass `--join-code-env NAME` with
+the code already in that environment variable. Setup consumes the variable
+before child processes start, saves the connection for later runs, and
+keeps joined-device checkpoints separate from local memory.
 
 Rerun setup to repair unchanged owned configuration or add a new agent.
 Use `ohya uninstall` to remove owned services, agent entries, and PATH blocks.

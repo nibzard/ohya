@@ -5,9 +5,9 @@ import (
 	"errors"
 	"io"
 
-	"github.com/nibzard/ohya/internal/control"
 	"github.com/nibzard/ohya/internal/device"
 	"github.com/nibzard/ohya/internal/registry"
+	"github.com/nibzard/ohya/internal/setup"
 	"github.com/nibzard/ohya/internal/watch"
 )
 
@@ -79,8 +79,8 @@ func jsonClassOf(err error) (code, hint string) {
 	switch {
 	case errors.Is(err, watch.ErrStateLost), errors.Is(err, device.ErrUnusable):
 		return "state_recovery_failed", "restore the state directory's identity and checkpoint files from a backup, then rerun"
-	case errors.Is(err, control.ErrNotProvisioned):
-		return "coordination_plane_absent", "run ohya serve once to provision the coordination plane, then retry"
+	case errors.Is(err, setup.ErrInsufficientSpace):
+		return "insufficient_disk_space", "remove old recovery points or free space, then rerun; setup --state can use a disk with more space"
 	case errors.Is(err, registry.ErrDeviceUnknown):
 		return "device_unknown", "run ohya devices list to see every paired device ID"
 	case errors.Is(err, registry.ErrAlreadyRevoked):

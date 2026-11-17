@@ -2,14 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"time"
 
-	"github.com/nibzard/ohya/internal/control"
 	"github.com/nibzard/ohya/internal/registry"
+	"github.com/nibzard/ohya/internal/transport/address"
 )
 
 var devicesSpec = commandSpec{
@@ -74,7 +75,7 @@ var devicesInviteSpec = commandSpec{
 	synopsis:  "issue a one-time join code",
 	usageLine: "ohya devices invite [flags]",
 	description: "Issues one join code and prints it on the first stdout line, so it can be piped to the joining device. " +
-		"The code carries the pairing invitation plus a single-use coordinator admission key; each half is consumable exactly once within the code's lifetime. " +
+		"The code is ohya1.<invitation>.<tailcat-address>: the invitation admits exactly one device within the code's lifetime, and the address holds the hub's pre-shared key, so the code is a secret. " +
 		"Run it on the hub; the device joins with ohya join <code>.",
 	argsTitle: "Arguments",
 	args:      "(none)",
@@ -87,7 +88,7 @@ func runDevicesInvite(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	ttl := flags.c.fs.Duration("ttl", registry.DefaultInvitationTTL,
-		"how long the join code stays consumable")
+		"how long the invitation in the join code stays consumable")
 	if err := flags.c.parse(args, stdout); err != nil {
 		return err
 	}
@@ -102,7 +103,7 @@ func runDevicesInvite(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return jsonFailurePrint(*flags.json, stdout, devicesInviteSpec.name, err)
 	}
-	fmt.Fprintf(stderr, "expires %s (one device may use each half once); join with: ohya join <code>\n",
+	fmt.Fprintf(stderr, "expires %s (one device may use the invitation once; the hub address does not expire); join with: ohya join <code>\n",
 		msTime(expiresAtMS))
 	if *flags.json {
 		return printJSON(stdout, devicesInviteSpec.name,
@@ -118,40 +119,35 @@ type inviteJSONData struct {
 }
 
 func (f *registryFlags) issueJoinCode(ttl time.Duration) (code string, expiresAtMS int64, err error) {
-	ctl, err := control.Open(filepath.Join(*f.state, control.DirName))
+	return issueJoinCode(*f.state, ttl)
+}
+
+func issueJoinCode(state string, ttl time.Duration) (code string, expiresAtMS int64, err error) {
+	hubAddr, err := address.LoadHubAddr(state)
 	if err != nil {
+		if errors.Is(err, address.ErrNoIdentity) {
+			return "", 0, classify(err, "hub_identity_absent",
+				"run ohya serve once to create the hub identity, then retry")
+		}
 		return "", 0, err
 	}
-	defer ctl.Close()
-	st, err := ctl.State()
+	reg, err := registry.Open(filepath.Join(state, registry.FileName))
 	if err != nil {
-		return "", 0, err
-	}
-	user, err := control.EnsureUser(st)
-	if err != nil {
-		return "", 0, err
-	}
-	authKey, err := control.MintAuthKey(st, user, ttl)
-	if err != nil {
-		return "", 0, err
-	}
-	reg, err := f.openRegistry()
-	if err != nil {
-		return "", 0, err
+		return "", 0, classify(err, "registry_open_failed", "check that the --state directory exists and is writable")
 	}
 	defer reg.Close()
 	inv, err := reg.Issue(context.Background(), ttl)
 	if err != nil {
 		return "", 0, err
 	}
-	return inv.Secret + ":" + authKey, inv.ExpiresAtMS, nil
+	return formatJoinCode(inv.Secret, hubAddr), inv.ExpiresAtMS, nil
 }
 
 var devicesListSpec = commandSpec{
 	name:        "ohya devices list",
 	synopsis:    "list devices and invitations",
 	usageLine:   "ohya devices list [flags]",
-	description: "Prints every paired device with its state and pairing time, then every invitation: used by which device, expired, or open until when.",
+	description: "Prints every paired device with its state, pairing time, and the transport path and time of its last sync, then every invitation: used by which device, expired, or open until when.",
 	argsTitle:   "Arguments",
 	args:        "(none)",
 	examples:    []string{"ohya devices list"},
@@ -197,6 +193,11 @@ func runDevicesList(args []string, stdout, stderr io.Writer) error {
 	for _, d := range devices {
 		line := fmt.Sprintf("  %s  %s  paired %s",
 			d.DeviceID, d.State, msTime(d.PairedAtMS))
+		if d.LastSyncAtMS != 0 {
+			line += fmt.Sprintf(", last sync %s via %s", msTime(d.LastSyncAtMS), d.LastPath)
+		} else {
+			line += ", never synced"
+		}
 		if d.RevokedAtMS != 0 {
 			line += fmt.Sprintf(", revoked %s", msTime(d.RevokedAtMS))
 		}
@@ -226,10 +227,12 @@ type listJSONData struct {
 }
 
 type deviceJSON struct {
-	ID        string `json:"id"`
-	State     string `json:"state"`
-	PairedAt  string `json:"paired_at"`
-	RevokedAt string `json:"revoked_at,omitempty"`
+	ID         string  `json:"id"`
+	State      string  `json:"state"`
+	PairedAt   string  `json:"paired_at"`
+	RevokedAt  string  `json:"revoked_at,omitempty"`
+	LastPath   *string `json:"last_path"`
+	LastSyncAt *string `json:"last_sync_at"`
 }
 
 type invitationJSON struct {
@@ -248,6 +251,12 @@ func deviceJSONList(devices []registry.DeviceInfo) []deviceJSON {
 			ID:       d.DeviceID,
 			State:    d.State,
 			PairedAt: msTime(d.PairedAtMS),
+		}
+		if d.LastSyncAtMS != 0 {
+			at := msTime(d.LastSyncAtMS)
+			path := d.LastPath
+			j.LastSyncAt = &at
+			j.LastPath = &path
 		}
 		if d.RevokedAtMS != 0 {
 			j.RevokedAt = msTime(d.RevokedAtMS)
@@ -275,7 +284,7 @@ func invitationJSONList(invitations []registry.InvitationInfo) []invitationJSON 
 var devicesRevokeSpec = commandSpec{
 	name:        "ohya devices revoke",
 	synopsis:    "revoke a device, final for its identity",
-	usageLine:   "ohya devices revoke <device-id>",
+	usageLine:   "ohya devices revoke <device-id> [flags]",
 	description: "Revokes one device. Revocation is final for the device identity: its connections close, its sources stay bound to the revoked identity, and re-admission needs a new device identity.",
 	argsTitle:   "Arguments",
 	args:        "<device-id>  the device ID shown by ohya devices list",

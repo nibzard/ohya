@@ -135,20 +135,37 @@ Register the MCP server in your agent, for example in Claude Code:
 
 ### Share memory across machines
 
-```sh
-# On the hub
-ohya serve --tls-cert cert.pem --tls-key key.pem --control-url https://hub.example:9417
-ohya devices invite            # prints a one-time join code
+Two steps and one shared code
+([ADR 0012](docs/adr/0012-two-step-multi-machine-setup.md)):
 
-# On each device: paste the code without echo, keep it out of shell history
-read -rs OHYA_JOIN_CODE && export OHYA_JOIN_CODE
-ohya setup --join-code-env OHYA_JOIN_CODE --control https://hub.example:9417
-```
+1. On the hub machine, run:
 
-Joined agents use `ohya mcp --remote` and query the shared history on the
-hub. Revoke a device at any time with `ohya devices revoke ID`. See
-[serve and join](docs/reference.md#commands) for addresses, TLS, and state
-directories.
+   ```sh
+   ohya setup --hub
+   ```
+
+   Setup keeps local ingestion, adds an owned `ohya serve` user service,
+   creates the hub identity, checks that a relay answers, and prints a
+   one-time join code together with the device command.
+
+2. On each other machine, paste the printed command:
+
+   ```sh
+   curl -fsSL https://github.com/nibzard/ohya/releases/latest/download/install.sh | sh -s -- --join
+   ```
+
+   The installer reads the code from the terminal (`/dev/tty`) without
+   echo, so it stays out of shell history and the screen.
+
+Agents and scripts pass the code through a variable instead:
+`install.sh --join-code-env NAME` (nothing prompts under `--json`; without
+a terminal the code must come that way). Both machines need outbound
+internet access to meet through a relay; no reachable hub address,
+certificate, or open port is required. Joined agents use
+`ohya mcp --remote` and query the shared history on the hub. New codes at
+any time: `ohya devices invite`. Revoke a device with
+`ohya devices revoke ID`. See [serve and join](docs/reference.md#commands)
+for the transport, join codes, and state directories.
 
 ## What agents can ask
 
@@ -197,14 +214,15 @@ directories and sends only the normalized value to the hub.
 
 | Command | Purpose |
 | --- | --- |
-| `ohya setup` / `uninstall` | Configure or remove the service and agent integrations; memory stays |
+| `ohya setup` / `uninstall` | Configure or remove the service and agent integrations; memory stays; `--hub` also sets up device serving |
 | `ohya ingest [--once]` | Import local session history, then poll for new records |
 | `ohya mcp [--remote]` | Serve `sql` and `annotate` on stdio, locally or through a joined device |
-| `ohya serve` | Run the hub: coordination plane, DERP relay, and sync endpoint |
+| `ohya serve` | Run the hub: Tailcat transport and sync endpoint, no open port |
 | `ohya join CODE` | Pair this device with a hub and upload its sessions |
 | `ohya devices invite\|list\|revoke` | Manage paired devices |
 | `ohya rederive` | Rebuild normalized rows after a parser upgrade |
 | `ohya doctor` | Read-only health checks |
+| `ohya usage` | Report how agents use the `sql` and `annotate` tools |
 | `ohya version` | Build, parser, and schema versions |
 
 Every command takes `--help`. Reporting commands take `--json`. No command

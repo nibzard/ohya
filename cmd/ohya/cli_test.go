@@ -2,12 +2,18 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"flag"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/nibzard/ohya/internal/registry"
 )
 
 func helpCases() []struct {
@@ -104,7 +110,10 @@ func TestUsageErrorsExitTwoOnStderr(t *testing.T) {
 		{"bad devices flag", []string{"devices", "list", "--nope"}, "flag provided but not defined: -nope", "ohya devices list"},
 		{"bad flag value", []string{"devices", "invite", "--ttl", "soon"}, "invalid value", "ohya devices invite"},
 		{"missing flag value", []string{"ingest", "--db"}, "flag needs an argument", "ohya ingest"},
+		{"missing flag value after positional", []string{"join", "CODE", "--state"}, "flag needs an argument", "ohya join"},
+		{"unknown flag after positional", []string{"devices", "revoke", "ID", "--nope"}, "flag provided but not defined: -nope", "ohya devices revoke"},
 		{"missing argument", []string{"devices", "revoke"}, "revoke needs exactly one device ID", "ohya devices revoke"},
+		{"two device IDs", []string{"devices", "revoke", "a", "--state", "s", "b"}, "revoke needs exactly one device ID", "ohya devices revoke"},
 		{"unexpected argument", []string{"rederive", "extra"}, `unexpected argument "extra"`, "ohya rederive"},
 	}
 	for _, tc := range cases {
@@ -177,6 +186,146 @@ func TestProcessExitCodes(t *testing.T) {
 			}
 			if (stderr.Len() > 0) != tc.wantStderr {
 				t.Fatalf("stderr = %q; want output: %t", stderr.String(), tc.wantStderr)
+			}
+		})
+	}
+}
+
+func TestPermuteFlags(t *testing.T) {
+	cases := []struct {
+		name     string
+		in       []string
+		want     []string
+		wantBare string
+	}{
+		{"no flags", []string{"a", "b"}, []string{"a", "b"}, ""},
+		{"flags first", []string{"--state", "d", "a"}, []string{"--state", "d", "a"}, ""},
+		{"flags after positional", []string{"a", "--state", "d"}, []string{"--state", "d", "a"}, ""},
+		{"flags between positionals", []string{"a", "--json", "b"}, []string{"--json", "a", "b"}, ""},
+		{"equals form", []string{"a", "--state=d"}, []string{"--state=d", "a"}, ""},
+		{"duration value", []string{"a", "--interval", "5s"}, []string{"--interval", "5s", "a"}, ""},
+		{"value taken from flag-looking argument", []string{"a", "--state", "--json"}, []string{"--state", "--json", "a"}, ""},
+		{"terminator keeps rest positional", []string{"--state", "d", "--", "a", "--json"}, []string{"--state", "d", "--", "a", "--json"}, ""},
+		{"terminator after positional", []string{"a", "--", "--json"}, []string{"a", "--", "--json"}, ""},
+		{"unknown flag stays a flag", []string{"a", "--nope", "b"}, []string{"--nope", "a", "b"}, ""},
+		{"trailing flag without value", []string{"a", "--state"}, nil, "--state"},
+		{"single dash form", []string{"a", "-state", "d"}, []string{"-state", "d", "a"}, ""},
+		{"single dash alone is positional", []string{"-", "--json"}, []string{"--json", "-"}, ""},
+		{"no arguments", nil, nil, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := flag.NewFlagSet("test", flag.ContinueOnError)
+			fs.String("state", "", "")
+			fs.Bool("json", false, "")
+			fs.Duration("interval", 0, "")
+			got, bare := permuteFlags(fs, tc.in)
+			if !reflect.DeepEqual(got, tc.want) || bare != tc.wantBare {
+				t.Fatalf("permuteFlags(%q) = %q, %q; want %q, %q", tc.in, got, bare, tc.want, tc.wantBare)
+			}
+		})
+	}
+}
+
+func TestJoinParsesFlagsOnEitherSideOfPositional(t *testing.T) {
+	cases := []struct {
+		name           string
+		flags          func(state string) []string
+		code           int
+		wantErr        string
+		wantDeviceFile bool
+	}{
+		{"state applied", func(state string) []string { return []string{"--state", state} },
+			1, "a join code starts with ohya1.", true},
+		{"interval applied", func(state string) []string {
+			return []string{"--state", state, "--interval", "0"}
+		}, 2, "--interval must be positive", false},
+	}
+	for _, tc := range cases {
+		for _, side := range []string{"before", "after"} {
+			t.Run(tc.name+" — flags "+side, func(t *testing.T) {
+				state := t.TempDir()
+				args := []string{"join"}
+				if side == "before" {
+					args = append(append(args, tc.flags(state)...), "notacode")
+				} else {
+					args = append(append(args, "notacode"), tc.flags(state)...)
+				}
+				var stdout, stderr bytes.Buffer
+				if got := cliMain(args, &stdout, &stderr); got != tc.code {
+					t.Fatalf("exit code = %d; want %d (stderr: %q)", got, tc.code, stderr.String())
+				}
+				if !strings.Contains(stderr.String(), tc.wantErr) {
+					t.Fatalf("stderr = %q; want it to contain %q", stderr.String(), tc.wantErr)
+				}
+				if tc.wantDeviceFile {
+					if _, err := os.Stat(filepath.Join(state, "device.json")); err != nil {
+						t.Fatalf("the join state directory holds no device identity: %v", err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestDevicesRevokeParsesFlagsOnEitherSideOfPositional(t *testing.T) {
+	deviceID := "0123456789abcdef0123456789abcdef"
+	cases := []struct {
+		side string
+		json bool
+	}{
+		{"before", false},
+		{"after", false},
+		{"before", true},
+		{"after", true},
+	}
+	for _, tc := range cases {
+		name := "flags " + tc.side
+		if tc.json {
+			name += " with --json"
+		}
+		t.Run(name, func(t *testing.T) {
+			state := t.TempDir()
+			reg, err := registry.Open(filepath.Join(state, registry.FileName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := context.Background()
+			inv, err := reg.Issue(ctx, time.Hour)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := reg.Consume(ctx, inv.Secret, deviceID); err != nil {
+				t.Fatal(err)
+			}
+			if err := reg.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			flags := []string{"--state", state}
+			if tc.json {
+				flags = append(flags, "--json")
+			}
+			args := []string{"revoke"}
+			if tc.side == "before" {
+				args = append(append(args, flags...), deviceID)
+			} else {
+				args = append(append(args, deviceID), flags...)
+			}
+			var stdout, stderr bytes.Buffer
+			if err := runDevicesCommand(args, &stdout, &stderr); err != nil {
+				t.Fatalf("revoke err = %v (stderr: %q)", err, stderr.String())
+			}
+			out := stdout.String()
+			if !strings.Contains(out, deviceID) {
+				t.Fatalf("stdout = %q; want the revoked device ID", out)
+			}
+			if tc.json {
+				if !strings.Contains(out, `"device_id":"`+deviceID+`"`) {
+					t.Fatalf("stdout = %q; want the JSON device_id", out)
+				}
+			} else if !strings.Contains(out, "revoked") {
+				t.Fatalf("stdout = %q; want the revoked confirmation", out)
 			}
 		})
 	}

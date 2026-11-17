@@ -59,7 +59,7 @@ No copy-pasting context. No manual memory management. No expensive AI indexing p
 
 **1. Capture automatically.** A lightweight Go process watches Claude Code and Codex session logs, incrementally extracting messages, tool calls, timestamps, files, and metadata. Existing history is imported automatically.
 
-**2. Sync instantly.** Embedded Tailscale Tailcat networking securely connects devices through the planned transport adapter. Pairing and relay requirements must be validated before release. New events are pushed as they're written, with offline catch-up and durable synchronization.
+**2. Sync instantly.** Embedded Tailcat networking securely connects devices through a relay, with a direct path when one exists. The hub needs no reachable address, no certificate, and no open port. New events are pushed as they're written, with offline catch-up and durable synchronization.
 
 **3. Store and index.** Everything lives in one SQLite database. Native FTS5 and BM25 provide fast, ranked full-text search without embeddings, vector databases, or external services.
 

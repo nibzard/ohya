@@ -412,3 +412,69 @@ func TestSchemaVersionRefusesUnknownDatabase(t *testing.T) {
 		t.Fatal("a newer registry schema was accepted")
 	}
 }
+
+func TestMigrateV1ToAddsLastSyncColumns(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+	legacy, err := sql.Open("sqlite3", "file:"+path+"?_journal_mode=WAL&_foreign_keys=on&_txlock=immediate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE invitations (
+		   id             TEXT PRIMARY KEY,
+		   secret_digest  TEXT NOT NULL UNIQUE,
+		   state          TEXT NOT NULL CHECK (state IN ('open','used')),
+		   used_by        TEXT,
+		   expires_at_ms  INTEGER NOT NULL CHECK (expires_at_ms > 0),
+		   created_at_ms  INTEGER NOT NULL
+		 ) STRICT`,
+		`CREATE TABLE devices (
+		   device_id         TEXT PRIMARY KEY,
+		   state             TEXT NOT NULL CHECK (state IN ('active','revoked')),
+		   credential_digest TEXT NOT NULL UNIQUE,
+		   paired_via        TEXT NOT NULL REFERENCES invitations(id),
+		   paired_at_ms      INTEGER NOT NULL,
+		   revoked_at_ms     INTEGER
+		 ) STRICT`,
+		`INSERT INTO invitations (id, secret_digest, state, used_by, expires_at_ms, created_at_ms)
+		 VALUES ('inv1', 'aaa', 'used', 'dev1', 2000000000000, 1000000000000)`,
+		`INSERT INTO devices (device_id, state, credential_digest, paired_via, paired_at_ms)
+		 VALUES ('dev1', 'active', 'bbb', 'inv1', 1000000000000)`,
+		`PRAGMA user_version = 1`,
+	} {
+		if _, err := legacy.Exec(stmt); err != nil {
+			t.Fatalf("seed legacy schema: %v", err)
+		}
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reg, err := Open(path)
+	if err != nil {
+		t.Fatalf("open v1 registry: %v", err)
+	}
+	defer reg.Close()
+	ctx := context.Background()
+	devices, err := reg.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 1 || devices[0].DeviceID != "dev1" || devices[0].LastPath != "" || devices[0].LastSyncAtMS != 0 {
+		t.Fatalf("migrated list = %+v; want dev1 with no last sync", devices)
+	}
+	if err := reg.RecordSync(ctx, "dev1", "relay", 1765400000000); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.RecordSync(ctx, "absent", "direct", 1); err != nil {
+		t.Fatalf("record for an unknown device must not fail: %v", err)
+	}
+	devices, err = reg.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 1 || devices[0].LastPath != "relay" || devices[0].LastSyncAtMS != 1765400000000 {
+		t.Fatalf("list after record = %+v; want the recorded path and time", devices)
+	}
+}

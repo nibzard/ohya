@@ -108,7 +108,7 @@ func TestServiceReadinessRequiresRunningProcess(t *testing.T) {
 		{"darwin", launchAgentPrintWaiting, false},
 	}
 	for _, c := range cases {
-		if ready := serviceRunning(c.platform, c.output) == nil; ready != c.ready {
+		if ready := serviceRunning(c.platform, c.output, "memory service") == nil; ready != c.ready {
 			t.Fatalf("%s %q readiness = %v", c.platform, c.output, ready)
 		}
 	}

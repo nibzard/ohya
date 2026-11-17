@@ -1,0 +1,506 @@
+package address
+
+import (
+	"bufio"
+	"context"
+	"crypto/tls"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/tailscale/tailcat"
+	"tailscale.com/derp/derpserver"
+	"tailscale.com/envknob"
+	"tailscale.com/net/netcheck"
+	"tailscale.com/syncs"
+	"tailscale.com/tailcfg"
+	"tailscale.com/types/key"
+	"tailscale.com/types/logger"
+)
+
+func TestMain(m *testing.M) {
+	envknob.Setenv("IN_TS_TEST", "true")
+	netcheck.HookStartCaptivePortalDetection.SetForTest(func(ctx context.Context, c *netcheck.Client, dm *tailcfg.DERPMap, preferredDERP tailcfg.DERPRegionID, setCaptivePortal func(bool)) (done <-chan struct{}, stop func()) {
+		return syncs.ClosedChan(), func() {}
+	})
+	os.Exit(m.Run())
+}
+
+type logSink struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (l *logSink) Logf(format string, args ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.lines = append(l.lines, fmt.Sprintf(format, args...))
+}
+
+func (l *logSink) all() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return strings.Join(l.lines, "\n")
+}
+
+func startLocalDERP(t *testing.T) *tailcfg.DERPRegion {
+	t.Helper()
+	srv := derpserver.New(key.NewNode(), logger.Discard)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen for the DERP relay: %v", err)
+	}
+	httpsrv := httptest.NewUnstartedServer(derpserver.Handler(srv))
+	httpsrv.Listener.Close()
+	httpsrv.Listener = ln
+	httpsrv.Config.TLSNextProto = make(map[string]func(*http.Server, *tls.Conn, http.Handler))
+	httpsrv.StartTLS()
+	t.Cleanup(func() {
+		httpsrv.CloseClientConnections()
+		httpsrv.Close()
+		srv.Close()
+	})
+	port := httpsrv.Listener.Addr().(*net.TCPAddr).Port
+	return &tailcfg.DERPRegion{
+		RegionID:   1,
+		RegionCode: "ohyatest",
+		RegionName: "ohya local test relay",
+		Nodes: []*tailcfg.DERPNode{{
+			Name:             "ohyatest1",
+			RegionID:         1,
+			HostName:         "127.0.0.1",
+			IPv4:             "127.0.0.1",
+			IPv6:             "none",
+			DERPPort:         port,
+			InsecureForTests: true,
+		}},
+	}
+}
+
+func serveEcho(t *testing.T, ln net.Listener) {
+	t.Helper()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				defer conn.Close()
+				io.Copy(conn, conn)
+			}(conn)
+		}
+	}()
+}
+
+func exchange(t *testing.T, conn net.Conn, message string) {
+	t.Helper()
+	if _, err := conn.Write([]byte(message + "\n")); err != nil {
+		t.Fatalf("write over the tunnel: %v", err)
+	}
+	line, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		t.Fatalf("read over the tunnel: %v", err)
+	}
+	if line != message+"\n" {
+		t.Fatalf("echo = %q, want %q", line, message+"\n")
+	}
+}
+
+func TestHubKeepsAddressAcrossRestart(t *testing.T) {
+	region := startLocalDERP(t)
+	state := t.TempDir()
+
+	hubLog := &logSink{}
+	hub, err := NewHub(HubOptions{StateDir: state, Region: region, Logf: hubLog.Logf})
+	if err != nil {
+		t.Fatalf("NewHub: %v", err)
+	}
+	hostPort9027, err := net.Listen("tcp", "127.0.0.1:9027")
+	if err != nil {
+		t.Fatalf("preflight bind of host port 9027: %v", err)
+	}
+	hostPort9027.Close()
+	ln, err := hub.Listen(context.Background())
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	if port := ln.Addr().(*net.TCPAddr).Port; port != HubPort {
+		t.Fatalf("listener port = %d, want %d", port, HubPort)
+	}
+	stillFree, err := net.Listen("tcp", "127.0.0.1:9027")
+	if err != nil {
+		t.Fatalf("hub Listen must not bind host port 9027: %v", err)
+	}
+	stillFree.Close()
+	addr := hub.Addr()
+	if !strings.HasPrefix(addr, "tc") {
+		t.Fatalf("address %q must be a tailcat address", addr)
+	}
+	public := hub.PublicKey()
+	if !strings.HasPrefix(public, "nodekey:") {
+		t.Fatalf("PublicKey = %q, want a nodekey: prefix", public)
+	}
+	if err := hub.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	identityPath := filepath.Join(state, hubStateDir, identityFileName)
+	data, err := os.ReadFile(identityPath)
+	if err != nil {
+		t.Fatalf("read identity: %v", err)
+	}
+	info, err := os.Stat(identityPath)
+	if err != nil {
+		t.Fatalf("stat identity: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("identity permissions = %o, want 600", perm)
+	}
+	dirInfo, err := os.Stat(filepath.Join(state, hubStateDir))
+	if err != nil {
+		t.Fatalf("stat identity directory: %v", err)
+	}
+	if perm := dirInfo.Mode().Perm(); perm != 0o700 {
+		t.Fatalf("identity directory permissions = %o, want 700", perm)
+	}
+
+	hub2, err := NewHub(HubOptions{StateDir: state, Region: region, Logf: hubLog.Logf})
+	if err != nil {
+		t.Fatalf("NewHub after restart: %v", err)
+	}
+	ln2, err := hub2.Listen(context.Background())
+	if err != nil {
+		t.Fatalf("Listen after restart: %v", err)
+	}
+	defer hub2.Close()
+	if hub2.Addr() != addr {
+		t.Fatalf("address after restart = %q, want the saved %q", hub2.Addr(), addr)
+	}
+	if hub2.PublicKey() != public {
+		t.Fatalf("PublicKey after restart = %q, want %q", hub2.PublicKey(), public)
+	}
+	data2, err := os.ReadFile(identityPath)
+	if err != nil {
+		t.Fatalf("read identity after restart: %v", err)
+	}
+	if string(data2) != string(data) {
+		t.Fatalf("identity changed across a restart that loaded it")
+	}
+	ln2.Close()
+
+	logs := hubLog.all()
+	if strings.Contains(logs, addr) {
+		t.Fatalf("the hub address appears in hub logs")
+	}
+	if strings.Contains(logs, "privkey:") || strings.Contains(logs, "psk:") {
+		t.Fatalf("key material appears in hub logs")
+	}
+}
+
+func TestHubDeviceExchange(t *testing.T) {
+	region := startLocalDERP(t)
+	state := t.TempDir()
+
+	hubLog := &logSink{}
+	hub, err := NewHub(HubOptions{StateDir: state, Region: region, Logf: hubLog.Logf})
+	if err != nil {
+		t.Fatalf("NewHub: %v", err)
+	}
+	ln, err := hub.Listen(context.Background())
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	serveEcho(t, ln)
+	addr := hub.Addr()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	deviceLog := &logSink{}
+	device := NewDevice(DeviceOptions{Logf: deviceLog.Logf})
+	conn, err := device.Dial(ctx, addr)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	exchange(t, conn, "first device says hello")
+	if err := conn.Close(); err != nil {
+		t.Fatalf("close conn: %v", err)
+	}
+
+	secondLog := &logSink{}
+	second := NewDevice(DeviceOptions{Logf: secondLog.Logf})
+	conn2, err := second.Dial(ctx, addr)
+	if err != nil {
+		t.Fatalf("Dial with a second device key: %v", err)
+	}
+	exchange(t, conn2, "second device says hello")
+	conn2.Close()
+
+	badLog := &logSink{}
+	bad := NewDevice(DeviceOptions{Logf: badLog.Logf})
+	_, err = bad.Dial(ctx, "tcnot-a-tailcat-address")
+	if err == nil {
+		t.Fatalf("dial with an invalid address must fail")
+	}
+	if strings.Contains(err.Error(), "tcnot-a-tailcat-address") {
+		t.Fatalf("the dial error echoes the address text: %v", err)
+	}
+	if err := bad.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	device.Close()
+	second.Close()
+	if err := hub.Close(); err != nil {
+		t.Fatalf("Close hub: %v", err)
+	}
+
+	hub2, err := NewHub(HubOptions{StateDir: state, Region: region, Logf: hubLog.Logf})
+	if err != nil {
+		t.Fatalf("NewHub after restart: %v", err)
+	}
+	ln2, err := hub2.Listen(ctx)
+	if err != nil {
+		t.Fatalf("Listen after restart: %v", err)
+	}
+	serveEcho(t, ln2)
+	if hub2.Addr() != addr {
+		t.Fatalf("address changed across restart: %q then %q", addr, hub2.Addr())
+	}
+	thirdLog := &logSink{}
+	third := NewDevice(DeviceOptions{Logf: thirdLog.Logf})
+	conn3, err := third.Dial(ctx, addr)
+	if err != nil {
+		t.Fatalf("Dial after hub restart: %v", err)
+	}
+	exchange(t, conn3, "third device after restart")
+	conn3.Close()
+	third.Close()
+	hub2.Close()
+
+	for name, logs := range map[string]string{
+		"hub":     hubLog.all(),
+		"device":  deviceLog.all(),
+		"second":  secondLog.all(),
+		"third":   thirdLog.all(),
+		"badDial": badLog.all(),
+	} {
+		if strings.Contains(logs, addr) {
+			t.Fatalf("the hub address appears in %s logs", name)
+		}
+		if strings.Contains(logs, "privkey:") || strings.Contains(logs, "psk:") {
+			t.Fatalf("key material appears in %s logs", name)
+		}
+	}
+}
+
+func TestHubRejectsRegionChangeAfterIdentity(t *testing.T) {
+	region := startLocalDERP(t)
+	state := t.TempDir()
+
+	hub, err := NewHub(HubOptions{StateDir: state, Region: region})
+	if err != nil {
+		t.Fatalf("NewHub: %v", err)
+	}
+	ln, err := hub.Listen(context.Background())
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	ln.Close()
+	hub.Close()
+
+	other := &tailcfg.DERPRegion{RegionID: 2, RegionCode: "other", Nodes: region.Nodes}
+	_, err = NewHub(HubOptions{StateDir: state, Region: other})
+	if err == nil {
+		t.Fatalf("NewHub must refuse a different region once the identity exists")
+	}
+	if !strings.Contains(err.Error(), filepath.Join(state, hubStateDir, identityFileName)) {
+		t.Fatalf("error must name the identity file: %v", err)
+	}
+}
+
+func TestHubCorruptIdentity(t *testing.T) {
+	region := startLocalDERP(t)
+	valid, err := json.Marshal(identity{
+		Version: identityVersion,
+		Node:    key.NewNode(),
+		PSK:     tailcat.NewPresharedKey(),
+		Region:  region,
+	})
+	if err != nil {
+		t.Fatalf("marshal identity: %v", err)
+	}
+	nodeText, err := key.NewNode().MarshalText()
+	if err != nil {
+		t.Fatalf("marshal node key: %v", err)
+	}
+	pskText, err := tailcat.NewPresharedKey().MarshalText()
+	if err != nil {
+		t.Fatalf("marshal pre-shared key: %v", err)
+	}
+	missingRegion := fmt.Sprintf(`{"version":1,"node":%q,"preshared_key":%q}`, string(nodeText), string(pskText))
+
+	cases := []struct {
+		name    string
+		content []byte
+		mode    os.FileMode
+	}{
+		{"garbage", []byte("\x00\x01 not json at all"), 0o600},
+		{"future version", []byte(`{"version":99}`), 0o600},
+		{"missing region", []byte(missingRegion), 0o600},
+		{"marked psk", []byte(strings.Replace(string(valid), `"preshared_key":`, `"preshared_key":"psk:OHYA-SECRET-MARKER-DO-NOT-ECHO","old_preshared_key":`, 1)), 0o600},
+		{"group readable", valid, 0o640},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			state := t.TempDir()
+			path := filepath.Join(state, hubStateDir, identityFileName)
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatalf("MkdirAll: %v", err)
+			}
+			if err := os.WriteFile(path, tc.content, tc.mode); err != nil {
+				t.Fatalf("write identity: %v", err)
+			}
+
+			hub, err := NewHub(HubOptions{StateDir: state, Region: region})
+			if err == nil {
+				hub.Close()
+				t.Fatalf("NewHub must fail on a corrupt identity file")
+			}
+			if !strings.Contains(err.Error(), path) {
+				t.Fatalf("error must name the identity file %s: %v", path, err)
+			}
+			if strings.Contains(err.Error(), "OHYA-SECRET-MARKER-DO-NOT-ECHO") {
+				t.Fatalf("error echoes file content: %v", err)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read identity after the failed start: %v", err)
+			}
+			if string(got) != string(tc.content) {
+				t.Fatalf("NewHub overwrote the identity file on failure")
+			}
+		})
+	}
+}
+
+func TestHubRequiresStateDir(t *testing.T) {
+	if _, err := NewHub(HubOptions{}); err == nil {
+		t.Fatalf("NewHub must require a state directory")
+	}
+	if _, err := NewHub(HubOptions{StateDir: "  "}); err == nil {
+		t.Fatalf("NewHub must reject a blank state directory")
+	}
+}
+
+func TestDeviceRejectsSecondHub(t *testing.T) {
+	region := startLocalDERP(t)
+	hub, err := NewHub(HubOptions{StateDir: t.TempDir(), Region: region})
+	if err != nil {
+		t.Fatalf("NewHub: %v", err)
+	}
+	ln, err := hub.Listen(context.Background())
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	serveEcho(t, ln)
+	defer hub.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	device := NewDevice(DeviceOptions{})
+	defer device.Close()
+	conn, err := device.Dial(ctx, hub.Addr())
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	exchange(t, conn, "first hub")
+	conn.Close()
+
+	other, err := NewHub(HubOptions{StateDir: t.TempDir(), Region: region})
+	if err != nil {
+		t.Fatalf("NewHub: %v", err)
+	}
+	ln2, err := other.Listen(context.Background())
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	ln2.Close()
+	other.Close()
+
+	if _, err := device.Dial(ctx, other.Addr()); err == nil {
+		t.Fatalf("Dial must refuse a second hub address on one device")
+	}
+}
+
+func TestLoadHubAddrMatchesStartedHub(t *testing.T) {
+	region := startLocalDERP(t)
+	state := t.TempDir()
+
+	if _, err := LoadHubAddr(state); err == nil {
+		t.Fatalf("LoadHubAddr without an identity must fail")
+	}
+
+	hub, err := NewHub(HubOptions{StateDir: state, Region: region})
+	if err != nil {
+		t.Fatalf("NewHub: %v", err)
+	}
+	ln, err := hub.Listen(context.Background())
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer hub.Close()
+	ln.Close()
+
+	loaded, err := LoadHubAddr(state)
+	if err != nil {
+		t.Fatalf("LoadHubAddr: %v", err)
+	}
+	if loaded != hub.Addr() {
+		t.Fatalf("LoadHubAddr = %q, want the started hub address %q", loaded, hub.Addr())
+	}
+	if r := hub.Region(); r == nil || r.RegionID != region.RegionID {
+		t.Fatalf("hub Region = %+v, want the saved region", r)
+	}
+}
+
+func TestValidateRegion(t *testing.T) {
+	node := func(mut func(*tailcfg.DERPNode)) *tailcfg.DERPNode {
+		n := &tailcfg.DERPNode{HostName: "derp.example", DERPPort: 443}
+		if mut != nil {
+			mut(n)
+		}
+		return n
+	}
+	for _, tc := range []struct {
+		name   string
+		region *tailcfg.DERPRegion
+		ok     bool
+	}{
+		{"nil", nil, false},
+		{"zero region id", &tailcfg.DERPRegion{RegionID: 0, Nodes: []*tailcfg.DERPNode{node(nil)}}, false},
+		{"no nodes", &tailcfg.DERPRegion{RegionID: 1}, false},
+		{"stun only", &tailcfg.DERPRegion{RegionID: 1, Nodes: []*tailcfg.DERPNode{node(func(n *tailcfg.DERPNode) { n.STUNOnly = true })}}, false},
+		{"null node", &tailcfg.DERPRegion{RegionID: 1, Nodes: []*tailcfg.DERPNode{nil}}, false},
+		{"no host name", &tailcfg.DERPRegion{RegionID: 1, Nodes: []*tailcfg.DERPNode{node(func(n *tailcfg.DERPNode) { n.HostName = "" })}}, false},
+		{"valid", &tailcfg.DERPRegion{RegionID: 1, Nodes: []*tailcfg.DERPNode{node(nil)}}, true},
+	} {
+		err := validateRegion(tc.region)
+		if tc.ok && err != nil {
+			t.Errorf("%s: unexpected error %v", tc.name, err)
+		}
+		if !tc.ok && err == nil {
+			t.Errorf("%s: expected an error", tc.name)
+		}
+	}
+}

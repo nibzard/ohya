@@ -12,9 +12,13 @@ import (
 	"github.com/mattn/go-sqlite3"
 )
 
-func Backup(ctx context.Context, source, destination string) (err error) {
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancel()
+const backupStepPages = 128
+
+const backupMinBytesPerSecond = 256 << 10
+
+const backupMinBudget = 2 * time.Minute
+
+func Backup(ctx context.Context, source, destination string, progress func(done, total int64)) (err error) {
 	original, err := OpenReadOnly(source)
 	if err != nil {
 		return err
@@ -45,6 +49,10 @@ func Backup(ctx context.Context, source, destination string) (err error) {
 		return err
 	}
 	defer src.Close()
+	var pageSize int64
+	if err := src.QueryRowContext(ctx, `PRAGMA page_size`).Scan(&pageSize); err != nil {
+		return fmt.Errorf("store: backup: %w", err)
+	}
 	err = dst.Raw(func(dstRaw any) error {
 		return src.Raw(func(srcRaw any) error {
 			destinationConn, ok := dstRaw.(*sqlite3.SQLiteConn)
@@ -59,12 +67,18 @@ func Backup(ctx context.Context, source, destination string) (err error) {
 			if err != nil {
 				return err
 			}
+			copyCtx, cancel := context.WithTimeout(ctx, backupBudget(int64(backup.PageCount())*pageSize))
+			defer cancel()
 			for {
-				if err := ctx.Err(); err != nil {
+				if err := copyCtx.Err(); err != nil {
 					_ = backup.Close()
 					return err
 				}
-				done, err := backup.Step(128)
+				done, err := backup.Step(backupStepPages)
+				if progress != nil && pageSize > 0 {
+					total := int64(backup.PageCount()) * pageSize
+					progress(total-int64(backup.Remaining())*pageSize, total)
+				}
 				if err != nil {
 					_ = backup.Close()
 					return err
@@ -73,9 +87,9 @@ func Backup(ctx context.Context, source, destination string) (err error) {
 					return backup.Close()
 				}
 				select {
-				case <-ctx.Done():
+				case <-copyCtx.Done():
 					_ = backup.Close()
-					return ctx.Err()
+					return copyCtx.Err()
 				case <-time.After(5 * time.Millisecond):
 				}
 			}
@@ -96,4 +110,12 @@ func Backup(ctx context.Context, source, destination string) (err error) {
 	}
 	defer dir.Close()
 	return dir.Sync()
+}
+
+func backupBudget(totalBytes int64) time.Duration {
+	budget := time.Duration(totalBytes/backupMinBytesPerSecond) * time.Second
+	if budget < backupMinBudget {
+		return backupMinBudget
+	}
+	return budget
 }

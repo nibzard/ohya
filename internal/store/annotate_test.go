@@ -45,7 +45,7 @@ func TestAnnotateUpsertLifecycle(t *testing.T) {
 		return result
 	}
 
-	if got := upsert(`{"status":"open"}`); got != (AnnotateResult{Applied: 1}) {
+	if got := upsert(`{"status":"open"}`); got != (AnnotateResult{Applied: 1, AppliedUpsert: 1}) {
 		t.Fatalf("first upsert = %+v", got)
 	}
 	value, created, updated := annotateRow(t, db, 1, "tags", "needs-review", "dev1")
@@ -58,14 +58,14 @@ func TestAnnotateUpsertLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, created, updated = annotateRow(t, db, 1, "tags", "needs-review", "dev1")
-	if got := upsert(`{"status":"open"}`); got != (AnnotateResult{Unchanged: 1}) {
+	if got := upsert(`{"status":"open"}`); got != (AnnotateResult{Unchanged: 1, UnchangedUpsert: 1}) {
 		t.Fatalf("identical retry = %+v", got)
 	}
 	if _, c, u := annotateRow(t, db, 1, "tags", "needs-review", "dev1"); c != created || u != updated {
 		t.Fatalf("identical retry rewrote timestamps: (%d, %d), want (%d, %d)", c, u, created, updated)
 	}
 
-	if got := upsert(`{"status":"done"}`); got != (AnnotateResult{Applied: 1}) {
+	if got := upsert(`{"status":"done"}`); got != (AnnotateResult{Applied: 1, AppliedUpsert: 1}) {
 		t.Fatalf("changed upsert = %+v", got)
 	}
 	if v, c, u := annotateRow(t, db, 1, "tags", "needs-review", "dev1"); v != `{"status":"done"}` ||
@@ -77,13 +77,13 @@ func TestAnnotateUpsertLifecycle(t *testing.T) {
 	result, err := Annotate(ctx, db, "dev1", []AnnotationOp{
 		{Op: AnnotationDelete, EventID: 1, Namespace: "tags", Key: "needs-review"},
 	})
-	if err != nil || result != (AnnotateResult{Applied: 1}) {
+	if err != nil || result != (AnnotateResult{Applied: 1, AppliedDelete: 1}) {
 		t.Fatalf("delete = %+v, %v", result, err)
 	}
 	result, err = Annotate(ctx, db, "dev1", []AnnotationOp{
 		{Op: AnnotationDelete, EventID: 1, Namespace: "tags", Key: "needs-review"},
 	})
-	if err != nil || result != (AnnotateResult{Unchanged: 1}) {
+	if err != nil || result != (AnnotateResult{Unchanged: 1, UnchangedDelete: 1}) {
 		t.Fatalf("delete of absent annotation = %+v, %v; it must succeed as unchanged", result, err)
 	}
 	if got := annotationCount(t, db, "1=1"); got != 0 {
@@ -127,7 +127,7 @@ func TestAnnotateBatchIsAtomic(t *testing.T) {
 		{Op: AnnotationUpsert, EventID: 1, Namespace: "tags", Key: "b", Value: `{"ok":true}`},
 		{Op: AnnotationDelete, EventID: 1, Namespace: "tags", Key: "absent"},
 	})
-	if err != nil || result != (AnnotateResult{Applied: 2, Unchanged: 1}) {
+	if err != nil || result != (AnnotateResult{Applied: 2, Unchanged: 1, AppliedUpsert: 2, UnchangedDelete: 1}) {
 		t.Fatalf("mixed batch = %+v, %v", result, err)
 	}
 }
@@ -215,7 +215,7 @@ func TestAnnotateWriterIsolationAndConcurrentWrites(t *testing.T) {
 	result, err := Annotate(ctx, db, "dev2", []AnnotationOp{
 		{Op: AnnotationDelete, EventID: 1, Namespace: "security", Key: "review"},
 	})
-	if err != nil || result != (AnnotateResult{Applied: 1}) {
+	if err != nil || result != (AnnotateResult{Applied: 1, AppliedDelete: 1}) {
 		t.Fatalf("dev2 delete = %+v, %v", result, err)
 	}
 	if value, _, _ := annotateRow(t, db, 1, "security", "review", "dev1"); value != `"one"` {

@@ -118,10 +118,27 @@ func recoveryOptions(t *testing.T) Options {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.Writer().Exec(`CREATE TABLE recovery_size_probe (padding TEXT); INSERT INTO recovery_size_probe VALUES (hex(zeroblob(655360)))`); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
 	return o
+}
+
+func staleSchema(t *testing.T, o Options) {
+	t.Helper()
+	db, err := store.Open(context.Background(), o.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Writer().Exec(`DELETE FROM schema_migrations WHERE version = (SELECT max(version) FROM schema_migrations)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func recoveryPoints(t *testing.T, state string) []string {
@@ -160,16 +177,7 @@ func TestSetupSkipsRecoveryPointForCurrentSchema(t *testing.T) {
 
 func TestSetupSavesRecoveryPointBeforeMigration(t *testing.T) {
 	o := recoveryOptions(t)
-	db, err := store.Open(context.Background(), o.Database)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Writer().Exec(`DELETE FROM schema_migrations WHERE version = (SELECT max(version) FROM schema_migrations)`); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
+	staleSchema(t, o)
 	var progress []string
 	o.Progress = func(line string) { progress = append(progress, line) }
 	report, err := Run(context.Background(), o)
@@ -182,8 +190,13 @@ func TestSetupSavesRecoveryPointBeforeMigration(t *testing.T) {
 	if points := recoveryPoints(t, o.Clients.State); len(points) != 1 {
 		t.Fatalf("recovery points = %v", points)
 	}
-	if len(progress) != 1 || !strings.HasPrefix(progress[0], "saving recovery point (") {
-		t.Fatalf("progress = %q", progress)
+	if len(progress) < 2 || !strings.HasPrefix(progress[0], "saving recovery point (about ") || !strings.Contains(progress[0], ") to ") {
+		t.Fatalf("size progress = %q", progress)
+	}
+	for _, line := range progress[1:] {
+		if !strings.HasPrefix(line, "recovery point ") || !strings.Contains(line, "% (") {
+			t.Fatalf("copy progress = %q", progress)
+		}
 	}
 }
 
@@ -207,16 +220,7 @@ func TestSetupKeepsNewestRecoveryPoints(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "unrelated"), []byte("keep"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	db, err := store.Open(context.Background(), o.Database)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Writer().Exec(`DELETE FROM schema_migrations WHERE version = (SELECT max(version) FROM schema_migrations)`); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
+	staleSchema(t, o)
 	report, err := Run(context.Background(), o)
 	if err != nil || !report.Complete() {
 		t.Fatalf("setup = %+v %v", report, err)
@@ -228,6 +232,85 @@ func TestSetupKeepsNewestRecoveryPoints(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "unrelated")); err != nil {
 		t.Fatalf("removed unrelated file: %v", err)
+	}
+}
+
+func TestSetupRefusesRecoveryPointWithoutFreeSpace(t *testing.T) {
+	o := recoveryOptions(t)
+	staleSchema(t, o)
+	if err := os.Truncate(o.Database, 5<<40); err != nil {
+		t.Fatal(err)
+	}
+	report, err := Run(context.Background(), o)
+	if err == nil || !errors.Is(err, ErrInsufficientSpace) {
+		t.Fatalf("refusal = %v", err)
+	}
+	r := backupResult(t, report)
+	if r.Status != "failed" || r.Changed || !strings.Contains(r.Detail, "free") {
+		t.Fatalf("backup = %+v", r)
+	}
+	if points := recoveryPoints(t, o.Clients.State); len(points) != 0 {
+		t.Fatalf("recovery points = %v", points)
+	}
+	if _, err := os.Stat(filepath.Join(o.Clients.State, "setup", "backups")); !os.IsNotExist(err) {
+		t.Fatalf("created the backups directory: %v", err)
+	}
+	if info, err := os.Stat(o.Database); err != nil || info.Size() != 5<<40 {
+		t.Fatalf("database changed: %v %v", info, err)
+	}
+}
+
+func TestSetupInterruptedRecoveryCopyLeavesNoPartialPoint(t *testing.T) {
+	o := recoveryOptions(t)
+	staleSchema(t, o)
+	dir := filepath.Join(o.Clients.State, "setup", "backups")
+	kept := filepath.Join(dir, "recovery-kept")
+	if err := os.MkdirAll(kept, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(kept, "hub.db"), []byte("old"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	o.Progress = func(line string) {
+		if strings.HasPrefix(line, "recovery point ") {
+			cancel()
+		}
+	}
+	report, err := Run(ctx, o)
+	if err == nil || !errors.Is(err, context.Canceled) || report.Complete() {
+		t.Fatalf("interrupted copy = %+v %v", report, err)
+	}
+	if points := recoveryPoints(t, o.Clients.State); len(points) != 1 || points[0] != kept {
+		t.Fatalf("recovery points = %v", points)
+	}
+	staging, err := filepath.Glob(filepath.Join(dir, ".recovery-*"))
+	if err != nil || len(staging) != 0 {
+		t.Fatalf("staging left behind: %v %v", staging, err)
+	}
+}
+
+func TestSetupRemovesAbandonedRecoveryStaging(t *testing.T) {
+	o := recoveryOptions(t)
+	staleSchema(t, o)
+	dir := filepath.Join(o.Clients.State, "setup", "backups")
+	abandoned := filepath.Join(dir, ".recovery-abandoned")
+	if err := os.MkdirAll(abandoned, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(abandoned, "hub.db"), []byte("partial"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	report, err := Run(context.Background(), o)
+	if err != nil || !report.Complete() {
+		t.Fatalf("setup = %+v %v", report, err)
+	}
+	if _, err := os.Stat(abandoned); !os.IsNotExist(err) {
+		t.Fatalf("abandoned staging kept: %v", err)
+	}
+	if points := recoveryPoints(t, o.Clients.State); len(points) != 1 {
+		t.Fatalf("recovery points = %v", points)
 	}
 }
 

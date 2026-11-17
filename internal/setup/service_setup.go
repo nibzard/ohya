@@ -10,9 +10,13 @@ import (
 	"time"
 )
 
-func configureService(ctx context.Context, o Options, service Service) (results []Result) {
-	result := Result{Component: "service", Status: "failed"}
-	receipt := filepath.Join(o.Clients.State, "setup", "service.json")
+func configureService(ctx context.Context, o Options, service Service) []Result {
+	return configureOwnedService(ctx, o, service, "service", "service.json", true)
+}
+
+func configureOwnedService(ctx context.Context, o Options, service Service, component, receiptName string, withRecovery bool) (results []Result) {
+	result := Result{Component: component, Status: "failed"}
+	receipt := filepath.Join(o.Clients.State, "setup", receiptName)
 	active := o.LoadedService(ctx, service.Loaded) == nil
 	original, readErr := readRegular(service.Path)
 	owned, receiptErr := loadFileReceipt(receipt)
@@ -40,7 +44,7 @@ func configureService(ctx context.Context, o Options, service Service) (results 
 		}
 		stopped = err == nil
 	}
-	if err == nil {
+	if err == nil && withRecovery {
 		var recovery Result
 		recovery, err = recoveryPoint(ctx, o)
 		if recovery.Component != "" {
@@ -74,6 +78,9 @@ func configureService(ctx context.Context, o Options, service Service) (results 
 	} else {
 		result.Status = "running"
 		result.Detail = "History imports in the background; run ohya doctor to check sources."
+		if component == "hub-service" {
+			result.Detail = "The hub serves devices; run ohya devices invite for another code."
+		}
 	}
 	return append(results, result)
 }

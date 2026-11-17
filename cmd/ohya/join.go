@@ -10,15 +10,13 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
-	"github.com/nibzard/ohya/internal/control"
 	"github.com/nibzard/ohya/internal/device"
 	"github.com/nibzard/ohya/internal/hubsync"
 	"github.com/nibzard/ohya/internal/transport"
-	"github.com/nibzard/ohya/internal/transport/tailcat"
+	"github.com/nibzard/ohya/internal/transport/address"
 	"github.com/nibzard/ohya/internal/uploader"
 	"github.com/nibzard/ohya/internal/watch"
 )
@@ -27,8 +25,6 @@ type joinOptions struct {
 	pairOnly   bool
 	allowEmpty bool
 	stateDir   string
-	controlURL string
-	hubAddr    string
 	code       string
 	roots      []agentRoot
 	interval   time.Duration
@@ -40,6 +36,7 @@ var joinSpec = commandSpec{
 	synopsis:  "pair a device with a hub and upload its agent sessions",
 	usageLine: "ohya join [code] [flags]",
 	description: "Pairs this device with a hub using one join code — printed by ohya devices invite on the hub — then uploads every watched agent source: batches of original records, acknowledged durably, retried after reconnects, catching up offline from the retained files. " +
+		"A device that already holds a credential sends its hello to the hub address in the code first: when the hub accepts it, the device keeps its identity, credential, and checkpoints, and the invitation stays unused; when the hub rejects it, join fails with the reason and never pairs as a new device. " +
 		"The join state directory is deliberately its own (default ~/.ohya/join): its checkpoints hold this hub's acknowledgments and must never mix with local ingestion's.",
 	argsTitle: "Arguments",
 	args:      "<code>  join code from ohya devices invite; omit it to resume an already-paired device",
@@ -53,11 +50,7 @@ func runJoinCommand(args []string, stdout, stderr io.Writer) error {
 	}
 	c := newCommandFlags(joinSpec)
 	state := c.fs.String("state", filepath.Join(home, ".ohya", "join"),
-		"join state `directory`: device identity, pairing credential, transport node, and this hub's upload checkpoints")
-	controlURL := c.fs.String("control", control.DefaultURL(),
-		"coordination `URL` of the hub's tailnet")
-	hubAddr := c.fs.String("hub-addr", tailcat.DefaultHubAddr(),
-		"hub `address` inside the tailnet")
+		"join state `directory`: device identity, pairing credential, hub address, and this hub's upload checkpoints")
 	rootFlags := newAgentRootFlags(c.fs, home)
 	allowEmpty := c.fs.Bool("allow-empty", false, "wait for session roots that do not yet exist")
 	interval := c.fs.Duration("interval", 2*time.Second,
@@ -81,8 +74,6 @@ func runJoinCommand(args []string, stdout, stderr io.Writer) error {
 	return runJoin(ctx, joinOptions{
 		allowEmpty: *allowEmpty,
 		stateDir:   *state,
-		controlURL: *controlURL,
-		hubAddr:    *hubAddr,
 		code:       code,
 		roots:      roots,
 		interval:   *interval,
@@ -101,47 +92,51 @@ func runJoin(ctx context.Context, o joinOptions) error {
 	if err != nil {
 		return err
 	}
-	invitation, authKey := "", ""
+	invitation, codeAddr := "", ""
 	if o.code != "" {
-		invitation, authKey, err = control.SplitJoinCode(o.code)
+		invitation, codeAddr, err = parseJoinCode(o.code)
 		if err != nil {
 			return err
 		}
 	}
-	node, err := tailcat.NewSharedDevice(tailcat.Options{
-		Hostname:   deviceHostname(deviceID),
-		AuthKey:    authKey,
-		ControlURL: o.controlURL,
-		StateDir:   filepath.Join(o.stateDir, "tailcat"),
-	})
-	if err != nil {
-		return err
-	}
+	node := address.NewDevice(address.DeviceOptions{})
 	defer node.Close()
 
+	hubAddr := ""
 	cred, err := device.LoadCredential(o.stateDir)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		if o.code == "" {
 			return errors.New("this device is not paired yet; pass the join code printed by ohya devices invite")
 		}
-		cred, err = pair(ctx, node, o.hubAddr, invitation, deviceID)
+		hubAddr = codeAddr
+		cred, err = pair(ctx, node, hubAddr, invitation, deviceID)
 		if err != nil {
 			return err
 		}
 		if err := device.SaveCredential(o.stateDir, cred); err != nil {
 			return err
 		}
+		if err := device.SaveHubAddress(o.stateDir, hubAddr); err != nil {
+			return err
+		}
 		fmt.Fprintf(o.stderr, "ohya: paired as device %s\n", cred.DeviceID)
 	case err != nil:
 		return err
+	default:
+		hubAddr, err = rejoin(ctx, node, o.stateDir, cred, o.code, codeAddr, o.stderr)
+		if err != nil {
+			return err
+		}
 	}
 
+	reportJoinTransport(ctx, node, hubAddr, o.stderr)
 	if o.pairOnly {
 		return nil
 	}
+	reportJoinBacklog(o.stateDir, o.roots, o.stderr)
 
-	dial := func(ctx context.Context) (net.Conn, error) { return node.Dial(ctx, o.hubAddr) }
+	dial := func(ctx context.Context) (net.Conn, error) { return node.Dial(ctx, hubAddr) }
 	errs := make(chan error, len(o.roots))
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -158,54 +153,130 @@ func runJoin(ctx context.Context, o joinOptions) error {
 		if err != nil {
 			return err
 		}
-		dir, optional := root.dir, root.optional
+		dirs := root.dirs
 		go func() {
 			errs <- up.Run(runCtx, func() ([]string, error) {
-				candidates, err := discoverSessionFiles(dir)
-				if (optional || o.allowEmpty) && errors.Is(err, fs.ErrNotExist) {
-					return nil, nil
-				}
-				return candidates, err
+				return discoverSessionFiles(dirs, o.allowEmpty)
 			})
 		}()
 	}
 	select {
 	case <-ctx.Done():
 		cancel()
+		drainDevice(node)
 		return nil
 	case err := <-errs:
 		cancel()
+		drainDevice(node)
 		return err
 	}
+}
+
+func rejoin(ctx context.Context, node transport.Device, stateDir string, cred device.Credential, code, codeAddr string, stderr io.Writer) (string, error) {
+	if code == "" {
+		hubAddr, err := device.LoadHubAddress(stateDir)
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", errors.New("this device holds no hub address; pass a join code from ohya devices invite once to save it")
+		}
+		if err != nil {
+			return "", err
+		}
+		return hubAddr, nil
+	}
+	if err := verifyCredential(ctx, node, codeAddr, cred); err != nil {
+		return "", err
+	}
+	if err := device.SaveHubAddress(stateDir, codeAddr); err != nil {
+		return "", err
+	}
+	fmt.Fprintf(stderr, "ohya: hub accepted device %s; kept identity and checkpoints, the invitation stays unused\n", cred.DeviceID)
+	return codeAddr, nil
+}
+
+func verifyCredential(ctx context.Context, node transport.Device, hubAddr string, cred device.Credential) error {
+	probeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	session := hubsync.NewRemoteSession(
+		func(ctx context.Context) (net.Conn, error) { return node.Dial(ctx, hubAddr) },
+		cred.Secret, hubsync.RemoteSessionOptions{})
+	defer session.Close()
+	if _, err := session.Query(probeCtx, "SELECT 1"); err != nil {
+		if errors.Is(err, hubsync.ErrRemoteUnauthorized) {
+			return fmt.Errorf("the hub refused this device's credential: %w; the device identity was revoked, or the code names a different hub", err)
+		}
+		if isVersionMismatch(err) {
+			return versionMismatchFailure(err)
+		}
+		return fmt.Errorf("cannot reach the hub at the address in this code: %w; check that ohya serve runs on the hub and this device can reach a relay (outbound HTTPS, TCP 443)", err)
+	}
+	return nil
 }
 
 func pair(ctx context.Context, node transport.Device, hubAddr, invitation, deviceID string) (device.Credential, error) {
 	conn, err := node.Dial(ctx, hubAddr)
 	if err != nil {
-		return device.Credential{}, fmt.Errorf("join: reach the hub at %s: %w", hubAddr, err)
+		return device.Credential{}, fmt.Errorf("join: reach the hub: %w; check that ohya serve runs on the hub and this device can reach a relay (outbound HTTPS, TCP 443)", err)
 	}
 	defer conn.Close()
 	secret, err := hubsync.Pair(conn, invitation, deviceID)
 	if err != nil {
+		var perr *hubsync.Error
+		if errors.As(err, &perr) && perr.Code == hubsync.CodeAuth {
+			return device.Credential{}, fmt.Errorf("join: pair with hub: %w; when the invitation expired or was used, ask the hub for a fresh code from ohya devices invite", err)
+		}
+		if isVersionMismatch(err) {
+			return device.Credential{}, versionMismatchFailure(err)
+		}
 		return device.Credential{}, fmt.Errorf("join: pair with hub: %w", err)
 	}
 	return device.Credential{DeviceID: deviceID, Secret: secret}, nil
 }
 
-func deviceHostname(deviceID string) string {
-	id := strings.Map(func(r rune) rune {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			return r
-		default:
-			return -1
+func drainDevice(node *address.Device) {
+	drainCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	_ = node.Drain(drainCtx)
+	cancel()
+}
+
+func reportJoinTransport(ctx context.Context, node *address.Device, hubAddr string, stderr io.Writer) {
+	reportCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	report, err := node.PathInfo(reportCtx, hubAddr)
+	switch {
+	case err != nil:
+		fmt.Fprintf(stderr, "ohya: hub path unknown (the transport library reported no measurement: %v); sync protocol %d\n", err, hubsync.ProtocolVersion)
+	case report.Path == address.PathRelay:
+		fmt.Fprintf(stderr, "ohya: hub answers through a relay path (region %s), round trip %.1f ms; sync protocol %d\n",
+			relayRegionText(report.RegionID, report.RegionCode), report.RoundTripMS, hubsync.ProtocolVersion)
+	default:
+		fmt.Fprintf(stderr, "ohya: hub answers through a %s path, round trip %.1f ms; sync protocol %d\n",
+			report.Path, report.RoundTripMS, hubsync.ProtocolVersion)
+	}
+}
+
+func reportJoinBacklog(stateDir string, roots []agentRoot, stderr io.Writer) {
+	var pending int64
+	for _, root := range roots {
+		candidates, err := discoverSessionFiles(root.dirs, false)
+		if err != nil {
+			continue
 		}
-	}, strings.ToLower(deviceID))
-	if len(id) > 12 {
-		id = id[:12]
+		snaps, err := watch.InspectSources(stateDir, root.agent)
+		if err != nil {
+			fmt.Fprintf(stderr, "ohya: upload backlog for %s unknown: %v\n", root.agent, err)
+			continue
+		}
+		byPath := make(map[string]int64, len(snaps))
+		for _, s := range snaps {
+			byPath[s.Path] = s.CursorBytes
+		}
+		for _, path := range candidates {
+			info, err := os.Stat(path)
+			if err != nil {
+				continue
+			}
+			pending += info.Size() - byPath[path]
+		}
 	}
-	if id == "" {
-		id = "device"
-	}
-	return "dev-" + id
+	fmt.Fprintf(stderr, "ohya: upload backlog: %d bytes\n", pending)
 }

@@ -34,3 +34,31 @@ real subprocess in `cmd/ohya`. The SDK pulls the transitive dependencies
 listed in go.mod (jsonschema-go for tool schemas, oauth2 and jwt for its auth
 package, and related support libraries); only `mcp` and `jsonrpc` are imported
 by ohya code.
+
+Pinned 2026-11-16 (T121): `github.com/tailscale/tailcat v0.7.0` (BSD-3-Clause)
+is a direct dependency, imported by `internal/transport/address`
+([ADR 0011](0011-tailcat-address-transport.md)). `tailscale.com` stays at
+v1.104.4; the 2026-11-16 spike verified that Tailcat builds and its test suite
+passes with that pin, and the dependency graph only reuses versions go.mod
+already carried. Tailcat v0.x promises no API, command-line, or wire-format
+stability, so ohya pins one exact version and upgrades it only in a release
+that states the change; a Tailcat wire change must bump the sync
+`ProtocolVersion`. The shared `tailscale.com` pin also covers the test-only
+`derp/derpserver` import that runs a local relay without internet access.
+
+Removed 2026-11-16 (T123): `github.com/juanfont/headscale` v0.29.7, the
+embedded coordination server behind the superseded tsnet transport
+([ADR 0011](0011-tailcat-address-transport.md), "What is removed"), and
+with it every transitive dependency only it carried. Direct dependencies
+shrank to five. The linux/amd64 release binary, built with the
+`scripts/package.sh` flags, fell from 72,148,584 to 49,350,600 bytes
+(see [docs/performance.md](../performance.md), "Release binary size").
+
+Promoted 2026-11-17 (T102): `github.com/klauspost/compress` v1.20.0
+moved from indirect (carried through `tailscale.com`) to direct. The
+offline storage analysis programs under `perf/`
+([plan 004](../../plans/004-storage-efficiency.md) S3) import its zstd
+encoder and decoder to measure compression ratios and decode cost on a
+real hub; no version changed and no release binary imports it outside
+the existing module graph. A storage design that adopts zstd at rest
+will make the import production-facing and needs its own ADR.

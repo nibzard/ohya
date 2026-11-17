@@ -12,6 +12,7 @@ import (
 
 	"github.com/nibzard/ohya/internal/device"
 	"github.com/nibzard/ohya/internal/hubsync"
+	"github.com/nibzard/ohya/internal/observe"
 	"github.com/nibzard/ohya/internal/watch"
 	"github.com/nibzard/ohya/internal/workspace"
 )
@@ -21,6 +22,13 @@ const DefaultRequestTimeout = 60 * time.Second
 const (
 	DefaultReconnectBase = time.Second
 	DefaultReconnectCap  = time.Minute
+)
+
+const (
+	backlogRateWindow  = 10 * time.Second
+	backlogRateMinSpan = time.Second
+	backlogLogFloor    = 1 << 20
+	backlogLogInterval = 10 * time.Second
 )
 
 var ErrDisconnected = errors.New("uploader: hub connection failed; unacknowledged bytes are sent again after reconnecting")
@@ -38,6 +46,7 @@ type Options struct {
 	Interval       time.Duration
 	Log            io.Writer
 	Resolve        workspace.Resolver
+	Observer       observe.Observer
 }
 
 type Stats struct {
@@ -52,6 +61,7 @@ type Uploader struct {
 	dial       Dialer
 	opts       Options
 	log        io.Writer
+	observer   observe.Observer
 
 	conn         *conn
 	ready        map[string]bool
@@ -62,9 +72,26 @@ type Uploader struct {
 	lossReported map[string]bool
 	gapReported  map[string]int64
 	offline      bool
+	advances     uint32
 
 	workspacesDue bool
 	workspacesOff bool
+	drain         *backlogDrain
+}
+
+type backlogDrain struct {
+	start   time.Time
+	left    int64
+	sent    int64
+	total   int64
+	samples []drainSample
+	lastLog time.Time
+	logged  bool
+}
+
+type drainSample struct {
+	at   time.Time
+	sent int64
 }
 
 type stopMark struct {
@@ -99,8 +126,12 @@ func New(w *watch.Watcher, cred device.Credential, dial Dialer, opts Options) (*
 	if opts.Resolve == nil {
 		opts.Resolve = workspace.Resolve
 	}
+	observer := opts.Observer
+	if observer == nil {
+		observer = observe.Disabled
+	}
 	return &Uploader{
-		watcher: w, credential: cred, dial: dial, opts: opts, log: log,
+		watcher: w, credential: cred, dial: dial, opts: opts, log: log, observer: observer,
 		ready: map[string]bool{}, blocked: map[string]bool{},
 		stops: map[string]stopMark{}, idle: map[string]stopMark{}, seen: map[string]int64{},
 		lossReported: map[string]bool{}, gapReported: map[string]int64{},
@@ -134,6 +165,7 @@ func (u *Uploader) Run(ctx context.Context, discover func() ([]string, error)) e
 		case errors.Is(err, ErrDisconnected):
 			failures++
 			wait = u.opts.Reconnect.Wait(failures)
+			u.observer.Observe("upload_backoff_duration", wait)
 		default:
 			return err
 		}
@@ -152,17 +184,24 @@ func (u *Uploader) Sync(ctx context.Context, candidates []string) (stats Stats, 
 	if err != nil {
 		return stats, err
 	}
+	u.observer.Set("watch_sources", float64(len(u.stops)), "stopped")
+	u.observer.Set("watch_sources", float64(len(u.blocked)), "blocked")
 	defer func() {
 		if ferr := u.watcher.Flush(); ferr != nil {
 			u.logf("persist acknowledgments: %v", ferr)
+			u.observer.Add("upload_failures", 1, "checkpoint")
 			if err == nil {
 				err = ferr
 			}
+			return
 		}
+		u.observer.Add("upload_checkpoint_advances", uint64(u.advances))
+		u.advances = 0
 	}()
 	for _, o := range outcomes {
 		u.noteLoss(o)
 	}
+	u.updateBacklog(outcomes)
 	if err = u.connect(ctx); err != nil {
 		return stats, err
 	}
@@ -241,12 +280,21 @@ func (u *Uploader) noteLoss(o watch.Outcome) {
 		delete(u.seen, old)
 		delete(u.lossReported, old)
 	case o.Missing:
-		if end, ok := u.seen[o.SourceID]; ok && end > o.Cursor && !u.lossReported[o.SourceID] {
-			u.lossReported[o.SourceID] = true
+		if u.lossReported[o.SourceID] {
+			return
+		}
+		u.lossReported[o.SourceID] = true
+		if end, ok := u.seen[o.SourceID]; ok && end > o.Cursor {
 			u.logf("%s: source %s disappeared before upload: bytes [%d, %d) were never uploaded; they upload if the file returns, otherwise they are lost (no outgoing spool)",
 				o.Path, o.SourceID, o.Cursor, end)
+			return
 		}
+		u.logf("%s: source %s disappeared; the checkpoint is kept and upload resumes if the file returns",
+			o.Path, o.SourceID)
 		return
+	}
+	if u.lossReported[o.SourceID] {
+		u.observer.Add("watch_source_events", 1, "returned")
 	}
 	u.seen[o.SourceID] = o.End
 	delete(u.lossReported, o.SourceID)
@@ -288,11 +336,14 @@ func (u *Uploader) syncSource(ctx context.Context, o watch.Outcome, stats *Stats
 			return nil
 		}
 		delete(u.idle, o.SourceID)
+		u.observer.Add("upload_batches", 1, "attempted")
+		u.observer.Add("upload_payload_bytes", uint64(b.End-b.Start))
 		ack, perr, err := u.exchange(ctx, func(w io.Writer) error { return hubsync.WriteBatch(w, b) })
 		if err != nil {
 			return err
 		}
 		if perr != nil {
+			u.observer.Add("upload_batches", 1, "rejected")
 			cursor, retry, err := u.batchRefused(ctx, o, perr)
 			if err != nil || !retry {
 				return err
@@ -300,6 +351,7 @@ func (u *Uploader) syncSource(ctx context.Context, o watch.Outcome, stats *Stats
 			o.Cursor = cursor
 			continue
 		}
+		u.observer.Add("upload_batches", 1, "successful")
 		if ack.Cursor < o.Cursor {
 			cursor, ok := u.reconcile(o, ack.Cursor)
 			if !ok {
@@ -311,8 +363,13 @@ func (u *Uploader) syncSource(ctx context.Context, o watch.Outcome, stats *Stats
 		if ack.Cursor > o.Cursor {
 			if err := u.watcher.Acknowledge(o.Path, o.SourceID, ack.Cursor); err != nil {
 				u.logf("%s: persist acknowledgment: %v", o.Path, err)
+				u.observer.Add("upload_failures", 1, "checkpoint")
 				return nil
 			}
+			u.advances++
+			u.observer.Add("upload_ack_bytes", uint64(ack.Cursor-o.Cursor))
+			u.advanceBacklog(ack.Cursor - o.Cursor)
+			u.observer.Add("upload_events_inserted", uint64(ack.Inserted))
 			stats.Acknowledged += ack.Cursor - o.Cursor
 			stats.Inserted += ack.Inserted
 			o.Cursor = ack.Cursor
@@ -364,10 +421,14 @@ func (u *Uploader) reconcile(o watch.Outcome, hub int64) (int64, bool) {
 	switch {
 	case hub > o.Cursor:
 		if err := u.watcher.Acknowledge(o.Path, o.SourceID, hub); err != nil {
+			u.observer.Add("upload_failures", 1, "checkpoint")
 			u.block(o, fmt.Sprintf("hub cursor %d is ahead of the checkpoint %d but cannot be acknowledged: %v",
 				hub, o.Cursor, err))
 			return 0, false
 		}
+		u.advances++
+		u.observer.Add("upload_ack_bytes", uint64(hub-o.Cursor))
+		u.advanceBacklog(hub - o.Cursor)
 	case hub < o.Cursor:
 		u.logf("%s: hub cursor of source %s regressed from %d to %d (hub restored from a backup?); replaying the retained file",
 			o.Path, o.SourceID, o.Cursor, hub)
@@ -512,11 +573,13 @@ func (u *Uploader) connect(ctx context.Context) error {
 	defer cancel()
 	c, err := u.dial(dctx)
 	if err != nil {
+		u.observer.Add("upload_failures", 1, "connect")
 		return u.disconnected(ctx, fmt.Errorf("dial hub: %w", err))
 	}
 	_ = c.SetWriteDeadline(time.Now().Add(u.opts.RequestTimeout))
 	if err := hubsync.WriteHello(c, u.credential.Secret); err != nil {
 		c.Close()
+		u.observer.Add("upload_failures", 1, "connect")
 		return u.disconnected(ctx, err)
 	}
 	u.conn = &conn{c: c, br: bufio.NewReaderSize(c, 64<<10)}
@@ -542,6 +605,8 @@ func (u *Uploader) exchange(ctx context.Context, write func(io.Writer) error) (h
 
 func (u *Uploader) roundTrip(ctx context.Context, write func(io.Writer) error, read func(io.Reader) (*hubsync.Error, error)) (*hubsync.Error, error) {
 	c := u.conn
+	start := time.Now()
+	defer func() { u.observer.Observe("upload_round_trip_duration", time.Since(start)) }()
 	deadline := time.Now().Add(u.opts.RequestTimeout)
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d
@@ -559,24 +624,39 @@ func (u *Uploader) roundTrip(ctx context.Context, write func(io.Writer) error, r
 		_ = c.c.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 		if _, perr, rerr := hubsync.ReadReply(c.br); rerr == nil && perr != nil {
 			u.Close()
+			u.protocolFailure(perr)
 			return nil, connError(perr)
 		}
 		u.Close()
+		u.observer.Add("upload_failures", 1, "write")
 		return nil, u.disconnected(ctx, err)
 	}
 	perr, err := read(c.br)
 	if err != nil {
 		u.Close()
+		u.observer.Add("upload_failures", 1, "read")
 		return nil, u.disconnected(ctx, err)
 	}
 	if perr != nil {
 		switch perr.Code {
 		case hubsync.CodeAuth, hubsync.CodeVersion, hubsync.CodeMalformed, hubsync.CodeTooLarge, hubsync.CodeBusy:
+			u.protocolFailure(perr)
 			u.Close()
 			return nil, connError(perr)
 		}
 	}
 	return perr, nil
+}
+
+func (u *Uploader) protocolFailure(perr *hubsync.Error) {
+	switch perr.Code {
+	case hubsync.CodeAuth:
+		u.observer.Add("upload_failures", 1, "auth")
+	case hubsync.CodeBusy:
+		u.observer.Add("upload_failures", 1, "retry")
+	default:
+		u.observer.Add("upload_failures", 1, "other")
+	}
 }
 
 func connError(perr *hubsync.Error) error {
@@ -603,4 +683,100 @@ func (u *Uploader) disconnected(ctx context.Context, err error) error {
 
 func (u *Uploader) logf(format string, args ...any) {
 	fmt.Fprintf(u.log, "ohya: "+format+"\n", args...)
+}
+
+func (u *Uploader) updateBacklog(outcomes []watch.Outcome) {
+	var pending int64
+	for _, o := range outcomes {
+		if !o.Missing {
+			pending += o.End - o.Cursor
+		}
+	}
+	now := time.Now()
+	switch {
+	case u.drain == nil && pending > 0:
+		u.drain = &backlogDrain{
+			start:   now,
+			left:    pending,
+			total:   pending,
+			samples: []drainSample{{at: now}},
+			lastLog: now,
+		}
+		u.reportBacklog(now, false)
+	case u.drain != nil && pending > 0:
+		u.drain.left = pending
+		u.reportBacklog(now, false)
+	case u.drain != nil && pending == 0:
+		u.reportBacklog(now, true)
+		u.drain = nil
+	}
+}
+
+func (u *Uploader) advanceBacklog(delta int64) {
+	if u.drain == nil || delta <= 0 {
+		return
+	}
+	now := time.Now()
+	u.drain.sent += delta
+	u.drain.left -= delta
+	u.drain.samples = append(u.drain.samples, drainSample{at: now, sent: u.drain.sent})
+	u.reportBacklog(now, false)
+}
+
+func (u *Uploader) reportBacklog(now time.Time, done bool) {
+	d := u.drain
+	if d == nil {
+		return
+	}
+	cutoff := now.Add(-backlogRateWindow)
+	keep := 0
+	for i, s := range d.samples {
+		if s.at.After(cutoff) {
+			keep = i
+			break
+		}
+	}
+	d.samples = d.samples[keep:]
+
+	var rate float64
+	rateKnown := false
+	if first, last := d.samples[0], d.samples[len(d.samples)-1]; len(d.samples) >= 2 && last.at.Sub(first.at) >= backlogRateMinSpan {
+		rate = float64(last.sent-first.sent) / last.at.Sub(first.at).Seconds()
+		rateKnown = true
+	}
+	left, sent := d.left, d.sent
+	if done {
+		left = 0
+	}
+	u.observer.Set("upload_backlog_bytes", float64(left), u.opts.Agent)
+	u.observer.Set("upload_backlog_sent_bytes", float64(sent), u.opts.Agent)
+	if done || !rateKnown || rate <= 0 || left <= 0 {
+		u.observer.Set("upload_backlog_rate_bytes", 0, u.opts.Agent)
+		u.observer.Set("upload_backlog_eta_ms", 0, u.opts.Agent)
+	} else {
+		eta := time.Duration(float64(left) / rate * float64(time.Second))
+		u.observer.Set("upload_backlog_rate_bytes", rate, u.opts.Agent)
+		u.observer.Set("upload_backlog_eta_ms", eta.Seconds()*1000, u.opts.Agent)
+	}
+	if d.total < backlogLogFloor {
+		return
+	}
+	if d.logged && now.Sub(d.lastLog) < backlogLogInterval && !done {
+		return
+	}
+	d.lastLog = now
+	d.logged = true
+	agent := u.opts.Agent
+	switch {
+	case done:
+		u.logf("upload backlog for %s: complete, %d bytes acknowledged in %s", agent, sent, now.Sub(d.start).Round(time.Second))
+	case !rateKnown:
+		u.logf("upload backlog for %s: %d of %d bytes acknowledged, rate unknown so far", agent, sent, d.total)
+	case left > 0:
+		eta := time.Duration(float64(left) / rate * float64(time.Second))
+		u.logf("upload backlog for %s: %d of %d bytes acknowledged, %.0f bytes/s, about %s left",
+			agent, sent, d.total, rate, eta.Round(time.Second))
+	default:
+		u.logf("upload backlog for %s: %d of %d bytes acknowledged, %.0f bytes/s", agent, sent, d.total, rate)
+	}
 }

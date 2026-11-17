@@ -14,6 +14,7 @@ import (
 const (
 	mainThread     = "00000000-0000-7000-8000-0000000000c1"
 	subagentThread = "00000000-0000-7000-8000-0000000000d1"
+	mcpThread      = "00000000-0000-7000-8000-0000000000e1"
 )
 
 func fixture(t testing.TB, name string) []byte {
@@ -179,6 +180,47 @@ func TestParseMainSession(t *testing.T) {
 	}
 	if got := string(u2.Usage); got != `{"cache_write_input_tokens":0,"cached_input_tokens":1250,"input_tokens":1300,"output_tokens":30,"reasoning_output_tokens":0,"total_tokens":1330}` {
 		t.Errorf("second usage = %s", got)
+	}
+}
+
+func TestParseMCPToolCallSession(t *testing.T) {
+	data := fixture(t, "mcp-tool-call.jsonl")
+	res, err := Parse(data, 0, Options{SourceScope: "src-mcp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkInvariants(t, data, 0, res)
+	nov16 := func(h, m, s, milli int) int64 {
+		return time.Date(2026, time.November, 16, h, m, s, milli*int(time.Millisecond), time.UTC).UnixMilli()
+	}
+	checkTable(t, res, []want{
+		{0, 402, "session_meta", "", "", "", -1, nov16(10, 0, 1, 0)},
+		{402, 552, "event_msg", "", "", "", 1, nov16(10, 0, 2, 0)},
+		{552, 827, "response_item", "user", "", "Use the ohya sql MCP tool with this exact query: SELECT count(*) AS n FROM sessions. Reply with just the number.", 2, nov16(10, 0, 3, 0)},
+		{827, 1135, "turn_context", "", "", "", 3, nov16(10, 0, 4, 0)},
+		{1135, 1418, "response_item", "assistant", "", "I'll run the exact query with the ohya sql tool.", 4, nov16(10, 0, 5, 0)},
+		{1418, 1707, "response_item", "", "exec", "exec text(await tools.mcp__ohya__sql({query:\"SELECT count(*) AS n FROM sessions\"}));\n", 5, nov16(10, 0, 7, 0)},
+		{1707, 2365, "token_usage_record", "", "", "", 6, nov16(10, 0, 8, 0)},
+		{2365, 3086, "event_msg", "", "", "", 7, nov16(10, 0, 9, 0)},
+		{3086, 3615, "response_item", "", "", "Script completed\nWall time 0.0 seconds\nOutput:\n\n{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"columns\\\":[\\\"n\\\"],\\\"row_count\\\":1,\\\"rows\\\":[[3]],\\\"truncated\\\":false}\"}],\"structuredContent\":{\"columns\":[\"n\"],\"row_count\":1,\"rows\":[[3]],\"truncated\":false}}", 8, nov16(10, 0, 10, 0)},
+		{3615, 3853, "response_item", "assistant", "", "3", 9, nov16(10, 0, 12, 0)},
+		{3853, 3986, "event_msg", "", "", "", 10, nov16(10, 0, 13, 0)},
+	})
+	if res.Cursor != 3986 || res.Native != mcpThread {
+		t.Fatalf("cursor/native = %d/%q, want 3986/%q", res.Cursor, res.Native, mcpThread)
+	}
+	call := res.Records[7]
+	if md := metadataOf(t, call); md["payloadType"] != "item_completed" {
+		t.Errorf("McpToolCall metadata = %v", md)
+	}
+	if !strings.Contains(call.Raw, `"server":"ohya"`) || !strings.Contains(call.Raw, `"tool":"sql"`) {
+		t.Errorf("McpToolCall raw record lost the server or tool name: %s", call.Raw)
+	}
+	if md := metadataOf(t, res.Records[5]); md["payloadType"] != "custom_tool_call" || md["callId"] != "call_fixture_00e1" {
+		t.Errorf("custom_tool_call metadata = %v", md)
+	}
+	if u := res.Records[6]; u.ResponseID != "resp_fixture_00e1" || len(u.Usage) == 0 {
+		t.Errorf("usage record = %q/%s", u.ResponseID, u.Usage)
 	}
 }
 
@@ -553,7 +595,7 @@ func TestParseSplitAtEveryOffset(t *testing.T) {
 }
 
 func TestParseIsDeterministic(t *testing.T) {
-	for _, name := range []string{"main-session.jsonl", "subagent-session.jsonl", "resumed-page.jsonl", "reenumerated-page.jsonl"} {
+	for _, name := range []string{"main-session.jsonl", "subagent-session.jsonl", "resumed-page.jsonl", "reenumerated-page.jsonl", "mcp-tool-call.jsonl"} {
 		data := fixture(t, name)
 		a, errA := Parse(data, 0, Options{SourceScope: "s"})
 		b, errB := Parse(data, 0, Options{SourceScope: "s"})

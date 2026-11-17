@@ -1,0 +1,38 @@
+{
+  "format_version": 1,
+  "instance": {
+    "instance_id": "3f9b2c1d8e4a7f60b5d3c2a19e8f7b6d",
+    "pid": 4242,
+    "roles": ["ingest"],
+    "start_wall_ms": 1794837600000,
+    "build_revision": "d63898e",
+    "build_dirty": false,
+    "scope": "/home/example/.ohya"
+  },
+  "uptime_ms": 65000,
+  "sampled_wall_ms": 1794837665000,
+  "counters": {
+    "discovery_candidates": 3,
+    "ingest_events{result=inserted}": 12,
+    "parse_records{agent=claude-code}": 12,
+    "parse_records{agent=codex}": 4
+  },
+  "gauges": {
+    "watch_sources{state=active}": 3,
+    "watch_pending_complete_bytes": 512
+  },
+  "durations": {
+    "parse_duration{agent=claude-code}": {
+      "bounds_ms": [0.1, 0.5, 1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000],
+      "buckets": [3, 5, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "count": 12,
+      "sum_ms": 7.8
+    }
+  },
+  "resources": {
+    "goroutines": {"value": 42},
+    "heap_alloc_bytes": {"value": 18874368},
+    "rss_bytes": {"value": null, "reason": "rss unavailable on this platform"}
+  },
+  "future_field": {"note": "unknown fields are tolerated by readers"}
+}

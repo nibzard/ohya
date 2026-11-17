@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -98,7 +99,11 @@ func newSliceEnv(t *testing.T) *sliceEnv {
 }
 
 func (e *sliceEnv) claudeRoots() []agentRoot {
-	return []agentRoot{{agent: claudecode.AgentName, dir: e.root, flag: "claude-root"}}
+	return []agentRoot{{agent: claudecode.AgentName, flag: "claude-root", dirs: e.dirs()}}
+}
+
+func (e *sliceEnv) dirs() []agentDir {
+	return []agentDir{{dir: e.root}}
 }
 
 func (e *sliceEnv) session(name string) string {
@@ -127,7 +132,7 @@ func (e *sliceEnv) newRunner(t *testing.T, stderr io.Writer) (*ingestor, func())
 		hub.Close()
 		t.Fatal(err)
 	}
-	return newIngestor(hub, w, e.agent, deviceID, e.maxRecordBytes, stderr), func() { hub.Close() }
+	return newIngestor(hub, w, e.agent, deviceID, e.maxRecordBytes, stderr, nil), func() { hub.Close() }
 }
 
 func (e *sliceEnv) runPass(t *testing.T) (passStats, string) {
@@ -135,7 +140,7 @@ func (e *sliceEnv) runPass(t *testing.T) (passStats, string) {
 	var stderr bytes.Buffer
 	r, done := e.newRunner(t, &stderr)
 	defer done()
-	stats, err := r.poll(context.Background(), e.root, false)
+	stats, err := r.poll(context.Background(), e.dirs(), false)
 	if err != nil {
 		t.Fatalf("poll: %v", err)
 	}
@@ -424,7 +429,7 @@ func TestIngestReportsPersistentDiagnosticOncePerRun(t *testing.T) {
 	r, done := e.newRunner(t, &stderr)
 	defer done()
 	for i := 0; i < 2; i++ {
-		if _, err := r.poll(context.Background(), e.root, false); err != nil {
+		if _, err := r.poll(context.Background(), e.dirs(), false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -747,8 +752,8 @@ func TestIngestCrashHelper(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	r := newIngestor(hub, w, agent, deviceID, 0, io.Discard)
-	candidates, err := discoverSessionFiles(root)
+	r := newIngestor(hub, w, agent, deviceID, 0, io.Discard, nil)
+	candidates, err := discoverSessionFiles([]agentDir{{dir: root}}, false)
 	if err != nil {
 		panic(err)
 	}
@@ -840,8 +845,8 @@ func TestIngestCrashAckHelper(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	r := newIngestor(hub, w, agent, deviceID, 0, io.Discard)
-	candidates, err := discoverSessionFiles(root)
+	r := newIngestor(hub, w, agent, deviceID, 0, io.Discard, nil)
+	candidates, err := discoverSessionFiles([]agentDir{{dir: root}}, false)
 	if err != nil {
 		panic(err)
 	}
@@ -898,8 +903,9 @@ func TestIngestMissingClaudeRootFails(t *testing.T) {
 	e := newSliceEnv(t)
 	err := runIngest(context.Background(), ingestOptions{
 		dbPath: e.dbPath, stateDir: e.stateDir,
-		roots: []agentRoot{{agent: claudecode.AgentName, dir: filepath.Join(e.root, "absent"), flag: "claude-root"}},
-		once:  true, stdout: io.Discard, stderr: io.Discard,
+		roots: []agentRoot{{agent: claudecode.AgentName, flag: "claude-root",
+			dirs: []agentDir{{dir: filepath.Join(e.root, "absent")}}}},
+		once: true, stdout: io.Discard, stderr: io.Discard,
 	})
 	if err == nil || !strings.Contains(err.Error(), "does not exist") {
 		t.Fatalf("error = %v, want the missing projects directory", err)
@@ -925,7 +931,7 @@ func TestDiscoverSessionFiles(t *testing.T) {
 	writeFile(t, main, "{}\n")
 	writeFile(t, sub, "{}\n")
 
-	files, err := discoverSessionFiles(root)
+	files, err := discoverSessionFiles([]agentDir{{dir: root}}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -940,6 +946,63 @@ func TestDiscoverSessionFiles(t *testing.T) {
 	}
 }
 
+func TestDiscoverSessionFilesAcrossDirs(t *testing.T) {
+	base := t.TempDir()
+	sessions := filepath.Join(base, "sessions")
+	archived := filepath.Join(base, "archived_sessions")
+	writeFile(t, filepath.Join(sessions, "2026", "11", "rollout-a.jsonl"), "{}\n")
+	writeFile(t, filepath.Join(archived, "rollout-b.jsonl"), "{}\n")
+	present := []agentDir{
+		{dir: sessions, optional: true},
+		{dir: archived, optional: true},
+	}
+	for _, tc := range []struct {
+		name       string
+		dirs       []agentDir
+		allowEmpty bool
+		want       []string
+		wantErr    string
+	}{
+		{"both roots", present, false,
+			[]string{filepath.Join(sessions, "2026", "11", "rollout-a.jsonl"), filepath.Join(archived, "rollout-b.jsonl")}, ""},
+		{"archived missing is optional", []agentDir{
+			{dir: sessions, optional: true},
+			{dir: filepath.Join(base, "archived-absent"), optional: true},
+		}, false,
+			[]string{filepath.Join(sessions, "2026", "11", "rollout-a.jsonl")}, ""},
+		{"sessions missing leaves archived", []agentDir{
+			{dir: filepath.Join(base, "sessions-absent"), optional: true},
+			{dir: archived, optional: true},
+		}, false,
+			[]string{filepath.Join(archived, "rollout-b.jsonl")}, ""},
+		{"required missing dir fails", []agentDir{
+			{dir: filepath.Join(base, "sessions-absent")},
+			{dir: archived, optional: true},
+		}, false, nil, "does not exist"},
+		{"allow-empty tolerates a required missing dir", []agentDir{
+			{dir: filepath.Join(base, "sessions-absent")},
+			{dir: archived, optional: true},
+		}, true,
+			[]string{filepath.Join(archived, "rollout-b.jsonl")}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			files, err := discoverSessionFiles(tc.dirs, tc.allowEmpty)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("error = %v, want it to mention %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(files, tc.want) {
+				t.Fatalf("files = %v, want %v", files, tc.want)
+			}
+		})
+	}
+}
+
 func TestIngestStoppedSourceNotReReadWhileUnchanged(t *testing.T) {
 	e := newSliceEnv(t)
 	session := e.session("malformed-line.jsonl")
@@ -948,7 +1011,7 @@ func TestIngestStoppedSourceNotReReadWhileUnchanged(t *testing.T) {
 	r, done := e.newRunner(t, &stderr)
 	defer done()
 
-	stats, err := r.poll(context.Background(), e.root, false)
+	stats, err := r.poll(context.Background(), e.dirs(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -956,7 +1019,7 @@ func TestIngestStoppedSourceNotReReadWhileUnchanged(t *testing.T) {
 		t.Fatalf("first pass = %+v, want 1 stopped source", stats)
 	}
 
-	stats, err = r.poll(context.Background(), e.root, false)
+	stats, err = r.poll(context.Background(), e.dirs(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -974,7 +1037,7 @@ func TestIngestStoppedSourceNotReReadWhileUnchanged(t *testing.T) {
 	defer os.Chmod(session, 0o600)
 
 	stderr.Reset()
-	stats, err = r.poll(context.Background(), e.root, false)
+	stats, err = r.poll(context.Background(), e.dirs(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -997,7 +1060,7 @@ func TestIngestPartialTailNotReReadUntilGrowth(t *testing.T) {
 	r, done := e.newRunner(t, &stderr)
 	defer done()
 
-	stats, err := r.poll(context.Background(), e.root, false)
+	stats, err := r.poll(context.Background(), e.dirs(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1005,7 +1068,7 @@ func TestIngestPartialTailNotReReadUntilGrowth(t *testing.T) {
 		t.Fatalf("first pass = %+v, want 3 complete records", stats)
 	}
 
-	stats, err = r.poll(context.Background(), e.root, false)
+	stats, err = r.poll(context.Background(), e.dirs(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1022,7 +1085,7 @@ func TestIngestPartialTailNotReReadUntilGrowth(t *testing.T) {
 	}
 
 	stderr.Reset()
-	stats, err = r.poll(context.Background(), e.root, false)
+	stats, err = r.poll(context.Background(), e.dirs(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1037,7 +1100,7 @@ func TestIngestPartialTailNotReReadUntilGrowth(t *testing.T) {
 		t.Fatal(err)
 	}
 	appendFile(t, session, `"}]}}`+"\n")
-	stats, err = r.poll(context.Background(), e.root, false)
+	stats, err = r.poll(context.Background(), e.dirs(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1054,7 +1117,7 @@ func TestIngestReplacementRetriesDespiteCachedStop(t *testing.T) {
 	r, done := e.newRunner(t, &stderr)
 	defer done()
 
-	stats, err := r.poll(context.Background(), e.root, false)
+	stats, err := r.poll(context.Background(), e.dirs(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1062,7 +1125,7 @@ func TestIngestReplacementRetriesDespiteCachedStop(t *testing.T) {
 		t.Fatalf("first pass = %+v, want 1 stopped source", stats)
 	}
 
-	stats, err = r.poll(context.Background(), e.root, false)
+	stats, err = r.poll(context.Background(), e.dirs(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1075,12 +1138,62 @@ func TestIngestReplacementRetriesDespiteCachedStop(t *testing.T) {
 	}
 	replaceFile(t, session, line("replacement", "sess-new"))
 
-	stats, err = r.poll(context.Background(), e.root, false)
+	stats, err = r.poll(context.Background(), e.dirs(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if stats.inserted != 1 || stats.stopped != 0 {
 		t.Fatalf("pass after replacement = %+v, want the new incarnation ingested, not skipped from the old source's cache", stats)
+	}
+}
+
+func TestIngestReRegistersSourceAfterHubLosesRow(t *testing.T) {
+	e := newSliceEnv(t)
+	session := e.session("torn-session.jsonl")
+	torn := fmt.Sprintf(`{"type":"user","sessionId":%q,"message":{"role":"user","content":"torn"`, fixtureNativeID)
+	writeFile(t, session, torn)
+	var stderr bytes.Buffer
+	r, done := e.newRunner(t, &stderr)
+	defer done()
+
+	stats, err := r.poll(context.Background(), e.dirs(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.sources != 1 || stats.inserted != 0 || stats.failed != 0 {
+		t.Fatalf("first pass = %+v, want one source holding only a torn tail", stats)
+	}
+
+	if _, err := rawOpen(t, e.dbPath).Exec(`DELETE FROM sources`); err != nil {
+		t.Fatal(err)
+	}
+
+	appendFile(t, session, `}}`+"\n")
+	stderr.Reset()
+	stats, err = r.poll(context.Background(), e.dirs(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.failed != 1 || stats.inserted != 0 {
+		t.Fatalf("pass after the row loss = %+v, want the batch refused once", stats)
+	}
+	if !strings.Contains(stderr.String(), "not registered") {
+		t.Fatalf("stderr = %q, want the not-registered diagnostic", stderr.String())
+	}
+
+	stderr.Reset()
+	stats, err = r.poll(context.Background(), e.dirs(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.failed != 0 || stats.inserted != 1 {
+		t.Fatalf("pass after the refusal = %+v, want the source re-registered and the record ingested", stats)
+	}
+	if stderr.String() != "" {
+		t.Fatalf("stderr = %q, want silence after recovery", stderr.String())
+	}
+	if _, cursor := soleSourceID(t, rawOpen(t, e.dbPath)); cursor != int64(len(torn)+3) {
+		t.Fatalf("stored cursor = %d, want the full %d-byte file", cursor, len(torn)+3)
 	}
 }
 
@@ -1097,7 +1210,7 @@ func TestIngestInPlaceRepairSameSizeRetriesViaModTime(t *testing.T) {
 	r, done := e.newRunner(t, &stderr)
 	defer done()
 
-	stats, err := r.poll(context.Background(), e.root, false)
+	stats, err := r.poll(context.Background(), e.dirs(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1105,7 +1218,7 @@ func TestIngestInPlaceRepairSameSizeRetriesViaModTime(t *testing.T) {
 		t.Fatalf("first pass = %+v, want 1 inserted and 1 stopped", stats)
 	}
 
-	stats, err = r.poll(context.Background(), e.root, false)
+	stats, err = r.poll(context.Background(), e.dirs(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1137,7 +1250,7 @@ func TestIngestInPlaceRepairSameSizeRetriesViaModTime(t *testing.T) {
 		t.Fatalf("repair changed the file size: %+v, %v", info, err)
 	}
 
-	stats, err = r.poll(context.Background(), e.root, false)
+	stats, err = r.poll(context.Background(), e.dirs(), false)
 	if err != nil {
 		t.Fatal(err)
 	}

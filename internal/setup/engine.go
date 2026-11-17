@@ -5,12 +5,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/nibzard/ohya/internal/store"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
+	"syscall"
 	"time"
+
+	"github.com/nibzard/ohya/internal/store"
 )
 
 type Result struct {
@@ -23,6 +26,15 @@ type Result struct {
 type Report struct {
 	Results []Result `json:"results"`
 	DryRun  bool     `json:"dry_run"`
+	Hub     *HubJoin `json:"hub,omitempty"`
+}
+
+type HubJoin struct {
+	Code          string `json:"code_secret"`
+	ExpiresAt     string `json:"expires_at"`
+	DeviceCommand string `json:"device_command"`
+	RelayRegion   string `json:"relay_region"`
+	NodeKey       string `json:"node_key"`
 }
 
 func (r Report) Complete() bool {
@@ -53,6 +65,9 @@ type Options struct {
 	Prepare          func(context.Context) error
 	Notify           func(Result)
 	Progress         func(string)
+
+	HubServiceArgs []string
+	CheckHub       func(context.Context) error
 }
 
 func (o Options) progress(line string) {
@@ -100,6 +115,13 @@ func Run(ctx context.Context, o Options) (Report, error) {
 			return report, err
 		}
 	}
+	var hubService Service
+	if !o.NoService && o.HubServiceArgs != nil {
+		hubService, err = HubServicePlan(platform, o.Clients.Home, o.Clients.Binary, o.HubServiceArgs)
+		if err != nil {
+			return report, err
+		}
+	}
 	var profiles []Profile
 	if !o.NoModifyPath {
 		profiles, err = ProfilePlan(o.Clients.Home, o.Shell, filepath.Dir(o.Clients.Binary))
@@ -113,6 +135,9 @@ func Run(ctx context.Context, o Options) (Report, error) {
 		}
 		if !o.NoService {
 			report.add(o, Result{Component: "service", Status: "planned", Detail: service.Path})
+		}
+		if hubService.Path != "" {
+			report.add(o, Result{Component: "hub-service", Status: "planned", Detail: hubService.Path})
 		}
 		for _, c := range clients {
 			detail := c.Config
@@ -172,6 +197,22 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	}
 	if !o.NoService {
 		report.add(o, configureService(ctx, o, service)...)
+		if report.Complete() && hubService.Path != "" {
+			report.add(o, configureOwnedService(ctx, o, hubService, "hub-service", "hub-service.json", false)...)
+			if !report.Complete() {
+				return report, nil
+			}
+			if o.CheckHub != nil {
+				check := Result{Component: "hub", Status: "ready", Detail: "The hub reaches its relay and answers a device dial."}
+				if err := o.CheckHub(ctx); err != nil {
+					check.Status = "failed"
+					check.Detail = err.Error()
+					report.add(o, check)
+					return report, nil
+				}
+				report.add(o, check)
+			}
+		}
 	}
 	if o.NoService {
 		recovery, err := recoveryPoint(ctx, o)
@@ -253,37 +294,23 @@ func Remove(ctx context.Context, state string, run func(context.Context, []strin
 	}
 	serviceReceipt := filepath.Join(state, "setup", "service.json")
 	if r, err := loadFileReceipt(serviceReceipt); err == nil {
-		platform := "linux"
-		if filepath.Ext(r.Path) == ".plist" {
-			platform = "darwin"
-		}
-		service, err := ServicePlan(platform, "/", "/ohya", nil)
+		result, err := removeOwnedService(ctx, r, run, "service", serviceReceipt, ServicePlan)
 		if err != nil {
 			return report, err
-		}
-		result := Result{Component: "service", Status: "removed"}
-		current, readErr := readRegular(r.Path)
-		if readErr != nil && !isMissing(readErr) {
-			return report, readErr
-		}
-		if readErr == nil && !bytes.Equal(current, r.Content) && !bytes.Equal(current, r.Previous) {
-			return report, fmt.Errorf("%s has been edited; preserve its service", r.Path)
-		}
-		for _, cmd := range service.Stop {
-			if err = run(ctx, cmd); err != nil {
-				break
-			}
-		}
-		if err == nil {
-			result.Changed, err = RemoveFile(serviceReceipt)
-		}
-		if err != nil {
-			result.Status = "failed"
-			result.Detail = err.Error()
 		}
 		report.Results = append(report.Results, result)
 	} else if !isMissing(err) {
 		return report, fmt.Errorf("read service receipt: %w", err)
+	}
+	hubServiceReceipt := filepath.Join(state, "setup", "hub-service.json")
+	if r, err := loadFileReceipt(hubServiceReceipt); err == nil {
+		result, err := removeOwnedService(ctx, r, run, "hub-service", hubServiceReceipt, HubServicePlan)
+		if err != nil {
+			return report, err
+		}
+		report.Results = append(report.Results, result)
+	} else if !isMissing(err) {
+		return report, fmt.Errorf("read hub service receipt: %w", err)
 	}
 	profiles, err := RemoveProfiles(state)
 	if err != nil {
@@ -308,7 +335,44 @@ func Remove(ctx context.Context, state string, run func(context.Context, []strin
 	return report, nil
 }
 
+func removeOwnedService(ctx context.Context, r fileReceipt, run func(context.Context, []string) error, component, receiptPath string, plan func(string, string, string, []string) (Service, error)) (Result, error) {
+	platform := "linux"
+	if filepath.Ext(r.Path) == ".plist" {
+		platform = "darwin"
+	}
+	service, err := plan(platform, "/", "/ohya", nil)
+	if err != nil {
+		return Result{}, err
+	}
+	result := Result{Component: component, Status: "removed"}
+	current, readErr := readRegular(r.Path)
+	if readErr != nil && !isMissing(readErr) {
+		return result, readErr
+	}
+	if readErr == nil && !bytes.Equal(current, r.Content) && !bytes.Equal(current, r.Previous) {
+		return result, fmt.Errorf("%s has been edited; preserve its service", r.Path)
+	}
+	for _, cmd := range service.Stop {
+		if err = run(ctx, cmd); err != nil {
+			break
+		}
+	}
+	if err == nil {
+		result.Changed, err = RemoveFile(receiptPath)
+	}
+	if err != nil {
+		result.Status = "failed"
+		result.Detail = err.Error()
+	}
+	return result, nil
+}
+
 const recoveryPointsKept = 2
+const recoverySpaceMarginBytes = 64 << 20
+
+const recoveryStagingPrefix = ".recovery-"
+
+var ErrInsufficientSpace = errors.New("insufficient free space for the recovery point")
 
 func recoveryPoint(ctx context.Context, o Options) (Result, error) {
 	database := o.Database
@@ -329,26 +393,107 @@ func recoveryPoint(ctx context.Context, o Options) (Result, error) {
 		return Result{Component: "backup", Status: "not needed", Detail: "memory schema matches this build"}, nil
 	}
 	dir := filepath.Join(o.Clients.State, "setup", "backups")
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	var cleanupErr error
+	if _, err := os.Lstat(dir); err == nil {
+		cleanupErr = removeAbandonedStaging(dir)
+	} else if !os.IsNotExist(err) {
 		return Result{}, err
 	}
-	point, err := os.MkdirTemp(dir, "recovery-")
+	copyBytes := info.Size()
+	if wal, err := os.Lstat(database + "-wal"); err == nil && wal.Mode().IsRegular() {
+		copyBytes += wal.Size()
+	}
+	required := copyBytes + copyBytes/10 + recoverySpaceMarginBytes
+	free, err := availableBytes(dir)
 	if err != nil {
 		return Result{}, err
 	}
-	path := filepath.Join(point, "hub.db")
-	result := Result{Component: "backup", Status: "saved", Detail: path, Changed: true}
-	o.progress(fmt.Sprintf("saving recovery point (%s)…", formatBytes(info.Size())))
-	if err := store.Backup(ctx, database, path); err != nil {
+	if free < uint64(required) {
+		detail := fmt.Sprintf("only %s free on %s for a recovery point of about %s",
+			formatBytes(int64(free)), dir, formatBytes(required))
+		result := Result{Component: "backup", Status: "failed", Detail: detail}
+		return result, fmt.Errorf("%w: %s; remove old recovery points under %s or free space, then rerun ohya setup (setup --state can use a disk with more space)",
+			ErrInsufficientSpace, detail, dir)
+	}
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return Result{}, err
+	}
+	staging, err := os.MkdirTemp(dir, recoveryStagingPrefix)
+	if err != nil {
+		return Result{}, err
+	}
+	point := filepath.Join(dir, "recovery-"+strings.TrimPrefix(filepath.Base(staging), recoveryStagingPrefix))
+	path := filepath.Join(staging, "hub.db")
+	result := Result{Component: "backup", Status: "saved", Detail: filepath.Join(point, "hub.db"), Changed: true}
+	o.progress(fmt.Sprintf("saving recovery point (about %s) to %s…", formatBytes(copyBytes), dir))
+	if err := store.Backup(ctx, database, path, recoveryProgress(o)); err != nil {
+		_ = os.RemoveAll(staging)
 		result.Status = "failed"
 		result.Detail = "could not create a consistent recovery point"
 		result.Changed = false
 		return result, err
 	}
+	if err := os.Rename(staging, point); err != nil {
+		_ = os.RemoveAll(staging)
+		result.Status = "failed"
+		result.Detail = "could not publish the recovery point"
+		result.Changed = false
+		return result, err
+	}
+	if cleanupErr != nil {
+		result.Detail += "; abandoned staging directories could not be removed: " + cleanupErr.Error()
+	}
 	if err := pruneRecoveryPoints(dir, recoveryPointsKept); err != nil {
 		result.Detail += "; older recovery points could not be removed: " + err.Error()
 	}
 	return result, nil
+}
+
+func recoveryProgress(o Options) func(done, total int64) {
+	lastDecile := 0
+	return func(done, total int64) {
+		if total <= 0 {
+			return
+		}
+		percent := int(done * 100 / total)
+		decile := percent / 10
+		if decile <= lastDecile || decile >= 10 {
+			return
+		}
+		lastDecile = decile
+		o.progress(fmt.Sprintf("recovery point %d%% (%s of %s)", percent, formatBytes(done), formatBytes(total)))
+	}
+}
+
+func removeAbandonedStaging(dir string) error {
+	stale, err := filepath.Glob(filepath.Join(dir, recoveryStagingPrefix+"*"))
+	if err != nil {
+		return err
+	}
+	for _, path := range stale {
+		if err := os.RemoveAll(path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func availableBytes(path string) (uint64, error) {
+	for {
+		var stat syscall.Statfs_t
+		err := syscall.Statfs(path, &stat)
+		if err == nil {
+			return stat.Bavail * uint64(stat.Bsize), nil
+		}
+		if !os.IsNotExist(err) {
+			return 0, err
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return 0, err
+		}
+		path = parent
+	}
 }
 
 func pruneRecoveryPoints(dir string, keep int) error {

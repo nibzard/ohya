@@ -26,7 +26,9 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/nibzard/ohya/internal/device"
 	"github.com/nibzard/ohya/internal/fixgen"
+	"github.com/nibzard/ohya/internal/observe"
 )
 
 const freshnessSessionID = "00000000-0000-4000-8000-0000000000a1"
@@ -109,7 +111,6 @@ type freshnessStack struct {
 	devState     string
 	sessionPath  string
 	backlogPath  string
-	ctrlAddr     string
 	serveCmd     *exec.Cmd
 	serveLog     *bytes.Buffer
 	joinCmd      *exec.Cmd
@@ -423,16 +424,13 @@ func startFreshnessStack(t *testing.T, opts freshnessOptions) *freshnessStack {
 			log:        &bytes.Buffer{},
 		})
 	}
-	ctrlAddr := fmt.Sprintf("127.0.0.1:%d", freeTCPPort(t))
-	stunAddr := fmt.Sprintf("127.0.0.1:%d", freeUDPPort(t))
-	st.ctrlAddr = ctrlAddr
-
 	st.sampler = startResourceSampler(st.hubDB, 250*time.Millisecond)
 	t.Cleanup(st.sampler.stopAndWait)
 
+	regionFile := writeDERPRegionFile(t, startLocalDERP(t))
 	st.serveCmd = exec.Command(os.Args[0], "child-serve",
-		"--db", st.hubDB, "--state", st.hubState,
-		"--control-listen", ctrlAddr, "--stun-listen", stunAddr)
+		"--db", st.hubDB, "--state", st.hubState)
+	st.serveCmd.Env = append(os.Environ(), "OHYA_TEST_DERP_REGION_FILE="+regionFile)
 	st.serveCmd.Stderr = st.serveLog
 	serveOut, err := st.serveCmd.StdoutPipe()
 	if err != nil {
@@ -472,8 +470,8 @@ func startFreshnessStack(t *testing.T, opts freshnessOptions) *freshnessStack {
 			t.Fatal(err)
 		}
 		dev.code = strings.SplitN(strings.TrimSpace(invOut.String()), "\n", 2)[0]
-		if !strings.Contains(dev.code, ":") {
-			t.Fatalf("join code = %q; want invitation and preauth key halves", dev.code)
+		if _, _, err := parseJoinCode(dev.code); err != nil {
+			t.Fatalf("join code = %q; want an ohya1 code: %v", dev.code, err)
 		}
 	}
 
@@ -482,12 +480,11 @@ func startFreshnessStack(t *testing.T, opts freshnessOptions) *freshnessStack {
 		t.Fatal(err)
 	}
 	code := strings.SplitN(strings.TrimSpace(invOut.String()), "\n", 2)[0]
-	if !strings.Contains(code, ":") {
-		t.Fatalf("join code = %q; want invitation and preauth key halves", code)
+	if _, _, err := parseJoinCode(code); err != nil {
+		t.Fatalf("join code = %q; want an ohya1 code: %v", code, err)
 	}
 
 	st.joinCmd = exec.Command(os.Args[0], "child-join",
-		"--control", "http://"+ctrlAddr,
 		"--state", st.devState,
 		"--claude-root", filepath.Dir(st.sessionPath), "--codex-root", "", "--pi-root", "",
 		"--interval", opts.uploadEvery.String(),
@@ -519,7 +516,7 @@ func startFreshnessStack(t *testing.T, opts freshnessOptions) *freshnessStack {
 	}
 
 	mcpCmd := exec.Command(os.Args[0], "child-mcp",
-		"--remote", "--control", "http://"+ctrlAddr, "--state", st.devState)
+		"--remote", "--state", st.devState)
 	client := mcp.NewClient(&mcp.Implementation{Name: "freshness-observer", Version: "v0"}, nil)
 	st.mcpCtx, st.mcpCancel = context.WithTimeout(context.Background(), 30*time.Minute)
 	session, err := client.Connect(st.mcpCtx, &mcp.CommandTransport{Command: mcpCmd}, nil)
@@ -771,7 +768,7 @@ type loadedQueryRunner struct {
 func startLoadedQuerySession(t *testing.T, st *freshnessStack, stop <-chan struct{}, timeout, period time.Duration) *loadedQueryRunner {
 	t.Helper()
 	cmd := exec.Command(os.Args[0], "child-mcp",
-		"--remote", "--control", "http://"+st.ctrlAddr, "--state", st.devState)
+		"--remote", "--state", st.devState)
 	client := mcp.NewClient(&mcp.Implementation{Name: "freshness-load", Version: "v0"}, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: cmd}, nil)
@@ -923,7 +920,6 @@ func measureFreshness(t *testing.T, st *freshnessStack, opts freshnessOptions) *
 	loadStop := make(chan struct{})
 	for i, dev := range st.extraDevices {
 		dev.cmd = exec.Command(os.Args[0], "child-join",
-			"--control", "http://"+st.ctrlAddr,
 			"--state", dev.stateDir,
 			"--claude-root", dev.claudeRoot, "--codex-root", "", "--pi-root", "",
 			"--interval", opts.uploadEvery.String(),
@@ -1136,6 +1132,7 @@ func TestFreshnessSmoke(t *testing.T) {
 	st := startFreshnessStack(t, opts)
 	rep := measureFreshness(t, st, opts)
 	rep.logTo(t, st)
+	assertRemoteUsageRecords(t, st, rep)
 	visible, timedOut, overdue, outstanding := rep.counts()
 	loaded := opts.backlogBPS > 0 || opts.devices > 1 || opts.queriesEvery > 0
 	if rep.queryErrors > 0 {
@@ -1156,5 +1153,45 @@ func TestFreshnessSmoke(t *testing.T) {
 	if visible == 0 {
 		t.Fatalf("freshness smoke: no sample ever became visible; serve stderr:\n%s\njoin stderr:\n%s",
 			st.serveLog.String(), st.joinLog.String())
+	}
+}
+
+func assertRemoteUsageRecords(t *testing.T, st *freshnessStack, rep *freshnessReport) {
+	t.Helper()
+	waitUsageRecords(t, st.devState, 1)
+	records := readUsageRecords(t, st.devState)
+	deviceID, err := device.LoadOrCreate(st.devState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok := 0
+	for _, record := range records {
+		if err := record.Validate(); err != nil {
+			t.Fatalf("freshness smoke: device-side usage record invalid: %v", err)
+		}
+		if record.Path != observe.UsagePathRemote || record.DeviceID != deviceID {
+			t.Fatalf("freshness smoke: device-side record path/device = %s/%s, want remote/%s",
+				record.Path, record.DeviceID, deviceID)
+		}
+		if record.Tool != observe.UsageToolSQL {
+			t.Fatalf("freshness smoke: device-side record tool = %s, want sql", record.Tool)
+		}
+		if record.Client != observe.UsageClientOther {
+			t.Fatalf("freshness smoke: device-side record client = %s, want other", record.Client)
+		}
+		if record.PhaseMS.TotalMS <= 0 {
+			t.Fatalf("freshness smoke: device-side record total_ms = %v, want the client-observed time",
+				record.PhaseMS.TotalMS)
+		}
+		if record.Outcome == observe.UsageOutcomeOK {
+			ok++
+		}
+	}
+	if ok == 0 {
+		t.Fatalf("freshness smoke: %d device-side records hold no ok outcome", len(records))
+	}
+	if len(records) < rep.queries-rep.queryErrors {
+		t.Fatalf("freshness smoke: %d device-side records for %d successful poll queries",
+			len(records), rep.queries-rep.queryErrors)
 	}
 }

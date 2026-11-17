@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "time_bucket": "2026-11-16T14:00Z",
+  "time_ms": 1794840478000,
+  "instance_id": "3f9b2c1d8e4a7f60b5d3c2a19e8f7b6d",
+  "tool": "annotate",
+  "client": "codex",
+  "client_version": "0.166",
+  "path": "remote",
+  "device_id": "fedcba9876543210fedcba9876543210",
+  "session_hint": "",
+  "outcome": "rejected",
+  "sqlite_code": 1299,
+  "phase_ms": {
+    "admission_wait_ms": 0.0,
+    "reader_wait_ms": 0.0,
+    "first_row_ms": 0.0,
+    "iteration_ms": 0.0,
+    "total_ms": 1.4
+  },
+  "rows": 0,
+  "result_bytes": 0,
+  "reads": [],
+  "functions": [],
+  "fts": false,
+  "annotate_ops": {"upsert": 3, "delete": 1},
+  "future_field": "tolerated"
+}

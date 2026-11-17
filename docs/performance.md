@@ -223,8 +223,8 @@ max 2.247 s; 223 poll queries, 0 errors, query duration p50 1.4 ms, max
 2.4 ms; 0 timeouts, 0 outstanding records; 116 hub events (16 fixture plus
 100 appended). The distribution sits just under the upload interval, which
 consumes most of the freshness budget before parsing, transport, and commit.
-The first exchange through the remote session cost 2 ms because the shared
-device node was already up; a cold first dial costs seconds (see the serve
+The first exchange through the remote session cost 2 ms because the
+transport was already warm; a cold first dial costs seconds (see the serve
 end-to-end notes in `NOTES.md`).
 
 ## Workload matrix baselines
@@ -233,7 +233,10 @@ Measured 2026-11-15 (T070) per the performance plan's Phase 0 step 2: the
 four workloads of the measurement contract on the direct local-tailnet path,
 each combining freshness with every guardrail so an import improvement cannot
 hide a search regression. The DERP relay leg is not measured here; it stays
-with backlog T065.
+with backlog T065. The matrix and its T074 repetition predate the Tailcat
+address transport (ADR 0011): they ran on the embedded-coordination stack
+that T123 removed, so repeat them alongside the relay measurement before
+treating a number as a current-transport baseline.
 
 ### Environment
 
@@ -327,8 +330,9 @@ Workload 1 plus two more devices, each joining at window start with its own
 192 MiB-class fixture corpus (claude-code shape, seeds 701/702; 288.4 MB and
 282.2 MB on disk), uploading concurrently with the live-append device, while
 a second remote sql session runs the fixed BM25 workload (the six patterns of
-`BenchmarkQuery`) every second. Extra joins get a 40 s pairing lead — a fresh
-tsnet node needs about 20–25 s for its first dial. Two runs, seeds 1005 and
+`BenchmarkQuery`) every second. Extra joins get a 40 s pairing lead — a
+fresh device transport needs about 20–25 s for its first dial. Two runs,
+seeds 1005 and
 1006 (`OHYA_FRESH_SAMPLES=1000 OHYA_FRESH_DEVICES=3
 OHYA_FRESH_DEVICE_MIB=192 OHYA_FRESH_QUERIES_EVERY=1s
 OHYA_FRESH_PAIR_LEAD=40s OHYA_FRESH_SEED=<seed>`, same test).
@@ -410,17 +414,22 @@ same idempotent final count), closes the gap.
   restarted hub stayed healthy. Root cause (T075): the device node's control
   connection to the coordination plane never re-polls after the plane
   restarts inside the hub process, and the node's cached peer endpoints stop
-  matching the restarted hub. Fixed in the transport layer
+  matching the restarted hub. Fixed in the transport layer of that stack
   ([ADR 0006](adr/0006-shared-device-transport.md)): the owner discards and
   rebuilds its node when a dial fails while the coordination plane answers.
   `TestHubRestartReconnect` (two stop/restart cycles with an established
   join, 16-record fixture) recovers in 30.7–31.2 s per cycle, the
   post-fix workload-4 run recovers in 36.2 s with the full fixture, and the
-  regression reproduced as "never within 2 minutes" before the fix. Separately,
+  regression reproduced as "never within 2 minutes" before the fix. The
+  whole mechanism — the shared node and its coordination plane — left the
+  tree with ADR 0011; the Tailcat address transport covers the same
+  restart case by re-pinging the relay and replacing its client, and
+  `TestHubRestartReconnect` still guards it. Separately,
   the restarted hub intermittently died with `panic: ipnlocal: watchdog
   timeout` in tailscale.com v1.104.4 (1 of 3 manual restarts during T070);
   not reproduced across 10 further stop/restart cycles after the fix —
-  remains monitored, see NOTES.md.
+  that panic sat in the deleted coordination stack and cannot recur on the
+  address transport.
 
 ### Query latency at one million events
 
@@ -644,7 +653,7 @@ The rejected experiments are the selection record above ("Phase 1
 selection: none"): every candidate's measured trigger read false, and no
 workload misses its re-scoped target or budget. Between the T070 baseline
 tree and this verdict, production code changed only in the T075
-hub-restart transport fix (`internal/transport/tailcat`) — a correctness
+hub-restart transport fix — a correctness
 fault the first matrix exposed — plus test harness and documentation
 changes. T073 added no migration (the schema stays at 006) and touched no
 synchronization or authorization model, so the TLA+ specifications are
@@ -831,6 +840,44 @@ Extrapolation: a history the size of the verified real corpus (about 2 GB)
 imports in 4–13 minutes wall (about 2 minutes CPU) on comparable hardware.
 Ingestion work is linear in bytes: the per-byte rate is flat from 4 MiB to
 128 MiB corpora within measurement noise.
+
+## Idle ingestion cost
+
+Measured 2026-11-16 (plan 004 S2): an ingest daemon holding a fully
+acknowledged corpus still read ~13 MB/s on the production hub (about 5,250
+sources, NOTES.md) — one 4 KiB fingerprint window and one `RegisterSource`
+transaction per source per pass, nearly all served from the page cache. The
+cost was CPU, not disk.
+
+Change: the watcher skips the fingerprint read while a source's platform
+identity, size, and modification time match the previous poll, and the
+ingestor calls `RegisterSource` only for sources it has not registered at
+that path in this process (new, replaced, or moved sources, and every
+source once after a restart).
+
+Measurement: `genfixture` corpus of 600 sessions at 128 KiB plus subagents
+(1,482 files, 122 MiB, 42,276 events) on the reference machine, imported
+once, then `ohya ingest` at the shipped 2 s interval. `/proc/<pid>/io` was
+sampled over one 60 s steady-state window that starts after the first pass.
+Raw samples under `perf/t101/` (gitignored).
+
+| Metric | Before | After |
+|---|---|---|
+| `rchar` per 60 s window | 176,038,235 B (2.9 MB/s) | 330 B |
+| Read syscalls per window | 43,008 | 30 |
+| Storage `read_bytes` per window | 0 | 0 |
+
+The before figure is one fingerprint window per source per pass: 1,482 ×
+4 KiB is about 5.9 MB per pass, and the 60 s window holds just under 30
+aligned passes (sources with stopped tails verify windows shorter than
+4 KiB), which is the measured 176 MB. The after figure is measurement
+noise. A process restart still re-verifies one fingerprint window per
+source and re-registers each source once — the first pass after a restart
+costs what one pass always cost. Detection of replacement, truncation, and
+in-place rewrites that move the modification time is unchanged (the
+existing watcher tests pin it); an in-place rewrite that restores the exact
+size and modification time stays invisible until a restart, the edge
+already recorded in NOTES.md.
 
 ## Ingestion stage attribution
 
@@ -1053,6 +1100,90 @@ corpus volume. Wide full-text matches scale with the number of matching
 postings — about 0.5–1 ms per 1,000 matching events at this scale — so a
 10x larger hub keeps wide matches in the hundreds of milliseconds.
 
+### Recall query deadline (T104, plan 003 R2)
+
+One pattern broke that table in production: `events` joined to `sessions`
+filtered on `cwd` with `ORDER BY e.time_ms DESC LIMIT 5` — the "newest
+events of this project" recall. On 2026-11-15 23:32 local, one such call
+timed out at 5,027 ms and a near-identical sibling took 3,991 ms (verified
+in the hub transcripts through `ohya usage` evidence shapes; the call
+timestamp falls inside the recovery-copy iowait storm recorded for
+2026-11-16 in NOTES.md, which saturated this disk for 8.5 hours).
+
+`EXPLAIN QUERY PLAN` (engine, bundled SQLite 3.54.1) shows why the shape is
+deadline-fragile even though the plan is indexed:
+
+```text
+SCAN s
+SEARCH e USING INDEX events_session_time (session_id=?)
+USE TEMP B-TREE FOR ORDER BY
+```
+
+The join streams every matching `events` row into the sort before the
+LIMIT applies — one table row read per project event. Warm, that is cheap
+(about 16 ns per row); cold, it is one page read per row. The recipe
+selects the newest IDs in a subquery first, which sorts on the covering
+index without touching `events` rows, then fetches only the rows it
+returns:
+
+```sql
+SELECT e.id, e.session_id, e.time_ms, e.kind, e.role, substr(e.text, 1, 300) AS excerpt
+FROM events e WHERE e.id IN (
+  SELECT ev.id FROM sessions s JOIN events_settled ev ON ev.session_id = s.id
+  WHERE s.cwd = '/home/agent/project'
+  ORDER BY ev.time_ms DESC LIMIT 5)
+ORDER BY e.time_ms DESC;
+```
+
+```text
+SEARCH ev USING COVERING INDEX events_session_time (session_id=?)
+SEARCH e USING INTEGER PRIMARY KEY (rowid=?)
+```
+
+The recipe is published in the `sql` tool description and in DB.md
+("Project recall example"); `TestProjectEventsRecipePlan` pins the
+covering-index plan and `TestProjectEventsRecipeEquivalence` pins that it
+returns the same rows as the plain join.
+
+Measured with the T092 usage records (per-call `total_ms` from the engine's
+usage sink; the report path was verified end to end: 5 recipe calls through
+`ohya mcp` stdio appear in `ohya usage` with p50/p95 latency). Fixture:
+compact three-agent mix, scale 2.8, seed 7 (`perf/recallduration`), 3.88 M
+events in 16,638 sessions, 6.7 GiB — above the live hub anchor (2.69 M
+events, 7,276 sessions, 16.3 GB); largest cwd group 493,571 events, about
+30x the incident cwd's 8,914. One cold run (page cache evicted with
+`posix_fadvise`, order-sensitive) plus 40 warm runs per shape, engine
+deadline 5 s:
+
+| Shape (largest cwd, 493,571 matching events) | cold | p50 | p95 | timeouts |
+|---|---|---|---|---|
+| Plain join over `events` | 2,374 ms | 8.0 ms | 8.6 ms | 0 |
+| Plain join over `events_settled` | 298 ms | 8.2 ms | 8.7 ms | 0 |
+| Recipe (covering subquery) | 100 ms | 3.6 ms | 4.0 ms | 0 |
+| Time-bounded join (7-day cutoff) | 243 ms | 5.2 ms | 6.0 ms | 0 |
+
+The median cwd group (483,076 events) lands within the same bands. Cold on
+the live hub itself, read-only through the engine at the incident cwd
+(8,914 matching events): plain join 1,080 ms first run against 218 ms for
+the recipe — a query that eats a fifth of the deadline on an idle disk
+crosses it under the documented storm.
+
+Rejected alternative — a new index `events(time_ms DESC, id)`, measured on
+the fixture (`perf/recallduration -mode index`): build 82 s, +70.5 MiB
+(about 1.6% of database size; roughly 260 MiB extrapolated to the live
+hub). The planner flips to `SCAN e USING INDEX events_time_id` plus a
+sessions lookup per row: an active project answers in 75 ms cold, but a
+cwd whose events are old or absent scans the whole index backward — a
+no-match cwd timed out at 5,004 ms on 20 of 20 runs. The index trades the
+fetch-every-matching-row failure for a scan-every-newer-row failure and
+costs storage on every hub; the recipe dominates both cases with the
+existing index, so no schema change was made. A view cannot fix the shape:
+views take no parameters and flatten into the same plan.
+
+Follow-up evidence rides on the plan 002 baseline (T099): once the live
+hub runs a build with the usage recorder (T113), `ohya usage` can confirm
+on real calls that the recipe adoption removes the timeout tail.
+
 ## Database size
 
 The end-to-end hub holds 138.7 MiB of source records as 351.6 MB (2.42x
@@ -1064,6 +1195,23 @@ database, plus the same again temporarily for a `VACUUM INTO` backup.
 During sustained import the write-ahead log stays bounded by SQLite's
 automatic checkpoint: about 4–6 MiB observed, cycling as checkpoints keep
 up. A clean process stop checkpoints and removes the WAL.
+
+## Release binary size
+
+Measured 2026-11-16 (T123) on the reference machine, linux/amd64, Go
+1.27.3, with the `scripts/package.sh` build flags
+(`CGO_ENABLED=1 go build -tags sqlite_fts5 -trimpath -buildvcs=true
+-ldflags "-X main.releaseVersion=…"`), stripping nothing:
+
+| Build | Bytes | MiB |
+|---|---|---|
+| With the embedded Headscale stack (before T123) | 72,148,584 | 68.8 |
+| Tailcat address transport only (after T123) | 49,350,600 | 47.1 |
+
+Removing `internal/control`, the tsnet adapter, and `cmd/tailcat-spike`
+(ADR 0011, "What is removed") cut 22,797,984 bytes, 31.6%. The remaining
+transport code — `tailscale.com` plus `github.com/tailscale/tailcat` —
+still dominates the binary over ohya's own code.
 
 ## Memory
 

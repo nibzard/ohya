@@ -14,7 +14,6 @@ import (
 
 	"github.com/nibzard/ohya/internal/claudecode"
 	"github.com/nibzard/ohya/internal/codex"
-	"github.com/nibzard/ohya/internal/control"
 	"github.com/nibzard/ohya/internal/events"
 	"github.com/nibzard/ohya/internal/pi"
 	"github.com/nibzard/ohya/internal/registry"
@@ -77,13 +76,13 @@ func decodeEnvelope(t *testing.T, out string) jsonEnvelope {
 
 func pairDevice(t *testing.T, stateDir, deviceID string) {
 	t.Helper()
-	provisionControl(t, stateDir)
+	writeHubIdentity(t, stateDir)
 	out, err := runDevices(t, stateDir, "invite")
 	if err != nil {
 		t.Fatal(err)
 	}
 	code := strings.SplitN(strings.TrimSpace(out), "\n", 2)[0]
-	invitation, _, err := control.SplitJoinCode(code)
+	invitation, _, err := parseJoinCode(code)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +216,7 @@ func TestDevicesListJSONGolden(t *testing.T) {
 			t.Fatalf("code %d, stderr %q", code, stderr)
 		}
 		got := scrubJSONKeys(t, out, "id", "paired_at", "created_at", "expires_at")
-		goldenCompare(t, got, `{"schema_version":1,"command":"ohya devices list","data":{"devices":[{"id":"<id>","state":"active","paired_at":"<paired_at>"}],"invitations":[{"id":"<id>","state":"used","used_by":"`+deviceID+`","created_at":"<created_at>","expires_at":"<expires_at>","expired":false}]},"error":null}`+"\n")
+		goldenCompare(t, got, `{"schema_version":1,"command":"ohya devices list","data":{"devices":[{"id":"<id>","state":"active","paired_at":"<paired_at>","last_path":null,"last_sync_at":null}],"invitations":[{"id":"<id>","state":"used","used_by":"`+deviceID+`","created_at":"<created_at>","expires_at":"<expires_at>","expired":false}]},"error":null}`+"\n")
 		env := decodeEnvelope(t, out)
 		var data listJSONData
 		if err := json.Unmarshal(env.Data, &data); err != nil {
@@ -240,7 +239,7 @@ func TestDevicesListJSONGolden(t *testing.T) {
 			t.Fatalf("code %d, stderr %q", code, stderr)
 		}
 		goldenCompare(t, scrubJSONKeys(t, out, "id", "paired_at", "created_at", "expires_at", "revoked_at"),
-			`{"schema_version":1,"command":"ohya devices list","data":{"devices":[{"id":"<id>","state":"revoked","paired_at":"<paired_at>","revoked_at":"<revoked_at>"}],"invitations":[{"id":"<id>","state":"used","used_by":"`+deviceID+`","created_at":"<created_at>","expires_at":"<expires_at>","expired":false}]},"error":null}`+"\n")
+			`{"schema_version":1,"command":"ohya devices list","data":{"devices":[{"id":"<id>","state":"revoked","paired_at":"<paired_at>","revoked_at":"<revoked_at>","last_path":null,"last_sync_at":null}],"invitations":[{"id":"<id>","state":"used","used_by":"`+deviceID+`","created_at":"<created_at>","expires_at":"<expires_at>","expired":false}]},"error":null}`+"\n")
 	})
 
 	t.Run("failure", func(t *testing.T) {
@@ -260,7 +259,7 @@ func TestDevicesListJSONGolden(t *testing.T) {
 func TestDevicesInviteJSONGolden(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		state := t.TempDir()
-		provisionControl(t, state)
+		writeHubIdentity(t, state)
 		code, out, stderr := runCLI("devices", "invite", "--json", "--state", state)
 		if code != 0 {
 			t.Fatalf("exit code %d (stderr %q)", code, stderr)
@@ -272,9 +271,9 @@ func TestDevicesInviteJSONGolden(t *testing.T) {
 		if err := json.Unmarshal(env.Data, &data); err != nil {
 			t.Fatal(err)
 		}
-		invitation, authKey, err := control.SplitJoinCode(data.Code)
-		if err != nil || len(invitation) < 16 || len(authKey) < 16 {
-			t.Fatalf("join code %q does not carry two secret halves (%v)", data.Code, err)
+		invitation, hubAddr, err := parseJoinCode(data.Code)
+		if err != nil || len(invitation) < 16 || !strings.HasPrefix(hubAddr, "tc") {
+			t.Fatalf("join code %q does not carry an invitation and a tailcat address (%v)", data.Code, err)
 		}
 		if strings.Contains(stderr, data.Code) {
 			t.Fatalf("stderr %q leaks the join code", stderr)
@@ -291,7 +290,7 @@ func TestDevicesInviteJSONGolden(t *testing.T) {
 			t.Fatalf("exit code %d; want 1", code)
 		}
 		got := strings.ReplaceAll(out, state, "<state>")
-		goldenCompare(t, got, `{"schema_version":1,"command":"ohya devices invite","data":null,"error":{"code":"coordination_plane_absent","message":"control: holds no coordination plane at <state>/control; run ohya serve once to provision it","hint":"run ohya serve once to provision the coordination plane, then retry"}}`+"\n")
+		goldenCompare(t, got, `{"schema_version":1,"command":"ohya devices invite","data":null,"error":{"code":"hub_identity_absent","message":"address: no saved hub identity at <state>/tailcat-hub/identity.json; run ohya serve once to create it","hint":"run ohya serve once to create the hub identity, then retry"}}`+"\n")
 	})
 }
 

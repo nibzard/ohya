@@ -39,6 +39,11 @@ type AnnotationOp struct {
 type AnnotateResult struct {
 	Applied   int `json:"applied"`
 	Unchanged int `json:"unchanged"`
+
+	AppliedUpsert   int `json:"-"`
+	UnchangedUpsert int `json:"-"`
+	AppliedDelete   int `json:"-"`
+	UnchangedDelete int `json:"-"`
 }
 
 type annotationID struct {
@@ -74,10 +79,19 @@ func Annotate(ctx context.Context, writer *sql.DB, writerID string, ops []Annota
 		if err != nil {
 			return AnnotateResult{}, err
 		}
-		if changed {
+		switch {
+		case changed && ops[i].Op == AnnotationUpsert:
 			result.Applied++
-		} else {
+			result.AppliedUpsert++
+		case changed:
+			result.Applied++
+			result.AppliedDelete++
+		case ops[i].Op == AnnotationUpsert:
 			result.Unchanged++
+			result.UnchangedUpsert++
+		default:
+			result.Unchanged++
+			result.UnchangedDelete++
 		}
 	}
 	if err := tx.Commit(); err != nil {

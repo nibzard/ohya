@@ -42,7 +42,6 @@ check() {
 
 check Sync SyncConcurrent SyncFailures SyncLiveness
 check Auth Auth AuthWide
-check TransportOwner TransportOwner
 
 echo ""
 echo "All models checked: no errors."

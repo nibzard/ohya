@@ -27,7 +27,7 @@ How to use this file:
   - ChatGPT desktop: no reliable local transcripts; official export only — deferred.
   - Cowork local sessions may write JSONL under `~/Library/Application Support/Claude/local-agent-mode-sessions/` — absent on current install; check if usage starts.
 
-- Codex `archived_sessions/` ingestion gap (verified 2026-11-15): `~/.codex/archived_sessions` is a sibling of `sessions/` and holds rollouts moved out of it (6 plain-JSONL files, 1.5 MB, Feb–Sep 2026, none duplicated under `sessions/`). The default codex root is `$CODEX_HOME/sessions` (cmd/ohya/main.go:154) and `discoverSessionFiles` walks only that root (cmd/ohya/ingest.go:313), so archived files are silently never ingested. A watched file moved there stops producing outcomes without a diagnostic (internal/watch/watch.go:73 drops un-stattable paths): pre-move history stays in the hub, post-move appends are lost. Remedy when acted on: watch `archived_sessions` as a second default codex root — the watcher already follows moves by file identity (watch.go:80–97), so the transition is free. Watching all of `~/.codex` instead would wrongly ingest `session_index.jsonl`, `history.jsonl`, and vendor JSONL.
+- Codex `archived_sessions/` ingestion gap (verified 2026-11-15): `~/.codex/archived_sessions` is a sibling of `sessions/` and holds rollouts moved out of it (6 plain-JSONL files, 1.5 MB, Feb–Sep 2026, none duplicated under `sessions/`; the directory was absent again on 2026-11-16 while `sessions/` remained). Resolved 2026-11-16 (T081): ohya now watches `$CODEX_HOME/archived_sessions` as a second default codex root on both ingest and join (one watcher per agent covers both roots, so a file moving between them keeps its checkpoint by file identity), and a watched source whose path stops being statable prints one diagnostic per disappearance on both paths instead of stopping silently. Watching all of `~/.codex` stays wrong: it would ingest `session_index.jsonl`, `history.jsonl`, and vendor JSONL.
 
 - Competitive clock (observed 2026-11-15, openai/codex main): Codex is landing first-party memory (`memories/write`; `memories_1.sqlite` now present in `~/.codex`), a SQLite-backed `message-board` + message-board-mcp crate, and `external-agent-migration` importing Claude Code sessions. Cross-agent, local-first, shared remain ohya's wedge; factor into launch sequencing. Their session search still greps raw JSONL (ripgrep with JSON-escaped terms, search.rs) plus a bolted-on SQLite listing index — converging on ohya's design from both sides.
 
@@ -409,74 +409,6 @@ How to use this file:
     a fresh invitation (registry state must be "absent"), so re-admission
     is a new device.json — Auth.tla's RevocationIrreversible.
 
-- Tailcat/tsnet driver facts (2026-11-13, internal/transport, T014; measured
-  in ADR 0002, reproduced by cmd/tailcat-spike against local Headscale
-  v0.29.7):
-  - `tsnet.Server.Up(ctx)` surfaces a rejected pairing key in milliseconds
-    ("authkey already used"); a bare `Dial` would sit in NeedsLogin until
-    the context deadline. The adapter therefore calls Up before dialing so
-    authorization failures fail fast — keep that when the sync layer grows.
-  - A tsnet listener's Accept is not context-aware; close the listener to
-    unblock shutdown.
-  - Ephemeral registration makes the coordination server expire the node at
-    disconnect, orphaning the local state (next start needs a new pairing
-    key). ohya nodes register durably.
-  - WhoIs on an accepted connection returns the peer's login and FQDN —
-    the transport-level device identity for the authorization model.
-  - `tailscale.com` v1.104.4 hard-requires `go >= 1.27.3` in go.mod;
-    GOTOOLCHAIN=auto downloads the toolchain. Headscale v0.29.7 CLI wants
-    numeric user IDs (`preauthkeys create -u 1`), and its `server_url`
-    must be reachable from every node process.
-
-- Forced-relay validation facts (2026-11-14, cmd/tailcat-spike + ADR 0002,
-  T032; raw artifacts with the T032 run):
-  - tsnet's derphttp upgrades the DERP connection to TLS unconditionally
-    (no loopback exception); against a plain-HTTP control plane the client
-    never even probes /derp, so isolated peers with no direct path never
-    connect (observed: 2-minute dial timeout, zero relay traffic). The
-    vendor debug switch `TS_DEBUG_USE_DERP_HTTP=1` forces plain-HTTP DERP
-    and is the only way to exercise the relay on an HTTP plane — cross-
-    machine relay in production rides on the serve TLS gap.
-  - Live TLS smoke (2026-11-14, after T054, self-signed ECDSA cert,
-    SAN 127.0.0.1): `ohya serve --tls-cert/--tls-key` serves coordination
-    and health over TLS (curl --cacert 200; untrusted client refused).
-    The tsnet client honors Go's system-roots knobs — `SSL_CERT_FILE` with
-    the plane's certificate is enough for a device to trust it ("passed
-    x509 validation"), no OS trust-store edit needed on Linux. Pairing and
-    auth complete over TLS, but the first `ohya-hub.tail.ohya:9027` dial
-    then resolved through the system resolver (127.0.0.53) instead of
-    MagicDNS and join exited 1; the same-host plain-HTTP join resolves and
-    uploads fine. Reproduced twice. Root cause found (2026-11-15): serve's
-    own hub node also rejects the self-signed plane cert ("bad certificate"
-    handshakes), never enrolls, and the tailnet the device joins therefore
-    has no ohya-hub peer — MagicDNS then falls back to the system resolver
-    for the missing name. Fix: serve prepends a state-dir trust directory
-    (symlink to the plane cert) to `SSL_CERT_DIR` before any TLS use, and
-    `Node.Dial` waits for the backend to be Running with a MagicDNS suffix
-    and peers before dialing. Live retest: zero bad-certificate errors,
-    pairing + 1,307 claude-code + 1,671 codex events synced over TLS;
-    `TestServeJoinTLS` pins the path. T065's two-host relay measurement is
-    still open.
-  - The T014 claim that peers "found each other through the embedded DERP"
-    is disproven: T014's single-host nodes show no /derp traffic at all;
-    discovery ran through the control-plane map exchange, then direct.
-  - The spike harness now records the peer path on both sides
-    (tailcat.Node.PeerPath: relay name + direct endpoint from
-    ipnstate.PeerStatus; empty CurAddr = relay-only). Key conversion is
-    key.NodePublic(who.Node.Key) against Status.Peer — note the field is
-    Peer, not Peers, in v1.104.4.
-  - Reproduction topology: two user-defined docker bridges with the nodes
-    on separate networks and Headscale dual-attached (network alias
-    `headscale`, so server_url resolves per network); docker's nftables
-    forward rules drop all cross-bridge traffic (counters prove it).
-    Same-day direct reference: both node containers on one bridge.
-    Host-process runs cannot resolve the DERP hostname (server_url's host
-    is baked into the DERP map), so keep validation runs in containers.
-  - Numbers: relay-only p50 260 µs @1 KiB / 1,244 µs @64 KiB / 14,215 µs
-    @1 MiB (69.5 MiB/s) vs direct 124 / 676 / 3,561 µs (251.3 MiB/s) —
-    1.8–2.1× at kilobyte sizes, ~4× at 1 MiB; warm dial ~4 s either way.
-    busybox `nc -u -z` is not a UDP reachability check (always "open").
-
 - Remote query/annotate path choices (2026-11-13, internal/hubsync +
   internal/mcpserver + internal/store, T036; ADR 0003):
   - Query ('Q') and annotate ('N') frames ride the sync connection; the
@@ -517,57 +449,12 @@ How to use this file:
     deadline plus bufio Peek: timeout = open, EOF/reset = reconnect and
     re-probe every source. A hub host that dies without FIN/RST is still
     noticed only at the next exchange or by TCP keepalive (unverified for
-    the tsnet netstack).
+    the in-process netstack).
   - The endpoint writes CodeBusy and closes before reading the hello, so
     the device's first write can fail with a reset; the uploader then tries
     to read the hub's error frame before reporting a plain disconnect.
   - A parse stop is not resent until the file grows (in-memory mark per
     process); a restart resends the stopped bytes once.
-
-- Serve/join wiring facts (2026-11-14, internal/control + cmd/ohya, T034;
-  ADR 0002 records the control-plane decision):
-  - Embedded headscale v0.29.7 goes through internal/control only, the way
-    tailcat isolates tsnet. Facts: `types.LoadConfig(path, true)` is
-    viper-global, so one process holds one plane; config paths must be
-    absolute (headscale joins relative paths against the config directory,
-    doubling them); `app.Serve` installs its own SIGTERM/SIGINT handlers,
-    so the plane stops with the process (verified by the e2e clean exits).
-    State surface used: GetUserByName/CreateUser,
-    CreatePreAuthKey(&types.UserID, reusable=false, ephemeral=false,
-    &exp, nil) → *types.PreAuthKeyNew, GetPreAuthKey (spent?), ResolveNode
-    (hub enrolled?).
-  - The join code is `invitation:preauthkey` — each half single-use within
-    the invitation's lifetime. `devices invite` opens the control plane
-    before the registry, so a missing plane issues nothing. The plane's
-    SQLite (glebarez driver, busy timeout 10 s) tolerates a concurrent
-    `devices invite` process while serve runs.
-  - Serve derives `-control-url` from `-control-listen` and refuses a
-    wildcard listen without an explicit URL (it cannot guess the address
-    devices use). The hub node mints its own single-use key only while
-    `ResolveNode("ohya-hub")` finds no node; restarts with existing node
-    state consume none.
-  - Join enrolls with the preauth half, then pairs over the tailnet (node
-    dial → 'P' frame → 'C' credential). `ohya mcp --remote` reuses the
-    join state directory; `--remote` is boolean and `--hub-addr` (same
-    flag and default ohya-hub.tail.ohya:9027 as join) carries the address.
-  - e2e (cmd/ohya/serve_e2e_test.go, fork-child pattern): serve ready in
-    ~1 s, the 16-record fixture lands within ~10–20 s of join, the first
-    remote dial costs ~10 s (tsnet path discovery). The core serve/join
-    and TLS tests now run on darwin CI. Their state directories use a
-    short `/tmp/ohya-e2e-*` path to fit the control socket limit. Native
-    macOS execution still needs a new CI run; Linux checks cannot prove it.
-  - darwin check-job facts (2026-11-14, T057, internal/control): headscale
-    serves its gRPC API on a unix socket at <dir>/headscale.sock, and
-    darwin's sun_path holds 104 bytes (Linux 108) — t.TempDir() on the
-    macOS runner (/var/folders/<xx>/<per-user id>/T/) pushes
-    TestControlStartServeAndMint's socket to ~100–105 bytes, so Serve died
-    at "setting up gRPC socket: bind: invalid argument". The test now hosts
-    the plane under a flat os.MkdirTemp (socket ≤ ~97 bytes on every
-    supported platform); reproduce the old failure on Linux by pointing
-    TMPDIR at a ~90-char path. Same test also reserved the STUN port via a
-    TCP bind, but the STUN listener binds UDP and a failed bind is fatal
-    inside headscale (log.Fatal exits the test binary) — it now reserves a
-    UDP port, like freeUDPPort in the serve e2e test.
 
 - Parser output version and re-derivation choices (2026-11-13,
   internal/store + internal/events, T025): `events.parser_version` versions
@@ -686,6 +573,19 @@ How to use this file:
   main; the process-level test forks through TestMain's `child-run` role.
   Help and error texts spell flags with two dashes; the parser keeps
   accepting one dash.
+  T128 done (2026-11-17): flags may appear on either side of a positional
+  argument. `commandFlagSet.parse` permutes flag arguments (with their
+  values) before positionals before flag.Parse, because the standard flag
+  package stops at the first positional. Gotchas pinned in tests: a
+  non-bool flag that ends the argument list without its value must NOT be
+  permuted in front of positionals — flag.Parse would silently bind the
+  first positional as the value (permuteFlags returns it and parse feeds it
+  to fs.Parse alone for the authentic "flag needs an argument" error); a
+  value is taken from the immediately following argument even when it looks
+  like a flag (flag package semantics); `--` ends the scan and keeps the
+  rest positional; a `--state X` after the positional now works, so
+  "revoke needs exactly one device ID" only fires when the ID count is
+  really wrong.
   T060 done (2026-11-14): `ingest --once` returns the errDegraded sentinel
   (cmd/ohya/ingest.go) when passStats counts any failed or stopped source;
   cliMain maps it to exit 3 with no extra stderr line (diagnostics already
@@ -765,8 +665,8 @@ How to use this file:
   - Doctor never creates state: device.Load (new, read-only) instead of
     LoadOrCreate; watch.InspectSources reads checkpoints without Poll.
     Missing identity/database = warn (ingest creates them), unusable ones =
-    error. The coordination probe (only when credential.json is present)
-    counts any HTTP response as answered — the control plane 404s on /.
+    error. The join-state check (T123) verifies credential.json plus the
+    saved hub address and never prints the address, which is a secret.
     Error findings ride in the JSON data with exit 1 (findings are the
     report, the exit code is the verdict), mirroring degraded ingest.
 
@@ -832,8 +732,8 @@ How to use this file:
   distribution sits just under the upload interval — the interval, not the
   write path, dominates the budget. Gotchas: the observer warms its first
   exchange before the first append (a cold first dial costs seconds and
-  would poison sample one; warm cost 2 ms because the shared device node
-  was already up), and the marker query pages by `id > last` so the 500-row
+  would poison sample one; warm cost 2 ms because the transport was
+  already up), and the marker query pages by `id > last` so the 500-row
   tool bound never truncates a backlog drain.
 
 - Benchmark corpus fixtures (2026-11-15, T069, internal/fixgen/mix.go):
@@ -869,14 +769,6 @@ How to use this file:
     under `OHYA_MIX_VERIFY=1` (about 1 GiB RAM, 22 s); the default check
     stays small. genfixture's plain build needs no sqlite_fts5 tag.
 
-- Shared device transport (2026-11-15, ADR 0006): `join` and remote MCP
-  must use `tailcat.NewSharedDevice`. Independent nodes with the same state
-  stall uploads. The shared adapter owns the node under `owner.lock` and
-  publishes an authenticated loopback proxy in owner-only `proxy.json`.
-  Never delete the lock file. Stop older binaries before upgrading: they
-  do not acquire it. Keep device state on a local filesystem. The regression
-  test covers live appends with two MCP clients and transfer after owner death.
-
 - Workload matrix baselines (2026-11-15, T070, docs/performance.md "Workload
   matrix baselines"): all four plan workloads measured on the direct
   local-tailnet path with 1,000-sample doubled runs; raw logs under
@@ -891,39 +783,19 @@ How to use this file:
   WAL 27-32 MiB under sustained mixed read/write — well above the 4-6 MiB
   import-only figure, plan headroom accordingly. Guardrail verdict table in
   the doc.
-- Hub-restart recovery regression, found by the T070 matrix (2026-11-15,
-  follow-up key `hub-restart-reconnect`), fixed same day (T075): when the hub
-  process stopped and restarted, a device whose sync connection was
-  established never re-uploaded (dials timed out at the 60 s deadline for
-  3+ minutes, 5/5). Diagnosis: after the coordination plane restarts inside
-  the hub process, the long-lived device node's control connections sit dead
-  in CLOSE-WAIT and its control client never re-polls, so the cached peer
-  endpoints never pick up the restarted hub; tailscale.com v1.104.4 does not
-  recover by itself. Fix (internal/transport/tailcat, ADR 0006): the shared
-  device's owner treats "dial failed while the coordination plane still
-  answers an HTTP request" as stale node state — it closes the node, starts
-  the same durable identity again, republishes the proxy descriptor, and
-  retries once; the direct dial also carries its own 20 s deadline so the
-  rebuild fits inside the uploader's 60 s dial budget. A dial failure with an
-  unreachable plane keeps the node (ordinary downtime backoff).
-  `TestHubRestartReconnect` (two stop/restart cycles, established join)
-  recovers in ~31 s per cycle; a post-fix workload-4 run recovers in 36.2 s
-  with the full 191-source fixture and stays idempotent; unit tests pin the
-  rebuild decision. Open: the
-  intermittent hub-side `panic: ipnlocal: watchdog timeout` (tailscale.com
-  v1.104.4, 1 of 3 manual restarts during T070) was not reproduced across 10
-  post-fix stop/restart cycles (watch the serve stderr in the restart tests if it
-  returns; the panic is an ipnlocal deadlock probe, i.e. some watched lock
-  hung >30 s).
 - T070 harness facts worth keeping: the sql tool returns JSON numbers, which
   decode as float64 — `fmt.Sprint` renders ids ≥ 1e6 as `1.012834e+06`, so
   any harness that parses ids from tool output must `CAST(id AS TEXT)` in
   the query (the bug poisoned every later poll and looked like a hub
-  outage). A fresh device node's first dial to the hub costs ~20-25 s
-  (tsnet path discovery), so the multi-device workload needs
+  outage). A fresh device transport's first dial to the hub costs seconds
+  (path discovery), so the multi-device workload needs
   `OHYA_FRESH_PAIR_LEAD` before appends start. `fixgen` corpora size at
   sessions × ~3 MiB (main 2 MiB + two quarter-size subagents), so
   `OHYA_FRESH_DEVICE_MIB=192` yields ~285 MB per extra device.
+  The T075 hub-restart regression this matrix found lived in the deleted
+  coordination stack; performance.md "Workload 4" keeps the history, and
+  the address transport's own restart handling is recorded under T122
+  below.
 - Ingestion stage attribution (2026-11-15, T071): numbers and method in
   docs/performance.md "Ingestion stage attribution"; raw evidence under
   `perf/t071/` (gitignored). Durable findings:
@@ -1123,9 +995,11 @@ How to use this file:
   archives, `SHA256SUMS`, and `install.sh`; macOS archives are unsigned
   because this machine has no Developer ID Application certificate. The
   qualified `ohya.rb` formula is in the run artifacts for a future tap.
-  `install.sh` prints "release version must start with v and a digit" when a
+  `install.sh` printed "release version must start with v and a digit" when a
   repository has no stable release, because GitHub redirects
-  `/releases/latest` to `/releases`; that diagnostic gap is still open.
+  `/releases/latest` to `/releases`; closed 2026-11-17 (T084): install.sh
+  now detects that redirect, names the no-stable-release condition, and
+  points to the release list with `--version`.
 
 - 2026-11-15, v0.1.0 setup failure on a real GUI Mac (27.2.1): `launchctl
   print` includes `resource coalition`/`jetsam coalition` sub-blocks whose
@@ -1173,6 +1047,18 @@ How to use this file:
   slow disks a full-copy migration is an hours-long denial of service against
   everything sharing the disk; consider size-aware or incremental backup
   (or at minimum a progress log line and idle-time execution).
+  Size-awareness landed same day (T100, plan 004 S1): setup checks free
+  space on the recovery filesystem (database + WAL + 10% + 64 MiB) before
+  copying and refuses with both numbers and a remedy (JSON code
+  `insufficient_disk_space`), changes nothing on refusal, reports the
+  estimate before the copy plus a stderr line every further 10%, stages the
+  copy in a hidden `.recovery-*` directory renamed to `recovery-*` only on
+  success (an interrupted copy leaves no partial point; abandoned staging is
+  removed on the next run), and the copy deadline scales with size instead
+  of the old fixed 2 minutes (2 min minimum, else a 256 KiB/s average floor,
+  so the measured 39 min/GB worst case still completes). Cost guidance is in
+  docs/release-operations.md "Recovery point cost". Idle-time execution and
+  incremental backup remain unimplemented.
 
 - Ingest idle write amplification (root-caused and fixed 2026-11-16):
   idle ingest wrote ~9 MB/s; 99.9% went to `sources/<agent>.json`
@@ -1189,13 +1075,24 @@ How to use this file:
   the number of sources. If that dominates, move checkpoints into SQLite
   (ADR needed). Measured after deploying 6d464f1 (2026-11-16, 30 s
   windows): ingest disk writes fell from 13.2 MB/s to 0.76 MB/s.
-- Ingest per-pass read cost (observed 2026-11-16, not fixed): every pass
-  still reads ~13 MB/s, nearly all from the page cache. Each pass reads a
-  4 KiB fingerprint window for every source (~5,250 `pread64` calls on
-  session files) and calls `RegisterSource` for every source (~25 MB of
-  `hub.db` page reads in 20 s). The cost is CPU, not disk. Possible fix:
-  skip fingerprint checks and registration for sources whose identity,
-  size, and mtime did not change since the last pass.
+- Ingest per-pass read cost (root-caused and fixed 2026-11-16, plan 004 S2):
+  idle ingest read ~13 MB/s, nearly all from the page cache — one 4 KiB
+  fingerprint window per source per pass and one `RegisterSource`
+  transaction per source per pass. Fixes: `watch.Poll` skips the
+  fingerprint read while platform identity, size, and modification time
+  match the previous poll (in-memory per Watcher, so a restart re-verifies
+  every source once), and the ingestor registers only sources this process
+  has not registered at that path (new, replaced, moved, or first pass
+  after restart); a write-path `ErrSourceNotRegistered` drops that memory
+  so the next pass re-registers a hub row lost to a restored backup.
+  Measured with `/proc/<pid>/io`, 60 s steady window, 1,482-source corpus
+  at the 2 s interval: rchar fell from 176 MB (2.9 MB/s, one window per
+  source per pass) to 330 bytes; storage reads stayed 0. Numbers in
+  docs/performance.md "Idle ingestion cost". Remaining limits: an in-place
+  rewrite that restores exact size and mtime stays invisible until a
+  restart (pre-existing accepted edge, same as the write-amplification
+  note above); replacement, truncation, and mtime-moving rewrites are
+  still detected exactly (pinned by the existing watcher tests).
 
 - v0.1.2 release (2026-11-16): published from `6ed9fc3`; hosted macOS arm64
   runners can fail to start a job ("not acquired by Runner ... capacity"),
@@ -1232,4 +1129,603 @@ How to use this file:
   previews or `sessions`. That is too little to choose a storage design,
   for example how often agents read `raw_json`. Duplication on MacBook
   data, FTS share by kind, and decode cost need offline analysis, not new
-  instrumentation.
+  instrumentation. Correction (2026-11-16, T094): "No Codex call was found"
+  and "available in 26 sessions" were scan artifacts, not facts — see the
+  usage report note below.
+
+- Observation schemas and recorder frozen (2026-11-16, T090, plans/001
+  milestone 1 + plans/002 usage record): `internal/observe` holds the fixed
+  metric catalogue (families from plan 001's measurement dictionary; label
+  values are closed sets with a fallback, so series are bounded by
+  `SeriesBound` and junk values fold into the fallback, never a new series),
+  fixed duration histogram bounds (0.1 ms … 60 s, +Inf; quantiles are bucket
+  estimates and return unavailable below 20 observations), the snapshot
+  payload (format 1, also the history.jsonl sample payload), the structured
+  log entry (format 1, stable event codes with curated messages — raw error
+  text has no field), fake monotonic/wall clocks, resource readings where
+  unsupported is `null` + reason (never zero), window deltas that refuse to
+  join counters across instances, resets, or missing samples, and the usage
+  record with per-field export classes (ADR 0010; classification tests fail
+  on a class-less field or a never-collected field name). Freeze facts:
+  recorder calls with an unknown metric name, wrong kind, wrong label
+  arity, or negative duration are dropped and counted, never panic, never
+  touch domain state. Everything is in-memory; publication, files, and the
+  engine wiring are milestones 2–4 (T091–T097).
+
+- Runtime paths instrumented (2026-11-16, T091, plans/001 milestone 2):
+  watch, store, uploader, hubsync, and the local ingestor report through
+  `observe.Observer` (new narrow interface; `observe.Disabled` is the no-op;
+  `*Recorder` satisfies it). Facts future work must keep:
+  - The catalogue grew by six names (watch_read_bytes,
+    watch_checkpoint_saves, watch_checkpoint_bytes_written, ingest_passes,
+    ingest_pass_duration, ingest_failures{failure_kind}) — the per-pass I/O
+    facts the idle-amplification notes wanted, so idle cost is readable
+    from metrics: one fingerprint window per source per pass, zero
+    checkpoint saves on a no-op pass, bytes written per save.
+  - Nil observers normalize to Disabled at each constructor
+    (`watch.Options.Observer`, `uploader.Options.Observer`,
+    `hubsync.Options.Observer`, `store.WithObserver` on Open,
+    `ingestOptions.observer` in cmd/ohya). Production CLI processes still
+    pass nil: recorder construction, publication, and `--observe off` are
+    milestone 3 (T093); today the assertions live in the per-package
+    observer tests.
+  - `IngestResult.Duplicates` counts ordinal-content duplicates the write
+    path recognizes (rows still insert with `duplicate_of` set and count in
+    `Inserted`); the ON CONFLICT path is unreachable under the stored-records
+    cursor invariant and is not asserted.
+  - Store `sqlite_outcomes` separates busy/locked/error by driver code and
+    deliberately skips domain rejections (ErrBatchRejected family) — a
+    refused batch is not a database failure. `upload_batches` has the same
+    shape on the device: a transport-lost batch is attempted but neither
+    successful nor rejected.
+  - `upload_checkpoint_advances` counts only acknowledgments whose deferred
+    checkpoint flush succeeded (pending advances survive a failed flush and
+    count at the next successful one); `watch_checkpoint_saves` counts real
+    state-file writes with their byte volume.
+  - Hub-side: connections admitted/rejected/active, per-frame authorization,
+    gate wait, normalize (with parse metrics by agent), store transaction,
+    ack write; a clean EOF on connection close is not a read failure.
+  - Boundaries left open on purpose: `discovery_last_scan_ms`
+    and the SQLite DBStats/file-size gauges need the recorder clock and a
+    periodic sampler, which belongs to the T093 publisher. The uploader-side
+    pending-byte gauges are deferred to remote-status work (T098) — the
+    ingestor sets `watch_pending_complete_bytes` (failed sources' backlog)
+    and `watch_partial_tail_bytes` (per-source tails cached in
+    `ingestor.tails`) as sampled gauges. The mcpserver SQL/Annotation
+    families landed in T117 (see below).
+  - `internal/observe/observertest` is the shared fake Observer for tests;
+    it fails Add calls with unknown metric names or wrong label arity into
+    `UnknownAddCalls()`, and every observer test asserts that stays 0 —
+    the guard against fat-fingered metric names the recorder would silently
+    drop. `observe.SeriesKey` renders keys for assertions.
+
+- SQL and Annotation engine metrics shipped (2026-11-16, T117, plans/001
+  milestone 2 completion): `EngineOptions.Observer` (nil normalizes to
+  `observe.Disabled` in NewEngine) emits the catalog's sql_* and annotate_*
+  series from the engine, so the local stdio path and the remote hubsync
+  handleQuery/handleAnnotate path report through the same engine — hubsync
+  keeps only its transport-level hub_failures and cannot double-count. Facts
+  future work must keep:
+  - The engine reuses the T092 queryTrace for phases; a trace is created
+    whenever Usage or Observer is set (`Engine.traced`), so the untraced fast
+    path stays byte-identical when neither is configured. Production CLI
+    processes still pass no observer (recorder wiring is T093, milestone 3).
+  - Outcome labels come from the frozen `usageOutcome` classifier, so
+    sql_requests{query_class,query_outcome} and the usage record can never
+    disagree; annotate requests report under query_class="annotate".
+  - `sql_active` is an engine-owned count set under a small mutex after
+    admission and released via defer, so the gauge never exceeds
+    MaxConcurrency; requests refused at admission count
+    `sql_busy_rejections` plus sql_requests{outcome=busy} and never enter the
+    gauge. Rows/result bytes/truncations emit only on success — a failed
+    request returns nothing, even if iteration materialized rows before the
+    error. Phase durations emit only when the phase completed (unset trace
+    fields are skipped, never zero-filled).
+  - `annotate_duration` wraps the store.Annotate call (validate + transaction
+    + commit — the engine cannot see the pure tx span); both engine-side
+    (ErrAnnotateRejected) and store-side (store.ErrAnnotationRejected)
+    rejections count `annotate_validation_failures`.
+  - `annotate_operations{op,op_result}` needed a per-kind split:
+    `store.AnnotateResult` gained four `json:"-"` counters
+    (Applied/Unchanged × Upsert/Delete) set in the store's apply loop, so the
+    MCP JSON reply, the hubsync wire frame, and every wire-roundtrip test
+    comparison stay byte-identical (wire decode leaves the per-kind fields
+    zero); only direct store/engine call-site literals in tests needed
+    updating, and they now pin the per-kind counts.
+  - The device side of `ohya mcp --remote` now reports the client-view
+    sql_*/annotate_* series from hubsync.RemoteSession itself (T108, see
+    below); the joining process holds no Engine, so its metrics are the
+    client-observed subset (requests/outcome, total duration, rows,
+    truncations, busy rejections, annotate validation failures).
+
+- Usage recording for `sql`/`annotate` shipped (2026-11-16, T092, plan 002):
+  the engine wraps its existing authorizer per call, so `SQLITE_READ`
+  table.column sets and `SQLITE_FUNCTION` names (arg2) are collected with no
+  SQL text. Verified authorizer facts that shaped the code: FTS5 queries
+  report reads as `events_fts.events_fts`/`.ROWID`/`.rank` plus the shadow
+  `events_fts_config.k/v` — all outside the frozen T090 catalogue, so they
+  fold into `other` (the separate `fts` flag is set from the table name);
+  `count(*)` fires a read with an empty column name, which is skipped
+  (no column identity); an authorizer denial surfaces as SQLITE_AUTH (23)
+  and is classified `rejected`, which required `queryError` to wrap the
+  driver error with `%w` (not `%v`) so the result code survives. Records go
+  to `<state>/observe/<instance>/usage.jsonl` through a bounded async queue
+  (256 deep, drop-and-count; 8 MiB per file, two rotated files; 0700/0600;
+  no fsync). Per-instance retention is size-bounded by rotation; the 30-day
+  and cross-instance pruning belongs to plan 001 milestone 3 instance
+  cleanup (T093). The device-side client-outcome record for `ohya mcp
+  --remote` landed 2026-11-17 (T108, see below); the `ohya usage` report
+  shipped as T094.
+
+- Usage report shipped (2026-11-16, T094, plan 002): `ohya usage`
+  (cmd/ohya/usage.go) combines server usage records with transcript
+  evidence in the hub and reproduced the manual 2026-11-16 numbers
+  exactly (8 claude-code `sql` calls, 4 sessions, 2 devices, 1 timeout,
+  max result 48,474 B, 0 `raw_json` reads; ~2.3 s on the 16.3 GB hub).
+  Facts future work must keep:
+  - Verified transcript evidence shapes. Claude Code: `tool_use` blocks
+    named `mcp__ohya__sql`/`mcp__ohya__annotate` with `id` `call_*`,
+    paired to `tool_result` blocks by `metadata` JSON (the result record
+    embeds the call ID); availability comes from `attachment` records of
+    type `prompt_snapshot` or `deferred_tools_delta`. Codex: `event_msg`
+    records with `payload.type='item_completed'` and
+    `payload.item.type='McpToolCall'`, `payload.item.server='ohya'`
+    (fields `tool`, `status`, `arguments.query`, `result.content[].text`,
+    `duration`, plus `payload.started_at_ms`/`completed_at_ms`), and the
+    older `payload.type='mcp_tool_call_end'` with
+    `payload.invocation.server`. `event_msg` records carry no searchable
+    text, so FTS cannot find them — Codex needs per-session
+    `json_extract` scans.
+  - The manual scan's two misses are corrected: its Codex query read
+    `$.payload.arguments` instead of `$.payload.item.arguments` (14 real
+    Codex `sql` calls exist, 1 hitting the 5 s deadline), and its
+    availability count of 26 included one `edited_text_file` false
+    positive (the true count is 25: 19 prompt snapshots + 6 deferred
+    tool deltas). The plan's warning to verify the Codex format before
+    claiming "no Codex use" was exactly right.
+  - Discovery must be set-based on a large hub. The claude-code path
+    finds candidates through `events_fts MATCH '"mcp ohya sql" OR "mcp
+    ohya annotate"'` (unicode61 splits `mcp__ohya__sql` into mcp/ohya/sql)
+    and confirms structurally by parsing metadata; one FTS query beats
+    every per-session scan. Availability is one `EXISTS (... LIMIT 1)`
+    query over `sessions_recent` (~1 s) where a per-session loop cost
+    47 s over 1,256 sessions. Codex per-session scans stay (no FTS text).
+  - Timeout classification: an error result counts as `timeout` only when
+    its text contains "execution deadline exceeded" — and only for calls
+    already known failed (`is_error` for Claude Code, `status='failed'`
+    for Codex), because a successful result can itself quote the marker.
+  - Output contract: deterministic, bounded (deadline default 120 s,
+    5,000 sessions / 20,000 calls per agent), partial reports list what
+    was skipped and exit 1 only when nothing was collected; no SQL text,
+    query text, or transcript excerpts by default (`--local-detail` adds
+    the local query text; result text is never printed). The JSON
+    envelope follows ADR 0005.
+
+- Codex call path verified live (2026-11-16, T103, plan 003 R1): the
+  integration and the scan are both sound — plan R1's "no Codex call" premise
+  was the scan bug T094 already fixed. Verified end to end with `ohya setup`'s
+  own code path writing `[mcp_servers.ohya]` into an isolated `CODEX_HOME`
+  (seeded sandbox hub), `codex mcp list` showing it, and `codex exec`
+  (0.169.0) starting the server and completing `sql` calls; `ohya usage` on
+  the real hub still reports the 14 Codex calls. New parser fixture
+  `testdata/codex/mcp-tool-call.jsonl` pins the transcript records of one MCP
+  call (parser test plus `cmd/ohya` `TestUsageCodexMCPFixture`, which ingests
+  the fixture and asserts the scan reads it). Facts future work must keep:
+  - Codex config layering, verified by live A/B runs (0.169.0): a
+    `.codex/config.toml` in any ancestor of the working directory acts as a
+    project override that BEATS `$CODEX_HOME/config.toml` when both define
+    the same server name (a cwd under `/home/agent` resolved `ohya` to the
+    real installed entry and answered from the real hub; the same config from
+    `/tmp` answered from the sandbox hub). This is exactly what setup's
+    preflight refuses ("defines ohya for this project") — a tempting "fix" to
+    skip `$HOME/.codex/config.toml` in that walk was made and reverted; the
+    guard is correct because the override really wins. Consequence for
+    isolation harnesses (`cmd/memory-e2e`), hardened 2026-11-17 (T129):
+    the gate now keeps every codex child cwd outside all `.codex`-bearing
+    ancestors — the trace tree when its chain is clean, else a scratch
+    directory under the system temporary directory, else a fail-fast error
+    naming every shadowing config — and runs `codex login`, `codex mcp
+    list`, and `codex exec` from that root (symlinks in the chain resolve
+    first, matching the child's physical cwd). Also verified 2026-11-17
+    (0.169.0): `codex mcp list` reads only `$CODEX_HOME` — it shows the
+    sandbox entry even from a cwd whose ancestor config would win inside
+    `codex exec` — so a registration check alone can never detect the
+    shadowing.
+  - 0.169 evidence shapes confirmed live: the `item_completed` item carries
+    `server`, `tool`, `arguments`, `status`, `result.content[].text` plus
+    `structuredContent`, `duration`, and payload `started_at_ms`/
+    `completed_at_ms` (T094's shapes were right). The model may call MCP tools
+    through the `exec` meta-tool (`custom_tool_call` name `exec` running
+    `tools.mcp__ohya__sql(...)`); the McpToolCall event then sits between the
+    `custom_tool_call` and `custom_tool_call_output` records. 0.169 also
+    writes `response_item/additional_tools` (developer-role tool catalog;
+    MCP tools appear as `mcp__<server>__<tool>`).
+  - The ChatGPT-account auth on this VM hit its usage limit (reset 23:26
+    local, 2026-11-16), which fails `codex exec` turns before any tool call;
+    API-key auth in the isolated CODEX_HOME worked. Never run `codex login
+    --with-api-key` against the real `~/.codex` — it replaces the user's
+    `auth.json`.
+
+- Recall evaluation set shipped (2026-11-17, T107, plan 003 R5): synthetic
+  sessions in `testdata/recall/` (all three agent formats, markers identify
+  known answers) plus `internal/recalleval` — question set, `Ingest` through
+  the production parse/write path, and `Run` through the mcpserver engine.
+  Runs in `make check`; baseline recall 9/9 at top 10. Facts worth keeping:
+  - Answer events are identified by unique `oyr-*` markers resolved at run
+    time (`text LIKE`, exactly one event required); numeric event IDs are
+    NOT pinned in code — they are deterministic per corpus revision and
+    pinned by TestRecallDeterministic instead, so fixture edits do not need
+    repinning. Markers never appear in MATCH terms (a question must not pass
+    by matching its own marker).
+  - The set deliberately includes multi-match questions (failed test vs
+    diagnosis, stale bound vs correction) so BM25 ordering is exercised;
+    several answers must rank below noisier matches and still land in the
+    top 10.
+  - The O6 measurement recipe (plan 004, T112's unblock condition) is pinned
+    by TestRecallMeasuresUnindexedToolOutputs: deleting the FTS rows of both
+    agents' tool outputs (Codex `function_call_output`: kind='response_item',
+    tool_name NULL, metadata callId present; Claude Code `tool_result`:
+    kind='user' with a tool_result first metadata block) drops recall to
+    6/9 — exactly the three questions whose answers live only in tool
+    outputs. External-content FTS5 delete works as INSERT ... SELECT with the
+    literal first column.
+  - The repo-scoped question guards `sessions.repo` derivation end to end:
+    a broken derivation empties the scoped result and fails the guard.
+
+- Tailcat address adapter (2026-11-16, T121, ADR 0011;
+  internal/transport/address): hub identity (version 1: node private key,
+  pre-shared key, DERP region as JSON) lives owner-only in
+  `<state>/tailcat-hub/identity.json` through durablefile; since T123 this
+  is the only transport adapter (the tsnet stack is deleted). Verified
+  library facts that shaped the code:
+  - `Server.Start` picks defaults into locals and never writes Key,
+    PresharedKey, or Region back — an identity must be generated and
+    reloaded by ohya itself, and the selected region of a first start
+    without an explicit Region is only observable through
+    `ParseAddr(srv.TailcatAddr())`.
+  - `ConnInfo.Addr()` zeroes RegionID/RegionCode/RegionName and node
+    names before CBOR encoding, and `ParseAddr` restores RegionID as
+    index+1 and node names from HostName — so the address string does
+    not depend on the region's ID, but a round-tripped region is not
+    byte-identical to a configured one. The adapter therefore saves a
+    caller-provided Region verbatim and only falls back to the parsed
+    region when Tailcat picked one from the default map; a configured
+    region with a different RegionID is refused on restart (the
+    identity pins it).
+  - Hermetic tests: a local DERP relay is `tailscale.com/derp/derpserver`
+    behind httptest StartTLS on 127.0.0.1:0 with a node that sets
+    `IPv4: "127.0.0.1"`, `IPv6: "none"`, `DERPPort`, and
+    `InsecureForTests: true` (derphttp skips cert verification); no STUN
+    port and no public relay map are needed. TestMain sets `IN_TS_TEST`
+    (magicsock skips portmapper probes) and stubs
+    `netcheck.HookStartCaptivePortalDetection` exactly like tailcat's own
+    tests, or every engine start waits on gateway probes. A fresh client
+    resends its meow ping every second for up to 10 s, so no explicit
+    wait for the server's DERP connection is needed; a full hub+device
+    exchange test costs ~7 s.
+  - `PresharedKey.UnmarshalText` echoes its input in the error, so the
+    identity loader decodes through string fields and reports an invalid
+    pre-shared key without the underlying text (never leak key bytes
+    through error strings); the corrupt-identity regression pins that
+    plus "no overwrite on failure".
+  - The device dials `Client.DialTCPPort(ctx, 9027)`; one Device is bound
+    to one hub address for its process lifetime (a second address is
+    refused). Dial caps itself at 20 s when the caller's deadline is
+    later, matching the uploader's 60 s reconnect budget. `Drain(ctx)`
+    (Server/Client `DrainTCP`) exists for clean shutdown: exiting right
+    after Close can lose FINs inside the in-process TCP stack.
+    Never-started case (fixed 2026-11-16, T119): tailcat's
+    `Client.DrainTCP` derefs `c.lb`, which stays nil until the first
+    Ping/dial runs `ensureStarted` (`Client.Close` is the guarded one),
+    so draining a never-dialed client — or the fresh client
+    `resetClient` swaps in after a failed dial — panicked with exit 2
+    on the `mcp --remote` and join exit paths. `Device.Drain` now
+    mirrors `Hub.Drain`'s started guard: it drains only a client that
+    completed a dial since the last reset (no dial, no TCP endpoints,
+    nothing to flush) and returns nil otherwise.
+  - go.mod: `github.com/tailscale/tailcat v0.7.0` direct,
+    `tailscale.com` still v1.104.4 (no version bumps; tidy moved
+    `golang.org/x/sys` v0.49.0 from indirect to direct because tailcat's
+    unix file compiles into the imported package).
+
+- ohya1 join codes and the caller switch to the address transport
+  (2026-11-16, T122, ADR 0011/0012; cmd/ohya, internal/transport/address,
+  internal/device): serve, devices invite, join, and mcp --remote now use
+  internal/transport/address. T123 then deleted the tsnet adapter,
+  internal/control, and the headscale dependency; doctor's join-state
+  check verifies the saved hub address instead of probing a coordination
+  URL, and transport path/round-trip reporting waits for T125.
+  Facts the switch depends on:
+  - The join code is `ohya1.<invitation>.<tailcat-address>`; invitation is
+    hex and the address is base64url, so `.` never collides. The address is
+    a secret (pre-shared key inside), so no error message, log, or test
+    output may include it or the code; the old `<invitation>:<preauth-key>`
+    form is rejected with a message that names the new format and
+    `ohya devices invite`.
+  - `address.LoadHubAddr(stateDir)` recomputes the hub address offline from
+    the saved identity through the exported
+    `tailcat.DiscoPublicForNode` + `ConnInfo.Addr`; it is byte-identical to
+    `Server.TailcatAddr()` because the identity pins the exact region.
+    devices invite uses it, so it needs no running transport.
+  - Hub restart recovery: `Client.up` short-circuits after the first meow,
+    so a long-lived client never re-meows, and a restarted hub forgets every
+    peer — handshakes then die against the old direct UDP endpoint and the
+    first dial after a restart times out. The adapter now (a) sends one
+    meow (`Client.Ping`) before every dial — after the first success the
+    library returns immediately, so this costs one relay packet — and (b)
+    replaces the tailcat client after a failed dial, because the client key
+    carries no identity (ADR 0011); the retry then connects in ~4 s. The
+    uploader's backoff and RemoteSession's single retry absorb the failed
+    first dial; hub-restart visibility dropped from >2 min to ~4 s.
+  - Hello-first rebind probe is `hubsync.RemoteSession.Query(ctx,
+    "SELECT 1")` on the saved credential: the hub's CodeAuth error text
+    distinguishes revoked ("device is revoked") from a different hub
+    ("credential does not belong to a paired device"); on rejection join
+    fails with that reason and never consumes the invitation. No protocol
+    or TLA+ change (ADR 0012 says so); `make tla` still passes.
+  - Hermetic e2e: the local DERP recipe from T121 moved to
+    cmd/ohya/serve_e2e_test.go (startLocalDERP + a region JSON file);
+    child-serve injects it through OHYA_TEST_DERP_REGION_FILE in TestMain,
+    never the public relay map; the same TestMain sets IN_TS_TEST and stubs
+    captive portal detection for every child. A SIGTERM to a child in its
+    first ~300 ms (still in package init) kills it before its signal
+    handler exists — stop test children only after they did observable
+    work, or the strict stopChild reports "signal: terminated".
+
+- Headscale stack removal (2026-11-16, T123, ADR 0011 "What is removed"):
+  internal/control, internal/transport/tailcat (tsnet adapter, shared-node
+  lock, loopback proxy, SSL_CERT_DIR trust dir, netns switch, MagicDNS
+  wait), cmd/tailcat-spike, and tla/TransportOwner (model, cfg, runner
+  line, README section) are deleted; `make tla` covers Sync and Auth only.
+  go.mod shrank to five direct dependencies (headscale plus everything
+  only it carried is gone; golang.org/x/net and x/sys moved back to
+  indirect). Release binary, linux/amd64, package.sh flags:
+  72,148,584 → 49,350,600 bytes (31.6% smaller; macOS size unmeasured —
+  no darwin machine in this task; docs/performance.md "Release binary
+  size"). doctor lost --control and the coordination probe: the join-state
+  check now reads credential.json plus hub-address.json, warns on a
+  missing address, and never prints the address (a secret). The
+  coordination_plane_absent JSON code died with its only producer.
+
+- go.sum stability under the verification gate (2026-11-16, T123 repair):
+  the check setup runs `go mod download all`, which records hashes for the
+  whole module graph and grows go.sum far beyond what `go mod tidy`
+  writes. A candidate that stages only the tidied go.sum fails the gate
+  with "the verification command passed but changed project files". Stage
+  a go.sum produced by `go mod download all` (a superset of tidy's) so the
+  tree is stable under both commands; do not re-tidy it away.
+
+- Hub setup and the device join command (2026-11-16, T124, ADR 0012;
+  cmd/ohya, internal/setup, internal/transport/address, install.sh):
+  `ohya setup --hub` adds a second owned service (`ohya-serve.service` /
+  `com.nibzard.ohya.serve.plist`, receipt `setup/hub-service.json`) after
+  the ingestion service, skips the recovery point for it (one copy per run
+  already happened before the ingest restart; the online snapshot absorbs
+  the running writer), then waits for the identity the serve process
+  writes and probes the hub before issuing the code. Facts worth keeping:
+  - Probe classification is two-step on purpose (address.ProbeHub): an
+    outbound TCP connect to the relay node the identity pins (DERPPort 0
+    means 443) decides ErrRelayUnreachable, and only then a device-side
+    dial of the hub address decides ErrHubUnreachable — tailcat's meow
+    Ping alone cannot tell an unreachable relay from a hub that never
+    connected to it, but the prior TCP check collapses that ambiguity.
+  - The join code is printed only to stdout text or the JSON field
+    `data.hub.code_secret`; the setup results never embed it, and the
+    `hub` component's detail names only the relay region and node key.
+  - install.sh `--join` reads /dev/tty with `stty -echo`; the pty test
+    feeds the code through `script -qec` with a delayed write (input that
+    arrives before stty runs is echoed by the pty) and strips \r before
+    asserting. Without a tty or under --json it refuses and names
+    --join-code-env.
+  - The e2e harness replaces the service manager through a package-level
+    `serviceRunnersHook` in cmd/ohya (nil in production): the fake maps
+    systemctl/launchctl verbs to real child-serve/child-run ingest
+    processes. Doctor's service inspection uses the same hook so it sees
+    the children. Ordering trap: `ohya.service` is a substring of
+    `ohya-serve.service`, so the serve commands must be matched first.
+  - mcp --remote on a joined setup needs `--state <setup>/join`, not the
+    setup state root; the setup engine's client args already point there.
+  - `make check` ends with `go run ./cmd/commentcheck`, which fails on every
+    comment in a .go file (only `//go:embed` is approved) — including the
+    doc comments standard Go style asks for on exported symbols. Write no
+    comments at all; keep the rationale in docs and NOTES.
+
+- Plan 004 S3 offline storage analyses (measured 2026-11-17, 16.6 GB hub,
+  2.69 M events; read-only scripts under `perf/`, raw tables in
+  `perf/t102/` and the task artifact dir, both gitignored; no transcript
+  content in any output):
+  - FTS index share (`perf/ftsshare`, every 20th event id inserted into
+    per-category contentless FTS5 tables, `dbstat` after `optimize`;
+    the sum of the category tables overestimates the all-docs index by
+    only 3%, so shares are trustworthy): tool outputs hold 67.7% of the
+    FTS index (22,386 of 64,457 sampled indexed docs; 100.6 of
+    137.4 MB sampled text). Codex `response_item` across all roles is
+    59.6% alone; Codex `event_msg` contributes zero — all its rows carry
+    NULL text, so FTS never indexes them. O6 (index less) has real
+    headroom: excluding tool outputs would remove about two thirds of
+    the index; the recall cost is unmeasured and still needs plan 003
+    R5. Reference cross-check: the sample's optimized index/text ratio
+    is 0.351 versus about 0.30 on the hub (0.83 GB over ~2.7 GB indexed
+    text — the earlier "5.6 GB of text" figure counts NULL-text rows).
+  - Duplication and compression per device (`perf/devratio`; phase A
+    every 20th row, phase B 60 sessions per device picked with
+    probability proportional to estimated size, zstd-3 =
+    klauspost SpeedDefault, dictionaries trained by `zstd --train` on a
+    disjoint half of the picked sessions):
+    VM (5.5 GB raw): per-row 2.26x, 64 KB blocks 3.01x, 1 MB blocks
+    3.76x, per-row with a 110 KB dictionary 2.61x (self-trained also
+    2.62x), 1 MB blocks with dictionary 4.43x, session-stream duplicate
+    share 30.4%.
+    MacBook (4.5 GB raw): per-row 2.20x, 64 KB blocks 2.82x, 1 MB
+    blocks 3.28x, per-row with dictionary 2.47x — but 2.78x when
+    measured on the dictionary's own training half, so the
+    brainstorm's 3.08x per-row dictionary number (trained and measured
+    on one sample) is optimistic by roughly 0.3x — session-stream
+    duplicates 34.8%. The brainstorm's ~33% duplication therefore holds
+    on the MacBook data. Large strings (>=256 B) carry 76.5% (VM) and
+    86.7% (MacBook) of raw bytes. Cross-device large-string repeats are
+    ~0% (0.0% VM, 0.2% MacBook): the two devices share almost no
+    content, so per-device dictionaries lose nothing and content
+    addressing (O2) has no cross-device win on this hub. A row-uniform
+    sample undercounts duplication (18-20%) versus whole-session
+    streams (30-35%) because it breaks intra-session repeats — use
+    session streams for duplication claims.
+  - klauspost/compress zstd decode cost (`perf/zstdbench`, blocks of
+    consecutive raw_json records from the 4 largest sessions, i9-12900HK,
+    single goroutine, warmed, klauspost v1.20.0 = the module's pin):
+    64 KB block no dictionary 123 us (759 MB/s), with dictionary
+    158 us (590 MB/s); 1 MB block no dictionary 1.33 ms (874 MB/s),
+    with dictionary 1.72 ms (676 MB/s). Decode runs at 0.6-0.9 GB/s on
+    one core; a dictionary costs about 25% of decode speed. O1's
+    `ohya_raw(id)` decoding one 1 MB block costs ~1.3-1.7 ms — the
+    brainstorm's "about 1 ms" estimate was right — and a 64 KB block
+    costs ~0.12-0.16 ms, so block size trades decode latency against
+    ratio, not against any throughput wall.
+  - `zstd --train` needs a few dozen samples minimum (it fails with
+    "Src size is incorrect" on toy corpora), and mattn's dbstat needs
+    the extra `sqlite_dbstat` build tag — `perf/README.md` records both
+    run commands.
+
+- Transport path and first-upload reporting (2026-11-17, T125, ADR 0012;
+  internal/transport/address/path.go, cmd/ohya, internal/registry,
+  internal/uploader): doctor, join, devices list, and the uploader now
+  report path type, relay region, round trip, and backlog drain
+  progress. Facts future work must keep:
+  - Device side measures with up to three `tailcat.Client.DiscoPing`
+    calls (`Device.PathInfo`): `PingResult.Endpoint != ""` is a direct
+    path, `DERPRegionID != 0` is a relay with `DERPRegionCode`,
+    `LatencySeconds` is the round trip. Repeated pings upgrade a relay
+    answer to direct; never invent a value — unmeasured is
+    `unknown`/null.
+  - Hub side reads `Server.Status().Peer` — but `PeerStatus.TailscaleIPs`
+    is EMPTY in tailcat, so a connection's remote address cannot be
+    matched by IP list. Each peer has a deterministic tunnel address:
+    `fd7a:115c:a1e0::/48` ULA plus 10 bytes of the node key (tailcat's
+    unexported `tcAddrForKey`, mirrored as `address.peerTunnelAddr`; the
+    live e2e test fails if upstream ever changes the scheme).
+    `CurAddr != ""` is direct; `Relay` holds the DERP region CODE (not
+    the name) via magicsock's `derpRegionCodeOfIDLocked`.
+  - The sync wire protocol is unchanged (ADR 0012): the hub learns the
+    path from its own transport status at authentication time through
+    `pathRecorder` (cmd/ohya/hubpath.go wraps the registry
+    Authenticator), persisting registry.db v2 (`devices.last_path`,
+    `devices.last_sync_at_ms`; ALTER TABLE migration from v1) on connect
+    and at most every 30 s. `ohya devices list` prints them; null means
+    never synced.
+  - Doctor on a paired device dials the hub once: PathInfo then one
+    `SELECT 1` through the sync protocol (protocol compatibility is the
+    real exchange, not a version string compare). A hub behind a closed
+    port holds the probe ~10 s (meow resend loop); the whole probe is
+    bounded at 45 s. The JSON `transport` object appears only when
+    paired; hub address/credential never appear anywhere.
+  - Uploader backlog gauges (`upload_backlog_bytes`,
+    `upload_backlog_sent_bytes`, `upload_backlog_rate_bytes`,
+    `upload_backlog_eta_ms`): a drain starts when a pass sees pending
+    bytes and completes when a later pass sees none (completion is
+    detected at the START of the next pass, so tests need one extra
+    sync). Rate publishes only with ≥2 ack samples spanning ≥1 s inside
+    a 10 s window; before that the log says "rate unknown so far". Log
+    lines need a ≥1 MiB total and print at most every 10 s — small
+    appends stay fully silent. ETA uses float math; integer
+    `Duration/Duration` truncates.
+
+- Recall deadline friction removed (2026-11-17, T104, plan 003 R2): the
+  timed-out production call was `events` JOIN `sessions` ON cwd with
+  ORDER BY time_ms DESC LIMIT 5 (verified in the hub transcripts; 5,027 ms
+  timeout, 3,991 ms sibling, both 2026-11-15 23:32 local — inside the
+  recovery-copy iowait storm). Facts worth keeping:
+  - The plan is indexed but streams every matching events row into the
+    sort (one table-page read per project event when cold; ~16 ns warm).
+    The fix is a query recipe, not a schema change: select the newest IDs
+    in a subquery over `events_settled` (SEARCH ev USING COVERING INDEX
+    events_session_time), then fetch those IDs by rowid. Published in the
+    sql tool description and DB.md "Project recall example";
+    TestProjectEventsRecipePlan pins the covering plan, equivalence test
+    pins identical rows. Cold on the live hub at the incident cwd: 1,080 ms
+    → 218 ms.
+  - `perf/recallduration` reproduces and measures the pattern on a compact
+    mix fixture (scale 2.8, seed 7: 3.88 M events, largest cwd 493,571
+    events; ~25 min build). Usage-record timings (T092 sink): plain join
+    p95 8.6 ms warm / 2.4 s cold; recipe 4.0 ms / 100 ms. A
+    `posix_fadvise(DONTNEED)` eviction makes cold runs repeatable; cold
+    single runs are order-sensitive (later shapes keep some pages).
+  - Index rejected with measurements: `events(time_ms DESC, id)` costs
+    +70.5 MiB and 82 s build on the 6.7 GiB fixture, answers an active
+    project in 75 ms cold, but a no-match/old cwd scans the whole index
+    backward — 5,004 ms on 20 of 20 runs (hard timeout). Views cannot fix
+    the shape (no parameters; they flatten into the same plan).
+  - Driver fact: the engine's authorizer stays registered on pooled reader
+    connections, so a raw `PRAGMA page_count` through the readers pool
+    after an engine query is denied ("not authorized") — read such pragmas
+    through the writer (fix in perf/recallduration).
+  - Live-hub before/after confirmation rides on T113 (hub binary predates
+    the usage recorder) and the T099 baseline window.
+
+- Device-side client-outcome records for `ohya mcp --remote` (2026-11-17,
+  T108, plan 002): hubsync.RemoteSession records one usage record per
+  sql/annotate exchange plus the client-view observer metrics, wired from
+  runMcpRemote through RemoteSessionOptions{DeviceID, Usage, Observer}
+  (join and doctor probes pass zero options and record nothing). Facts
+  future work must keep:
+  - The device-side record keeps what only the device knows: the MCP
+    client name/version bucket (read from the mcpserver origin context the
+    tool handler already injects — requestOrigin sets path local, the
+    session overrides it to remote), the session hint, its own device
+    identity, the client-observed total in phase_ms.total_ms, and rows for
+    successful sql calls. Hub-only fields (phase breakdown, result bytes,
+    sqlite_code, reads, functions, fts, annotate op counts) stay zero —
+    the hub-side engine record owns them; ohya usage reads both through
+    the same observe/ tree per --state, and joining across machines stays
+    plan 001 milestone 5 (T098).
+  - Outcome classification is wire-code based (remoteUsageOutcome): hub
+    CodeBusy → busy, CodeRejected/CodeTooLarge/ErrTooLarge/auth refusal →
+    rejected, ctx cancel → cancelled, ctx or conn deadline → timeout
+    (os.ErrDeadlineExceeded — the conn deadline surfaces as a net error,
+    not context.DeadlineExceeded), everything else (dial loss, protocol
+    garbage, CodeInternal carrying the real SQLite error) → sql_error. A
+    hub-side timeout arrives as CodeRejected (the endpoint folds
+    ErrDeadline into it), so the device cannot distinguish it — the
+    hub-side record does.
+  - The origin Path from mcpserver.requestOrigin is always local (an
+    Engine default); RemoteSession ignores it and stamps remote, because
+    the session knows it is the client end.
+  - Metrics from the session mirror the engine's label shapes exactly
+    (sql_requests{query_class,query_outcome}, sql_total_duration,
+    sql_rows, sql_truncations{truncation_kind}, sql_busy_rejections,
+    annotate_validation_failures) — hub and device snapshots stay
+    comparable series-by-series; per-process snapshots cannot
+    double-count.
+  - Trap fixed alongside: openUsageWriter returns nil *UsageWriter on
+    failure, and assigning that to the UsageSink interface field made a
+    non-nil interface — the local mcp path and serve then PANICKED on the
+    first sql call after "usage records disabled" (nil deref inside
+    UsageWriter.Record stamping InstanceID). usageSink() in cmd/ohya/mcp.go
+    now converts nil-for-nil; pinned by TestMCPStdioServesWithoutUsageRecords.
+  - e2e: TestFreshnessSmoke asserts the real child-mcp --remote stack
+    writes one device-side record per poll query into the join state's
+    observe/ tree (client "other" — freshness-observer is outside the
+    fixed set). waitUsageRecords(n) TRUNCATES to n records — re-read with
+    readUsageRecords before counting everything.
+
+- Released-schema upgrade tests own DB.md upgrade-policy item 5 (2026-11-17,
+  T083): releases ship databases (v0.1.0/v0.1.1 schema 6, v0.1.2 schema 7),
+  so DB.md's old "no released database exists" baseline was false.
+  `internal/store/migrate_released_test.go` builds a database at each schema
+  in `releasedSchemas` from the embedded migration bytes, seeds rows a
+  released write path could have written (FTS-indexed event, ordinal replay
+  duplicate, token usage, annotation, and from schema 7 a workspaces row),
+  upgrades through `store.Open`, asserts the rows survive, and then ingests
+  through the current write path. The same change that publishes a release
+  adds it to `releasedSchemas` and DB.md policy item 5;
+  `TestReleasedSchemasMatchPublishedTags` enforces that wherever git tags
+  are visible — it fails on a published v-tag missing from the list, on a
+  wrong schema number (it counts each tag's shipped migrations), and on a
+  shipped migration file whose bytes differ from the tree (the immutability
+  rule). CI's check-linux job fetches tags at checkout (actions/checkout
+  `fetch-tags: true`, T131, 2026-11-17), so the guard runs in CI too — a
+  depth-1 tag fetch carries each tag's full tree, which is all ls-tree and
+  show read; the macOS check job and the bench job still fetch no tags. The
+  deferred events(source_id, parser_version) doctor
+  index keeps its deferral (see the 6.6 GB hub note above): add it with the
+  next migration, which these tests then exercise as an upgrade from every
+  released schema.

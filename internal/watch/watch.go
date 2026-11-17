@@ -13,12 +13,15 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/nibzard/ohya/internal/observe"
 )
 
 const DefaultFingerprintWindow int64 = 4096
 
 type Options struct {
 	FingerprintWindow int64
+	Observer          observe.Observer
 }
 
 type Watcher struct {
@@ -26,7 +29,9 @@ type Watcher struct {
 	agent    string
 	window   int64
 	state    checkpointFile
+	lastPass map[string]probe
 	dirty    bool
+	observer observe.Observer
 }
 
 type Outcome struct {
@@ -51,11 +56,16 @@ func New(stateDir, agent string, o Options) (*Watcher, error) {
 	if window <= 0 {
 		window = DefaultFingerprintWindow
 	}
+	observer := o.Observer
+	if observer == nil {
+		observer = observe.Disabled
+	}
 	state, err := loadState(stateDir, agent)
 	if err != nil {
 		return nil, err
 	}
-	return &Watcher{stateDir: stateDir, agent: agent, window: window, state: state}, nil
+	return &Watcher{stateDir: stateDir, agent: agent, window: window, state: state,
+		lastPass: map[string]probe{}, observer: observer}, nil
 }
 
 type probe struct {
@@ -92,6 +102,8 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 
 	var outcomes []Outcome
 	changed := false
+	present, missing := 0, 0
+	var observedBytes int64
 
 	renamedFrom := map[string]string{}
 	moves := map[string]string{}
@@ -141,6 +153,12 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 			}
 		}
 		w.state.Sources = moved
+		for key, target := range moves {
+			if pr, ok := w.lastPass[key]; ok {
+				w.lastPass[target] = pr
+				delete(w.lastPass, key)
+			}
+		}
 		changed = true
 	}
 
@@ -148,22 +166,31 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 		entry := w.state.Sources[key]
 		pr, live := probes[key]
 		if !live {
+			missing++
+			delete(w.lastPass, key)
+			w.observer.Add("watch_source_events", 1, "missing")
 			outcomes = append(outcomes, Outcome{
 				Path: key, SourceID: entry.SourceID,
 				Cursor: entry.CursorBytes, Missing: true,
 			})
 			continue
 		}
+		present++
+		observedBytes += pr.size
 		reason := ""
+		watchEvent := ""
 		switch {
 		case pr.identity != entry.FileIdentity:
 			reason = "platform file identity changed: the path holds a different file incarnation"
+			watchEvent = "replacement"
 		case pr.size < entry.CursorBytes:
 			reason = fmt.Sprintf("file size %d is below the acknowledged cursor %d: the file was truncated",
 				pr.size, entry.CursorBytes)
-		default:
-			reason = w.verifyFingerprint(key, entry)
+			watchEvent = "truncation"
+		case w.lastPass[key] != pr:
+			reason, watchEvent = w.verifyFingerprint(key, entry)
 		}
+		w.lastPass[key] = pr
 		if reason == "" {
 			outcomes = append(outcomes, Outcome{
 				Path: key, SourceID: entry.SourceID,
@@ -172,6 +199,7 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 			})
 			continue
 		}
+		w.observer.Add("watch_source_events", 1, watchEvent)
 		outcome, err := w.register(key, pr, reason)
 		if err != nil {
 			return nil, err
@@ -196,10 +224,13 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 		if id != "" && claimed[id] {
 			continue
 		}
+		present++
+		observedBytes += probes[key].size
 		outcome, err := w.register(key, probes[key], "new file")
 		if err != nil {
 			return nil, err
 		}
+		w.lastPass[key] = probes[key]
 		if id != "" {
 			claimed[id] = true
 		}
@@ -207,6 +238,9 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 		changed = true
 	}
 
+	w.observer.Set("watch_sources", float64(present), "active")
+	w.observer.Set("watch_sources", float64(missing), "missing")
+	w.observer.Add("watch_bytes_observed", uint64(observedBytes))
 	if changed {
 		w.dirty = true
 	}
@@ -221,25 +255,28 @@ func (w *Watcher) Flush() error {
 	if !w.dirty {
 		return nil
 	}
-	if err := saveState(w.stateDir, w.agent, w.state); err != nil {
+	written, err := saveState(w.stateDir, w.agent, w.state)
+	if err != nil {
 		return err
 	}
+	w.observer.Add("watch_checkpoint_saves", 1)
+	w.observer.Add("watch_checkpoint_bytes_written", uint64(written))
 	w.dirty = false
 	return nil
 }
 
-func (w *Watcher) verifyFingerprint(path string, entry sourceCheckpoint) string {
+func (w *Watcher) verifyFingerprint(path string, entry sourceCheckpoint) (string, string) {
 	if entry.CursorBytes == 0 {
-		return ""
+		return "", ""
 	}
-	sum, err := fingerprintFile(path, entry.CursorBytes, entry.FingerprintWindow)
+	sum, err := w.fingerprint(path, entry.CursorBytes, entry.FingerprintWindow)
 	switch {
 	case err == nil && sum != entry.FingerprintSHA256:
-		return "content before the acknowledged cursor changed: the file was rewritten in place"
+		return "content before the acknowledged cursor changed: the file was rewritten in place", "replacement"
 	case errors.Is(err, errShortRead):
-		return "the acknowledged prefix became unreadable during verification: the file shrank"
+		return "the acknowledged prefix became unreadable during verification: the file shrank", "truncation"
 	default:
-		return ""
+		return "", ""
 	}
 }
 
@@ -270,7 +307,7 @@ func (w *Watcher) ReadPending(o Outcome) ([]byte, error) {
 	if o.End < o.Cursor {
 		return nil, fmt.Errorf("watch: outcome for %s has end %d before cursor %d", o.Path, o.End, o.Cursor)
 	}
-	f, info, err := observe(o.Path, entry.FileIdentity)
+	f, info, err := openVerified(o.Path, entry.FileIdentity)
 	if err != nil {
 		return nil, err
 	}
@@ -282,6 +319,7 @@ func (w *Watcher) ReadPending(o Outcome) ([]byte, error) {
 	if _, err := f.ReadAt(buf, o.Cursor); err != nil {
 		return nil, fmt.Errorf("watch: read %s at %d: %w", o.Path, o.Cursor, err)
 	}
+	w.observer.Add("watch_read_bytes", uint64(len(buf)))
 	return buf, nil
 }
 
@@ -310,7 +348,7 @@ func (w *Watcher) Rewind(path, sourceID string, cursor int64) error {
 			cursor, entry.CursorBytes, p)
 	}
 	if entry.CursorBytes > 0 {
-		sum, err := fingerprintFile(p, entry.CursorBytes, entry.FingerprintWindow)
+		sum, err := w.fingerprint(p, entry.CursorBytes, entry.FingerprintWindow)
 		if err != nil || sum != entry.FingerprintSHA256 {
 			return fmt.Errorf("watch: %s no longer holds the acknowledged bytes; they cannot be replayed", p)
 		}
@@ -334,7 +372,7 @@ func (w *Watcher) entry(path, sourceID string) (string, sourceCheckpoint, error)
 }
 
 func (w *Watcher) checkpoint(p string, entry sourceCheckpoint, end int64) error {
-	f, info, err := observe(p, entry.FileIdentity)
+	f, info, err := openVerified(p, entry.FileIdentity)
 	if err != nil {
 		return err
 	}
@@ -349,6 +387,7 @@ func (w *Watcher) checkpoint(p string, entry sourceCheckpoint, end int64) error 
 		if _, err := f.ReadAt(buf, end-window); err != nil {
 			return fmt.Errorf("watch: read %s at %d: %w", p, end-window, err)
 		}
+		w.observer.Add("watch_read_bytes", uint64(window))
 		digest := sha256.Sum256(buf)
 		sum = hex.EncodeToString(digest[:])
 	}
@@ -361,7 +400,7 @@ func (w *Watcher) checkpoint(p string, entry sourceCheckpoint, end int64) error 
 	return nil
 }
 
-func observe(path, identity string) (*os.File, fs.FileInfo, error) {
+func openVerified(path, identity string) (*os.File, fs.FileInfo, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("watch: open %s: %w", path, err)
@@ -380,11 +419,19 @@ func observe(path, identity string) (*os.File, fs.FileInfo, error) {
 
 var errShortRead = errors.New("watch: short read")
 
-func fingerprintFile(path string, cursor, window int64) (string, error) {
+func (w *Watcher) fingerprint(path string, cursor, window int64) (string, error) {
 	window = min(window, cursor)
 	if window <= 0 {
 		return "", nil
 	}
+	sum, err := fingerprintFile(path, cursor, window)
+	if err == nil {
+		w.observer.Add("watch_read_bytes", uint64(window))
+	}
+	return sum, err
+}
+
+func fingerprintFile(path string, cursor, window int64) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("watch: open %s: %w", path, err)

@@ -154,8 +154,8 @@ SQL function (for example `ohya_raw(id)`) keeps `events_settled.raw_json`
 working for agents.
 *Evidence.* 4.10x on 1 MB blocks; 5.78x with long-range zstd-19 for
 archive-grade seals. zstd is already in the binary through
-`github.com/klauspost/compress` v1.20.0 (indirect today, through headscale
-and tailscale), so this needs no new module.
+`github.com/klauspost/compress` v1.20.0 (indirect today, through the
+tailscale transport), so this needs no new module.
 *Estimated hub size.* raw part 9.9 GB → about 2.4 GB; hub about 16.3 →
 8.8 GB. With archive-grade seals, about 8.1 GB.
 *Why it fits.* Sealed segments are immutable. That makes backup, sync, and
@@ -215,7 +215,10 @@ agent reasoning, user messages, and tool *inputs* fully.
 *Evidence.* "The Complexity Trap" (JetBrains, NeurIPS 2025 DL4Code
 workshop) found that masking old tool observations halves agent cost
 without lowering solve rates. That suggests observations are low-value for
-recall too. This is a hypothesis for this corpus, not a measured result.
+recall too. Measured 2026-11-17 (plan 004 S3): tool outputs hold 67.7% of
+this hub's FTS index, so the size lever is real; whether their recall
+value is low enough to drop is still a hypothesis for this corpus, to be
+checked against the plan 003 R5 recall evaluation.
 *Scenarios:* 10.
 
 ### O7. Optional semantic layer, measured first
@@ -386,13 +389,42 @@ run inside segments, where it is cheap.
 
 ## Open questions
 
+Answered 2026-11-17 by the plan 004 S3 offline analyses (read-only
+scripts under `perf/`, raw tables in `perf/t102/`, summary and method
+notes in `NOTES.md`):
+
+- **What share of the FTS index comes from tool outputs?** 67.7% on this
+  hub (22,386 of 64,457 sampled indexed docs; 100.6 of 137.4 MB sampled
+  text). Codex `response_item` across all roles holds 59.6% alone and
+  Codex `event_msg` holds zero, because all its rows carry NULL text.
+  O6 has real headroom — excluding tool outputs would remove about two
+  thirds of the index — but the recall cost is unmeasured and needs the
+  plan 003 R5 evaluation before cutting anything.
+- **Does the measured 33% duplication hold on the MacBook data?** Yes.
+  Session-stream duplicates are 34.8% on the MacBook against 30.4% on
+  the VM (whole-session streams; a row-uniform sample undercounts at
+  18–20% because it breaks intra-session repeats). Large strings
+  (≥ 256 B) carry 86.7% (MacBook) and 76.5% (VM) of raw bytes.
+  Cross-device large-string repeats are ~0%, so content addressing (O2)
+  has no cross-device win on this hub and per-device dictionaries lose
+  nothing. Other users' hubs stay unmeasured until `ohya store
+  estimate` exists (D1). Per-device ratios: VM per-row 2.26x, 64 KB
+  blocks 3.01x, 1 MB blocks 3.76x; MacBook 2.20x / 2.82x / 3.28x. The
+  per-row dictionary ratio measured on disjoint data is 2.47–2.61x, not
+  the 3.08x this document measured on the dictionary's own training
+  sample.
+- **What is the decode cost of `klauspost/compress` zstd per 64 KB and
+  per 1 MB block?** On this VM (i9-12900HK, single goroutine, library
+  v1.20.0): 64 KB block 123 µs without a dictionary (759 MB/s), 158 µs
+  with one (590 MB/s); 1 MB block 1.33 ms without (874 MB/s), 1.72 ms
+  with (676 MB/s). A dictionary costs about 25% of decode speed. The
+  "about 1 ms per 1 MB block" assumption behind O1 was right.
+
+Still open:
+
 - How often do agents read `raw_json` through `sql()`? This sets the
-  block size and whether O1 or O3 wins.
-- What share of the FTS index comes from tool outputs? This decides O6.
-- Does the measured 33% duplication hold on the MacBook data and on other
-  users' hubs?
-- What is the decode cost of `klauspost/compress` zstd in the ohya binary
-  on this VM, per 64 KB and per 1 MB block?
+  block size and whether O1 or O3 wins. Blocked on the plan 002
+  acceptance gate, not on offline analysis.
 - Can the segment format double as the sync batch format without a
   protocol version bump?
 

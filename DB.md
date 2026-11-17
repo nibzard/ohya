@@ -16,8 +16,10 @@ adds `workspaces`, the device-observed repository of each session working
 directory, and the `sessions (device_id, cwd)` index (see "Repository
 derivation").
 Do not duplicate the DDL here.
-There is no released database yet, so migrations 001 and 002 are the pre-release baseline; every later
-schema change arrives as a new migration file.
+Databases ship with releases: v0.1.0 and v0.1.1 ship schema 6, and v0.1.2 ships schema 7
+([release-operations](docs/release-operations.md)), so databases at released schemas exist outside
+this repository and can arrive for upgrade at any time. Migrations 001 and 002 were the pre-release
+baseline; every schema change after a release arrives as a new migration file.
 
 ## Migrations
 
@@ -38,8 +40,17 @@ Upgrade policy:
    new file numbered below the newest applied version is an error, never a silent upgrade.
 4. Migration file names match `NNN_name.sql` with a unique three-digit version. `store.SchemaVersion`
    reports the newest embedded version without opening a database.
-5. Until a database ships, 001 is the only baseline. After a release exists, test every new migration
-   by upgrading a database from each released schema, not only by fresh creation.
+5. Databases ship with every release, so released schemas exist in the wild: v0.1.0 and v0.1.1
+   ship schema 6; v0.1.2 ships schema 7. Test every new migration by upgrading a database from
+   each released schema, not only by fresh creation. `internal/store/migrate_released_test.go`
+   owns that test: it builds a database at each schema listed in `releasedSchemas` from the
+   embedded migration bytes, seeds rows a released write path could have written, and upgrades
+   through `store.Open` to the current version, so a migration numbered above every released
+   schema still runs as an upgrade, never only as fresh creation. The same change that publishes
+   a release adds it to `releasedSchemas` and to this item's list;
+   `TestReleasedSchemasMatchPublishedTags` fails `make check` wherever the published tags are
+   visible when the list falls behind or a shipped migration file no longer matches its
+   released bytes.
 6. Keep this file in step with the migration list in the same change, so a review can diff policy
    against DDL.
 
@@ -154,9 +165,11 @@ queries that deliberately want the live tail.
   hold different records, and the 003 rule suppressed real records (11
   per-response usage records were lost from token totals across the 7 corpus
   thread pairs), which is why 005 rekeys the rule by content. Duplicate marks
-  written under 003 stay as stored until the hub is re-ingested; no released
-  database exists. Records without an ordinal (Claude Code, Codex before
-  0.147.0) are never deduplicated this way.
+  written under 003 stay as stored until the hub is re-ingested; only a
+  database written between 003 and 005 can hold them, and every release
+  ships 005, so a database created by a released binary never does. Records
+  without an ordinal (Claude Code, Codex before 0.147.0) are never
+  deduplicated this way.
 - A batch names the device that owns its source (`store.Batch.DeviceID`); the
   write path rejects a batch claiming another device, because ownership is
   fixed at registration. The sync endpoint passes the authenticated identity,
@@ -335,6 +348,38 @@ WHERE events_fts MATCH 'authentication AND refresh'
 ORDER BY events_fts.rank
 LIMIT 10;
 ```
+
+## Project recall example
+
+A query for "the newest events of this project" joins `events` to `sessions`
+filtered on `cwd` or `repo` and orders by `time_ms`. The planner drives that
+join through `events_session_time` and feeds every matching `events` row into
+the sort, so the query reads one table row per project event before it can
+return the first one; a project with tens of thousands of events exhausts the
+`sql` tool's 5 s deadline (observed 2026-11-15 on a 2.7 M-event hub: one call
+timed out at 5,027 ms and a second took about 4 s). Select the newest IDs in a
+subquery first: it sorts on the covering `events_session_time` index without
+reading `events` rows, and the outer query reads only the rows it returns.
+
+```sql
+SELECT e.id, e.session_id, e.time_ms, e.kind, e.role, substr(e.text, 1, 300) AS excerpt
+FROM events e WHERE e.id IN (
+  SELECT ev.id FROM sessions s JOIN events_settled ev ON ev.session_id = s.id
+  WHERE s.cwd = '/home/agent/project' OR s.repo = 'github.com/owner/name'
+  ORDER BY ev.time_ms DESC LIMIT 5)
+ORDER BY e.time_ms DESC;
+```
+
+`EXPLAIN QUERY PLAN` shows the difference: the plain join reports
+`SEARCH e USING INDEX events_session_time` plus `USE TEMP B-TREE FOR ORDER BY`
+with a row fetch per match, while the subquery form reports
+`SEARCH ev USING COVERING INDEX events_session_time` and
+`SEARCH e USING INTEGER PRIMARY KEY (rowid=?)`.
+The same shape serves an `events_fts MATCH` result when the filter is wide:
+filter, order, and limit in a covering subquery, then read the chosen rows.
+Measured effect and the rejected alternatives (an `events(time_ms)` index, a
+wider covering index) are recorded in docs/performance.md
+("Recall query deadline").
 
 Agents persist their interpretations in `event_annotations`; there is no built-in
 classifier or dedicated classification table. Add secondary indexes or normalized file references only after real

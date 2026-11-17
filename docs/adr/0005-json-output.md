@@ -94,16 +94,16 @@ Every failure maps to exactly one code.
 | `database_open_failed` | The hub database could not be opened (`ingest`, `rederive`) | check the `--db` path and its permissions |
 | `state_recovery_failed` | The state directory's identity or checkpoint files exist but cannot be used (`ingest`) | restore them from a backup |
 | `missing_agent_root` | A session directory passed with `--<agent>-root` does not exist (`ingest`) | pass the flag or create the directory |
-| `coordination_plane_absent` | `devices invite` found no coordination plane to bridge to | run `ohya serve` once |
+| `hub_identity_absent` | `devices invite` found no saved hub identity to compute an address from | run `ohya serve` once to create the hub identity, then retry |
 | `registry_open_failed` | The device registry could not be opened (`devices` subcommands) | check the `--state` directory |
 | `device_unknown` | `devices revoke` named a device that is not paired | run `ohya devices list` |
 | `device_already_revoked` | `devices revoke` named an already-revoked identity | revocation is final; re-admission needs a new identity |
 
 Classification is by sentinel (`errors.Is`), never by matching message text:
 `watch.ErrStateLost` and `device.ErrUnusable` map to `state_recovery_failed`,
-`control.ErrNotProvisioned` to `coordination_plane_absent`,
 `registry.ErrDeviceUnknown` and `registry.ErrAlreadyRevoked` to their codes.
-Failures whose class only the failing call site knows are wrapped there.
+Failures whose class only the failing call site knows are wrapped there;
+`hub_identity_absent` wraps `address.ErrNoIdentity` at the invite call site.
 
 ## Consequences
 
@@ -118,3 +118,13 @@ otherwise rest on prose (`registry.ErrAlreadyRevoked`,
 Covering the long-running commands stays deliberately undone: a trailing
 object after hours of serving serves no consumer, and inventing one now
 would add contract surface without a user.
+
+## Amendment (2026-11-16): transport code follows the address transport
+
+[ADR 0011](0011-tailcat-address-transport.md) replaced the embedded
+coordination plane with the Tailcat address transport. The table and the
+sentinel list above are updated: `coordination_plane_absent` and
+`control.ErrNotProvisioned` left with the plane (T123), and
+`devices invite` fails with `hub_identity_absent` (wrapping
+`address.ErrNoIdentity`, T122) when the state directory holds no hub
+identity. No other code changed.

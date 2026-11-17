@@ -38,7 +38,7 @@ Current integration points:
 | `internal/mcpserver/query.go`, `Engine.Query` | Query validation, admission, reader acquisition, iteration and bounds |
 | `internal/mcpserver/annotate.go` | Annotation validation and transactional outcome |
 | `internal/setup/service.go`, `ServicePlan` | Owned launchd/systemd service lifecycle |
-| `internal/transport/tailcat/tailcat.go` | Transport-specific facts; expose only verified supported observations |
+| `internal/transport/address/address.go` | Transport-specific facts; expose only verified supported observations |
 
 Existing uploader stats contain `Sources`, `Inserted`, and `Acknowledged`; preserve their actual semantics rather than renaming them into speculative metrics. `Run` discards each successful pass's stats. The query engine has a five-second deadline, four admission slots and explicit row/byte truncation. The settled-events view excludes sessions active within ten minutes.
 

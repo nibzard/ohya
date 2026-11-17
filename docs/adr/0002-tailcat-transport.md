@@ -1,11 +1,6 @@
 # 0002: Embedded Tailcat transport
 
-Status: selected for the sync layer, 2026-11-13, after the T014 feasibility
-spike; the production control plane was decided 2026-11-14 (below). Feasibility
-is validated for pairing and encrypted exchange on Linux against a
-self-hosted control plane, and the self-hosted plane now ships embedded in
-`ohya serve`. Forced-relay (DERP-only) behavior is validated 2026-11-14
-between isolated network peers (T032, below).
+Status: superseded by ADR 0011, 2026-11-16.
 
 ## Decision
 

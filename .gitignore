@@ -1,18 +1,28 @@
 /bin/
+# stray root-level go build output (make build writes bin/)
+/ohya
 *.db
 *.db-wal
 *.db-shm
-/tailcat-spike
 /tla/.tools/
 /tla/states/
 /tla/*_TTrace_*.tla
-# benchmark runs (make bench-save), profiles
-/perf/
+# benchmark runs (make bench-save), profiles, offline analysis outputs
+/perf/*
+!/perf/README.md
+!/perf/hubdata/
+!/perf/ftsshare/
+!/perf/devratio/
+!/perf/zstdbench/
+!/perf/recallduration/
+# local observability state (usage records, snapshots) written by ohya itself
+/observe/
 # memory-e2e gate output: isolated database, client state, traces
 /memory-e2e/
 # looper backlog contract (runtime file owned by the looper tool)
 /to-do.json
 /to-do.schema.json
+/to-do.json.context/
 # looper operation resource prefixes (private check-run output)
 looper_*/
 # regenerated benchmark corpora (docs/performance.md), never committed

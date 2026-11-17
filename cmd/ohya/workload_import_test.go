@@ -55,15 +55,14 @@ func TestWorkloadImport(t *testing.T) {
 	hubDB := filepath.Join(dir, "hub", "hub.db")
 	hubState := filepath.Join(dir, "hub-state")
 	devState := filepath.Join(dir, "dev-state")
-	ctrlAddr := fmt.Sprintf("127.0.0.1:%d", freeTCPPort(t))
-	stunAddr := fmt.Sprintf("127.0.0.1:%d", freeUDPPort(t))
+	regionFile := writeDERPRegionFile(t, startLocalDERP(t))
 
 	startServeChild := func(sampler *resourceSampler) (*exec.Cmd, *bytes.Buffer) {
 		t.Helper()
 		log := &bytes.Buffer{}
 		cmd := exec.Command(os.Args[0], "child-serve",
-			"--db", hubDB, "--state", hubState,
-			"--control-listen", ctrlAddr, "--stun-listen", stunAddr)
+			"--db", hubDB, "--state", hubState)
+		cmd.Env = append(os.Environ(), "OHYA_TEST_DERP_REGION_FILE="+regionFile)
 		cmd.Stderr = log
 		serveOut, err := cmd.StdoutPipe()
 		if err != nil {
@@ -100,15 +99,14 @@ func TestWorkloadImport(t *testing.T) {
 		t.Fatal(err)
 	}
 	code := strings.SplitN(strings.TrimSpace(invOut.String()), "\n", 2)[0]
-	if !strings.Contains(code, ":") {
-		t.Fatalf("join code = %q; want invitation and preauth key halves", code)
+	if _, _, err := parseJoinCode(code); err != nil {
+		t.Fatalf("join code = %q: %v", code, err)
 	}
 
 	startJoinChild := func(code string) (*exec.Cmd, *bytes.Buffer) {
 		t.Helper()
 		log := &bytes.Buffer{}
 		args := []string{
-			"--control", "http://" + ctrlAddr,
 			"--state", devState,
 			"--claude-root", filepath.Join(importRoot, "claude-code"),
 			"--codex-root", filepath.Join(importRoot, "codex"),

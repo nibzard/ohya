@@ -65,15 +65,16 @@ type Batch struct {
 }
 
 type IngestResult struct {
-	Inserted int
-	Cursor   int64
+	Inserted   int
+	Duplicates int
+	Cursor     int64
 }
 
 func SessionID(deviceID, agent, nativeID string) string {
 	return agent + ":" + deviceID + ":" + nativeID
 }
 
-func (d *DB) RegisterSource(ctx context.Context, id, deviceID, agent, path string) error {
+func (d *DB) RegisterSource(ctx context.Context, id, deviceID, agent, path string) (err error) {
 	switch {
 	case id == "":
 		return fmt.Errorf("store: register source: empty source ID: %w", ErrBatchRejected)
@@ -84,6 +85,13 @@ func (d *DB) RegisterSource(ctx context.Context, id, deviceID, agent, path strin
 	case path == "":
 		return fmt.Errorf("store: register source %s: empty path: %w", id, ErrBatchRejected)
 	}
+	txStart := time.Now()
+	defer func() {
+		d.observer.Observe("sqlite_transaction_duration", time.Since(txStart))
+		if outcome, count := sqliteOutcome(err); count {
+			d.observer.Add("sqlite_outcomes", 1, outcome)
+		}
+	}()
 	tx, err := d.writer.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: register source %s: %w", id, err)
@@ -150,7 +158,7 @@ func sourceState(ctx context.Context, db *sql.DB, id string) (SourceState, error
 	return st, nil
 }
 
-func (d *DB) Ingest(ctx context.Context, b Batch) (IngestResult, error) {
+func (d *DB) Ingest(ctx context.Context, b Batch) (res IngestResult, err error) {
 	if b.SourceID == "" {
 		return IngestResult{}, fmt.Errorf("store: ingest: empty source ID: %w", ErrBatchRejected)
 	}
@@ -161,6 +169,13 @@ func (d *DB) Ingest(ctx context.Context, b Batch) (IngestResult, error) {
 		return IngestResult{}, err
 	}
 
+	txStart := time.Now()
+	defer func() {
+		d.observer.Observe("sqlite_transaction_duration", time.Since(txStart))
+		if outcome, count := sqliteOutcome(err); count {
+			d.observer.Add("sqlite_outcomes", 1, outcome)
+		}
+	}()
 	tx, err := d.writer.BeginTx(ctx, nil)
 	if err != nil {
 		return IngestResult{}, fmt.Errorf("store: ingest source %s: begin: %w", b.SourceID, err)
@@ -206,7 +221,7 @@ func (d *DB) Ingest(ctx context.Context, b Batch) (IngestResult, error) {
 		return IngestResult{}, err
 	}
 
-	inserted, deltas, err := insertEvents(ctx, tx, b, cursor, deviceID, agent)
+	inserted, duplicates, deltas, err := insertEvents(ctx, tx, b, cursor, deviceID, agent)
 	if err != nil {
 		return IngestResult{}, err
 	}
@@ -228,7 +243,7 @@ func (d *DB) Ingest(ctx context.Context, b Batch) (IngestResult, error) {
 	if err := tx.Commit(); err != nil {
 		return IngestResult{}, fmt.Errorf("store: ingest source %s: commit: %w", b.SourceID, err)
 	}
-	return IngestResult{Inserted: inserted, Cursor: newCursor}, nil
+	return IngestResult{Inserted: inserted, Duplicates: duplicates, Cursor: newCursor}, nil
 }
 
 func validateBatch(events []Event) error {
@@ -347,9 +362,10 @@ func (d *sessionDelta) add(e *Event) {
 	}
 }
 
-func insertEvents(ctx context.Context, tx *sql.Tx, b Batch, cursor int64, deviceID, agent string) (int, map[string]*sessionDelta, error) {
+func insertEvents(ctx context.Context, tx *sql.Tx, b Batch, cursor int64, deviceID, agent string) (int, int, map[string]*sessionDelta, error) {
 	deltas := make(map[string]*sessionDelta)
 	inserted := 0
+	duplicates := 0
 	for i := range b.Events {
 		e := &b.Events[i]
 		if e.Offset < cursor {
@@ -360,7 +376,7 @@ func insertEvents(ctx context.Context, tx *sql.Tx, b Batch, cursor int64, device
 			`INSERT INTO sessions (id, agent, device_id, native_id) VALUES (?, ?, ?, ?)
 			 ON CONFLICT (id) DO NOTHING`,
 			sid, agent, deviceID, e.NativeID); err != nil {
-			return 0, nil, fmt.Errorf("store: ingest source %s: ensure session: %w", b.SourceID, err)
+			return 0, 0, nil, fmt.Errorf("store: ingest source %s: ensure session: %w", b.SourceID, err)
 		}
 		metadata := e.Metadata
 		if metadata == "" {
@@ -378,7 +394,7 @@ func insertEvents(ctx context.Context, tx *sql.Tx, b Batch, cursor int64, device
 				 WHERE session_id = ? AND ordinal = ? AND raw_json = ? AND duplicate_of IS NULL`,
 				sid, e.Ordinal, e.RawJSON).Scan(&duplicateOf)
 			if err != nil && !errors.Is(err, sql.ErrNoRows) {
-				return 0, nil, fmt.Errorf("store: ingest source %s: look up ordinal at offset %d: %w", b.SourceID, e.Offset, err)
+				return 0, 0, nil, fmt.Errorf("store: ingest source %s: look up ordinal at offset %d: %w", b.SourceID, e.Offset, err)
 			}
 		}
 		text := nullString(e.Text)
@@ -392,17 +408,19 @@ func insertEvents(ctx context.Context, tx *sql.Tx, b Batch, cursor int64, device
 			sid, b.SourceID, e.Offset, timeMS, e.Kind, nullString(e.Role),
 			nullString(e.ToolName), text, e.RawJSON, metadata, ordinal, duplicateOf, e.ParserVersion)
 		if err != nil {
-			return 0, nil, fmt.Errorf("store: ingest source %s: insert record at offset %d: %w", b.SourceID, e.Offset, err)
+			return 0, 0, nil, fmt.Errorf("store: ingest source %s: insert record at offset %d: %w", b.SourceID, e.Offset, err)
 		}
 		affected, err := res.RowsAffected()
 		if err != nil {
-			return 0, nil, fmt.Errorf("store: ingest source %s: count records: %w", b.SourceID, err)
+			return 0, 0, nil, fmt.Errorf("store: ingest source %s: count records: %w", b.SourceID, err)
 		}
 		if affected == 0 {
+			duplicates++
 			continue
 		}
 		inserted++
 		if duplicateOf.Valid {
+			duplicates++
 			continue
 		}
 
@@ -416,10 +434,10 @@ func insertEvents(ctx context.Context, tx *sql.Tx, b Batch, cursor int64, device
 			d.prompt = e
 		}
 		if err := insertUsage(ctx, tx, sid, e); err != nil {
-			return 0, nil, fmt.Errorf("store: ingest source %s: count usage at offset %d: %w", b.SourceID, e.Offset, err)
+			return 0, 0, nil, fmt.Errorf("store: ingest source %s: count usage at offset %d: %w", b.SourceID, e.Offset, err)
 		}
 	}
-	return inserted, deltas, nil
+	return inserted, duplicates, deltas, nil
 }
 
 func insertUsage(ctx context.Context, tx *sql.Tx, sid string, e *Event) error {

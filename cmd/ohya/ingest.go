@@ -14,6 +14,7 @@ import (
 	"github.com/nibzard/ohya/internal/device"
 	"github.com/nibzard/ohya/internal/events"
 	"github.com/nibzard/ohya/internal/hubsync"
+	"github.com/nibzard/ohya/internal/observe"
 	"github.com/nibzard/ohya/internal/store"
 	"github.com/nibzard/ohya/internal/watch"
 	"github.com/nibzard/ohya/internal/workspace"
@@ -22,9 +23,13 @@ import (
 const maxBatchBytes int64 = 8 << 20
 
 type agentRoot struct {
-	agent    string
+	agent string
+	flag  string
+	dirs  []agentDir
+}
+
+type agentDir struct {
 	dir      string
-	flag     string
 	optional bool
 }
 
@@ -39,11 +44,15 @@ type ingestOptions struct {
 	jsonOut        bool
 	stdout         io.Writer
 	stderr         io.Writer
+	observer       observe.Observer
 }
 
 var errDegraded = errors.New("ingest completed with a failed or stopped source")
 
 func runIngest(ctx context.Context, o ingestOptions) error {
+	if o.observer == nil {
+		o.observer = observe.Disabled
+	}
 	if len(o.roots) == 0 {
 		return errors.New("no agent session directory to watch")
 	}
@@ -52,15 +61,21 @@ func runIngest(ctx context.Context, o ingestOptions) error {
 		if !events.Supported(root.agent) {
 			return fmt.Errorf("agent %q has no parser", root.agent)
 		}
-		_, err := os.Stat(root.dir)
-		switch {
-		case err == nil:
+		rootPresent := false
+		for _, d := range root.dirs {
+			_, err := os.Stat(d.dir)
+			switch {
+			case err == nil:
+				rootPresent = true
+			case !errors.Is(err, os.ErrNotExist):
+				return fmt.Errorf("stat %s: %w", d.dir, err)
+			case !d.optional && !o.allowEmpty:
+				return classify(fmt.Errorf("%s session directory %s does not exist; pass --%s", root.agent, d.dir, root.flag),
+					"missing_agent_root", "pass the named --<agent>-root flag, or create the directory")
+			}
+		}
+		if rootPresent {
 			present++
-		case !errors.Is(err, os.ErrNotExist):
-			return fmt.Errorf("stat %s: %w", root.dir, err)
-		case !root.optional && !o.allowEmpty:
-			return classify(fmt.Errorf("%s session directory %s does not exist; pass --%s", root.agent, root.dir, root.flag),
-				"missing_agent_root", "pass the named --<agent>-root flag, or create the directory")
 		}
 	}
 	if present == 0 && !o.allowEmpty {
@@ -77,7 +92,7 @@ func runIngest(ctx context.Context, o ingestOptions) error {
 	if err := os.MkdirAll(o.stateDir, 0o700); err != nil {
 		return fmt.Errorf("create state directory: %w", err)
 	}
-	hub, err := store.Open(ctx, o.dbPath)
+	hub, err := store.Open(ctx, o.dbPath, store.WithObserver(o.observer))
 	if err != nil {
 		return classify(err, "database_open_failed", "check the --db path and its permissions; another ohya process may hold the database")
 	}
@@ -89,17 +104,18 @@ func runIngest(ctx context.Context, o ingestOptions) error {
 	}
 	runners := make([]*ingestor, len(o.roots))
 	for i, root := range o.roots {
-		w, err := watch.New(o.stateDir, root.agent, watch.Options{})
+		w, err := watch.New(o.stateDir, root.agent, watch.Options{Observer: o.observer})
 		if err != nil {
 			return err
 		}
-		runners[i] = newIngestor(hub, w, root.agent, deviceID, o.maxRecordBytes, o.stderr)
+		runners[i] = newIngestor(hub, w, root.agent, deviceID, o.maxRecordBytes, o.stderr, o.observer)
 	}
 
 	for pass := 1; ; pass++ {
 		var stats passStats
+		passStart := time.Now()
 		for i, r := range runners {
-			s, err := r.poll(ctx, o.roots[i].dir, o.roots[i].optional || o.allowEmpty)
+			s, err := r.poll(ctx, o.roots[i].dirs, o.allowEmpty)
 			if err != nil {
 				return err
 			}
@@ -109,6 +125,8 @@ func runIngest(ctx context.Context, o ingestOptions) error {
 			stats.stopped += s.stopped
 			stats.stops = append(stats.stops, s.stops...)
 		}
+		o.observer.Add("ingest_passes", 1)
+		o.observer.Observe("ingest_pass_duration", time.Since(passStart))
 		switch {
 		case o.jsonOut:
 			stops := stats.stops
@@ -146,15 +164,19 @@ func runIngest(ctx context.Context, o ingestOptions) error {
 }
 
 type ingestor struct {
-	hub            *store.DB
-	watcher        *watch.Watcher
-	agent          string
-	deviceID       string
-	maxRecordBytes int64
-	stderr         io.Writer
-	reported       map[string]int64
-	noProgress     map[string]noProgressMark
-	workspacesDue  bool
+	hub             *store.DB
+	watcher         *watch.Watcher
+	agent           string
+	deviceID        string
+	maxRecordBytes  int64
+	stderr          io.Writer
+	observer        observe.Observer
+	reported        map[string]int64
+	missingReported map[string]bool
+	noProgress      map[string]noProgressMark
+	tails           map[string]int64
+	registered      map[string]string
+	workspacesDue   bool
 }
 
 type noProgressMark struct {
@@ -166,12 +188,15 @@ type noProgressMark struct {
 	recordTooLarge bool
 }
 
-func newIngestor(hub *store.DB, w *watch.Watcher, agent, deviceID string, maxRecordBytes int64, stderr io.Writer) *ingestor {
+func newIngestor(hub *store.DB, w *watch.Watcher, agent, deviceID string, maxRecordBytes int64, stderr io.Writer, observer observe.Observer) *ingestor {
+	if observer == nil {
+		observer = observe.Disabled
+	}
 	return &ingestor{
 		hub: hub, watcher: w, agent: agent, deviceID: deviceID,
-		maxRecordBytes: maxRecordBytes, stderr: stderr, reported: map[string]int64{},
-		noProgress:    map[string]noProgressMark{},
-		workspacesDue: true,
+		maxRecordBytes: maxRecordBytes, stderr: stderr, observer: observer, reported: map[string]int64{},
+		missingReported: map[string]bool{}, noProgress: map[string]noProgressMark{}, tails: map[string]int64{},
+		registered: map[string]string{}, workspacesDue: true,
 	}
 }
 
@@ -198,37 +223,53 @@ type ingestJSONData struct {
 	Stops   []stopReport `json:"stops"`
 }
 
-func (r *ingestor) poll(ctx context.Context, root string, optional bool) (passStats, error) {
-	candidates, err := discoverSessionFiles(root)
-	if optional && errors.Is(err, fs.ErrNotExist) {
-		candidates, err = nil, nil
-	}
+func (r *ingestor) poll(ctx context.Context, dirs []agentDir, allowEmpty bool) (passStats, error) {
+	discoveryStart := time.Now()
+	candidates, err := discoverSessionFiles(dirs, allowEmpty)
 	if err != nil {
+		r.observer.Add("discovery_errors", 1, "read")
 		return passStats{}, err
 	}
+	r.observer.Add("discovery_scans", 1)
+	r.observer.Add("discovery_candidates", uint64(len(candidates)))
+	r.observer.Observe("discovery_duration", time.Since(discoveryStart))
 	outcomes, err := r.watcher.Poll(candidates)
 	if err != nil {
 		return passStats{}, err
 	}
 	var stats passStats
+	pendingComplete := int64(0)
 	for _, o := range outcomes {
 		if o.Missing {
+			r.reportMissing(o)
+			delete(r.tails, o.SourceID)
 			continue
 		}
+		if r.missingReported[o.SourceID] {
+			r.observer.Add("watch_source_events", 1, "returned")
+		}
+		delete(r.missingReported, o.SourceID)
 		stats.sources++
 		if o.Fresh {
 			if o.ReplacedSourceID != "" {
 				delete(r.noProgress, o.ReplacedSourceID)
+				delete(r.tails, o.ReplacedSourceID)
+				delete(r.registered, o.ReplacedSourceID)
 			}
 			if o.Reason != "new file" {
 				fmt.Fprintf(r.stderr, "ohya: %s: new source %s re-imports from byte zero: %s\n",
 					o.Path, o.SourceID, o.Reason)
 			}
 		}
-		if err := r.hub.RegisterSource(ctx, o.SourceID, r.deviceID, r.agent, o.Path); err != nil {
-			r.reportSource(o.Path, err)
-			stats.failed++
-			continue
+		if r.registered[o.SourceID] != o.Path {
+			if err := r.hub.RegisterSource(ctx, o.SourceID, r.deviceID, r.agent, o.Path); err != nil {
+				r.reportSource(o.Path, err)
+				r.observer.Add("ingest_failures", 1, "commit")
+				stats.failed++
+				pendingComplete += o.End - o.Cursor
+				continue
+			}
+			r.registered[o.SourceID] = o.Path
 		}
 		if o.End <= o.Cursor {
 			continue
@@ -249,6 +290,10 @@ func (r *ingestor) poll(ctx context.Context, root string, optional bool) (passSt
 		if err != nil {
 			r.reportSource(o.Path, err)
 			stats.failed++
+			pendingComplete += o.End - o.Cursor
+			if errors.Is(err, store.ErrSourceNotRegistered) {
+				delete(r.registered, o.SourceID)
+			}
 			continue
 		}
 		mark := noProgressMark{end: o.End, cursor: committed, modTime: o.ModTime}
@@ -263,10 +308,14 @@ func (r *ingestor) poll(ctx context.Context, root string, optional bool) (passSt
 			mark.stopped = true
 			mark.stopOffset = stop.Offset
 			mark.recordTooLarge = stop.RecordTooLarge
+			delete(r.tails, o.SourceID)
+		} else {
+			r.tails[o.SourceID] = o.End - committed
 		}
 		stats.inserted += inserted
 		if err := r.watcher.Acknowledge(o.Path, o.SourceID, committed); err != nil {
 			r.reportSource(o.Path, err)
+			r.observer.Add("ingest_failures", 1, "checkpoint")
 			stats.failed++
 			continue
 		}
@@ -276,9 +325,25 @@ func (r *ingestor) poll(ctx context.Context, root string, optional bool) (passSt
 			delete(r.noProgress, o.SourceID)
 		}
 	}
+	var tails, stopped int64
+	for _, v := range r.tails {
+		tails += v
+	}
+	for _, mark := range r.noProgress {
+		if mark.stopped {
+			stopped++
+		}
+	}
+	r.observer.Set("watch_partial_tail_bytes", float64(tails))
+	r.observer.Set("watch_pending_complete_bytes", float64(pendingComplete))
+	r.observer.Set("watch_sources", float64(stopped), "stopped")
+	checkpointStart := time.Now()
 	if err := r.watcher.Flush(); err != nil {
+		r.observer.Observe("ingest_checkpoint_duration", time.Since(checkpointStart))
+		r.observer.Add("ingest_failures", 1, "checkpoint")
 		return stats, err
 	}
+	r.observer.Observe("ingest_checkpoint_duration", time.Since(checkpointStart))
 	if r.workspacesDue || stats.inserted > 0 {
 		r.observeWorkspaces(ctx)
 	}
@@ -310,32 +375,64 @@ func (r *ingestor) ingestSource(ctx context.Context, o watch.Outcome) (int, int6
 		chunk.End = readEnd
 		data, err := r.watcher.ReadPending(chunk)
 		if err != nil {
+			r.observer.Add("ingest_failures", 1, "read")
 			return inserted, o.Cursor, nil, err
 		}
 		opts := events.Options{SourceScope: o.SourceID, MaxRecordBytes: r.maxRecordBytes}
 		if chunk.Cursor > 0 {
 			st, err := r.hub.SourceState(ctx, o.SourceID)
 			if err != nil {
+				r.observer.Add("ingest_failures", 1, "read")
 				return inserted, o.Cursor, nil, err
 			}
 			opts.FirstNative = st.FirstNativeID
 		}
+		parseStart := time.Now()
 		res, perr := events.Parse(r.agent, data, chunk.Cursor, opts)
+		parseElapsed := time.Since(parseStart)
+		r.observer.Add("parse_bytes", uint64(len(data)))
+		r.observer.Observe("ingest_parse_duration", parseElapsed)
+		r.observer.Observe("parse_duration", parseElapsed, r.agent)
+		var stop *events.StopError
+		stopped := errors.As(perr, &stop)
+		attempted := uint64(len(res.Events))
+		if stopped {
+			attempted++
+		}
+		r.observer.Add("parse_records", attempted, "attempted")
+		r.observer.Add("parse_records", uint64(len(res.Events)), "normalized")
+		if stopped {
+			r.observer.Add("parse_records", 1, "stopped")
+			if stop.RecordTooLarge {
+				r.observer.Add("parse_stops", 1, "oversize")
+			} else {
+				r.observer.Add("parse_stops", 1, "invalid")
+			}
+		}
 		if len(res.Events) > 0 {
+			r.observer.Add("ingest_batches", 1, "attempted")
 			result, err := r.hub.Ingest(ctx, store.Batch{
 				SourceID: o.SourceID,
 				DeviceID: r.deviceID,
 				Events:   res.Events,
 			})
 			if err != nil {
+				if errors.Is(err, store.ErrBatchRejected) {
+					r.observer.Add("ingest_batches", 1, "rejected")
+				} else {
+					r.observer.Add("ingest_batches", 1, "rolled_back")
+				}
 				return inserted, o.Cursor, nil, err
 			}
+			r.observer.Add("ingest_batches", 1, "committed")
+			r.observer.Add("ingest_events", uint64(result.Inserted), "inserted")
+			r.observer.Add("ingest_events", uint64(result.Duplicates), "duplicate")
+			r.observer.Add("ingest_bytes", uint64(result.Cursor-o.Cursor))
 			inserted += result.Inserted
 			o.Cursor = result.Cursor
 			readEnd = min(o.End, o.Cursor+maxBatchBytes)
 		}
-		var stop *events.StopError
-		if errors.As(perr, &stop) {
+		if stopped {
 			r.reportStop(o, stop)
 			return inserted, o.Cursor, stop, nil
 		}
@@ -354,6 +451,16 @@ func (r *ingestor) ingestSource(ctx context.Context, o watch.Outcome) (int, int6
 
 func (r *ingestor) reportSource(path string, err error) {
 	fmt.Fprintf(r.stderr, "ohya: %s: %v\n", path, err)
+}
+
+func (r *ingestor) reportMissing(o watch.Outcome) {
+	if r.missingReported[o.SourceID] {
+		return
+	}
+	r.missingReported[o.SourceID] = true
+	fmt.Fprintf(r.stderr,
+		"ohya: %s: source %s disappeared; the acknowledged checkpoint is kept and ingestion resumes if the file returns\n",
+		o.Path, o.SourceID)
 }
 
 func (r *ingestor) reportStop(o watch.Outcome, stop *events.StopError) {
@@ -375,7 +482,22 @@ func stopRemedy(recordTooLarge bool) string {
 	return "repair_source_file"
 }
 
-func discoverSessionFiles(root string) ([]string, error) {
+func discoverSessionFiles(dirs []agentDir, allowEmpty bool) ([]string, error) {
+	var files []string
+	for _, d := range dirs {
+		found, err := walkSessionFiles(d.dir)
+		if errors.Is(err, os.ErrNotExist) && (d.optional || allowEmpty) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, found...)
+	}
+	return files, nil
+}
+
+func walkSessionFiles(root string) ([]string, error) {
 	var files []string
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {

@@ -19,6 +19,55 @@ import (
 	"time"
 )
 
+func TestBootstrapNoStableReleaseRedirect(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("shell bootstrap targets Unix")
+	}
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("curl is not installed")
+	}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/releases/latest":
+			http.Redirect(w, r, "/releases", http.StatusFound)
+		case "/releases":
+			_, _ = w.Write([]byte("fixture release list"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	dir := t.TempDir()
+	ca := filepath.Join(dir, "ca.pem")
+	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	script, err := filepath.Abs("../../install.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	root := server.URL + "/releases"
+	output, err := runInstaller(ctx, t, script, ca, nil,
+		[]string{"OHYA_RELEASE_ROOT=" + root}, "--no-agents", "--no-service")
+	if err == nil {
+		t.Fatalf("accepted a repository without a stable release: %s", output)
+	}
+	if !strings.Contains(output, "no stable release") {
+		t.Fatalf("output = %s; want the no-stable-release diagnostic", output)
+	}
+	if !strings.Contains(output, root) {
+		t.Fatalf("output = %s; want the release list location", output)
+	}
+	if !strings.Contains(output, "--version") {
+		t.Fatalf("output = %s; want the --version guidance", output)
+	}
+	if strings.Contains(output, "must start with v and a digit") {
+		t.Fatalf("output = %s; the generic version diagnostic replaced the redirect diagnostic", output)
+	}
+}
+
 func TestBootstrapVerifiedRelease(t *testing.T) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		t.Skip("shell bootstrap targets Unix")

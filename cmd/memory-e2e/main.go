@@ -64,7 +64,7 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	defer g.close()
+	defer func() { g.close() }()
 
 	g.log.line("memory-e2e: ohya=%s claude=%s codex=%s timeout=%s", g.ohya, g.claude, g.codex, g.timeout)
 	g.log.line("output directory: %s (all state and traces stay here)", g.out)
@@ -134,6 +134,7 @@ type gate struct {
 	claudeConfig string
 	claudeHome   string
 	codexHome    string
+	codexWork    string
 	tracesDir    string
 
 	log      report
@@ -195,6 +196,9 @@ func newGate(out, ohya, claude, codex string, timeout time.Duration) (*gate, err
 }
 
 func (g *gate) prepare(ctx context.Context) error {
+	if err := g.prepareCodexWork(); err != nil {
+		return err
+	}
 	mcpConfig := map[string]any{
 		"mcpServers": map[string]any{
 			"ohya": map[string]any{
@@ -217,9 +221,31 @@ func (g *gate) prepare(ctx context.Context) error {
 	return g.verifyCodexServer(ctx)
 }
 
+func (g *gate) prepareCodexWork() error {
+	fallbacks := []string{os.TempDir()}
+	if fallbacks[0] != "/tmp" {
+		fallbacks = append(fallbacks, "/tmp")
+	}
+	base, relocated, err := chooseCodexWork(g.tracesDir, fallbacks)
+	if err != nil {
+		return err
+	}
+	g.codexWork = base
+	if !relocated {
+		g.log.line("codex working root: %s (no .codex/config.toml ancestor)", base)
+		return nil
+	}
+	inner := g.close
+	g.close = func() { os.RemoveAll(base); inner() }
+	g.log.line("codex working root: %s (relocated: the output tree sits under %s, which codex merges over the sandbox CODEX_HOME)",
+		base, strings.Join(ancestorCodexConfigs(g.tracesDir), ", "))
+	return nil
+}
+
 func (g *gate) codexLogin(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, g.codex, "login", "--with-api-key")
 	cmd.Env = g.codexEnv()
+	cmd.Dir = g.codexWork
 	cmd.Stdin = strings.NewReader(os.Getenv("OPENAI_API_KEY"))
 	logPath := filepath.Join(g.tracesDir, "codex-login.log")
 	logFile, err := os.Create(logPath)
@@ -238,13 +264,14 @@ func (g *gate) codexLogin(ctx context.Context) error {
 func (g *gate) verifyCodexServer(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, g.codex, "mcp", "list")
 	cmd.Env = g.codexEnv()
+	cmd.Dir = g.codexWork
 	cmd.WaitDelay = 30 * time.Second
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("codex mcp list: %w: %s", err, out)
 	}
 	for _, line := range strings.Split(string(out), "\n") {
-		if strings.HasPrefix(line, "ohya ") {
+		if strings.HasPrefix(line, "ohya ") && strings.Contains(line, g.ohya) {
 			return nil
 		}
 	}

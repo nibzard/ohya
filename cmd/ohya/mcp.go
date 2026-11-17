@@ -11,13 +11,14 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
-	"github.com/nibzard/ohya/internal/control"
 	"github.com/nibzard/ohya/internal/device"
 	"github.com/nibzard/ohya/internal/hubsync"
 	"github.com/nibzard/ohya/internal/mcpserver"
+	"github.com/nibzard/ohya/internal/observe"
 	"github.com/nibzard/ohya/internal/store"
-	"github.com/nibzard/ohya/internal/transport/tailcat"
+	"github.com/nibzard/ohya/internal/transport/address"
 )
 
 var mcpSpec = commandSpec{
@@ -43,11 +44,7 @@ func runMcpCommand(args []string, stdout, stderr io.Writer) error {
 	state := c.fs.String("state", "",
 		"state `directory` for the device identity; defaults to the database directory, with --remote to the join state directory")
 	remote := c.fs.Bool("remote", false,
-		"serve the tools from the joined hub over the tailnet instead of a local database")
-	hubAddr := c.fs.String("hub-addr", tailcat.DefaultHubAddr(),
-		"hub `address` inside the tailnet (--remote only)")
-	controlURL := c.fs.String("control", control.DefaultURL(),
-		"coordination `URL` of the hub's tailnet (--remote only)")
+		"serve the tools from the joined hub over the tailcat transport instead of a local database")
 	if err := c.parse(args, stdout); err != nil {
 		return err
 	}
@@ -65,7 +62,7 @@ func runMcpCommand(args []string, stdout, stderr io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if *remote {
-		return runMcpRemote(ctx, *hubAddr, *controlURL, stateDir)
+		return runMcpRemote(ctx, stateDir)
 	}
 	return runMcp(ctx, *db, stateDir)
 }
@@ -91,12 +88,43 @@ func runMcp(ctx context.Context, dbPath, stateDir string) error {
 	if err != nil {
 		return err
 	}
-	server := mcpserver.New(mcpserver.NewEngine(readers, hub.Writer(), mcpserver.EngineOptions{WriterID: deviceID}),
+	usage := openUsageWriter(stateDir, observe.RoleMCP)
+	if usage != nil {
+		defer usage.Close()
+	}
+	server := mcpserver.New(mcpserver.NewEngine(readers, hub.Writer(), mcpserver.EngineOptions{WriterID: deviceID, Usage: usageSink(usage)}),
 		mcpserver.EngineOptions{WriterID: deviceID})
 	return mcpserver.Run(ctx, server)
 }
 
-func runMcpRemote(ctx context.Context, hubAddr, controlURL, stateDir string) error {
+func usageSink(w *observe.UsageWriter) mcpserver.UsageSink {
+	if w == nil {
+		return nil
+	}
+	return w
+}
+
+func openUsageWriter(stateDir string, role observe.Role) *observe.UsageWriter {
+	_, revision, dirty, _ := buildIdentity()
+	clock := observe.NewSystemClock()
+	instance, err := observe.NewInstance(stateDir, revision, dirty == "true", clock, role)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ohya: usage records disabled: %v\n", err)
+		return nil
+	}
+	writer, err := observe.NewUsageWriter(observe.UsageWriterConfig{
+		Dir:      filepath.Join(stateDir, "observe"),
+		Instance: instance,
+		Clock:    clock,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ohya: usage records disabled: %v\n", err)
+		return nil
+	}
+	return writer
+}
+
+func runMcpRemote(ctx context.Context, stateDir string) error {
 	deviceID, err := device.LoadOrCreate(stateDir)
 	if err != nil {
 		return err
@@ -108,19 +136,30 @@ func runMcpRemote(ctx context.Context, hubAddr, controlURL, stateDir string) err
 	if err != nil {
 		return err
 	}
-	node, err := tailcat.NewSharedDevice(tailcat.Options{
-		Hostname:   deviceHostname(deviceID),
-		ControlURL: controlURL,
-		StateDir:   filepath.Join(stateDir, "tailcat"),
-	})
+	hubAddr, err := device.LoadHubAddress(stateDir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("this state directory holds no hub address; run ohya join with an ohya1 code once to save it")
+	}
 	if err != nil {
 		return err
 	}
-	defer node.Close()
+	usage := openUsageWriter(stateDir, observe.RoleMCP)
+	if usage != nil {
+		defer usage.Close()
+	}
+	node := address.NewDevice(address.DeviceOptions{})
 	session := hubsync.NewRemoteSession(
 		func(ctx context.Context) (net.Conn, error) { return node.Dial(ctx, hubAddr) },
-		cred.Secret)
+		cred.Secret,
+		hubsync.RemoteSessionOptions{DeviceID: deviceID, Usage: usageSink(usage)})
 	defer session.Close()
 	server := mcpserver.New(session, mcpserver.EngineOptions{WriterID: deviceID})
-	return mcpserver.Run(ctx, server)
+	err = mcpserver.Run(ctx, server)
+	drainCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	_ = node.Drain(drainCtx)
+	cancel()
+	if cerr := node.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }

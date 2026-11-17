@@ -133,7 +133,7 @@ func TestIngestPiMalformedLineStops(t *testing.T) {
 	r, done := e.newRunner(t, &stderr)
 	defer done()
 	for i := 0; i < 2; i++ {
-		stats, err := r.poll(context.Background(), e.root, false)
+		stats, err := r.poll(context.Background(), e.dirs(), false)
 		if err != nil {
 			t.Fatal(err)
 		}

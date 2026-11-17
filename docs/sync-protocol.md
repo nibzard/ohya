@@ -6,6 +6,20 @@ hub. `internal/hubsync` implements it, and `internal/uploader` and
 "Sync contract", states the guarantees; `tla/Sync.tla` and `tla/Auth.tla`
 model them.
 
+## Transport
+
+The frames ride the Tailcat address transport ([ADR 0011](adr/0011-tailcat-address-transport.md)):
+the hub listens on TCP port 9027 inside the transport's network stack and
+opens no host port, and each device process dials the hub address on its
+own with a fresh transport key. Admission is the pre-shared key inside the
+hub address — only a holder of the address completes a handshake — while
+authorization stays in the device registry (`tla/Auth.tla`). A join code
+(`ohya1.<invitation>.<tailcat-address>`) carries both halves to the device,
+which saves the address in its join state next to `credential.json`. A
+device that re-presents a join code proves its credential with one hello
+and one read-only query before it uses the invitation; no new frame or
+state transition exists for that probe ([ADR 0012](adr/0012-two-step-multi-machine-setup.md)).
+
 ## Frames
 
 Every frame starts with a one-byte marker and the protocol version byte. The

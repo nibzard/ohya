@@ -69,7 +69,13 @@ func newCommandFlags(spec commandSpec) *commandFlagSet {
 }
 
 func (c *commandFlagSet) parse(args []string, stdout io.Writer) error {
-	if err := c.fs.Parse(args); err != nil {
+	permuted, valueless := permuteFlags(c.fs, args)
+	if valueless != "" {
+		if err := c.fs.Parse([]string{valueless}); err != nil {
+			return usageError{cmd: c.spec.name, msg: err.Error()}
+		}
+	}
+	if err := c.fs.Parse(permuted); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			c.buf.WriteTo(stdout)
 			return errHelp
@@ -77,6 +83,39 @@ func (c *commandFlagSet) parse(args []string, stdout io.Writer) error {
 		return usageError{cmd: c.spec.name, msg: err.Error()}
 	}
 	return nil
+}
+
+func permuteFlags(fs *flag.FlagSet, args []string) (permuted []string, valuelessFlag string) {
+	var flags, positional []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if len(arg) < 2 || arg[0] != '-' {
+			positional = append(positional, arg)
+			continue
+		}
+		if arg == "--" {
+			positional = append(positional, args[i:]...)
+			break
+		}
+		flags = append(flags, arg)
+		if strings.Contains(arg, "=") {
+			continue
+		}
+		name := strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-")
+		f := fs.Lookup(name)
+		if f == nil {
+			continue
+		}
+		if bf, ok := f.Value.(interface{ IsBoolFlag() bool }); ok && bf.IsBoolFlag() {
+			continue
+		}
+		if i+1 >= len(args) {
+			return nil, arg
+		}
+		i++
+		flags = append(flags, args[i])
+	}
+	return append(flags, positional...), ""
 }
 
 func (c *commandFlagSet) usageErrorf(format string, args ...any) error {

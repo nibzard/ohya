@@ -66,7 +66,7 @@ func TestRemoteSessionReconnectsAfterHubRestart(t *testing.T) {
 		func(ctx context.Context) (net.Conn, error) {
 			var d net.Dialer
 			return d.DialContext(ctx, "tcp", addr)
-		}, "cred-1")
+		}, "cred-1", RemoteSessionOptions{})
 	t.Cleanup(func() { session.Close() })
 
 	ctx := context.Background()
@@ -113,7 +113,7 @@ func TestRemoteSessionRefusesWrongCredential(t *testing.T) {
 		func(ctx context.Context) (net.Conn, error) {
 			var d net.Dialer
 			return d.DialContext(ctx, "tcp", s.addr)
-		}, "wrong-credential")
+		}, "wrong-credential", RemoteSessionOptions{})
 	t.Cleanup(func() { session.Close() })
 
 	_, err = session.Query(context.Background(), "SELECT 1")

@@ -106,14 +106,24 @@ database takes minutes and stops ingestion for that time, so a copy on every
 rerun has a high cost and no benefit. After a successful copy, setup keeps the
 two newest recovery directories and removes older ones. The copy includes committed WAL pages and does not
 migrate the source. Each backup uses an exclusive destination and a bounded,
-context-aware copy loop. The backup is flushed before setup proceeds.
+context-aware copy loop whose deadline scales with the database size. The backup is flushed before setup proceeds.
+
+The copy is size-aware (2026-11-16, plan 004 S1): setup checks free space on
+the recovery directory's filesystem first and refuses, changing nothing, when
+it is below the database size plus its WAL, a ten percent margin, and 64 MiB;
+the refusal names both numbers and a remedy. Setup reports the estimated size
+before the copy and a progress line at every further ten percent. The copy is
+staged under a hidden directory and renamed into the kept set only after it
+succeeds, so an interrupted copy never leaves a partial recovery point that
+pruning would keep, and staging abandoned by a killed run is removed on the
+next run.
 
 Owned ingestion is stopped before the recovery point, including on a setup
 rerun with unchanged service settings. External writers do not invalidate the
 online snapshot. Setup does not proceed to database opening when backup or
 service preparation fails. Backups are retained during removal. Setup prints
-a progress line on stderr before a copy and prints each component result
-when it completes. Restore with
+a progress line on stderr before and during a copy and prints each component
+result when it completes. Restore with
 a compatible binary and matching stopped device state and checkpoints. A
 database-only recovery point cannot safely replace a coordinated state backup.
 Never combine older hub data with newer acknowledgments. Preserve the failed
@@ -124,8 +134,12 @@ database and its WAL files together. See `docs/release-operations.md`.
 `install.sh` resolves one release and downloads its archive and checksum list
 from that exact version over HTTPS. It verifies SHA-256, the allowed archive
 entries, regular file types, and the executable's release identity before
-calling the staged binary's install command. A release root override remains
-HTTPS-only. Checksums share the release host's trust boundary.
+calling the staged binary's install command. When the latest-release lookup
+lands on the releases list — GitHub answers `/releases/latest` with a
+redirect to `/releases` for a repository without a stable release — the
+installer says so, points to the release list, and asks for `--version`.
+A release root override remains HTTPS-only. Checksums share the release
+host's trust boundary.
 
 The staged executable streams its own bytes into a private staging directory
 on the destination filesystem. A destination lock serializes installations.
@@ -218,8 +232,10 @@ readiness twice within a bounded wait to reject immediate startup failures.
 Doctor reads ownership receipts and current client, profile, extension, and
 service files. It reports changes without rewriting them. Service inspection
 uses read-only status commands. Missing state stays missing. A remote setup
-selects its saved join state and coordination URL; doctor does not require a
-local hub database. Upload checkpoints can be checked for readability, while
+selects its saved join state and saved hub address (the coordination URL
+ended with the embedded coordination plane; ADR 0011); doctor does not
+require a local hub database. Upload checkpoints can be checked for
+readability, while
 hub-side parser stops remain the uploader's diagnostic responsibility. Doctor
 never starts an MCP server merely to test a connection, because that could
 create or migrate state.

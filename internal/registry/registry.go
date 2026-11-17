@@ -18,7 +18,7 @@ import (
 
 const FileName = "registry.db"
 
-const schemaVersion = 1
+const schemaVersion = 2
 
 const DefaultInvitationTTL = 15 * time.Minute
 
@@ -50,11 +50,13 @@ type Credential struct {
 }
 
 type DeviceInfo struct {
-	DeviceID    string
-	State       string
-	PairedVia   string
-	PairedAtMS  int64
-	RevokedAtMS int64
+	DeviceID     string
+	State        string
+	PairedVia    string
+	PairedAtMS   int64
+	RevokedAtMS  int64
+	LastPath     string
+	LastSyncAtMS int64
 }
 
 type InvitationInfo struct {
@@ -112,34 +114,48 @@ func (d *DB) ensureSchema(ctx context.Context) error {
 	}
 	tx, err := d.writer.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("registry: create schema: %w", err)
+		return fmt.Errorf("registry: migrate schema: %w", err)
 	}
 	defer tx.Rollback()
-	for _, stmt := range []string{
-		`CREATE TABLE invitations (
-		   id             TEXT PRIMARY KEY,
-		   secret_digest  TEXT NOT NULL UNIQUE,
-		   state          TEXT NOT NULL CHECK (state IN ('open','used')),
-		   used_by        TEXT,
-		   expires_at_ms  INTEGER NOT NULL CHECK (expires_at_ms > 0),
-		   created_at_ms  INTEGER NOT NULL
-		 ) STRICT`,
-		`CREATE TABLE devices (
-		   device_id         TEXT PRIMARY KEY,
-		   state             TEXT NOT NULL CHECK (state IN ('active','revoked')),
-		   credential_digest TEXT NOT NULL UNIQUE,
-		   paired_via        TEXT NOT NULL REFERENCES invitations(id),
-		   paired_at_ms      INTEGER NOT NULL,
-		   revoked_at_ms     INTEGER
-		 ) STRICT`,
-		`PRAGMA user_version = ` + strconv.Itoa(schemaVersion),
-	} {
-		if _, err := tx.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("registry: create schema: %w", err)
+	if version < 1 {
+		for _, stmt := range []string{
+			`CREATE TABLE invitations (
+			   id             TEXT PRIMARY KEY,
+			   secret_digest  TEXT NOT NULL UNIQUE,
+			   state          TEXT NOT NULL CHECK (state IN ('open','used')),
+			   used_by        TEXT,
+			   expires_at_ms  INTEGER NOT NULL CHECK (expires_at_ms > 0),
+			   created_at_ms  INTEGER NOT NULL
+			 ) STRICT`,
+			`CREATE TABLE devices (
+			   device_id         TEXT PRIMARY KEY,
+			   state             TEXT NOT NULL CHECK (state IN ('active','revoked')),
+			   credential_digest TEXT NOT NULL UNIQUE,
+			   paired_via        TEXT NOT NULL REFERENCES invitations(id),
+			   paired_at_ms      INTEGER NOT NULL,
+			   revoked_at_ms     INTEGER
+			 ) STRICT`,
+		} {
+			if _, err := tx.ExecContext(ctx, stmt); err != nil {
+				return fmt.Errorf("registry: create schema: %w", err)
+			}
 		}
 	}
+	if version < 2 {
+		for _, stmt := range []string{
+			`ALTER TABLE devices ADD COLUMN last_path TEXT`,
+			`ALTER TABLE devices ADD COLUMN last_sync_at_ms INTEGER`,
+		} {
+			if _, err := tx.ExecContext(ctx, stmt); err != nil {
+				return fmt.Errorf("registry: migrate to schema 2: %w", err)
+			}
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `PRAGMA user_version = `+strconv.Itoa(schemaVersion)); err != nil {
+		return fmt.Errorf("registry: set schema version: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("registry: create schema: commit: %w", err)
+		return fmt.Errorf("registry: migrate schema: commit: %w", err)
 	}
 	return nil
 }
@@ -311,7 +327,7 @@ func (d *DB) Revoke(ctx context.Context, deviceID string) error {
 
 func (d *DB) List(ctx context.Context) ([]DeviceInfo, error) {
 	rows, err := d.writer.QueryContext(ctx,
-		`SELECT device_id, state, paired_via, paired_at_ms, revoked_at_ms
+		`SELECT device_id, state, paired_via, paired_at_ms, revoked_at_ms, last_path, last_sync_at_ms
 		 FROM devices ORDER BY paired_at_ms DESC, device_id`)
 	if err != nil {
 		return nil, fmt.Errorf("registry: list devices: %w", err)
@@ -321,11 +337,17 @@ func (d *DB) List(ctx context.Context) ([]DeviceInfo, error) {
 	for rows.Next() {
 		var info DeviceInfo
 		var revoked sql.NullInt64
-		if err := rows.Scan(&info.DeviceID, &info.State, &info.PairedVia, &info.PairedAtMS, &revoked); err != nil {
+		var lastPath sql.NullString
+		var lastSync sql.NullInt64
+		if err := rows.Scan(&info.DeviceID, &info.State, &info.PairedVia, &info.PairedAtMS, &revoked, &lastPath, &lastSync); err != nil {
 			return nil, fmt.Errorf("registry: list devices: %w", err)
 		}
 		if revoked.Valid {
 			info.RevokedAtMS = revoked.Int64
+		}
+		info.LastPath = lastPath.String
+		if lastSync.Valid {
+			info.LastSyncAtMS = lastSync.Int64
 		}
 		out = append(out, info)
 	}
@@ -333,6 +355,19 @@ func (d *DB) List(ctx context.Context) ([]DeviceInfo, error) {
 		return nil, fmt.Errorf("registry: list devices: %w", err)
 	}
 	return out, nil
+}
+
+func (d *DB) RecordSync(ctx context.Context, deviceID, path string, atMS int64) error {
+	if path == "" {
+		path = "unknown"
+	}
+	_, err := d.writer.ExecContext(ctx,
+		`UPDATE devices SET last_path = ?, last_sync_at_ms = ? WHERE device_id = ?`,
+		path, atMS, deviceID)
+	if err != nil {
+		return fmt.Errorf("registry: record sync of %s: %w", deviceID, err)
+	}
+	return nil
 }
 
 func (d *DB) ListInvitations(ctx context.Context) ([]InvitationInfo, error) {

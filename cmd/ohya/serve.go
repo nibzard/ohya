@@ -4,57 +4,33 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
-	"github.com/nibzard/ohya/internal/control"
 	"github.com/nibzard/ohya/internal/device"
 	"github.com/nibzard/ohya/internal/hubsync"
 	"github.com/nibzard/ohya/internal/mcpserver"
+	"github.com/nibzard/ohya/internal/observe"
 	"github.com/nibzard/ohya/internal/registry"
 	"github.com/nibzard/ohya/internal/store"
-	"github.com/nibzard/ohya/internal/transport/tailcat"
+	"github.com/nibzard/ohya/internal/transport/address"
+	"tailscale.com/tailcfg"
 )
-
-const hubAuthKeyTTL = 10 * time.Minute
-
-func trustOwnPlane(stateDir, certPath string) error {
-	dir := filepath.Join(stateDir, control.DirName, "trust")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("create plane trust directory: %w", err)
-	}
-	link := filepath.Join(dir, "plane-cert.pem")
-	if err := os.Remove(link); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("reset plane trust link: %w", err)
-	}
-	if err := os.Symlink(certPath, link); err != nil {
-		return fmt.Errorf("link plane certificate: %w", err)
-	}
-	rest := os.Getenv("SSL_CERT_DIR")
-	if rest == "" {
-		rest = "/etc/ssl/certs"
-	}
-	if err := os.Setenv("SSL_CERT_DIR", dir+":"+rest); err != nil {
-		return fmt.Errorf("publish plane trust directory: %w", err)
-	}
-	return nil
-}
 
 var serveSpec = commandSpec{
 	name:      "ohya serve",
-	synopsis:  "run the hub for devices: coordination, sync, remote tools",
+	synopsis:  "run the hub for devices: transport, sync, remote tools",
 	usageLine: "ohya serve [flags]",
 	description: "Runs the hub side of device sync until the process receives SIGINT or SIGTERM. " +
-		"It provisions the self-hosted coordination plane in-process — own database, generated configuration, embedded DERP relay — enrolls the hub's own transport node, and serves the sync endpoint on the encrypted tailnet: registration, device batches, and the remote query and annotate tools through the same bounded engine as the stdio tools. " +
+		"The hub identity — node key, pre-shared key, relay region — is created on the first start and saved owner-only under tailcat-hub/ in the state directory, so its address never changes across restarts. " +
+		"The sync endpoint listens on port 9027 inside the Tailcat network stack and opens no port on the host; devices reach it through a DERP relay and a direct path when one exists. " +
 		"Devices join with ohya join and one code from ohya devices invite.",
 	argsTitle: "Arguments",
 	args:      "(none)",
-	examples:  []string{"ohya serve", "ohya serve --control-url http://192.0.2.10:8080", "ohya serve --tls-cert cert.pem --tls-key key.pem --control-url https://192.0.2.10:9417"},
+	examples:  []string{"ohya serve", "ohya serve --db /srv/ohya/hub.db --state /srv/ohya"},
 }
 
 func runServeCommand(args []string, stdout, stderr io.Writer) error {
@@ -66,41 +42,12 @@ func runServeCommand(args []string, stdout, stderr io.Writer) error {
 	db := c.fs.String("db", filepath.Join(home, ".ohya", "hub.db"),
 		"hub database `path`")
 	state := c.fs.String("state", "",
-		"state `directory` for the device identity, registry, and coordination plane; defaults to the database directory")
-	controlListen := c.fs.String("control-listen", control.DefaultListenAddr,
-		"listen `address` of the coordination plane and its embedded DERP relay")
-	controlURL := c.fs.String("control-url", "",
-		"coordination `URL` devices reach the hub at; defaults to the scheme of --tls-cert/--tls-key plus --control-listen (pass it when the hub is reachable from other machines)")
-	tlsCert := c.fs.String("tls-cert", "",
-		"TLS certificate `path` for the coordination plane and its embedded DERP relay; requires --tls-key, makes the default --control-url https, and devices must trust the certificate's CA")
-	tlsKey := c.fs.String("tls-key", "",
-		"TLS key `path` for the coordination plane; requires --tls-cert")
-	stunListen := c.fs.String("stun-listen", control.DefaultSTUNAddr,
-		"UDP listen `address` of the coordination plane's STUN helper for devices behind NAT")
-	controlLogLevel := c.fs.String("control-log-level", "warn",
-		"coordination plane log `level`: warn, info or debug")
-	tailnetPort := c.fs.Int("tailnet-port", tailcat.DefaultHubPort,
-		"tailnet `port` the sync endpoint listens on inside the transport")
+		"state `directory` for the device identity, registry, and Tailcat hub identity; defaults to the database directory")
 	if err := c.parse(args, stdout); err != nil {
 		return err
 	}
 	if c.fs.NArg() > 0 {
 		return c.usageErrorf("unexpected argument %q", c.fs.Arg(0))
-	}
-	url := *controlURL
-	if url == "" {
-		host, _, err := net.SplitHostPort(*controlListen)
-		if err != nil {
-			return fmt.Errorf("parse --control-listen: %w", err)
-		}
-		if host == "0.0.0.0" || host == "::" || strings.Contains(host, ":") {
-			return c.usageErrorf("--control-listen binds every interface; pass --control-url with the address devices use")
-		}
-		scheme := "http"
-		if *tlsCert != "" || *tlsKey != "" {
-			scheme = "https"
-		}
-		url = scheme + "://" + *controlListen
 	}
 	stateDir := *state
 	if stateDir == "" {
@@ -109,30 +56,18 @@ func runServeCommand(args []string, stdout, stderr io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return runServe(ctx, serveOptions{
-		dbPath:          *db,
-		stateDir:        stateDir,
-		controlListen:   *controlListen,
-		controlURL:      url,
-		stunListen:      *stunListen,
-		controlLogLevel: *controlLogLevel,
-		tlsCertPath:     *tlsCert,
-		tlsKeyPath:      *tlsKey,
-		tailnetPort:     *tailnetPort,
-		stdout:          stdout,
+		dbPath:   *db,
+		stateDir: stateDir,
+		stdout:   stdout,
 	})
 }
 
 type serveOptions struct {
-	dbPath          string
-	stateDir        string
-	controlListen   string
-	controlURL      string
-	stunListen      string
-	controlLogLevel string
-	tlsCertPath     string
-	tlsKeyPath      string
-	tailnetPort     int
-	stdout          io.Writer
+	dbPath   string
+	stateDir string
+	stdout   io.Writer
+
+	region *tailcfg.DERPRegion
 }
 
 func runServe(ctx context.Context, o serveOptions) error {
@@ -142,26 +77,15 @@ func runServe(ctx context.Context, o serveOptions) error {
 	if err := os.MkdirAll(o.stateDir, 0o700); err != nil {
 		return fmt.Errorf("create state directory: %w", err)
 	}
-	if o.tlsCertPath != "" {
-		if err := trustOwnPlane(o.stateDir, o.tlsCertPath); err != nil {
-			return err
-		}
-	}
-	ctl, err := control.Provision(control.Options{
-		Dir:         filepath.Join(o.stateDir, control.DirName),
-		ServerURL:   o.controlURL,
-		ListenAddr:  o.controlListen,
-		STUNAddr:    o.stunListen,
-		BaseDomain:  tailcat.DefaultBaseDomain,
-		LogLevel:    o.controlLogLevel,
-		TLSCertPath: o.tlsCertPath,
-		TLSKeyPath:  o.tlsKeyPath,
+	node, err := address.NewHub(address.HubOptions{
+		StateDir: o.stateDir,
+		Region:   o.region,
 	})
 	if err != nil {
 		return err
 	}
-	defer ctl.Close()
-	if err := ctl.Start(ctx); err != nil {
+	ln, err := node.Listen(ctx)
+	if err != nil {
 		return err
 	}
 
@@ -180,53 +104,36 @@ func runServe(ctx context.Context, o serveOptions) error {
 	}
 	defer reg.Close()
 
-	st, err := ctl.State()
-	if err != nil {
-		return err
-	}
-	authKey := ""
-	if !control.HubEnrolled(st) {
-		user, err := control.EnsureUser(st)
-		if err != nil {
-			return err
-		}
-		authKey, err = control.MintAuthKey(st, user, hubAuthKeyTTL)
-		if err != nil {
-			return err
-		}
-	}
-	node, err := tailcat.NewHub(tailcat.Options{
-		Hostname:   tailcat.HubHostname,
-		AuthKey:    authKey,
-		ControlURL: ctl.URL(),
-		StateDir:   filepath.Join(o.stateDir, "tailcat-hub"),
-		Port:       o.tailnetPort,
-	})
-	if err != nil {
-		return err
-	}
-	ln, err := node.Listen(ctx)
-	if err != nil {
-		return err
-	}
-
 	readers, err := hub.Reader()
 	if err != nil {
 		return err
 	}
 	defer readers.Close()
-	engine := mcpserver.NewEngine(readers, hub.Writer(), mcpserver.EngineOptions{WriterID: deviceID})
-	endpoint, err := hubsync.NewEndpoint(hub, &registry.Authenticator{DB: reg}, hubsync.Options{
+	usage := openUsageWriter(o.stateDir, observe.RoleServe)
+	if usage != nil {
+		defer usage.Close()
+	}
+	engine := mcpserver.NewEngine(readers, hub.Writer(), mcpserver.EngineOptions{WriterID: deviceID, Usage: usageSink(usage)})
+	auth := newPathRecorder(&registry.Authenticator{DB: reg}, node, reg, func(format string, args ...any) {
+		fmt.Fprintf(o.stdout, "ohya: "+format+"\n", args...)
+	})
+	endpoint, err := hubsync.NewEndpoint(hub, auth, hubsync.Options{
 		Remote: engine,
 	})
 	if err != nil {
 		return err
 	}
 
-	fmt.Fprintf(o.stdout, "ohya: serving devices at %s (coordination %s)\n", node.Addr(), ctl.URL())
+	region := node.Region()
+	fmt.Fprintf(o.stdout, "ohya: serving devices on the tailcat transport (relay region %d %s, node key %s)\n",
+		region.RegionID, region.RegionCode, node.PublicKey())
 	fmt.Fprintf(o.stdout, "ohya: invite a device: ohya devices invite --state %s\n", o.stateDir)
 
 	err = endpoint.Serve(ctx, ln)
+	_ = ln.Close()
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	_ = node.Drain(drainCtx)
+	drainCancel()
 	if cerr := node.Close(); err == nil {
 		err = cerr
 	}

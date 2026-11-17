@@ -29,6 +29,20 @@ func systemdQuote(value string) string {
 }
 
 func ServicePlan(platform, home, binary string, args []string) (Service, error) {
+	return planService(serviceTemplate{unit: "ohya.service", label: "com.nibzard.ohya", description: "ohya agent memory"}, platform, home, binary, args)
+}
+
+func HubServicePlan(platform, home, binary string, args []string) (Service, error) {
+	return planService(serviceTemplate{unit: "ohya-serve.service", label: "com.nibzard.ohya.serve", description: "ohya memory hub for devices"}, platform, home, binary, args)
+}
+
+type serviceTemplate struct {
+	unit        string
+	label       string
+	description string
+}
+
+func planService(t serviceTemplate, platform, home, binary string, args []string) (Service, error) {
 	if !filepath.IsAbs(home) || !filepath.IsAbs(binary) {
 		return Service{}, fmt.Errorf("service paths must be absolute")
 	}
@@ -43,11 +57,11 @@ func ServicePlan(platform, home, binary string, args []string) (Service, error) 
 		for _, arg := range args {
 			words = append(words, systemdQuote(arg))
 		}
-		content := "[Unit]\nDescription=ohya agent memory\nStartLimitIntervalSec=60\nStartLimitBurst=5\n\n[Service]\nType=simple\nExecStart=" + strings.Join(words, " ") + "\nWorkingDirectory=" + strings.ReplaceAll(home, "%", "%%") + "\nRestart=on-failure\nRestartSec=5\nUMask=0077\nStandardOutput=journal\nStandardError=journal\nLogRateLimitIntervalSec=60\nLogRateLimitBurst=20\n\n[Install]\nWantedBy=default.target\n"
-		return Service{Path: filepath.Join(home, ".config", "systemd", "user", "ohya.service"), Content: []byte(content), Start: [][]string{{"systemctl", "--user", "daemon-reload"}, {"systemctl", "--user", "enable", "ohya.service"}, {"systemctl", "--user", "restart", "ohya.service"}}, Stop: [][]string{{"systemctl", "--user", "disable", "--now", "ohya.service"}}, Loaded: []string{"systemctl", "--user", "show", "--property=LoadState", "--value", "ohya.service"}, Check: []string{"systemctl", "--user", "show", "--property=ActiveState,SubState,MainPID", "ohya.service"}}, nil
+		content := "[Unit]\nDescription=" + t.description + "\nStartLimitIntervalSec=60\nStartLimitBurst=5\n\n[Service]\nType=simple\nExecStart=" + strings.Join(words, " ") + "\nWorkingDirectory=" + strings.ReplaceAll(home, "%", "%%") + "\nRestart=on-failure\nRestartSec=5\nUMask=0077\nStandardOutput=journal\nStandardError=journal\nLogRateLimitIntervalSec=60\nLogRateLimitBurst=20\n\n[Install]\nWantedBy=default.target\n"
+		return Service{Path: filepath.Join(home, ".config", "systemd", "user", t.unit), Content: []byte(content), Start: [][]string{{"systemctl", "--user", "daemon-reload"}, {"systemctl", "--user", "enable", t.unit}, {"systemctl", "--user", "restart", t.unit}}, Stop: [][]string{{"systemctl", "--user", "disable", "--now", t.unit}}, Loaded: []string{"systemctl", "--user", "show", "--property=LoadState", "--value", t.unit}, Check: []string{"systemctl", "--user", "show", "--property=ActiveState,SubState,MainPID", t.unit}}, nil
 	case "darwin":
 		var b strings.Builder
-		b.WriteString("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict><key>Label</key><string>com.nibzard.ohya</string><key>ProgramArguments</key><array>")
+		b.WriteString("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict><key>Label</key><string>" + t.label + "</string><key>ProgramArguments</key><array>")
 		for _, arg := range append([]string{binary}, args...) {
 			b.WriteString("<string>")
 			if err := xml.EscapeText(&b, []byte(arg)); err != nil {
@@ -56,9 +70,9 @@ func ServicePlan(platform, home, binary string, args []string) (Service, error) 
 			b.WriteString("</string>")
 		}
 		b.WriteString("</array><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>5</integer><key>Umask</key><integer>63</integer></dict></plist>\n")
-		path := filepath.Join(home, "Library", "LaunchAgents", "com.nibzard.ohya.plist")
+		path := filepath.Join(home, "Library", "LaunchAgents", t.label+".plist")
 		domain := "gui/" + strconv.Itoa(os.Getuid())
-		return Service{Path: path, Content: []byte(b.String()), Start: [][]string{{"launchctl", "bootstrap", domain, path}, {"launchctl", "kickstart", "-k", domain + "/com.nibzard.ohya"}}, Stop: [][]string{{"launchctl", "bootout", domain + "/com.nibzard.ohya"}}, Loaded: []string{"launchctl", "print", domain + "/com.nibzard.ohya"}, Check: []string{"launchctl", "print", domain + "/com.nibzard.ohya"}}, nil
+		return Service{Path: path, Content: []byte(b.String()), Start: [][]string{{"launchctl", "bootstrap", domain, path}, {"launchctl", "kickstart", "-k", domain + "/" + t.label}}, Stop: [][]string{{"launchctl", "bootout", domain + "/" + t.label}}, Loaded: []string{"launchctl", "print", domain + "/" + t.label}, Check: []string{"launchctl", "print", domain + "/" + t.label}}, nil
 	default:
 		return Service{}, fmt.Errorf("user services are not supported on %s", platform)
 	}
@@ -110,7 +124,7 @@ func systemdFields(output string) map[string]string {
 	return values
 }
 
-func serviceRunning(platform, output string) error {
+func serviceRunning(platform, output, name string) error {
 	values := systemdFields(output)
 	if platform == "darwin" {
 		values = launchctlFields(output)
@@ -121,16 +135,24 @@ func serviceRunning(platform, output string) error {
 	}
 	process, err := strconv.Atoi(pid)
 	if err != nil || process <= 0 {
-		return errors.New("memory service has no running process")
+		return errors.New(name + " has no running process")
 	}
 	if platform == "darwin" {
 		if state != "running" {
-			return errors.New("memory LaunchAgent is loaded but not running")
+			return errors.New(name + " LaunchAgent is loaded but not running")
 		}
 	} else if state != "active" || values["SubState"] != "running" {
-		return errors.New("memory service is not running")
+		return errors.New(name + " is not running")
 	}
 	return nil
+}
+
+func serviceKind(args []string) string {
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "ohya-serve.service") || strings.Contains(joined, "com.nibzard.ohya.serve") {
+		return "hub service"
+	}
+	return "memory service"
 }
 
 func RunServiceLoaded(ctx context.Context, args []string) error {
@@ -139,7 +161,7 @@ func RunServiceLoaded(ctx context.Context, args []string) error {
 		return err
 	}
 	if args[0] == "systemctl" && strings.TrimSpace(output) != "loaded" {
-		return errors.New("memory service is not loaded")
+		return errors.New(serviceKind(args) + " is not loaded")
 	}
 	return nil
 }
@@ -150,10 +172,10 @@ func RunServiceCommand(ctx context.Context, args []string) error {
 		return err
 	}
 	if args[0] == "launchctl" && len(args) > 1 && args[1] == "print" {
-		return serviceRunning("darwin", output)
+		return serviceRunning("darwin", output, serviceKind(args))
 	}
 	if args[0] == "systemctl" && strings.Contains(strings.Join(args, " "), "--property=ActiveState,SubState,MainPID") {
-		return serviceRunning("linux", output)
+		return serviceRunning("linux", output, serviceKind(args))
 	}
 	return nil
 }

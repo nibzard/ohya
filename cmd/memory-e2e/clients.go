@@ -74,8 +74,13 @@ func (g *gate) runClaudeCase(ctx context.Context, c caseDef) *runResult {
 func (g *gate) runCodexCase(ctx context.Context, c caseDef) *runResult {
 	dir := filepath.Join(g.tracesDir, "codex-"+c.key)
 	res := &runResult{traceDir: dir}
-	if err := os.MkdirAll(filepath.Join(dir, "cwd"), 0o700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		res.problems = append(res.problems, "prepare case dir: "+err.Error())
+		return res
+	}
+	cwd, err := g.codexCaseDir(c.key)
+	if err != nil {
+		res.problems = append(res.problems, "prepare codex working dir: "+err.Error())
 		return res
 	}
 	eventsPath := filepath.Join(dir, "events.jsonl")
@@ -103,7 +108,7 @@ func (g *gate) runCodexCase(ctx context.Context, c caseDef) *runResult {
 		"-o", lastPath,
 		c.prompt,
 	)
-	cmd.Dir = filepath.Join(dir, "cwd")
+	cmd.Dir = cwd
 	cmd.Env = g.codexEnv()
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = devnull, events, stderr
 	cmd.WaitDelay = 15 * time.Second
@@ -158,6 +163,50 @@ func (g *gate) codexEnv() []string {
 		"LANG=C.UTF-8",
 		"CODEX_HOME=" + g.codexHome,
 	}
+}
+
+func (g *gate) codexCaseDir(key string) (string, error) {
+	dir := filepath.Join(g.codexWork, "codex-"+key, "cwd")
+	return dir, os.MkdirAll(dir, 0o700)
+}
+
+func ancestorCodexConfigs(dir string) []string {
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
+	}
+	var found []string
+	for d := dir; ; d = filepath.Dir(d) {
+		config := filepath.Join(d, ".codex", "config.toml")
+		if _, err := os.Stat(config); err == nil {
+			found = append(found, config)
+		}
+		if filepath.Dir(d) == d {
+			return found
+		}
+	}
+}
+
+func chooseCodexWork(inTree string, fallbacks []string) (string, bool, error) {
+	shadowed := ancestorCodexConfigs(inTree)
+	if len(shadowed) == 0 {
+		return inTree, false, nil
+	}
+	var rejected []string
+	for _, base := range fallbacks {
+		dir, err := os.MkdirTemp(base, "memory-e2e-codex-")
+		if err != nil {
+			rejected = append(rejected, fmt.Sprintf("%s unusable: %v", base, err))
+			continue
+		}
+		shadow := ancestorCodexConfigs(dir)
+		if len(shadow) == 0 {
+			return dir, true, nil
+		}
+		os.RemoveAll(dir)
+		rejected = append(rejected, fmt.Sprintf("%s shadowed by %s", base, strings.Join(shadow, ", ")))
+	}
+	return "", false, fmt.Errorf("the codex client cannot be isolated: its working directory must have no .codex/config.toml ancestor, but %s sits under %s and every fallback location is unusable or equally shadowed (%s); run the gate with -out under a tree with no ancestor .codex/config.toml, or clear those configs",
+		inTree, strings.Join(shadowed, ", "), strings.Join(rejected, "; "))
 }
 
 func parseClaudeTrace(path string) (answer string, ok bool, calls []string, problems []string) {

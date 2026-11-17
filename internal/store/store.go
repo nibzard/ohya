@@ -3,12 +3,14 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 	"path/filepath"
 	"strconv"
 
-	_ "github.com/mattn/go-sqlite3"
+	sqlite3 "github.com/mattn/go-sqlite3"
+	"github.com/nibzard/ohya/internal/observe"
 )
 
 const synchronousFull = 2
@@ -16,12 +18,23 @@ const synchronousFull = 2
 const busyTimeoutMs = 5000
 
 type DB struct {
-	path    string
-	writer  *sql.DB
-	readers *sql.DB
+	path     string
+	writer   *sql.DB
+	readers  *sql.DB
+	observer observe.Observer
 }
 
-func Open(ctx context.Context, path string) (*DB, error) {
+type OpenOption func(*DB)
+
+func WithObserver(o observe.Observer) OpenOption {
+	return func(d *DB) {
+		if o != nil {
+			d.observer = o
+		}
+	}
+}
+
+func Open(ctx context.Context, path string, opts ...OpenOption) (*DB, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return nil, fmt.Errorf("store: resolve %s: %w", path, err)
@@ -40,7 +53,32 @@ func Open(ctx context.Context, path string) (*DB, error) {
 		_ = writer.Close()
 		return nil, err
 	}
-	return &DB{path: abs, writer: writer}, nil
+	d := &DB{path: abs, writer: writer, observer: observe.Disabled}
+	for _, opt := range opts {
+		opt(d)
+	}
+	return d, nil
+}
+
+func sqliteOutcome(err error) (string, bool) {
+	if err == nil {
+		return "ok", true
+	}
+	var sqliteErr sqlite3.Error
+	if errors.As(err, &sqliteErr) {
+		switch sqliteErr.Code & 0xff {
+		case sqlite3.ErrBusy:
+			return "busy", true
+		case sqlite3.ErrLocked:
+			return "locked", true
+		}
+		return "error", true
+	}
+	if errors.Is(err, ErrBatchRejected) || errors.Is(err, ErrSourceOwnership) ||
+		errors.Is(err, ErrSourceNotRegistered) {
+		return "", false
+	}
+	return "error", true
 }
 
 func OpenReadOnly(path string) (*DB, error) {

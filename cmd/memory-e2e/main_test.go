@@ -173,6 +173,123 @@ func fakeResolve(text string, found bool) resolveFunc {
 	return func(context.Context, int64) (string, bool, error) { return text, found, nil }
 }
 
+func writeCodexConfig(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, ".codex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".codex", "config.toml"),
+		[]byte("[mcp_servers.ohya]\ncommand = 'shadow'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func skipWhenTempDirty(t *testing.T, dir string) {
+	t.Helper()
+	if shadowed := ancestorCodexConfigs(dir); len(shadowed) > 0 {
+		t.Skipf("temporary directory carries .codex ancestors: %v", shadowed)
+	}
+}
+
+func TestAncestorCodexConfigs(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	deep := filepath.Join(root, "a", "b")
+	if err := os.MkdirAll(deep, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	underRoot := func(paths []string) []string {
+		var kept []string
+		for _, p := range paths {
+			if strings.HasPrefix(p, root+string(filepath.Separator)) {
+				kept = append(kept, p)
+			}
+		}
+		return kept
+	}
+	if got := underRoot(ancestorCodexConfigs(deep)); len(got) != 0 {
+		t.Fatalf("clean chain reported %v", got)
+	}
+	writeCodexConfig(t, root)
+	writeCodexConfig(t, filepath.Join(root, "a"))
+	want := strings.Join([]string{
+		filepath.Join(root, "a", ".codex", "config.toml"),
+		filepath.Join(root, ".codex", "config.toml"),
+	}, ",")
+	if got := strings.Join(underRoot(ancestorCodexConfigs(deep)), ","); got != want {
+		t.Fatalf("ancestor walk from %s = %q, want %q", deep, got, want)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(deep, link); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(underRoot(ancestorCodexConfigs(link)), ","); got != want {
+		t.Fatalf("ancestor walk through symlink %s = %q, want %q", link, got, want)
+	}
+}
+
+func TestChooseCodexWorkKeepsCleanTree(t *testing.T) {
+	tmp := t.TempDir()
+	skipWhenTempDirty(t, tmp)
+	inTree := filepath.Join(tmp, "out", "traces")
+	base, relocated, err := chooseCodexWork(inTree, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if relocated || base != inTree {
+		t.Fatalf("chooseCodexWork = (%q, %v), want (%q, false)", base, relocated, inTree)
+	}
+}
+
+func TestChooseCodexWorkRelocatesShadowedTree(t *testing.T) {
+	shadowed := t.TempDir()
+	writeCodexConfig(t, shadowed)
+	clean := t.TempDir()
+	skipWhenTempDirty(t, clean)
+	base, relocated, err := chooseCodexWork(filepath.Join(shadowed, "out", "traces"), []string{clean})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !relocated {
+		t.Fatalf("relocated = false, base %q", base)
+	}
+	if !strings.HasPrefix(base, clean+string(filepath.Separator)) {
+		t.Fatalf("relocated base %q is not under %q", base, clean)
+	}
+	if _, err := os.Stat(base); err != nil {
+		t.Fatalf("relocated base: %v", err)
+	}
+}
+
+func TestChooseCodexWorkFailsWithoutCleanFallback(t *testing.T) {
+	shadowed := t.TempDir()
+	writeCodexConfig(t, shadowed)
+	traces := filepath.Join(shadowed, "out", "traces")
+
+	dirtyBase := t.TempDir()
+	dirtyConfig := filepath.Join(dirtyBase, ".codex", "config.toml")
+	writeCodexConfig(t, dirtyBase)
+	_, _, err := chooseCodexWork(traces, []string{dirtyBase})
+	if err == nil {
+		t.Fatal("expected a fail-fast error")
+	}
+	for _, want := range []string{filepath.Join(shadowed, ".codex", "config.toml"), dirtyConfig, "-out"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+
+	clean := t.TempDir()
+	skipWhenTempDirty(t, clean)
+	missing := filepath.Join(clean, "missing")
+	_, _, err = chooseCodexWork(traces, []string{missing})
+	if err == nil || !strings.Contains(err.Error(), missing) {
+		t.Fatalf("unusable fallback must be reported, got %v", err)
+	}
+}
+
 func TestCheckCase(t *testing.T) {
 	decision := caseDef{
 		key:            "explicit-decision",

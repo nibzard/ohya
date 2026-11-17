@@ -3,37 +3,21 @@ package setup
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
-	"net"
-	"net/url"
 	"os"
 	"path/filepath"
 )
 
 type Connection struct {
-	Mode       string `json:"mode"`
-	ControlURL string `json:"control_url,omitempty"`
-	HubAddress string `json:"hub_address,omitempty"`
+	Mode string `json:"mode"`
 }
 
 func (c Connection) Validate() error {
 	switch c.Mode {
-	case "local":
-		if c.ControlURL != "" || c.HubAddress != "" {
-			return errors.New("local setup cannot specify a hub")
-		}
-	case "remote":
-		u, err := url.Parse(c.ControlURL)
-		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-			return errors.New("coordination URL must be HTTP or HTTPS without credentials, query, or fragment")
-		}
-		if _, _, err := net.SplitHostPort(c.HubAddress); err != nil {
-			return fmt.Errorf("invalid hub address: %w", err)
-		}
+	case "local", "remote":
+		return nil
 	default:
 		return errors.New("setup mode must be local or remote")
 	}
-	return nil
 }
 
 func LoadConnection(state string) (Connection, error) {
@@ -71,7 +55,7 @@ func BindRemote(state string, c Connection) error {
 			return err
 		}
 		if previous != c {
-			return errors.New("this join state belongs to a different hub; use a new setup state directory")
+			return errors.New("this join state belongs to a different setup mode; use a new setup state directory")
 		}
 	} else if !os.IsNotExist(err) {
 		return err

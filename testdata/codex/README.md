@@ -8,7 +8,9 @@ files written by 0.104 through 0.167; the envelope is unchanged). The corpus
 held 2,488 files under `~/.codex/sessions/` (3.0 GB), from 2026-02-20 onward.
 Re-verified corpus-wide on 2026-11-14 (T044) over 2,491 files written by
 0.104.0 through 0.169.0: the usage-field identities below and the resumed-page
-enumeration under [Native session identity](#native-session-identity).
+enumeration under [Native session identity](#native-session-identity). The
+MCP tool-call records were captured live from 0.169.0 on 2026-11-16 (T103,
+[mcp-tool-call.jsonl](#mcp-tool-calljsonl)).
 
 ## Verified format
 
@@ -18,6 +20,13 @@ enumeration under [Native session identity](#native-session-identity).
   file. The date directories come from the local session-start time. Every
   file in the corpus matches this pattern; there are no other files under
   `sessions/`.
+- `~/.codex/archived_sessions/` — a sibling of `sessions/` holding rollouts
+  Codex moved out of it (observed 2026-11-15: 6 plain-JSONL files, 1.5 MB,
+  Feb–Sep 2026, none duplicated under `sessions/`; the directory was absent
+  again on 2026-11-16 while `sessions/` remained). ohya watches it as a
+  second default codex root (`$CODEX_HOME/archived_sessions`), so archived
+  rollouts ingest like `sessions/` rollouts and a file moved between the two
+  roots keeps its checkpoint.
 - Resumed or paginated threads add a second UUID:
   `rollout-<timestamp>-<thread-id>_<resume-id>.jsonl`. The second UUID never
   appears inside the file. See [Native session
@@ -59,7 +68,9 @@ Top-level `type` values observed:
   `encrypted_content`), `function_call` (`name`, JSON string `arguments`),
   `function_call_output`, `custom_tool_call` (`name`, string `input`),
   `custom_tool_call_output`, `web_search_call`, `agent_message`, and rare
-  tool-search variants. Assistant messages carry `status`, `phase`
+  tool-search variants. 0.169 also writes `additional_tools`, a developer-role
+  message listing the tool catalog (MCP tools appear as
+  `mcp__<server>__<tool>`). Assistant messages carry `status`, `phase`
   (`commentary` or `final`), and an `msg_…` id.
 - `event_msg` — UI events that mirror the transcript: `user_message` and
   `agent_message` repeat text that also appears in `response_item` records,
@@ -309,6 +320,41 @@ duplicates of them.
 | 3 | [771, 1484) | `token_usage_record` | Ordinal 13; `resp_fixture_0003`, the regenerated turn |
 | 4 | [1484, 1819) | `response_item/message` | Role `assistant`, phase `final` (ordinal 14) |
 | 5 | [1819, 2073) | `event_msg/task_complete` | Ordinal 15; 2,073 bytes total |
+
+### mcp-tool-call.jsonl
+
+One turn in which the model calls the ohya `sql` MCP tool. Captured from a live
+codex-cli 0.169.0 `codex exec` run (2026-11-16, T103) against an
+`ohya setup`-written `[mcp_servers.ohya]` entry, then authored synthetically.
+Codex 0.169 exposes MCP tools to the model both directly and through the `exec`
+meta-tool; here the model uses `exec`, so the call appears three times: the
+`response_item/custom_tool_call` running `tools.mcp__ohya__sql(...)`, the
+`event_msg/item_completed` record whose payload item carries
+`type: "McpToolCall"` with `server`, `tool`, `arguments`, `status`, `result`
+(`content[].text` plus `structuredContent`), `duration`, and the payload-level
+`started_at_ms`/`completed_at_ms`, and the `custom_tool_call_output` echoing the
+tool result. The `McpToolCall` event sits between the two `response_item`
+records, not adjacent to either. The thread id is
+`00000000-0000-7000-8000-0000000000e1`, ordinals 1–10.
+
+`event_msg` records carry no searchable text (see Parser normalization), so
+usage scans read these records through `json_extract` over the stored raw
+JSON — this fixture pins that path end to end (parser fixture plus
+`cmd/ohya` `TestUsageCodexMCPFixture`).
+
+| Line | Bytes | Kind | Notes |
+|---|---|---|---|
+| 1 | [0, 402) | `session_meta` | `originator` `codex_exec`, `source` `exec`, `cli_version` `0.169.0` |
+| 2 | [402, 552) | `event_msg/task_started` | Ordinal 1 |
+| 3 | [552, 827) | `response_item/message` | Role `user`, the prompt; ordinal 2 |
+| 4 | [827, 1135) | `turn_context` | Ordinal 3 |
+| 5 | [1135, 1418) | `response_item/message` | Role `assistant`, phase `commentary`; ordinal 4 |
+| 6 | [1418, 1707) | `response_item/custom_tool_call` | Tool `exec`, invokes `tools.mcp__ohya__sql`; ordinal 5 |
+| 7 | [1707, 2365) | `token_usage_record` | `resp_fixture_00e1`; ordinal 6 |
+| 8 | [2365, 3086) | `event_msg/item_completed` | Item `McpToolCall`, server `ohya`, tool `sql`; ordinal 7 |
+| 9 | [3086, 3615) | `response_item/custom_tool_call_output` | Echoes the tool result; ordinal 8 |
+| 10 | [3615, 3853) | `response_item/message` | Role `assistant`, phase `final_answer`; ordinal 9 |
+| 11 | [3853, 3986) | `event_msg/task_complete` | Ordinal 10; 3,986 bytes total |
 
 ### incomplete-tail.jsonl
 

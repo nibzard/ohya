@@ -234,7 +234,7 @@ func TestAnnotateWriterIsolation(t *testing.T) {
 
 	if result, err := remote.Annotate(ctx, json.RawMessage(
 		`{"operations":[{"op":"delete","event_id":2,"namespace":"security","key":"review"}]}`)); err != nil ||
-		result != (store.AnnotateResult{Applied: 1}) {
+		result != (store.AnnotateResult{Applied: 1, AppliedDelete: 1}) {
 		t.Fatalf("dev2 delete = %+v, %v", result, err)
 	}
 	var dev1Value string

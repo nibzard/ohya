@@ -119,7 +119,7 @@ setup engine without taking ownership of the Homebrew executable.
 4. Register the `ohya` stdio server in detected clients at user scope. Point each
    client at the installed absolute path and explicit database/state paths.
    Joined devices instead use `ohya mcp --remote` with the correct join state
-   and coordination URL. Their managed process runs the uploader.
+   and saved hub address. Their managed process runs the uploader.
 5. Provide memory guidance through MCP server instructions and tool descriptions.
    Where a client needs a separate skill, install an owned `ohya-memory` skill
    through its supported mechanism. Teach selective recall, event citations,

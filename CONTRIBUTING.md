@@ -3,8 +3,9 @@
 Read MANIFESTO.md and AGENTS.md first. Go 1.27.3 or later, CGO and a C
 compiler are required (on macOS, install Xcode Command Line Tools; on
 Debian or Ubuntu, `sudo apt install build-essential`). The Go
-minimum comes from the pinned Tailcat transport dependency
-([ADR 0002](docs/adr/0002-tailcat-transport.md)); with the default
+minimum comes from the pinned transport dependencies, `tailscale.com`
+and `github.com/tailscale/tailcat`
+([ADR 0011](docs/adr/0011-tailcat-address-transport.md)); with the default
 GOTOOLCHAIN=auto the toolchain is fetched as needed. SQLite is bundled in
 the driver. From the repository root:
 
@@ -19,7 +20,10 @@ deterministic synthetic corpora for each agent format (raise the volume
 with `OHYA_BENCH_MIB`);
 the measured limits and how to reproduce them are documented in
 [docs/performance.md](docs/performance.md). Two performance regression
-tests run as part of `make check`. To compare commits instead of single
+tests run as part of `make check`, and so does the recall evaluation
+guard: `internal/recalleval` replays the synthetic question set in
+[testdata/recall/](testdata/recall/README.md) through the `sql` tool
+engine and fails when a known answer leaves the top 10. To compare commits instead of single
 runs, `make bench-save` writes a repeated run (default 10 per benchmark)
 and `make bench-diff BASE=<old> NEW=<new>` prints the benchstat table
 between two saved runs; CI stores every run as an artifact and posts the
@@ -27,13 +31,13 @@ diff against the main-branch baseline — see "Tracking across commits" in
 docs/performance.md.
 
 The core transport tests run on Linux and macOS, including pairing, remote
-queries, live appends, transport owner changes, revocation, and TLS.
-They keep synthetic state under `/tmp/ohya-e2e-*` so the control socket fits
-macOS's path limit. To run those tests directly:
+queries, live appends, hub restarts, device rebinds, and revocation. They
+run their own local DERP relay and keep synthetic state under
+`/tmp/ohya-e2e-*`. To run those tests directly:
 
 ```sh
 go test -tags sqlite_fts5 -timeout 10m -count=1 -v ./cmd/ohya \
-  -run '^(TestServeJoinEndToEnd|TestServeJoinTLS)$'
+  -run '^(TestServeJoinEndToEnd|TestJoinRebind|TestHubRestartReconnect)$'
 ```
 
 The CI workflow also supports **Run workflow** for a manual verification run.
@@ -46,7 +50,11 @@ benchmark job runs on macOS only so its numbers always compare against the
 same runner hardware.
 The Linux job exists because the macOS job cannot see Linux-only breakage
 (CGO, file identity in `internal/watch`, path handling); the Ubuntu image
-ships gcc and make, so CGO needs no setup. `make tla` runs only on the macOS
+ships gcc and make, so CGO needs no setup. Only the Linux job fetches git
+tags at checkout (`fetch-tags: true`), so
+`TestReleasedSchemasMatchPublishedTags` runs there and every other checkout
+keeps the cheaper default (see DB.md, upgrade policy item 5). `make tla`
+runs only on the macOS
 job, because TLC is platform-independent Java and a second run adds no
 coverage. The benchmark job reports and never fails on a regression. It
 uploads its raw run even when a benchmark fails, because `make bench-save`
@@ -55,8 +63,8 @@ Migrations are versioned SQL files under `internal/store/migrations/NNN_name.sql
 the runner applies them in order and records checksums in `schema_migrations`.
 Never rewrite or delete an applied migration — add a new file instead, and keep
 connection pragmas in `internal/store` code rather than migration SQL (see DB.md
-for the upgrade policy). TLA+ models cover sync, authorization, and device
-transport ownership. Run `make tla` to check them with TLC (Java 11 or later).
+for the upgrade policy). TLA+ models cover sync and authorization.
+Run `make tla` to check them with TLC (Java 11 or later).
 The pinned TLC jar is vendored under `tla/vendor/` and checksum-verified on
 every run; the runner downloads nothing
 ([ADR 0007](docs/adr/0007-vendored-tlc-jar.md)).
@@ -107,6 +115,17 @@ The gate (`cmd/memory-e2e`) works as follows:
 - Codex runs with `--trust` for the scratch case directory, because it
   gates project MCP servers behind project trust. The trust record stays
   inside the isolated `CODEX_HOME` (verified 2026-11-14).
+- Codex also discovers project configuration from the working
+  directory. A `.codex/config.toml` in any ancestor of the child's
+  working directory is merged over `$CODEX_HOME` and wins on
+  server-name collision (verified against 0.169.0), which would point
+  the gate's `ohya` server at the machine's real hub whenever the gate
+  runs under such a tree. `codex mcp list` reads only `$CODEX_HOME`, so
+  the registration check cannot detect this. The gate keeps every
+  codex child's working directory outside all `.codex`-bearing
+  ancestors: it uses the trace tree when that tree is clean, otherwise a
+  scratch directory under the system temporary directory, and it fails
+  fast with the shadowing configs named when no clean location exists.
 - Codex emits WebSocket fallback error items even on successful runs: the
   wss endpoint rejects API-key auth, Codex falls back to HTTPS, and the
   run completes. The observed message starts with "Falling back from
@@ -129,10 +148,11 @@ The gate (`cmd/memory-e2e`) works as follows:
   batch bound extends the read to its end, up to the record size limit, so
   a batch never splits a record. Ingestion never acknowledges inside
   `ingestSource`; the caller acknowledges the committed cursor afterwards.
-- `ohya devices invite` provisions the coordinator user and preauth key
-  before the registry invitation, so it never issues half a join code. The
-  hub's own admission key is valid for 10 minutes. A joined device's tailnet
-  hostname is `dev-` plus the first 12 characters of its Device ID.
+- `ohya devices invite` recomputes the hub address from the saved transport
+  identity before it issues the registry invitation, so it never issues half
+  a join code. The code is `ohya1.<invitation>.<address>`; the address holds
+  the pre-shared key, so the code is a secret and never appears in output
+  beyond the code line itself.
 - The `cmd/ohya` tests run the test binary as a child process. A first
   argument of `child-run` runs the full CLI with the production exit codes.
   `child-serve`, `child-join`, and `child-mcp` run those commands for the

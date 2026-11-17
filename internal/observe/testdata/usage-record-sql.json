@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "time_bucket": "2026-11-16T14:00Z",
+  "time_ms": 1794840423123,
+  "instance_id": "3f9b2c1d8e4a7f60b5d3c2a19e8f7b6d",
+  "tool": "sql",
+  "client": "claude-code",
+  "client_version": "2.1",
+  "path": "local",
+  "device_id": "0123456789abcdef0123456789abcdef",
+  "session_hint": "28f633ba62e1aafb",
+  "outcome": "ok",
+  "sqlite_code": 0,
+  "phase_ms": {
+    "admission_wait_ms": 0.1,
+    "reader_wait_ms": 0.3,
+    "first_row_ms": 4.2,
+    "iteration_ms": 12.5,
+    "total_ms": 19.7
+  },
+  "rows": 48,
+  "result_bytes": 48332,
+  "reads": ["events.id", "events.text", "sessions.last_event_at_ms"],
+  "functions": ["bm25"],
+  "fts": true,
+  "future_field": "tolerated"
+}

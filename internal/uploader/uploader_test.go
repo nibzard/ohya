@@ -18,6 +18,7 @@ import (
 	"github.com/nibzard/ohya/internal/claudecode"
 	"github.com/nibzard/ohya/internal/device"
 	"github.com/nibzard/ohya/internal/hubsync"
+	"github.com/nibzard/ohya/internal/observe/observertest"
 	"github.com/nibzard/ohya/internal/registry"
 	"github.com/nibzard/ohya/internal/store"
 	"github.com/nibzard/ohya/internal/watch"
@@ -154,6 +155,7 @@ type fixture struct {
 	dialer   *testDialer
 	log      *syncBuffer
 	up       *Uploader
+	obs      *observertest.Recorder
 }
 
 type syncBuffer struct {
@@ -180,7 +182,7 @@ func newFixture(t *testing.T, opts Options) *fixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { reg.Close() })
-	f := &fixture{t: t, dir: t.TempDir(), stateDir: t.TempDir(), reg: reg, dialer: &testDialer{}, log: &syncBuffer{}}
+	f := &fixture{t: t, dir: t.TempDir(), stateDir: t.TempDir(), reg: reg, dialer: &testDialer{}, log: &syncBuffer{}, obs: observertest.New()}
 	deviceID, err := device.LoadOrCreate(f.stateDir)
 	if err != nil {
 		t.Fatal(err)
@@ -202,12 +204,13 @@ func newFixture(t *testing.T, opts Options) *fixture {
 
 func (f *fixture) newUploader(opts Options) *Uploader {
 	f.t.Helper()
-	w, err := watch.New(f.stateDir, claudecode.AgentName, watch.Options{})
+	w, err := watch.New(f.stateDir, claudecode.AgentName, watch.Options{Observer: f.obs})
 	if err != nil {
 		f.t.Fatal(err)
 	}
 	opts.Agent = claudecode.AgentName
 	opts.Log = f.log
+	opts.Observer = f.obs
 	if opts.RequestTimeout == 0 {
 		opts.RequestTimeout = 10 * time.Second
 	}
@@ -325,6 +328,9 @@ func TestOfflineCatchUp(t *testing.T) {
 
 	f.dialer.fault.Store(int32(closedHub))
 	f.wantDisconnected()
+	if got := f.obs.Counter("upload_failures", "connect"); got < 1 {
+		t.Errorf("connect failures = %d, want at least 1 while the hub is unreachable", got)
+	}
 	if got := f.checkpoint(a); got != 0 {
 		t.Fatalf("checkpoint while offline = %d; want 0", got)
 	}
@@ -390,6 +396,29 @@ func TestLostAcknowledgment(t *testing.T) {
 	if got := f.dialer.batches.Load(); got != 2 {
 		t.Fatalf("data batches sent = %d; want 2 (the lost one, then only the new bytes)", got)
 	}
+
+	one, two, three := line(sessA, "one"), line(sessA, "two"), line(sessA, "three")
+	if got := f.obs.Counter("upload_payload_bytes"); got != uint64(len(one)+len(two)+len(three)) {
+		t.Errorf("upload_payload_bytes = %d, want %d: attempted bytes cover both sends", got, len(one)+len(two)+len(three))
+	}
+	if got := f.obs.Counter("upload_events_inserted"); got != 1 {
+		t.Errorf("upload_events_inserted = %d, want 1: attempted bytes grew while newly reported events did not duplicate", got)
+	}
+	if got := f.obs.Counter("upload_ack_bytes"); got != uint64(len(one)+len(two)+len(three)) {
+		t.Errorf("upload_ack_bytes = %d, want the full file %d", got, len(one)+len(two)+len(three))
+	}
+	if got := f.obs.Counter("upload_checkpoint_advances"); got != 2 {
+		t.Errorf("upload_checkpoint_advances = %d, want 2 (probe reconcile, final acknowledgment)", got)
+	}
+	if got := f.obs.Counter("upload_batches", "attempted"); got != 2 {
+		t.Errorf("attempted batches = %d, want 2", got)
+	}
+	if got := f.obs.Counter("upload_batches", "successful"); got != 1 {
+		t.Errorf("successful batches = %d, want 1: the lost batch is attempted but never acknowledged", got)
+	}
+	if got := f.obs.UnknownAddCalls(); got != 0 {
+		t.Errorf("%d Add calls used unknown metric names or label arity", got)
+	}
 }
 
 func TestTimeoutRetries(t *testing.T) {
@@ -413,6 +442,18 @@ func TestTimeoutRetries(t *testing.T) {
 	}
 	if got := count(t, h.db, `SELECT count(*) FROM events`); got != 1 {
 		t.Fatalf("hub events = %d; want 1", got)
+	}
+	if got := f.obs.Counter("upload_failures", "read"); got != 1 {
+		t.Errorf("read failures = %d, want 1 from the stalled acknowledgment", got)
+	}
+	if got := f.obs.DurationCount("upload_round_trip_duration"); got < 2 {
+		t.Errorf("round trips observed = %d, want at least the failed batch and the recovery probe", got)
+	}
+	if got := f.obs.Counter("upload_events_inserted"); got != 0 {
+		t.Errorf("upload_events_inserted = %d, want 0: the lost acknowledgment reported no insertions", got)
+	}
+	if got := f.obs.Counter("upload_checkpoint_advances"); got != 1 {
+		t.Errorf("upload_checkpoint_advances = %d, want 1 from the recovery probe", got)
 	}
 }
 
@@ -441,6 +482,12 @@ func TestReconnectAfterHubRestart(t *testing.T) {
 	if got := count(t, db, `SELECT count(*) FROM events`); got != 2 {
 		t.Fatalf("hub events = %d; want 2", got)
 	}
+	if got := f.obs.Counter("upload_events_inserted"); got != 2 {
+		t.Errorf("upload_events_inserted = %d, want 2 across the restart with no duplicates", got)
+	}
+	if got, want := f.obs.Counter("upload_ack_bytes"), size(t, a); got != uint64(want) {
+		t.Errorf("upload_ack_bytes = %d, want the full file %d", got, want)
+	}
 }
 
 func TestBusyHubRetries(t *testing.T) {
@@ -458,6 +505,9 @@ func TestBusyHubRetries(t *testing.T) {
 	_, err = f.sync()
 	if !errors.Is(err, ErrDisconnected) || !strings.Contains(err.Error(), "busy") {
 		t.Fatalf("Sync error = %v; want busy wrapping ErrDisconnected", err)
+	}
+	if got := f.obs.Counter("upload_failures", "retry"); got != 1 {
+		t.Errorf("busy refusals counted as retry failures = %d, want 1", got)
 	}
 	holder.Close()
 
@@ -632,6 +682,63 @@ func TestDeletionBeforeUploadReported(t *testing.T) {
 	}
 }
 
+func TestAcknowledgedSourceDisappearanceReported(t *testing.T) {
+	f := newFixture(t, Options{})
+	h := serve(t, openHubDB(t, filepath.Join(t.TempDir(), "hub.db")), f.reg, hubsync.Options{})
+	f.dialer.point(h.addr)
+	a := filepath.Join(f.dir, "a.jsonl")
+	writeFile(t, a, line(sessA, "one"))
+	f.mustSync()
+	f.mustSync()
+	if got := f.checkpoint(a); got != int64(len(line(sessA, "one"))) {
+		t.Fatalf("checkpoint = %d, want the uploaded bytes acknowledged", got)
+	}
+	if err := os.Remove(a); err != nil {
+		t.Fatal(err)
+	}
+	f.mustSync()
+	f.mustSync()
+	want := fmt.Sprintf("%s: source", a)
+	for _, phrase := range []string{want, "disappeared; the checkpoint is kept and upload resumes if the file returns"} {
+		if n := strings.Count(f.log.String(), phrase); n != 1 {
+			t.Fatalf("log reports %q %d times, want once:\n%s", phrase, n, f.log)
+		}
+	}
+	if strings.Contains(f.log.String(), "never uploaded") {
+		t.Fatalf("an acknowledged source was reported as lost:\n%s", f.log)
+	}
+}
+
+func TestObserverCountsCheckpointPersistFailure(t *testing.T) {
+	f := newFixture(t, Options{})
+	h := serve(t, openHubDB(t, filepath.Join(t.TempDir(), "hub.db")), f.reg, hubsync.Options{})
+	f.dialer.point(h.addr)
+	a := filepath.Join(f.dir, "a.jsonl")
+	writeFile(t, a, line(sessA, "one"))
+	f.mustSync()
+
+	statePath := filepath.Join(f.stateDir, "sources", claudecode.AgentName+".json")
+	if err := os.Remove(statePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(statePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	appendFile(t, a, line(sessA, "two"))
+	if _, err := f.sync(); err == nil {
+		t.Fatal("Sync must fail when the checkpoint cannot persist")
+	}
+	if got := f.obs.Counter("upload_failures", "checkpoint"); got != 1 {
+		t.Errorf("checkpoint failures = %d, want 1 from the failed persist", got)
+	}
+	if got := f.obs.Counter("upload_checkpoint_advances"); got != 1 {
+		t.Errorf("upload_checkpoint_advances = %d, want 1: only the first pass persisted", got)
+	}
+	if got := count(t, h.db, `SELECT count(*) FROM events`); got != 2 {
+		t.Fatalf("hub events = %d, want 2: the hub committed both records", got)
+	}
+}
+
 func TestParseStopIsNotResent(t *testing.T) {
 	f := newFixture(t, Options{})
 	db := openHubDB(t, filepath.Join(t.TempDir(), "hub.db"))
@@ -659,6 +766,15 @@ func TestParseStopIsNotResent(t *testing.T) {
 	}
 	if got := count(t, db, `SELECT count(*) FROM events`); got != 1 {
 		t.Fatalf("hub events = %d; want 1", got)
+	}
+	if got := f.obs.Gauge("watch_sources", "stopped"); got != 1 {
+		t.Errorf("stopped sources gauge = %v, want 1", got)
+	}
+	if got := f.obs.Counter("upload_events_inserted"); got != 1 {
+		t.Errorf("upload_events_inserted = %d, want 1: resends past a stop do not duplicate", got)
+	}
+	if got := f.obs.Counter("upload_batches", "attempted"); got != 2 {
+		t.Errorf("attempted batches = %d, want 2", got)
 	}
 }
 
@@ -901,5 +1017,103 @@ func TestRecordAboveEightMiBSyncs(t *testing.T) {
 func TestBatchWindowHoldsLargestRecord(t *testing.T) {
 	if hubsync.MaxBatchBytes <= hubsync.MaxRecordBytes+1 {
 		t.Fatalf("batch window %d cannot hold a %d-byte record and its newline", hubsync.MaxBatchBytes, hubsync.MaxRecordBytes)
+	}
+}
+
+func TestBacklogProgressReportedWhileDraining(t *testing.T) {
+	f := newFixture(t, Options{})
+	h := serve(t, openHubDB(t, filepath.Join(t.TempDir(), "hub.db")), f.reg, hubsync.Options{})
+	f.dialer.point(h.addr)
+
+	a := filepath.Join(f.dir, "a.jsonl")
+	var big strings.Builder
+	for big.Len() < backlogLogFloor+4096 {
+		fmt.Fprintf(&big, "%s", line(sessA, "backlog payload"))
+	}
+	writeFile(t, a, big.String())
+
+	f.mustSync()
+	f.mustSync()
+
+	logged := f.log.String()
+	if !strings.Contains(logged, "upload backlog for claude-code:") {
+		t.Fatalf("log misses the backlog report:\n%s", logged)
+	}
+	if !strings.Contains(logged, fmt.Sprintf("complete, %d bytes acknowledged", size(t, a))) {
+		t.Fatalf("log misses the completion line with the drained byte count:\n%s", logged)
+	}
+	if !strings.Contains(logged, "rate unknown so far") {
+		t.Fatalf("log misses the unknown-rate report before a window exists:\n%s", logged)
+	}
+	agent := claudecode.AgentName
+	if got := f.obs.Gauge("upload_backlog_bytes", agent); got != 0 {
+		t.Fatalf("backlog gauge after completion = %v; want 0", got)
+	}
+	if got := f.obs.Gauge("upload_backlog_sent_bytes", agent); int64(got) != size(t, a) {
+		t.Fatalf("sent gauge = %v; want %d", got, size(t, a))
+	}
+	if got := f.obs.Gauge("upload_backlog_rate_bytes", agent); got != 0 {
+		t.Fatalf("rate gauge after completion = %v; want 0", got)
+	}
+	if got := f.obs.Gauge("upload_backlog_eta_ms", agent); got != 0 {
+		t.Fatalf("eta gauge after completion = %v; want 0", got)
+	}
+}
+
+func TestBacklogRateAndETA(t *testing.T) {
+	f := newFixture(t, Options{})
+	now := time.Now()
+	mib := int64(1 << 20)
+	f.up.drain = &backlogDrain{
+		start: now.Add(-30 * time.Second),
+		left:  5 * mib,
+		total: 10 * mib,
+		sent:  5 * mib,
+		samples: []drainSample{
+			{at: now.Add(-5 * time.Second), sent: 4 * mib},
+			{at: now, sent: 5 * mib},
+		},
+	}
+	f.up.reportBacklog(now, false)
+
+	agent := claudecode.AgentName
+	rate := f.obs.Gauge("upload_backlog_rate_bytes", agent)
+	if rate <= 0 {
+		t.Fatalf("rate gauge = %v; want a measured rate", rate)
+	}
+	eta := f.obs.Gauge("upload_backlog_eta_ms", agent)
+	wantETA := 25000.0
+	if eta < wantETA*0.99 || eta > wantETA*1.01 {
+		t.Fatalf("eta gauge = %v; want about %v ms", eta, wantETA)
+	}
+	if got := f.obs.Gauge("upload_backlog_bytes", agent); int64(got) != 5*mib {
+		t.Fatalf("backlog gauge = %v; want %d", got, 5*mib)
+	}
+	logged := f.log.String()
+	if !strings.Contains(logged, "bytes/s, about") || !strings.Contains(logged, "left") {
+		t.Fatalf("log misses the rate and estimate:\n%s", logged)
+	}
+}
+
+func TestBacklogSmallAppendStaysQuiet(t *testing.T) {
+	f := newFixture(t, Options{})
+	h := serve(t, openHubDB(t, filepath.Join(t.TempDir(), "hub.db")), f.reg, hubsync.Options{})
+	f.dialer.point(h.addr)
+
+	a := filepath.Join(f.dir, "a.jsonl")
+	writeFile(t, a, line(sessA, "one"))
+	f.mustSync()
+	f.log.mu.Lock()
+	f.log.buf.Reset()
+	f.log.mu.Unlock()
+
+	appendFile(t, a, line(sessA, "two"))
+	f.mustSync()
+	if strings.Contains(f.log.String(), "upload backlog") {
+		t.Fatalf("a small steady-state append must not log backlog lines:\n%s", f.log)
+	}
+	agent := claudecode.AgentName
+	if got := f.obs.Gauge("upload_backlog_bytes", agent); got != 0 {
+		t.Fatalf("backlog gauge after a small drained append = %v; want 0", got)
 	}
 }

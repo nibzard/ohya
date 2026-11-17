@@ -57,6 +57,12 @@ func TestRetrievalPerformanceCeiling(t *testing.T) {
 		"session-token-totals": `SELECT s.id, sum(u.input_tokens), sum(u.output_tokens)
 			FROM sessions s LEFT JOIN session_token_usage u ON u.session_id = s.id
 			GROUP BY s.id`,
+		"project-events-recipe": `SELECT e.id, e.session_id, e.time_ms, e.kind, e.role, substr(e.text, 1, 300) AS excerpt
+			FROM events e WHERE e.id IN (
+			  SELECT ev.id FROM sessions s JOIN events_settled ev ON ev.session_id = s.id
+			  WHERE s.cwd LIKE '%'
+			  ORDER BY ev.time_ms DESC LIMIT 5)
+			ORDER BY e.time_ms DESC`,
 		"annotation-paging": `SELECT e.id FROM events e
 			WHERE e.id > 0 AND NOT EXISTS (
 				SELECT 1 FROM event_annotations a
