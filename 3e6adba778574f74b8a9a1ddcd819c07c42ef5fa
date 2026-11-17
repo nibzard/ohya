@@ -1,0 +1,1 @@
+Context: round-9 closeout on operator instruction (commit all, push, cut v0.2.0). 3e6adba: see commit message; qualification evidence in docs/release-operations.md and CI runs 44085094843 (failed) + 44087678215 (green).
