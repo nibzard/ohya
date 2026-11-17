@@ -49,7 +49,7 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 	if db := os.Getenv("OHYA_MCP_TEST_DB"); db != "" {
-		if err := runMcp(context.Background(), db, os.Getenv("OHYA_MCP_TEST_STATE")); err != nil {
+		if err := runMcp(context.Background(), db, os.Getenv("OHYA_MCP_TEST_STATE"), true); err != nil {
 			fmt.Fprintln(os.Stderr, "ohya mcp test server:", err)
 			os.Exit(1)
 		}

@@ -71,25 +71,8 @@ func NewUsageWriter(cfg UsageWriterConfig) (*UsageWriter, error) {
 }
 
 func usageDir(dir, instanceID string) error {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("observe: create usage state directory: %w", err)
-	}
-	if info, err := os.Lstat(dir); err != nil || !info.IsDir() {
-		return fmt.Errorf("observe: usage state directory %s is not a directory", dir)
-	}
-	instance := filepath.Join(dir, instanceID)
-	if err := os.Mkdir(instance, 0o700); err != nil {
-		if !errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("observe: create usage instance directory: %w", err)
-		}
-		if info, lerr := os.Lstat(instance); lerr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("observe: usage instance path %s exists and is not a usable directory", instance)
-		}
-	}
-	if err := os.Chmod(instance, 0o700); err != nil {
-		return fmt.Errorf("observe: restrict usage instance directory: %w", err)
-	}
-	return nil
+	_, err := EnsureInstanceDir(dir, instanceID)
+	return err
 }
 
 func (w *UsageWriter) Record(r UsageRecord) bool {

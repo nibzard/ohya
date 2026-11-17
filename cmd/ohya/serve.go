@@ -43,11 +43,17 @@ func runServeCommand(args []string, stdout, stderr io.Writer) error {
 		"hub database `path`")
 	state := c.fs.String("state", "",
 		"state `directory` for the device identity, registry, and Tailcat hub identity; defaults to the database directory")
+	observeFlag := c.fs.String("observe", "on",
+		"publish local snapshots and metrics under the state directory's observe/ tree: on or off")
 	if err := c.parse(args, stdout); err != nil {
 		return err
 	}
 	if c.fs.NArg() > 0 {
 		return c.usageErrorf("unexpected argument %q", c.fs.Arg(0))
+	}
+	observeOn, err := parseObserveFlag(*observeFlag)
+	if err != nil {
+		return c.usageErrorf("%s", err.Error())
 	}
 	stateDir := *state
 	if stateDir == "" {
@@ -59,6 +65,7 @@ func runServeCommand(args []string, stdout, stderr io.Writer) error {
 		dbPath:   *db,
 		stateDir: stateDir,
 		stdout:   stdout,
+		observe:  observeOn,
 	})
 }
 
@@ -66,6 +73,7 @@ type serveOptions struct {
 	dbPath   string
 	stateDir string
 	stdout   io.Writer
+	observe  bool
 
 	region *tailcfg.DERPRegion
 }
@@ -89,7 +97,9 @@ func runServe(ctx context.Context, o serveOptions) error {
 		return err
 	}
 
-	hub, err := store.Open(ctx, o.dbPath)
+	telem := startTelemetry(o.stateDir, o.observe, sqliteSampleFiles(o.dbPath), observe.RoleServe)
+	defer telem.close()
+	hub, err := store.Open(ctx, o.dbPath, store.WithObserver(telem.observer()))
 	if err != nil {
 		return err
 	}
@@ -109,16 +119,13 @@ func runServe(ctx context.Context, o serveOptions) error {
 		return err
 	}
 	defer readers.Close()
-	usage := openUsageWriter(o.stateDir, observe.RoleServe)
-	if usage != nil {
-		defer usage.Close()
-	}
-	engine := mcpserver.NewEngine(readers, hub.Writer(), mcpserver.EngineOptions{WriterID: deviceID, Usage: usageSink(usage)})
+	engine := mcpserver.NewEngine(readers, hub.Writer(), mcpserver.EngineOptions{WriterID: deviceID, Usage: telem.usageSink(), Observer: telem.observer()})
 	auth := newPathRecorder(&registry.Authenticator{DB: reg}, node, reg, func(format string, args ...any) {
 		fmt.Fprintf(o.stdout, "ohya: "+format+"\n", args...)
 	})
 	endpoint, err := hubsync.NewEndpoint(hub, auth, hubsync.Options{
-		Remote: engine,
+		Remote:   engine,
+		Observer: telem.observer(),
 	})
 	if err != nil {
 		return err

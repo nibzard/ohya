@@ -1729,3 +1729,29 @@ How to use this file:
   index keeps its deferral (see the 6.6 GB hub note above): add it with the
   next migration, which these tests then exercise as an upgrade from every
   released schema.
+
+- Local observability milestone 3 delivered (2026-11-17, T093,
+  plans/001-runtime-observability.md): internal/observe gained the snapshot
+  publisher (atomic snapshot.json every 10 s plus startup and Close, one
+  history.jsonl sample per minute, 256 KiB/16 MiB caps, truncation fallback
+  that keeps counters), instance discovery (64-instance bound with explicit
+  truncation), PID liveness probing, and runtime resource sampling.
+  CleanStaleInstances runs at startup: at most eight terminated instances
+  per role and seven days of files, and a live or unknown PID is never
+  deleted. cmd/ohya gained `ohya status` (freshness, process state,
+  sources, backlog, findings; exit 3 when anything is stale or degraded)
+  and `ohya metrics` (1m/5m/1h/24h windows; counter deltas over monotonic
+  elapsed time; quantiles need twenty observations; instances are never
+  merged). All four long-running commands take `--observe on|off`; serve
+  and mcp also write usage records, ingest and join do not (they never
+  serve sql). `--remote` on status reports the capability gap as finding
+  remote_status_unsupported; hub-side aggregates are milestone 5 (T098).
+  Open question: a SIGTERM that lands while an ingest poll is in flight
+  can exit 1 instead of 0 — cmd/ohya/ingest.go runIngest returns the
+  ctx-canceled error from poll's RPCs (RegisterSource, Ingest) as a pass
+  failure; a signal between passes exits 0 through the select. The final
+  snapshot still publishes in both cases (deferred telemetry close).
+  Observed once in TestStatusChildCleanShutdownPublishesFinalSnapshot,
+  which therefore accepts exit 0 or 1; three consecutive manual runs
+  exited 0. Fix candidate: treat context.Canceled from poll as a clean
+  stop.

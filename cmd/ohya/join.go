@@ -15,6 +15,7 @@ import (
 
 	"github.com/nibzard/ohya/internal/device"
 	"github.com/nibzard/ohya/internal/hubsync"
+	"github.com/nibzard/ohya/internal/observe"
 	"github.com/nibzard/ohya/internal/transport"
 	"github.com/nibzard/ohya/internal/transport/address"
 	"github.com/nibzard/ohya/internal/uploader"
@@ -24,6 +25,7 @@ import (
 type joinOptions struct {
 	pairOnly   bool
 	allowEmpty bool
+	observe    bool
 	stateDir   string
 	code       string
 	roots      []agentRoot
@@ -55,6 +57,8 @@ func runJoinCommand(args []string, stdout, stderr io.Writer) error {
 	allowEmpty := c.fs.Bool("allow-empty", false, "wait for session roots that do not yet exist")
 	interval := c.fs.Duration("interval", 2*time.Second,
 		"polling `interval` between upload passes")
+	observeFlag := c.fs.String("observe", "on",
+		"publish local snapshots and metrics under the join state directory's observe/ tree: on or off")
 	if err := c.parse(args, stdout); err != nil {
 		return err
 	}
@@ -68,11 +72,16 @@ func runJoinCommand(args []string, stdout, stderr io.Writer) error {
 	if *interval <= 0 {
 		return c.usageErrorf("--interval must be positive")
 	}
+	observeOn, err := parseObserveFlag(*observeFlag)
+	if err != nil {
+		return c.usageErrorf("%s", err.Error())
+	}
 	roots := rootFlags.roots(c.fs)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return runJoin(ctx, joinOptions{
 		allowEmpty: *allowEmpty,
+		observe:    observeOn,
 		stateDir:   *state,
 		code:       code,
 		roots:      roots,
@@ -136,18 +145,21 @@ func runJoin(ctx context.Context, o joinOptions) error {
 	}
 	reportJoinBacklog(o.stateDir, o.roots, o.stderr)
 
+	telem := startTelemetry(o.stateDir, o.observe, nil, observe.RoleJoin)
+	defer telem.close()
 	dial := func(ctx context.Context) (net.Conn, error) { return node.Dial(ctx, hubAddr) }
 	errs := make(chan error, len(o.roots))
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	for _, root := range o.roots {
-		w, err := watch.New(o.stateDir, root.agent, watch.Options{})
+		w, err := watch.New(o.stateDir, root.agent, watch.Options{Observer: telem.observer()})
 		if err != nil {
 			return err
 		}
 		up, err := uploader.New(w, cred, dial, uploader.Options{
 			Agent:    root.agent,
 			Interval: o.interval,
+			Observer: telem.observer(),
 			Log:      o.stderr,
 		})
 		if err != nil {
