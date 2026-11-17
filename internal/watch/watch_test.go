@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const agent = "claude-code"
@@ -372,6 +373,10 @@ func TestInPlaceRewriteDetectedByFingerprint(t *testing.T) {
 	}
 	if err := f.Close(); err != nil {
 		t.Fatalf("close: %v", err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(path, future, future); err != nil {
+		t.Fatalf("chtimes: %v", err)
 	}
 
 	outcome := sole(t, poll(t, w, path))

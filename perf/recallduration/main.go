@@ -9,8 +9,6 @@ import (
 	"sort"
 	"time"
 
-	"golang.org/x/sys/unix"
-
 	"github.com/nibzard/ohya/internal/events"
 	"github.com/nibzard/ohya/internal/fixgen"
 	"github.com/nibzard/ohya/internal/mcpserver"
@@ -72,17 +70,6 @@ func summarize(name string, samples []sample) string {
 	return fmt.Sprintf("%-26s n=%3d cold=%8.1fms p50=%8.1fms p95=%8.1fms max=%8.1fms timeouts=%d rows=%d result=%dB",
 		name, len(samples), samples[0].totalMS, quantile(totals, 0.5), quantile(totals, 0.95),
 		max, timeouts, rows, bytes)
-}
-
-func evictCache(path string) {
-	for _, p := range []string{path, path + "-wal", path + "-shm"} {
-		f, err := os.Open(p)
-		if err != nil {
-			continue
-		}
-		_ = unix.Fadvise(int(f.Fd()), 0, 0, unix.FADV_DONTNEED)
-		f.Close()
-	}
 }
 
 func main() {

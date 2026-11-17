@@ -151,14 +151,25 @@ func TestPublisherHistoryAppendsPerIntervalAndPrunesByBytes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPublisher: %v", err)
 	}
-	time.Sleep(80 * time.Millisecond)
-	publisher.Close()
 	path := filepath.Join(publisher.Dir(), historyFileName)
+	var lines []string
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines = strings.Split(strings.TrimSpace(string(raw)), "\n")
+		if len(lines) >= 2 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	publisher.Close()
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
 	if len(lines) < 2 {
 		t.Fatalf("history must append one sample per interval, got %d lines", len(lines))
 	}

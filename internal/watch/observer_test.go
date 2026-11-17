@@ -106,7 +106,7 @@ func TestObserverCountsPendingReadBytes(t *testing.T) {
 	appendFile(t, a, strings.Repeat("y", 200))
 	var pending Outcome
 	for _, o := range poll(t, w, a) {
-		if o.Path == a {
+		if o.Path == normalizePath(a) {
 			pending = o
 		}
 	}
