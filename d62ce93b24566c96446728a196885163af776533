@@ -1,0 +1,8 @@
+Context for the recall evaluation set (T107, plan 003 R5).
+
+Why markers, not pinned event IDs: markers keep the corpus editable
+without repinning; TestRecallDeterministic pins ID and rank stability
+per corpus revision instead. Why a tool-output answer question: T112
+(plan 004 O6) is unblocked only once the set can measure recall with
+tool outputs excluded from the index; the unindex test proves it can.
+Rationale lives in testdata/recall/README.md and NOTES.md.
