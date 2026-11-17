@@ -27,6 +27,8 @@ How to use this file:
   - ChatGPT desktop: no reliable local transcripts; official export only — deferred.
   - Cowork local sessions may write JSONL under `~/Library/Application Support/Claude/local-agent-mode-sessions/` — absent on current install; check if usage starts.
 
+- ohya does not use Tailcat (verified 2026-11-16). ADR 0002 calls the embedded `tailscale.com/tsnet` node plus an in-process Headscale "Tailcat". The real Tailcat is `github.com/tailscale/tailcat` (BSD-3, v0.x, no API or wire-format stability promise). It needs no control plane: the server prints a `tc…` address with its WireGuard key, a pre-shared key, and DERP region data, and the client dials it. Rendezvous and fallback relay use Tailscale's public DERP map (`https://tailcat.dev/derpmap.json`, no account) or a self-hosted `derper`. The tsnet plus Headscale design is why a hub needs a reachable control URL and a trusted TLS certificate. Spike results (2026-11-16, `/tmp/tcspike`, library `Server.Listen` on the VM, CLI client on the MacBook with Tailscale quit): v0.7.0 builds and its tests pass against our `tailscale.com` v1.104.4 pin; the spike binary is 30 MB; a saved node key, pre-shared key, and region keep one 233-character address across restarts (`Server.Start` does not write back a generated key). Same LAN: direct path found automatically; one 32 MiB upload ran at 12.4 Mbit/s. Phone hotspot: no direct path in 30 s through the VM's double NAT (Proxmox, then UniFi); relay only, 3.1 to 3.3 Mbit/s, 65 to 265 ms. The MacBook's history is 4.46 GB of raw records, so a first upload over the relay takes about 3 hours. gzip shrinks a 20,000-record sample only 1.9 times. Tailcat v0.7.0 hardcodes a random UDP listen port and builds with `ts_omit_portmapper`, so a router port forward or UPnP cannot help without an upstream change. Sources: https://github.com/tailscale/tailcat, https://pkg.go.dev/github.com/tailscale/tailcat.
+
 - Codex `archived_sessions/` ingestion gap (verified 2026-11-15): `~/.codex/archived_sessions` is a sibling of `sessions/` and holds rollouts moved out of it (6 plain-JSONL files, 1.5 MB, Feb–Sep 2026, none duplicated under `sessions/`; the directory was absent again on 2026-11-16 while `sessions/` remained). Resolved 2026-11-16 (T081): ohya now watches `$CODEX_HOME/archived_sessions` as a second default codex root on both ingest and join (one watcher per agent covers both roots, so a file moving between them keeps its checkpoint by file identity), and a watched source whose path stops being statable prints one diagnostic per disappearance on both paths instead of stopping silently. Watching all of `~/.codex` stays wrong: it would ingest `session_index.jsonl`, `history.jsonl`, and vendor JSONL.
 
 - Competitive clock (observed 2026-11-15, openai/codex main): Codex is landing first-party memory (`memories/write`; `memories_1.sqlite` now present in `~/.codex`), a SQLite-backed `message-board` + message-board-mcp crate, and `external-agent-migration` importing Claude Code sessions. Cross-agent, local-first, shared remain ohya's wedge; factor into launch sequencing. Their session search still greps raw JSONL (ripgrep with JSON-escaped terms, search.rs) plus a bolted-on SQLite listing index — converging on ohya's design from both sides.
@@ -1789,3 +1791,14 @@ How to use this file:
     emitted from the hubsync endpoint yet — the EventSink reaches
     uploader, mcp engine, and local ingest only; that plus remote
     aggregates is milestone 5 (T098).
+
+- Pi Durable comparison priorities (2026-11-16):
+  1. Measure whether agents retrieve useful answers. Use known questions
+     and expected Event IDs. Track latency, result size, and failures
+     (`plans/003-recall-tool-improvements.md`).
+  2. Protect the existing recovery contract through storage changes.
+     Preserve commit-before-acknowledgment ordering and tests for lost
+     acknowledgments, interrupted commits, process crashes, and hub restarts.
+  3. Improve handoffs with source references. Retrieve decisions, failed
+     attempts, and unfinished work. Cite Events, then check the current
+     repository before acting.
