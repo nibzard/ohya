@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nibzard/ohya/internal/claudecode"
+	"github.com/nibzard/ohya/internal/observe"
 )
 
 var rootSpec = commandSpec{
@@ -20,7 +21,7 @@ var rootSpec = commandSpec{
 	usageLine: "ohya <command> [flags]",
 	description: "ohya captures Claude Code, Codex, and Pi agent sessions into one hub-owned SQLite database with full-text search, serves the read-only sql and bounded annotate MCP tools to coding agents, and synchronizes devices over an encrypted tailnet through serve and join. " +
 		"No command prompts for input: ohya is non-interactive by design.\n" +
-		"Exit codes: 0 success, 1 failure, 2 usage error, 3 degraded (only ingest --once: at least one source failed or stopped).",
+		"Exit codes: 0 success, 1 failure, 2 usage error, 3 degraded (ingest --once: at least one source failed or stopped; status and metrics: partial, stale, or degraded observation).",
 	argsTitle: "Commands",
 	args: `setup      configure memory services and installed agents
 uninstall  remove owned integrations and services; preserve memory
@@ -31,6 +32,8 @@ mcp        serve the sql and annotate MCP tools on stdio
 devices    manage device pairing and revocation
 rederive   rebuild normalized rows and events_fts after a parser upgrade
 doctor     run read-only health checks the sql tool cannot answer
+status     report runtime state from published local snapshots
+metrics    report counter rates and durations over a time window
 usage      report how agents use the sql and annotate tools
 version    print the build, parser, and schema versions`,
 	examples: []string{"ohya ingest --once", "ohya mcp"},
@@ -72,6 +75,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runRederiveCommand(rest, stdout, stderr)
 	case "doctor":
 		return runDoctorCommand(rest, stdout, stderr)
+	case "status":
+		return runStatusCommand(rest, stdout, stderr)
+	case "metrics":
+		return runMetricsCommand(rest, stdout, stderr)
 	case "usage":
 		return runUsageCommand(rest, stdout, stderr)
 	case "version":
@@ -112,6 +119,8 @@ func runIngestCommand(args []string, stdout, stderr io.Writer) error {
 	once := c.fs.Bool("once", false, "run exactly one pass and exit")
 	asJSON := c.fs.Bool("json", false,
 		"print one JSON object instead of the text summary; needs --once (docs/adr/0005)")
+	observeFlag := c.fs.String("observe", "on",
+		"in continuous mode, publish local snapshots and metrics under the state directory's observe/ tree: on or off")
 	maxRecordBytes := c.fs.Int64("max-record-bytes", claudecode.DefaultMaxRecordBytes,
 		"maximum `bytes` of one record's JSON text; a larger record stops its source (docs/adr/0004)")
 	if err := c.parse(args, stdout); err != nil {
@@ -129,6 +138,10 @@ func runIngestCommand(args []string, stdout, stderr io.Writer) error {
 	if *maxRecordBytes <= 0 {
 		return c.usageErrorf("--max-record-bytes must be positive")
 	}
+	observeOn, err := parseObserveFlag(*observeFlag)
+	if err != nil {
+		return c.usageErrorf("%s", err.Error())
+	}
 	roots := rootFlags.roots(c.fs)
 	stateDir := *state
 	if stateDir == "" {
@@ -136,6 +149,11 @@ func runIngestCommand(args []string, stdout, stderr io.Writer) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	var telem *telemetry
+	if !*once {
+		telem = startTelemetry(stateDir, observeOn, sqliteSampleFiles(*db), observe.RoleIngest)
+		defer telem.close()
+	}
 	err = runIngest(ctx, ingestOptions{
 		dbPath:         *db,
 		stateDir:       stateDir,
@@ -147,6 +165,7 @@ func runIngestCommand(args []string, stdout, stderr io.Writer) error {
 		jsonOut:        *asJSON,
 		stdout:         stdout,
 		stderr:         stderr,
+		observer:       telem.observer(),
 	})
 	if err != nil && *asJSON && !errors.Is(err, errDegraded) {
 		return printJSONError(stdout, ingestSpec.name, err)

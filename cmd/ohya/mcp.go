@@ -45,11 +45,17 @@ func runMcpCommand(args []string, stdout, stderr io.Writer) error {
 		"state `directory` for the device identity; defaults to the database directory, with --remote to the join state directory")
 	remote := c.fs.Bool("remote", false,
 		"serve the tools from the joined hub over the tailcat transport instead of a local database")
+	observeFlag := c.fs.String("observe", "on",
+		"publish local snapshots and metrics under the state directory's observe/ tree: on or off")
 	if err := c.parse(args, stdout); err != nil {
 		return err
 	}
 	if c.fs.NArg() > 0 {
 		return c.usageErrorf("unexpected argument %q", c.fs.Arg(0))
+	}
+	observeOn, err := parseObserveFlag(*observeFlag)
+	if err != nil {
+		return c.usageErrorf("%s", err.Error())
 	}
 	stateDir := *state
 	if *remote {
@@ -62,18 +68,20 @@ func runMcpCommand(args []string, stdout, stderr io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if *remote {
-		return runMcpRemote(ctx, stateDir)
+		return runMcpRemote(ctx, stateDir, observeOn)
 	}
-	return runMcp(ctx, *db, stateDir)
+	return runMcp(ctx, *db, stateDir, observeOn)
 }
 
-func runMcp(ctx context.Context, dbPath, stateDir string) error {
+func runMcp(ctx context.Context, dbPath, stateDir string, observeOn bool) error {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
 		return fmt.Errorf("create database directory: %w", err)
 	}
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return fmt.Errorf("create state directory: %w", err)
 	}
+	telem := startTelemetry(stateDir, observeOn, sqliteSampleFiles(dbPath), observe.RoleMCP)
+	defer telem.close()
 	hub, err := store.Open(ctx, dbPath)
 	if err != nil {
 		return err
@@ -88,43 +96,12 @@ func runMcp(ctx context.Context, dbPath, stateDir string) error {
 	if err != nil {
 		return err
 	}
-	usage := openUsageWriter(stateDir, observe.RoleMCP)
-	if usage != nil {
-		defer usage.Close()
-	}
-	server := mcpserver.New(mcpserver.NewEngine(readers, hub.Writer(), mcpserver.EngineOptions{WriterID: deviceID, Usage: usageSink(usage)}),
+	server := mcpserver.New(mcpserver.NewEngine(readers, hub.Writer(), mcpserver.EngineOptions{WriterID: deviceID, Usage: telem.usageSink(), Observer: telem.observer()}),
 		mcpserver.EngineOptions{WriterID: deviceID})
 	return mcpserver.Run(ctx, server)
 }
 
-func usageSink(w *observe.UsageWriter) mcpserver.UsageSink {
-	if w == nil {
-		return nil
-	}
-	return w
-}
-
-func openUsageWriter(stateDir string, role observe.Role) *observe.UsageWriter {
-	_, revision, dirty, _ := buildIdentity()
-	clock := observe.NewSystemClock()
-	instance, err := observe.NewInstance(stateDir, revision, dirty == "true", clock, role)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ohya: usage records disabled: %v\n", err)
-		return nil
-	}
-	writer, err := observe.NewUsageWriter(observe.UsageWriterConfig{
-		Dir:      filepath.Join(stateDir, "observe"),
-		Instance: instance,
-		Clock:    clock,
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ohya: usage records disabled: %v\n", err)
-		return nil
-	}
-	return writer
-}
-
-func runMcpRemote(ctx context.Context, stateDir string) error {
+func runMcpRemote(ctx context.Context, stateDir string, observeOn bool) error {
 	deviceID, err := device.LoadOrCreate(stateDir)
 	if err != nil {
 		return err
@@ -143,15 +120,13 @@ func runMcpRemote(ctx context.Context, stateDir string) error {
 	if err != nil {
 		return err
 	}
-	usage := openUsageWriter(stateDir, observe.RoleMCP)
-	if usage != nil {
-		defer usage.Close()
-	}
+	telem := startTelemetry(stateDir, observeOn, nil, observe.RoleMCP)
+	defer telem.close()
 	node := address.NewDevice(address.DeviceOptions{})
 	session := hubsync.NewRemoteSession(
 		func(ctx context.Context) (net.Conn, error) { return node.Dial(ctx, hubAddr) },
 		cred.Secret,
-		hubsync.RemoteSessionOptions{DeviceID: deviceID, Usage: usageSink(usage)})
+		hubsync.RemoteSessionOptions{DeviceID: deviceID, Usage: telem.usageSink(), Observer: telem.observer()})
 	defer session.Close()
 	server := mcpserver.New(session, mcpserver.EngineOptions{WriterID: deviceID})
 	err = mcpserver.Run(ctx, server)

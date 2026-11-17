@@ -19,6 +19,8 @@ make build
 ./bin/ohya devices revoke ID   # revoke a device, final for its identity
 ./bin/ohya rederive            # rebuild normalized rows after a parser upgrade
 ./bin/ohya doctor              # run read-only health checks and report findings
+./bin/ohya status              # runtime state from published local snapshots
+./bin/ohya metrics             # counter rates and durations over a time window
 ./bin/ohya usage               # report how agents use the sql and annotate tools
 ./bin/ohya version             # print the build, parser, and schema versions
 ```
@@ -28,12 +30,16 @@ Help is a request, not an error: `ohya`, `ohya --help`, `ohya -h`, and
 usage template — usage line, description, arguments, flags, examples — on
 stdout and exit 0. A usage error — unknown subcommand, bad flag, missing
 argument — prints one line on stderr that names the matching `--help` and
-exits 2, the flag package convention; every other failure exits 1. One
-command reports degradation through the exit code: `ohya ingest --once`
+exits 2, the flag package convention; every other failure exits 1. Three
+commands report degradation through the exit code: `ohya ingest --once`
 exits 3 when the pass completed but at least one source failed or stopped,
 so a script or agent that checks the exit code does not read missing data
 as success; the stdout summary carries the failed and stopped counts and
-stderr keeps the per-source diagnostics. Flags
+stderr keeps the per-source diagnostics. `ohya status` and `ohya metrics`
+also exit 3 when the result is valid but partial, stale, or degraded —
+a missing publisher, a stale snapshot, a broken sample, or a window the
+history does not fully cover — while the JSON stays parseable with data
+present and no top-level command error. Flags
 are spelled with two dashes (`--db`); the parser also accepts one dash.
 Flags may appear before or after positional arguments:
 `ohya join --state DIR CODE` and `ohya join CODE --state DIR` both parse.
@@ -371,6 +377,69 @@ window defaults to the last 30 days and ends now; `--since` and `--until`
 move it (`--since` takes `30d` or a Go duration, `--until` an RFC 3339
 time). The command takes the same `--db` and `--state` flags as `ingest`
 and opens the database read-only.
+
+## Local observability
+
+Every long-running ohya process — `serve`, `join`, continuous `ingest`,
+and `mcp` — publishes process-local observations under
+`<state>/observe/<instance-id>/`, where the instance id is random per
+process start. The directory holds `snapshot.json` (the current sample,
+replaced atomically every ten seconds, at startup, and at clean shutdown),
+`history.jsonl` (one aggregate sample per minute, retained 24 hours and at
+most 16 MiB), and, for processes that serve the tools, the usage records
+above. Directories are `0700`, files `0600`, and no publication fsyncs:
+this data is disposable. Counters are cumulative since process start and
+reset on restart; a failed publication is counted and retried on the next
+tick and never blocks ingestion, syncing, or queries. On startup a
+publisher removes only provably terminated instances of its own kind,
+keeping at most eight per role and seven days of files, and never removes
+a live instance. Pass `--observe off` to any long-running command to run
+without publication for baseline measurements.
+
+A snapshot older than thirty seconds is stale. A valid recent snapshot is
+evidence of recent activity, not proof that the process is alive, so
+liveness is probed separately; a pid that no process answers reads as
+`dead`, and a pid held by some process with no fresh publication reads as
+`unknown` — pid reuse and a stalled process are indistinguishable without
+kernel start-time data.
+
+### `ohya status`
+
+`ohya status` reads the cached snapshots and the saved setup connection;
+it never contacts the hub, starts a service, migrates a database, or
+repairs files. It resolves the state directory the way doctor does —
+`--state` wins, otherwise the database directory, switching to
+`<state>/join` when `setup/connection.json` selects remote memory — and
+`--role` and `--instance` narrow the report when several processes
+publish. Output carries the CLI identity, topology (mode, state
+directory, agent-root counts without paths, owned service loaded/running
+facts), storage sizes with their observation time (a joined client never
+reports its old local database as the hub), one section per instance with
+freshness, liveness, source-state gauges, pending and upload backlog in
+bytes, resource readings, and the raw counters, gauges, duration
+histograms, and resources from the snapshot. Findings carry a stable
+code, severity, evidence, and hint: `instance_terminated`,
+`instance_stale`, `instance_unreadable`, `instance_unsupported_version`,
+`no_instances`, `multiple_instances`, `pending_backlog`,
+`upload_backlog`, `sources_stopped`, `discovery_truncated`,
+`remote_status_unsupported`. Instances are never merged; a null value and
+a zero value stay distinct. `--remote` reports the capability gap
+honestly: this build cannot fetch hub-side aggregates yet (plan 001
+milestone 5). Exit 0 means every selected instance is fresh with no
+degraded component; exit 3 means the result is valid but partial, stale,
+or degraded.
+
+### `ohya metrics`
+
+`ohya metrics --window 1m|5m|1h|24h` reads the bounded history samples,
+not transcripts. Per instance it reports the sample count, observed and
+requested durations, missing-minute gaps, counter deltas between the
+first and last sample in the window, rates per second whose denominator
+is the monotonic time the process actually ran, and duration histogram
+deltas with p50/p95 bucket estimates — null below twenty observations.
+Percentiles are never averaged between instances, and a window the
+history does not cover is reported as partial rather than manufactured
+from less data. Exit 3 marks a sample-less, gapped, or partial window.
 
 ## Setup and installer
 
