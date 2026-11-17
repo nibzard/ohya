@@ -1033,7 +1033,9 @@ How to use this file:
   [plans/001-runtime-observability.md](plans/001-runtime-observability.md).
   Defines agent-facing status/metrics/logs/diagnose, precise cursor and latency
   semantics, bounded private telemetry, authenticated remote hub aggregates,
-  phased delivery and overhead/failure-path acceptance gates. Proposed only.
+  phased delivery and overhead/failure-path acceptance gates. Milestones 1–4
+  delivered 2026-11-16/17 (T090–T093, T096); milestones 5 (T098) and 6
+  (T097) are open.
 
 - Migration recovery copy cost on a slow single disk (observed 2026-11-16):
   the workspaces migration's forced full recovery copy (see the 6.6 GB hub
@@ -1813,3 +1815,71 @@ How to use this file:
   granularity on runner storage, a fixed 80 ms ticker window). CI macOS
   runners again proved narrower than local linux: run make check on all
   three platforms before cutting a release, not only linux.
+
+- Doctor hub-unit validation (2026-11-17, T134): doctor now parses systemd
+  user units itself instead of trusting only setup receipts — the live hub
+  ran `ohya-hub.service`, a hand-named unit no receipt covers, whose
+  ExecStart still passed the flags T122 removed (--control-listen,
+  --stun-listen, --tls-cert, --tls-key, --control-url), while the running
+  serve (PID 45514) executed the pre-v0.2.0 binary replaced on disk
+  (/proc/45514/exe "(deleted)"); installed v0.2.0 doctor exited 0 over it.
+  Facts future work must keep:
+  - `setup.ScanServeUnits(dir, bin)` claims a unit only when its ExecStart
+    executable resolves (EvalSymlinks) to the RUNNING binary and the first
+    argument is `serve` — a dev-build doctor never reports an installed
+    deployment, and units for other binaries never fire. The unit NAME is
+    irrelevant (ohya-hub.service, ohya-serve.service, anything else).
+  - Flag validation shares the real serve flag set through
+    newServeFlagSet (cmd/ohya/serve.go), so the check cannot drift from the
+    command; a removed flag surfaces as the flag package's own error text
+    ("flag provided but not defined: -control-listen").
+  - The replaced-executable check reads systemctl MainPID (real unit name
+    required) then /proc/<pid>/exe for the " (deleted)" suffix — Linux only;
+    darwin hub deployments (launchd plists) are NOT scanned, and the check
+    degrades silently where /proc or systemctl is absent. Covering plists is
+    unwritten work; no live macOS hub exists as evidence.
+  - Remedies differ by unit name: the setup-owned ohya-serve.service gets
+    "rerun ohya setup --hub to rewrite"; a hand-named unit additionally gets
+    the retire step (systemctl --user disable --now <unit>).
+  - The e2e hook stays error-only; the PID query is the overridable
+    hubUnitMainPID var (default setup.ServiceMainPID). Tests must stub it —
+    the default would invoke real systemctl for injected unit names.
+
+- Live-hub performance tracking (2026-11-17, T140): perf/livehub is the
+  recurring tracker for the deployed hub, checked in and tested; on the
+  hub VM a cron entry (`*/15 * * * *`) runs `-mode capture` then
+  `-mode report` against `~/.ohya`, keeping the standing report at
+  `~/.ohya/perf/report.md` (binary at `~/.ohya/perf/bin/livehub`,
+  rebuild with `go build -o ~/.ohya/perf/bin/livehub ./perf/livehub`
+  after checkout changes). Capture reads `history.jsonl` and
+  `usage.jsonl` only — no database opens, no new services; the 15-minute
+  cadence beats both retention windows (24 h history samples, eight
+  retained terminated instances per role). Rows and comparison rules are
+  documented in docs/performance.md "Live-hub trend". First capture
+  (655 records, 12 instances, 2026-11-17) already states three findings:
+  peak WAL 160.5 MiB beyond the round-8 ceiling plus allowed variation
+  (live hub: 2.7 M events, 16 GiB database, continuous ingest — the
+  matrix basis was 168 k to 1 M events; watch checkpoint behavior, not a
+  matrix failure); sql p95 993 ms with n 9 over the 250 ms screening
+  budget (agent-driven mix, zero timeouts); and the standing gap that
+  the serve process (PID 45514) predates v0.2.0, publishes no observe
+  data, and therefore contributes no hub-side metrics until the operator
+  restart (T126). Ingest-side numbers from the v0.2.0 ingest daemon on
+  day one: pass p50/p95 76.5/121 ms over 14,330 passes, sqlite txn
+  p50/p95 8.05/46.7 ms, publish p50/p95 0.30/0.48 ms — inside the
+  T070/T071 context band.
+
+- Revocation teardown race, fixed 2026-11-17: TestRevocationCancelsInFlightRequest
+  (internal/registry) failed once under full-suite parallel load because the
+  endpoint could still write one error frame between a session's cancel() and
+  conn.Close() (closeDevice orders cancel-then-close; a descheduled closer let
+  the woken handler reply first). Root cause fixed in internal/hubsync/endpoint.go:
+  connSession now guards every protocol write with the session context, so a
+  cancelled session sends nothing and teardown owns the connection. If a similar
+  "request completed after revocation" flake appears again, check for writes
+  bypassing connSession (the Serve-loop busy rejection is pre-session and stays
+  raw by design). Same load exposed a second, test-side race:
+  TestObserverCountsHubBatchStages asserted hub_ack_write_duration, which the
+  server records after the ack bytes are already on the wire, so a preempted
+  server goroutine loses the assertion; that one counter now uses
+  observertest.Recorder.AwaitDurationCount.

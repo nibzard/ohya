@@ -15,6 +15,7 @@
 !/perf/devratio/
 !/perf/zstdbench/
 !/perf/recallduration/
+!/perf/livehub/
 # local observability state (usage records, snapshots) written by ohya itself
 /observe/
 # memory-e2e gate output: isolated database, client state, traces

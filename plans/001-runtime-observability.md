@@ -1,6 +1,12 @@
 # Runtime observability for ohya
 
-Status: proposed implementation specification. Priority P1; effort L, delivered in small increments. Planned against `33df75d`, 2026-11-15. No implementation is included in this document.
+Status: in delivery. Milestones 1 through 4 are implemented (T090–T093,
+T096, delivered 2026-11-16 to 2026-11-17): recorder and schemas, path
+instrumentation, snapshots with `ohya status` and `ohya metrics`, and
+logs with `ohya logs` and `ohya diagnose`. Milestone 5, remote aggregates
+(T098), and milestone 6, the overhead baseline (T097), are open.
+Priority P1; effort L, delivered in small increments. Planned against
+`33df75d`, 2026-11-15.
 
 ## Outcome
 
@@ -16,7 +22,7 @@ ohya logs --since 10m --limit 100 --json
 ohya diagnose --output ./ohya-diagnostics.json
 ```
 
-These are proposed commands, not existing interfaces. Ship their help, documentation, and tests with their implementation. Remote status is a separate delivery milestone; older installations must report unsupported capabilities honestly.
+The local commands exist since milestones 3 and 4, with their help, documentation, and tests. Remote status is milestone 5 and is not delivered yet; `ohya status --remote` reports that capability gap. Older installations must report unsupported capabilities honestly.
 
 ## Constraints and current evidence
 

@@ -37,8 +37,8 @@ func TestObserverCountsHubBatchStages(t *testing.T) {
 	if got := obs.DurationCount("hub_gate_wait_duration"); got != 1 {
 		t.Errorf("gate waits = %d, want 1", got)
 	}
-	if got := obs.DurationCount("hub_ack_write_duration"); got != 1 {
-		t.Errorf("ack writes = %d, want 1", got)
+	if !obs.AwaitDurationCount("hub_ack_write_duration", 1, 10*time.Second) {
+		t.Errorf("ack writes = %d, want 1", obs.DurationCount("hub_ack_write_duration"))
 	}
 	if got := obs.Counter("parse_records", "attempted"); got != 16 {
 		t.Errorf("records attempted = %d, want 16", got)

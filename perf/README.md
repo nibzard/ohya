@@ -12,6 +12,33 @@ leave the machine it was trained on.
 
 Shared helpers live in `perf/hubdata`.
 
+## Live-hub performance tracking
+
+```sh
+go run ./perf/livehub -mode capture -state ~/.ohya
+go run ./perf/livehub -mode report -state ~/.ohya
+go run ./perf/livehub -mode report -state ~/.ohya -docs docs/performance.md
+```
+
+Recurring tracking of the deployed hub (T140; the dated trend rows and
+comparison rules live in docs/performance.md, "Live-hub trend"). Unlike
+the programs above, `livehub` reads no database: it reads each observe
+instance's `history.jsonl` and `usage.jsonl` under the state directory
+and appends new records to `<state>/perf/captures.jsonl` (capture), then
+aggregates daily p50/p95 rows, compares them against the round-8
+workload-matrix budgets, and states regressions (report). On the hub VM
+a cron entry runs both modes every 15 minutes and keeps the standing
+report at `~/.ohya/perf/report.md`; rebuild the cron binary after
+checkout changes with:
+
+```sh
+go build -o ~/.ohya/perf/bin/livehub ./perf/livehub
+```
+
+The capture log, capture state, and reports stay outside the repository
+(`<state>/perf/`, mode 0600); anything written under `perf/` in a
+checkout is already gitignored.
+
 ## FTS index share by event category
 
 ```sh

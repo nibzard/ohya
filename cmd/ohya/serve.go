@@ -33,36 +33,49 @@ var serveSpec = commandSpec{
 	examples:  []string{"ohya serve", "ohya serve --db /srv/ohya/hub.db --state /srv/ohya"},
 }
 
+type serveFlagSet struct {
+	c       *commandFlagSet
+	db      *string
+	state   *string
+	observe *string
+}
+
+func newServeFlagSet(home string) *serveFlagSet {
+	c := newCommandFlags(serveSpec)
+	s := &serveFlagSet{c: c}
+	s.db = c.fs.String("db", filepath.Join(home, ".ohya", "hub.db"),
+		"hub database `path`")
+	s.state = c.fs.String("state", "",
+		"state `directory` for the device identity, registry, and Tailcat hub identity; defaults to the database directory")
+	s.observe = c.fs.String("observe", "on",
+		"publish local snapshots and metrics under the state directory's observe/ tree: on or off")
+	return s
+}
+
 func runServeCommand(args []string, stdout, stderr io.Writer) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("resolve home directory: %w", err)
 	}
-	c := newCommandFlags(serveSpec)
-	db := c.fs.String("db", filepath.Join(home, ".ohya", "hub.db"),
-		"hub database `path`")
-	state := c.fs.String("state", "",
-		"state `directory` for the device identity, registry, and Tailcat hub identity; defaults to the database directory")
-	observeFlag := c.fs.String("observe", "on",
-		"publish local snapshots and metrics under the state directory's observe/ tree: on or off")
-	if err := c.parse(args, stdout); err != nil {
+	s := newServeFlagSet(home)
+	if err := s.c.parse(args, stdout); err != nil {
 		return err
 	}
-	if c.fs.NArg() > 0 {
-		return c.usageErrorf("unexpected argument %q", c.fs.Arg(0))
+	if s.c.fs.NArg() > 0 {
+		return s.c.usageErrorf("unexpected argument %q", s.c.fs.Arg(0))
 	}
-	observeOn, err := parseObserveFlag(*observeFlag)
+	observeOn, err := parseObserveFlag(*s.observe)
 	if err != nil {
-		return c.usageErrorf("%s", err.Error())
+		return s.c.usageErrorf("%s", err.Error())
 	}
-	stateDir := *state
+	stateDir := *s.state
 	if stateDir == "" {
-		stateDir = filepath.Dir(*db)
+		stateDir = filepath.Dir(*s.db)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return runServe(ctx, serveOptions{
-		dbPath:   *db,
+		dbPath:   *s.db,
 		stateDir: stateDir,
 		stdout:   stdout,
 		observe:  observeOn,

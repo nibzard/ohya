@@ -1291,6 +1291,68 @@ with the shared runners' disk contention, while the parse and query rows
 are stable. Treat a CI delta as a signal to reproduce locally with
 `make bench-save` on both commits, not as a verdict.
 
+## Live-hub trend
+
+Recurring tracking of the production hub (v0.2.0 instrumentation),
+separate from the matrix baselines above: those measure fixed workloads
+on controlled fixtures; this section measures what the deployed hub
+does each day. The first rows below were captured on 2026-11-17.
+
+Mechanics:
+
+- `perf/livehub -mode capture` reads every instance's `history.jsonl`
+  and `usage.jsonl` under the state directory's `observe/` tree and
+  appends new records to `<state>/perf/captures.jsonl`. A cron entry on
+  the hub VM runs capture and then report every 15 minutes; that cadence
+  beats both retention windows (24 h of history samples, eight retained
+  terminated instances per role).
+- `perf/livehub -mode report` aggregates the log per UTC day:
+  histogram-delta p50/p95 for ingest pass duration, SQLite transaction
+  duration, and instrumentation publish duration (all bucket estimates,
+  as in `ohya metrics`), plus exact per-call percentiles for sql tool
+  latency from usage records. It writes the standing report to
+  `<state>/perf/report.md`; `-docs <path>` refreshes the rows below
+  inside a checkout. Captured records older than 35 days are pruned;
+  the committed rows are the permanent record.
+
+Comparison rules, each with its source:
+
+- sql timeouts: the round-8 loaded-query budget allows zero timeouts
+  against the 5 s deadline; any timeout is a regression.
+- sql p95: screened against the 250 ms round-8 wide-match budget. Live
+  calls are an agent-driven mix, not the fixed matrix patterns, so this
+  is a screening threshold, not a matrix verdict.
+- Peak WAL: the 64 MiB round-8 ceiling with its 50% allowed variation.
+  The matrix basis is sustained mixed read and write at 168 k to 1 M
+  events; the live hub held 2.7 M events in a 16 GiB database under
+  continuous ingest on 2026-11-17, so treat an exceedance as a signal
+  to check checkpoint behavior, not as a matrix failure.
+- RSS by role: the round-8 ceilings (serve 192 MiB, join 128 MiB). The
+  ingest daemon has no round-8 budget because the matrix has no ingest
+  role; its value is context.
+- Ingest pass duration and SQLite transaction duration have no round-8
+  budget. Context band from T070/T071: a no-op pass costs 0.02 s at 461
+  sources, a one-turn pass 0.13 s, a live commit 5–33 ms, a register
+  commit about 43 ms. Regression rule: a day whose p95 exceeds twice
+  the deployment's recorded daily minimum for that metric is stated as
+  a regression.
+- The hub `serve` process predates v0.2.0 and publishes no observe
+  data. Until the operator restarts it onto an instrumented build
+  (backlog T126), hub-side metrics are absent and each day states that
+  gap.
+
+<!-- livehub:rows:begin -->
+
+| Date | Coverage | Ingest pass p50/p95 ms (n) | SQLite txn p50/p95 ms (n) | Publish p50/p95 ms (n) | sql p50/p95 ms (n; timeouts) | Peak WAL MiB | Max RSS MiB (role) | Verdict |
+|---|---|---|---|---|---|---|---|---|
+| 2026-11-17 | ingest 1, mcp 11, 646 samples | 76.5 / 121 (n 14330) | 8.05 / 46.7 (n 1636) | 0.30 / 0.48 (n 4018) | 302 / 993 (n 9; 0) | 160.5 | ingest 99.6, mcp 38.4 | regression |
+
+- 2026-11-17: watch: sql p95 993 ms above the 250 ms round-8 wide-match screening budget (agent-driven mix, not the fixed matrix patterns; n 9)
+- 2026-11-17: regression: peak WAL 160.5 MiB beyond the 64 MiB ceiling plus the 50% allowed variation (T070/T074 spread 27-65 MiB)
+- 2026-11-17: note: no serve instance published history this day; hub-side metrics absent until the hub process runs an instrumented build
+
+<!-- livehub:rows:end -->
+
 ## Limits and open items
 
 - All fsync-sensitive numbers (import rate, append latency) vary several-fold

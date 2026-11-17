@@ -65,6 +65,19 @@ func (r *Recorder) DurationCount(name string, labelValues ...string) int {
 	return r.durations[observe.SeriesKey(name, labelValues...)]
 }
 
+func (r *Recorder) AwaitDurationCount(name string, want int, timeout time.Duration, labelValues ...string) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if r.DurationCount(name, labelValues...) >= want {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func (r *Recorder) UnknownAddCalls() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()

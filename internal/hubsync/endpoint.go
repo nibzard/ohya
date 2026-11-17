@@ -67,9 +67,17 @@ type Endpoint struct {
 }
 
 type connSession struct {
+	ctx      context.Context
 	conn     net.Conn
 	deviceID string
 	cancel   context.CancelFunc
+}
+
+func (s *connSession) Write(p []byte) (int, error) {
+	if err := s.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return s.conn.Write(p)
 }
 
 func NewEndpoint(db *store.DB, auth Authenticator, opts Options) (*Endpoint, error) {
@@ -143,7 +151,7 @@ func (e *Endpoint) Serve(ctx context.Context, ln net.Listener) error {
 			continue
 		}
 		cctx, ccancel := context.WithCancel(ctx)
-		session := &connSession{conn: conn, cancel: ccancel}
+		session := &connSession{ctx: cctx, conn: conn, cancel: ccancel}
 		e.track(session)
 		e.wg.Add(1)
 		go func() {
@@ -161,7 +169,7 @@ func (e *Endpoint) serveConn(ctx context.Context, session *connSession) {
 	deviceID, err := e.authenticate(ctx, conn)
 	if err != nil {
 		e.observer.Add("hub_authorization", 1, "rejected")
-		_ = WriteError(conn, CodeAuth, err.Error())
+		_ = WriteError(session, CodeAuth, err.Error())
 		return
 	}
 	e.observer.Add("hub_connections", 1, "active")
@@ -173,13 +181,13 @@ func (e *Endpoint) serveConn(ctx context.Context, session *connSession) {
 			if !errors.Is(err, io.EOF) {
 				e.observer.Add("hub_failures", 1, "read")
 			}
-			e.replyDecodeError(conn, err)
+			e.replyDecodeError(session, err)
 			return
 		}
 		if e.authz != nil {
 			if err := e.authz.Authorize(ctx, deviceID); err != nil {
 				e.observer.Add("hub_authorization", 1, "rejected")
-				_ = WriteError(conn, CodeAuth, err.Error())
+				_ = WriteError(session, CodeAuth, err.Error())
 				return
 			}
 			e.observer.Add("hub_authorization", 1, "ok")
@@ -187,15 +195,15 @@ func (e *Endpoint) serveConn(ctx context.Context, session *connSession) {
 		var closeConn bool
 		switch {
 		case frame.Registration != nil:
-			closeConn = e.handleRegistration(ctx, conn, deviceID, *frame.Registration)
+			closeConn = e.handleRegistration(ctx, session, deviceID, *frame.Registration)
 		case frame.Batch != nil:
-			closeConn = e.handleBatch(ctx, conn, deviceID, *frame.Batch)
+			closeConn = e.handleBatch(ctx, session, deviceID, *frame.Batch)
 		case frame.Query != nil:
-			closeConn = e.handleQuery(ctx, conn, deviceID, *frame.Query)
+			closeConn = e.handleQuery(ctx, session, deviceID, *frame.Query)
 		case frame.Annotate != nil:
-			closeConn = e.handleAnnotate(ctx, conn, deviceID, *frame.Annotate)
+			closeConn = e.handleAnnotate(ctx, session, deviceID, *frame.Annotate)
 		case frame.Workspaces != nil:
-			closeConn = e.handleWorkspaces(ctx, conn, deviceID, *frame.Workspaces)
+			closeConn = e.handleWorkspaces(ctx, session, deviceID, *frame.Workspaces)
 		}
 		if closeConn {
 			return
@@ -209,14 +217,14 @@ func (e *Endpoint) authenticate(ctx context.Context, conn net.Conn) (string, err
 	return e.auth.Authenticate(ctx, conn)
 }
 
-func (e *Endpoint) handleRegistration(ctx context.Context, conn net.Conn, deviceID string, reg Registration) bool {
+func (e *Endpoint) handleRegistration(ctx context.Context, w io.Writer, deviceID string, reg Registration) bool {
 	if reg.DeviceID != deviceID {
-		_ = WriteError(conn, CodeAuth, fmt.Sprintf(
+		_ = WriteError(w, CodeAuth, fmt.Sprintf(
 			"registration names device %s, but the connection belongs to %s", reg.DeviceID, deviceID))
 		return true
 	}
 	if !events.Supported(reg.Agent) {
-		_ = WriteError(conn, CodeUnsupported,
+		_ = WriteError(w, CodeUnsupported,
 			fmt.Sprintf("agent %q has no parser at this hub; this hub parses %q", reg.Agent, events.Agents))
 		return false
 	}
@@ -227,21 +235,21 @@ func (e *Endpoint) handleRegistration(ctx context.Context, conn net.Conn, device
 	e.observer.Observe("hub_store_duration", time.Since(storeStart))
 	if err != nil {
 		e.observer.Add("hub_failures", 1, "commit")
-		_ = WriteError(conn, storeErrorCode(err), err.Error())
+		_ = WriteError(w, storeErrorCode(err), err.Error())
 		return false
 	}
-	_ = WriteAck(conn, Ack{})
+	_ = WriteAck(w, Ack{})
 	return false
 }
 
-func (e *Endpoint) handleBatch(ctx context.Context, conn net.Conn, deviceID string, b Batch) bool {
+func (e *Endpoint) handleBatch(ctx context.Context, w io.Writer, deviceID string, b Batch) bool {
 	if b.DeviceID != deviceID {
-		_ = WriteError(conn, CodeAuth, fmt.Sprintf(
+		_ = WriteError(w, CodeAuth, fmt.Sprintf(
 			"batch names device %s, but the connection belongs to %s", b.DeviceID, deviceID))
 		return true
 	}
 	if err := validateBoundaries(b); err != nil {
-		_ = WriteError(conn, CodeRejected, err.Error())
+		_ = WriteError(w, CodeRejected, err.Error())
 		return false
 	}
 
@@ -258,12 +266,12 @@ func (e *Endpoint) handleBatch(ctx context.Context, conn net.Conn, deviceID stri
 	})
 	if err != nil {
 		e.observer.Add("hub_failures", 1, "commit")
-		_ = WriteError(conn, storeErrorCode(err), err.Error())
+		_ = WriteError(w, storeErrorCode(err), err.Error())
 		return false
 	}
 	prefix, stop, err := e.normalize(b, st)
 	if err != nil {
-		_ = WriteError(conn, CodeRejected, err.Error())
+		_ = WriteError(w, CodeRejected, err.Error())
 		return false
 	}
 	var res store.IngestResult
@@ -280,7 +288,7 @@ func (e *Endpoint) handleBatch(ctx context.Context, conn net.Conn, deviceID stri
 	e.observer.Observe("hub_store_duration", time.Since(storeStart))
 	if err != nil {
 		e.observer.Add("hub_failures", 1, "commit")
-		_ = WriteError(conn, storeErrorCode(err), err.Error())
+		_ = WriteError(w, storeErrorCode(err), err.Error())
 		return false
 	}
 	ack := Ack{Cursor: res.Cursor, Inserted: int64(res.Inserted)}
@@ -290,14 +298,14 @@ func (e *Endpoint) handleBatch(ctx context.Context, conn net.Conn, deviceID stri
 		ack.Stop = stop.Error()
 	}
 	ackStart := time.Now()
-	_ = WriteAck(conn, ack)
+	_ = WriteAck(w, ack)
 	e.observer.Observe("hub_ack_write_duration", time.Since(ackStart))
 	return false
 }
 
-func (e *Endpoint) handleQuery(ctx context.Context, conn net.Conn, deviceID string, q Query) bool {
+func (e *Endpoint) handleQuery(ctx context.Context, w io.Writer, deviceID string, q Query) bool {
 	if e.remote == nil {
-		_ = WriteError(conn, CodeNoRemote,
+		_ = WriteError(w, CodeNoRemote,
 			"this endpoint serves the upload protocol only; query and annotate frames are not enabled")
 		return false
 	}
@@ -308,20 +316,20 @@ func (e *Endpoint) handleQuery(ctx context.Context, conn net.Conn, deviceID stri
 	result, err := e.remote.Query(ctx, q.SQL)
 	if err != nil {
 		e.observer.Add("hub_failures", 1, "other")
-		_ = WriteError(conn, queryErrorCode(err), err.Error())
+		_ = WriteError(w, queryErrorCode(err), err.Error())
 		return false
 	}
-	if err := WriteQueryResult(conn, result); err != nil {
+	if err := WriteQueryResult(w, result); err != nil {
 		e.observer.Add("hub_failures", 1, "write")
-		_ = WriteError(conn, CodeInternal, err.Error())
+		_ = WriteError(w, CodeInternal, err.Error())
 		return false
 	}
 	return false
 }
 
-func (e *Endpoint) handleAnnotate(ctx context.Context, conn net.Conn, deviceID string, a Annotate) bool {
+func (e *Endpoint) handleAnnotate(ctx context.Context, w io.Writer, deviceID string, a Annotate) bool {
 	if e.remote == nil {
-		_ = WriteError(conn, CodeNoRemote,
+		_ = WriteError(w, CodeNoRemote,
 			"this endpoint serves the upload protocol only; query and annotate frames are not enabled")
 		return false
 	}
@@ -332,21 +340,21 @@ func (e *Endpoint) handleAnnotate(ctx context.Context, conn net.Conn, deviceID s
 	result, err := e.remote.AnnotateAs(ctx, deviceID, a.Request)
 	if err != nil {
 		e.observer.Add("hub_failures", 1, "other")
-		_ = WriteError(conn, annotateErrorCode(err), err.Error())
+		_ = WriteError(w, annotateErrorCode(err), err.Error())
 		return false
 	}
-	_ = WriteAnnotateResult(conn, result)
+	_ = WriteAnnotateResult(w, result)
 	return false
 }
 
-func (e *Endpoint) handleWorkspaces(ctx context.Context, conn net.Conn, deviceID string, w Workspaces) bool {
+func (e *Endpoint) handleWorkspaces(ctx context.Context, wr io.Writer, deviceID string, w Workspaces) bool {
 	if w.DeviceID != deviceID {
-		_ = WriteError(conn, CodeAuth, fmt.Sprintf(
+		_ = WriteError(wr, CodeAuth, fmt.Sprintf(
 			"workspaces frame names device %s, but the connection belongs to %s", w.DeviceID, deviceID))
 		return true
 	}
 	if !events.Supported(w.Agent) {
-		_ = WriteError(conn, CodeUnsupported,
+		_ = WriteError(wr, CodeUnsupported,
 			fmt.Sprintf("agent %q has no parser at this hub; this hub parses %q", w.Agent, events.Agents))
 		return false
 	}
@@ -364,10 +372,10 @@ func (e *Endpoint) handleWorkspaces(ctx context.Context, conn net.Conn, deviceID
 		})
 	}
 	if err != nil {
-		_ = WriteError(conn, storeErrorCode(err), err.Error())
+		_ = WriteError(wr, storeErrorCode(err), err.Error())
 		return false
 	}
-	_ = WriteWorkspacesReply(conn, reply)
+	_ = WriteWorkspacesReply(wr, reply)
 	return false
 }
 
@@ -484,7 +492,7 @@ func storeErrorCode(err error) ErrorCode {
 	}
 }
 
-func (e *Endpoint) replyDecodeError(conn net.Conn, err error) {
+func (e *Endpoint) replyDecodeError(w io.Writer, err error) {
 	code := CodeMalformed
 	switch {
 	case errors.Is(err, ErrTooLarge):
@@ -492,7 +500,7 @@ func (e *Endpoint) replyDecodeError(conn net.Conn, err error) {
 	case errors.Is(err, ErrVersion):
 		code = CodeVersion
 	}
-	_ = WriteError(conn, code, err.Error())
+	_ = WriteError(w, code, err.Error())
 }
 
 func (e *Endpoint) track(s *connSession) {

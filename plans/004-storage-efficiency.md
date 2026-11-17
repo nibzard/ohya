@@ -1,8 +1,10 @@
 # Storage efficiency
 
-Status: proposed. Priority P2 for the cheap items, deferred for the rest.
-Planned against `d237c54`, 2026-11-16. Full analysis and sources:
-[`brainstorm.md`](../brainstorm.md). No implementation is included.
+Status: in delivery. S1 (T100), S2 (T101), and S3 (T102) are implemented,
+delivered 2026-11-16 to 2026-11-17. D1 (T110), D2 (T111), and D3 (T112)
+remain open, deferred until the plan 002 acceptance gate. Priority P2 for
+the cheap items, deferred for the rest. Planned against `d237c54`,
+2026-11-16. Full analysis and sources: [`brainstorm.md`](../brainstorm.md).
 
 ## Outcome
 

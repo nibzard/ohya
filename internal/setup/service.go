@@ -197,6 +197,23 @@ func serviceKind(args []string) string {
 	return "memory service"
 }
 
+func ServiceMainPID(ctx context.Context, unit string) (int, error) {
+	output, err := serviceOutput(ctx, []string{"systemctl", "--user", "show", "--property=MainPID", "--value", unit})
+	if err != nil {
+		return 0, err
+	}
+	return parseMainPID(output)
+}
+
+func parseMainPID(output string) (int, error) {
+	line := strings.Split(strings.TrimSpace(output), "\n")[0]
+	pid, err := strconv.Atoi(strings.TrimSpace(line))
+	if err != nil {
+		return 0, fmt.Errorf("parse MainPID output %q: %w", line, err)
+	}
+	return pid, nil
+}
+
 func RunServiceLoaded(ctx context.Context, args []string) error {
 	output, err := serviceOutput(ctx, args)
 	if err != nil {

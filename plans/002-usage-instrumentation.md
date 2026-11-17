@@ -1,7 +1,10 @@
 # Usage and friction instrumentation
 
-Status: proposed. Priority P1. Planned against `d237c54`, 2026-11-16. No
-implementation is included in this document.
+Status: in delivery. The usage record (T092), the `ohya usage` report
+(T094), ADR 0010 (T095), and the device-side client-outcome record for
+`ohya mcp --remote` (T108) are implemented, delivered 2026-11-16 to
+2026-11-17. The usage baseline (T099), the acceptance gate for plan 004,
+is open. Priority P1. Planned against `d237c54`, 2026-11-16.
 
 ## Outcome
 

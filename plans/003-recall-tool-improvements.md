@@ -1,7 +1,9 @@
 # Recall tool improvements
 
-Status: proposed. Priority P2. Planned against `d237c54`, 2026-11-16.
-Depends on plan 002 for measurement. No implementation is included.
+Status: in delivery. R1 (T103), R2 (T104), and R5 (T107) are implemented,
+delivered 2026-11-16 to 2026-11-17. R3 (T105) and R4 (T106) are open;
+both wait for the plan 002 baseline (T099). Priority P2. Planned against
+`d237c54`, 2026-11-16. Depends on plan 002 for measurement.
 
 ## Outcome
 

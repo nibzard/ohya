@@ -37,7 +37,7 @@ var doctorSpec = commandSpec{
 	name:      "ohya doctor",
 	synopsis:  "run read-only health checks the sql tool cannot answer",
 	usageLine: "ohya doctor [flags]",
-	description: "Checks state outside the read-only sql tool's reach: the database schema against this build's migrations, stored parser output versions this build's rederive refuses, the FTS5 integrity of events_fts with --deep, stopped sources in the local watch state (ADR 0004), the device identity, and — when the state directory holds a pairing credential — that the saved hub address is present and readable. A state directory with an owned ohya serve service also reports whether the hub identity exists. " +
+	description: "Checks state outside the read-only sql tool's reach: the database schema against this build's migrations, stored parser output versions this build's rederive refuses, the FTS5 integrity of events_fts with --deep, stopped sources in the local watch state (ADR 0004), the device identity, and — when the state directory holds a pairing credential — that the saved hub address is present and readable. A state directory with an owned ohya serve service also reports whether the hub identity exists. A user unit that starts this binary as the hub (ohya serve) has its ExecStart checked against this build's serve flags and its running process checked for a replaced executable: a unit this build cannot start, or a service still running a binary that was replaced on disk, is an error. " +
 		"On a paired device, doctor also dials the hub through the tailcat transport and reports whether it answers, the path type (direct or relay), the relay region, the round-trip time, and the compatibility of sync protocol versions; a value the transport library does not report is printed as unknown, and the hub address itself never appears.\n" +
 		"Doctor opens the database read-only: it never migrates, repairs, or re-derives, and prints no transcript content or secrets.\n" +
 		"The --deep check copies the database into memory, so it takes time and memory in proportion to the database size.\n" +
@@ -149,6 +149,7 @@ func runDoctorCommand(args []string, stdout, stderr io.Writer) error {
 		}
 		findings = append(findings, finding{Check: "setup:" + item.Component, Severity: severity, Detail: detail, Remedy: "rerun ohya setup to repair owned configuration; preserve intentional user edits"})
 	}
+	findings = append(findings, checkHubUnits(context.Background(), home)...)
 	if *asJSON {
 		if err := printJSON(stdout, doctorSpec.name, doctorJSONData{Findings: findings, Transport: transport}); err != nil {
 			return err
@@ -513,6 +514,77 @@ func checkHubIdentity(state string) finding {
 	}
 	return finding{Check: "hub_identity", Severity: sevOK,
 		Detail: fmt.Sprintf("hub identity present (node key %s, relay region %d %s)", info.NodeKey, info.RegionID, info.RegionCode)}
+}
+
+var hubUnitMainPID = setup.ServiceMainPID
+
+func serveArgsProblem(args []string) error {
+	s := newServeFlagSet("")
+	if err := s.c.fs.Parse(args); err != nil {
+		return err
+	}
+	if s.c.fs.NArg() > 0 {
+		return fmt.Errorf("unexpected argument %q", s.c.fs.Arg(0))
+	}
+	if _, err := parseObserveFlag(*s.observe); err != nil {
+		return err
+	}
+	return nil
+}
+
+func checkHubUnits(ctx context.Context, home string) []finding {
+	self, err := os.Executable()
+	if err != nil {
+		return nil
+	}
+	units, err := setup.ScanServeUnits(filepath.Join(home, ".config", "systemd", "user"), self)
+	if err != nil || len(units) == 0 {
+		return nil
+	}
+	var out []finding
+	for _, u := range units {
+		out = append(out, checkHubUnit(ctx, u)...)
+	}
+	return out
+}
+
+func checkHubUnit(ctx context.Context, u setup.UnitExecStart) []finding {
+	var out []finding
+	if problem := serveArgsProblem(u.Args[1:]); problem != nil {
+		remedy := fmt.Sprintf("rerun ohya setup --hub to rewrite %s with this build's serve flags and restart the service", u.Unit)
+		ownedUnit := "ohya-serve.service"
+		if plan, err := setup.HubServicePlan("linux", "/", "/", "/ohya", nil); err == nil {
+			ownedUnit = filepath.Base(plan.Path)
+		}
+		if u.Unit != ownedUnit {
+			remedy = fmt.Sprintf("rerun ohya setup --hub to install and start the owned %s, then retire %s: systemctl --user disable --now %s", ownedUnit, u.Unit, u.Unit)
+		}
+		out = append(out, finding{Check: "hub_unit", Severity: sevError,
+			Detail: fmt.Sprintf("%s starts this binary with serve arguments this build rejects: %v; the service cannot start again, so the next restart (reboot, crash, or manual) leaves the hub down", u.Unit, problem),
+			Remedy: remedy})
+	}
+	if f, replaced := checkHubUnitProcess(ctx, u); replaced {
+		out = append(out, f)
+	}
+	if len(out) == 0 {
+		out = append(out, finding{Check: "hub_unit", Severity: sevOK,
+			Detail: fmt.Sprintf("%s starts this binary with serve arguments this build accepts", u.Unit)})
+	}
+	return out
+}
+
+func checkHubUnitProcess(ctx context.Context, u setup.UnitExecStart) (finding, bool) {
+	pid, err := hubUnitMainPID(ctx, u.Unit)
+	if err != nil || pid <= 0 {
+		return finding{}, false
+	}
+	link, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid))
+	if err != nil || !strings.HasSuffix(link, " (deleted)") {
+		return finding{}, false
+	}
+	return finding{Check: "hub_unit", Severity: sevError,
+		Detail: fmt.Sprintf("%s (main PID %d) still runs an executable that was replaced on disk: %s; the service is not running the installed binary", u.Unit, pid, link),
+		Remedy: fmt.Sprintf("run systemctl --user restart %s once the unit starts the installed binary, so the hub runs the installed binary", u.Unit)}, true
 }
 
 func writeFindings(w io.Writer, findings []finding) {

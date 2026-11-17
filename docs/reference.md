@@ -87,7 +87,12 @@ their [ADR 0004](adr/0004-stopped-source-recovery.md) remedy, the
 device identity in the state directory, the saved hub address when that
 directory holds a pairing credential, whether a paired hub answers and
 over which transport path, and the hub identity when it holds
-an owned hub service.
+an owned hub service. Doctor also parses every systemd user unit whose
+ExecStart runs this binary as `ohya serve`, whether or not setup wrote
+it: a unit whose serve arguments this build rejects, and a running
+service whose executable was replaced on disk, are errors that name the
+unit, the offending argument or process, and one remedy — the hub is one
+restart away from an outage in both cases.
 Every finding prints a severity (`ok`, `warn`, `error`) and a
 one-line remedy; `--json` prints the same findings in the
 [ADR 0005](adr/0005-json-output.md) envelope. Doctor is read-only: it
@@ -638,7 +643,12 @@ to a built ohya executable, then run
 
 `ohya doctor` also inspects owned services and agent integrations. It reports
 changed or missing entries without modifying them — the ingestion service and,
-when present, the hub service. A state directory with an owned hub service
+when present, the hub service. Beyond the receipts, doctor parses the systemd
+user units in `~/.config/systemd/user/` itself: any unit whose ExecStart runs
+the doctor binary as `ohya serve` is checked against this build's serve flags,
+and its main process is checked for an executable replaced on disk, so a
+hand-named hub unit that survives an upgrade with removed flags is an error,
+not a silent pass. A state directory with an owned hub service
 also reports whether the hub identity exists and names its public node key.
 For remote setup, it follows
 the saved join state (`credential.json` and `hub-address.json`). It checks

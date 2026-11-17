@@ -6,7 +6,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -816,6 +818,24 @@ func TestUnauthenticatedConnectionClose(t *testing.T) {
 		Agent: claudecode.AgentName, Path: "/b.jsonl"})
 	refused.wantError(CodeAuth, "no assigned identity")
 	refused.expectClosed()
+}
+
+func TestSessionSendsNothingAfterCancellation(t *testing.T) {
+	hub, device := net.Pipe()
+	defer device.Close()
+	defer hub.Close()
+	go func() {
+		_, _ = io.Copy(io.Discard, device)
+	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	session := &connSession{ctx: ctx, conn: hub}
+	if _, err := session.Write([]byte{markerAck}); err != nil {
+		t.Fatalf("write before cancellation failed: %v", err)
+	}
+	cancel()
+	if _, err := session.Write([]byte{markerAck}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("write after cancellation = %v; want context.Canceled", err)
+	}
 }
 
 func TestBrokenFramesCloseConnection(t *testing.T) {
