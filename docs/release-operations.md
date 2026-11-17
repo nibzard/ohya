@@ -1,6 +1,6 @@
 # Release and recovery operations
 
-The newest release is v0.1.2, published on 2026-11-16 from commit `6ed9fc3`
+The newest release is v0.2.0, published on 2026-11-17 from commit `3e6adba`
 after the full candidate matrix passed; its macOS archives are unsigned. Apple signing and
 notarization must pass before a signed public release. Generated candidates
 are not qualified releases merely because packaging succeeds.
@@ -156,6 +156,18 @@ left by a killed run is removed on the next run.
   on attempt 2 because no hosted runner picked up attempt 1). It adds schema 7
   (workspaces) and cuts idle ingest checkpoint writes. The released installer
   upgraded the linux-amd64 hub host end to end; `ohya doctor` exited 0.
+- v0.2.0 (commit `3e6adba`, dirty=false) was published on 2026-11-17 after
+  the full hosted matrix passed (run 44087678215). The first candidate
+  (run 44085094843, commit `49170ee`) failed all three native builds:
+  perf/recallduration used a linux-only syscall, and three tests assumed
+  fast clocks, fine timestamp granularity, or unnormalized paths. The fixes
+  at `3e6adba` split evictCache by filename constraint and hardened the
+  tests. v0.2.0 adds usage instrumentation with the `ohya usage`, `status`,
+  `metrics`, `logs`, and `diagnose` commands, and replaces the embedded
+  Headscale stack with the Tailcat transport plus `ohya setup --hub` and a
+  one-line device join. The released installer upgraded the linux-amd64 hub
+  host end to end; `ohya doctor` exited 0 with the three long-standing
+  stopped sources (ADR 0004) as the only warnings.
 - The installer refuses to replace an executable whose digest matches neither
   its receipt entry nor the previous one ("installed executable has changed;
   preserve it"). A copy installed by hand outside `install.sh` triggers this

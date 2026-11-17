@@ -1802,3 +1802,14 @@ How to use this file:
   3. Improve handoffs with source references. Retrieve decisions, failed
      attempts, and unfinished work. Cite Events, then check the current
      repository before acting.
+
+- v0.2.0 released (2026-11-17) from `3e6adba`: round 9's usage
+  instrumentation (`ohya usage`/`status`/`metrics`/`logs`/`diagnose`,
+  ADRs 0005/0010) and the Tailcat transport migration (ADRs 0011/0012,
+  `ohya setup --hub`, one-line join, no control plane). Candidate
+  qualification run 44087678215; the first candidate 44085094843 failed
+  on a linux-only syscall in perf/recallduration plus three
+  environment-sensitive tests (symlinked temp paths on macOS, mtime
+  granularity on runner storage, a fixed 80 ms ticker window). CI macOS
+  runners again proved narrower than local linux: run make check on all
+  three platforms before cutting a release, not only linux.
