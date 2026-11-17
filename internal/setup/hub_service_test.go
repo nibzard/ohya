@@ -13,7 +13,7 @@ import (
 
 func TestHubServicePlans(t *testing.T) {
 	for _, platform := range []string{"linux", "darwin"} {
-		s, err := HubServicePlan(platform, "/home/a b", "/home/a b/ohya", []string{"serve", "--state", "/home/a b"})
+		s, err := HubServicePlan(platform, "/home/a b", "/home/a b/.ohya", "/home/a b/ohya", []string{"serve", "--state", "/home/a b"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -58,7 +58,7 @@ func TestHubServicePlans(t *testing.T) {
 				t.Fatalf("hub label = %q", label)
 			}
 		}
-		ingest, err := ServicePlan(platform, "/home/a b", "/home/a b/ohya", nil)
+		ingest, err := ServicePlan(platform, "/home/a b", "/home/a b/.ohya", "/home/a b/ohya", nil)
 		if err != nil {
 			t.Fatal(err)
 		}

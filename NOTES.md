@@ -1755,3 +1755,37 @@ How to use this file:
   which therefore accepts exit 0 or 1; three consecutive manual runs
   exited 0. Fix candidate: treat context.Canceled from poll as a clean
   stop.
+
+- Logs and diagnostics delivered (2026-11-17, T096, plans/001 milestone 4):
+  internal/observe gained the LogWriter (`events.jsonl`, 8 MiB plus two
+  rotated files per instance) and cmd/ohya gained `ohya logs` and
+  `ohya diagnose`. Facts future work must keep:
+  - Producer contract: Event() never blocks (256-deep queue, drops are
+    counted), coalesces warn/error bursts only while an identical entry
+    is queued (claim-before-write under one mutex makes the Counts map
+    race-free), and rejects unknown event codes — raw error text has no
+    field, so no secret can enter through an error. The final summary
+    carries real deltas when allowlisted counters moved (observed
+    `discovery_scans=17` in the smoke run) and outcome "final" when they
+    did not — both branches are intended; TestLogWriterRejectsInvalidCodesAndOversizeLines
+    pins the second, the smoke run exercised the first.
+  - Setup owns the macOS startup stderr file (state/logs/<label>.stderr.log,
+    rotated at 8 MiB to .1; no StandardOutPath — stdout stays unowned)
+    while Linux keeps the journal; launchd restart policy (KeepAlive,
+    ThrottleInterval 5) is unchanged. Setup also prunes stale observe/
+    instances (observe.CleanStaleInstances) and uninstall preserves
+    observe/ plus the stderr log. Native launchd smoke remains unrun —
+    no macOS machine was available; systemd user-session smoke passed:
+    a failing unit surfaces its usage error in the journal and stops at
+    StartLimitBurst=5 (no restart loop), a healthy unit's startup,
+    shutdown, and final summary are visible through `ohya logs`, and
+    `ohya diagnose` exports a 7.7 KB artifact. Units and state were
+    torn down through the registered idempotent cleanup.
+  - Boundary proven by construction and TestDiagnoseNeverExportsSeededSecrets:
+    logs/diagnose read only the already-sanitized observe/ files, so
+    secrets seeded in transcript text, SQL literals, annotation values,
+    source paths, error blobs, and device.json never appear in output.
+  - Hub-side transition events (auth failures, device pairing) are not
+    emitted from the hubsync endpoint yet — the EventSink reaches
+    uploader, mcp engine, and local ingest only; that plus remote
+    aggregates is milestone 5 (T098).

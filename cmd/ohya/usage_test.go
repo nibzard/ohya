@@ -162,7 +162,7 @@ func ingestUsageRoot(t *testing.T, dbPath, stateDir, agent string, files map[str
 		hub.Close()
 		t.Fatal(err)
 	}
-	r := newIngestor(hub, w, agent, deviceID, 0, io.Discard, nil)
+	r := newIngestor(hub, w, agent, deviceID, 0, io.Discard, nil, nil)
 	stats, err := r.poll(context.Background(), []agentDir{{dir: root}}, true)
 	hub.Close()
 	if err != nil {

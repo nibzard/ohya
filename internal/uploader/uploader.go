@@ -47,6 +47,7 @@ type Options struct {
 	Log            io.Writer
 	Resolve        workspace.Resolver
 	Observer       observe.Observer
+	Events         observe.EventSink
 }
 
 type Stats struct {
@@ -62,6 +63,7 @@ type Uploader struct {
 	opts       Options
 	log        io.Writer
 	observer   observe.Observer
+	events     observe.EventSink
 
 	conn         *conn
 	ready        map[string]bool
@@ -132,10 +134,18 @@ func New(w *watch.Watcher, cred device.Credential, dial Dialer, opts Options) (*
 	}
 	return &Uploader{
 		watcher: w, credential: cred, dial: dial, opts: opts, log: log, observer: observer,
-		ready: map[string]bool{}, blocked: map[string]bool{},
+		events: opts.Events,
+		ready:  map[string]bool{}, blocked: map[string]bool{},
 		stops: map[string]stopMark{}, idle: map[string]stopMark{}, seen: map[string]int64{},
 		lossReported: map[string]bool{}, gapReported: map[string]int64{},
 	}, nil
+}
+
+func (u *Uploader) event(level observe.Level, code observe.EventCode, outcome string, counts map[string]int64) {
+	if u.events == nil {
+		return
+	}
+	u.events.Event("uploader", level, code, outcome, counts)
 }
 
 func (u *Uploader) Close() error {
@@ -190,6 +200,7 @@ func (u *Uploader) Sync(ctx context.Context, candidates []string) (stats Stats, 
 		if ferr := u.watcher.Flush(); ferr != nil {
 			u.logf("persist acknowledgments: %v", ferr)
 			u.observer.Add("upload_failures", 1, "checkpoint")
+			u.event(observe.LevelWarn, observe.EventCheckpointFailed, "upload", nil)
 			if err == nil {
 				err = ferr
 			}
@@ -295,6 +306,7 @@ func (u *Uploader) noteLoss(o watch.Outcome) {
 	}
 	if u.lossReported[o.SourceID] {
 		u.observer.Add("watch_source_events", 1, "returned")
+		u.event(observe.LevelInfo, observe.EventSourceReturned, "", nil)
 	}
 	u.seen[o.SourceID] = o.End
 	delete(u.lossReported, o.SourceID)
@@ -364,6 +376,7 @@ func (u *Uploader) syncSource(ctx context.Context, o watch.Outcome, stats *Stats
 			if err := u.watcher.Acknowledge(o.Path, o.SourceID, ack.Cursor); err != nil {
 				u.logf("%s: persist acknowledgment: %v", o.Path, err)
 				u.observer.Add("upload_failures", 1, "checkpoint")
+				u.event(observe.LevelWarn, observe.EventCheckpointFailed, "upload", nil)
 				return nil
 			}
 			u.advances++
@@ -422,6 +435,7 @@ func (u *Uploader) reconcile(o watch.Outcome, hub int64) (int64, bool) {
 	case hub > o.Cursor:
 		if err := u.watcher.Acknowledge(o.Path, o.SourceID, hub); err != nil {
 			u.observer.Add("upload_failures", 1, "checkpoint")
+			u.event(observe.LevelWarn, observe.EventCheckpointFailed, "upload", nil)
 			u.block(o, fmt.Sprintf("hub cursor %d is ahead of the checkpoint %d but cannot be acknowledged: %v",
 				hub, o.Cursor, err))
 			return 0, false
@@ -509,6 +523,7 @@ func (u *Uploader) stopAt(o watch.Outcome, offset int64, reason string) {
 	u.stops[o.SourceID] = stopMark{offset: offset, end: o.End, modTime: o.ModTime}
 	if !seen || prev.offset != offset {
 		u.logf("%s: source %s stops at offset %d: %s", o.Path, o.SourceID, offset, reason)
+		u.event(observe.LevelWarn, observe.EventSourceStopped, "", map[string]int64{"stopped_sources": int64(len(u.stops))})
 	}
 }
 
@@ -588,6 +603,7 @@ func (u *Uploader) connect(ctx context.Context) error {
 	if u.offline {
 		u.offline = false
 		u.logf("reconnected to the hub; catching up from the retained files")
+		u.event(observe.LevelInfo, observe.EventTransportOnline, "", nil)
 	}
 	return nil
 }
@@ -652,6 +668,7 @@ func (u *Uploader) protocolFailure(perr *hubsync.Error) {
 	switch perr.Code {
 	case hubsync.CodeAuth:
 		u.observer.Add("upload_failures", 1, "auth")
+		u.event(observe.LevelWarn, observe.EventAuthFailure, "auth", nil)
 	case hubsync.CodeBusy:
 		u.observer.Add("upload_failures", 1, "retry")
 	default:
@@ -677,6 +694,7 @@ func (u *Uploader) disconnected(ctx context.Context, err error) error {
 	if !u.offline {
 		u.offline = true
 		u.logf("hub unreachable, retrying with backoff: %v", err)
+		u.event(observe.LevelWarn, observe.EventTransportOffline, "connect", nil)
 	}
 	return fmt.Errorf("%w: %v", ErrDisconnected, err)
 }

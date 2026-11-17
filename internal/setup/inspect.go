@@ -21,7 +21,7 @@ func inspected(component string, err error, ready bool) Result {
 	return result
 }
 
-func inspectServiceReceipt(ctx context.Context, r fileReceipt, run func(context.Context, []string) error, component string, plan func(string, string, string, []string) (Service, error)) Result {
+func inspectServiceReceipt(ctx context.Context, r fileReceipt, run func(context.Context, []string) error, component string, plan func(string, string, string, string, []string) (Service, error)) Result {
 	raw, readErr := readRegular(r.Path)
 	result := inspected(component, readErr, bytes.Equal(raw, r.Content))
 	if result.Status == "ready" {
@@ -29,7 +29,7 @@ func inspectServiceReceipt(ctx context.Context, r fileReceipt, run func(context.
 		if filepath.Ext(r.Path) == ".plist" {
 			platform = "darwin"
 		}
-		s, err := plan(platform, "/", "/ohya", nil)
+		s, err := plan(platform, "/", "/", "/ohya", nil)
 		if err == nil {
 			err = run(ctx, s.Check)
 		}

@@ -119,7 +119,7 @@ func runServe(ctx context.Context, o serveOptions) error {
 		return err
 	}
 	defer readers.Close()
-	engine := mcpserver.NewEngine(readers, hub.Writer(), mcpserver.EngineOptions{WriterID: deviceID, Usage: telem.usageSink(), Observer: telem.observer()})
+	engine := mcpserver.NewEngine(readers, hub.Writer(), mcpserver.EngineOptions{WriterID: deviceID, Usage: telem.usageSink(), Observer: telem.observer(), Events: telem.eventsSink()})
 	auth := newPathRecorder(&registry.Authenticator{DB: reg}, node, reg, func(format string, args ...any) {
 		fmt.Fprintf(o.stdout, "ohya: "+format+"\n", args...)
 	})

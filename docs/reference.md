@@ -386,10 +386,11 @@ and `mcp` — publishes process-local observations under
 process start. The directory holds `snapshot.json` (the current sample,
 replaced atomically every ten seconds, at startup, and at clean shutdown),
 `history.jsonl` (one aggregate sample per minute, retained 24 hours and at
-most 16 MiB), and, for processes that serve the tools, the usage records
-above. Directories are `0700`, files `0600`, and no publication fsyncs:
-this data is disposable. Counters are cumulative since process start and
-reset on restart; a failed publication is counted and retried on the next
+most 16 MiB), `events.jsonl` with two rotated files (the structured
+application logs below), and, for processes that serve the tools, the
+usage records above. Directories are `0700`, files `0600`, and no
+publication fsyncs: this data is disposable. Counters are cumulative
+since process start and reset on restart; a failed publication is counted and retried on the next
 tick and never blocks ingestion, syncing, or queries. On startup a
 publisher removes only provably terminated instances of its own kind,
 keeping at most eight per role and seven days of files, and never removes
@@ -441,6 +442,55 @@ Percentiles are never averaged between instances, and a window the
 history does not cover is reported as partial rather than manufactured
 from less data. Exit 3 marks a sample-less, gapped, or partial window.
 
+### `ohya logs`
+
+`ohya logs` reads the structured application logs every long-running
+process writes to `<state>/observe/<instance-id>/events.jsonl` next to
+its snapshots, plus the two rotated files beside it. Entries carry a
+curated event code, an optional outcome, numeric counts, and a
+correlation id at most; they never carry transcript text, SQL, source
+paths, or raw error strings, because parsers, queries, and transports
+can embed untrusted input in those. The writer coalesces repeated
+warnings by event code while an identical entry is still queued and
+reports the merge count, drops rather than blocks when its 256-entry
+queue is full, bounds each line to 8 KiB, keeps 8 MiB per file with two
+rotated files, and emits one activity summary per minute plus an idle
+heartbeat at most every five minutes and a final summary on clean
+shutdown. When writes fail (disk full, read-only path), the writer falls
+back to one sanitized stderr notice per minute and keeps counting.
+
+The command filters with `--since` (default 10m), `--level` (that
+severity and above), `--component`, and `--limit` (default 100, maximum
+1000, newest entries win). A finite report stops at 1 MiB of entries and
+says which bound applied; oversize or unreadable lines are skipped and
+counted, never printed. Logs are local only: the command never contacts
+the hub. `--follow` requires exactly one selected instance (`--instance`
+or `--role` disambiguates), replays the lookback window once, then
+streams new entries, follows rotation without re-emitting the rotated
+file, and exits 0 when cancelled. With `--follow --json` each entry is
+one independently versioned envelope per line. Exit 3 marks a partial
+report: no instances, skipped lines, or an unreadable instance.
+
+### `ohya diagnose`
+
+`ohya diagnose --output FILE` writes one JSON artifact with the local
+status report, the 1m/5m/1h metric windows, up to 100 recent warning and
+error log entries, the CLI build identity, the configured runtime
+limits, and what this build can and cannot export. The artifact is
+private (`0600`), never uploaded, capped at 2 MiB, and lists every
+section dropped for that cap. It refuses to overwrite an existing file
+without `--force` and rejects a symlink destination. The content is
+assembled from already-sanitized pieces — snapshots, history samples,
+and curated log entries — so transcripts, SQL text, annotation values,
+invitations, credentials, environment dumps, private keys, full source
+paths, and raw third-party errors never enter it; the boundary is pinned
+by tests that seed such values around the state directory and assert
+their absence. With `--remote` the artifact records the unsupported
+hub-side fetch as a finding and still exports every local section, so a
+partial artifact with the failure identified replaces an abort. Exit 0
+means the artifact is complete; exit 3 means partial (for example the
+remote gap or an unreadable local section).
+
 ## Setup and installer
 
 The integrated installer is under development; see
@@ -456,8 +506,16 @@ available from source builds:
 Setup configures a user ingestion service and native MCP entries for installed
 agents. Use `--agents claude,codex` to select clients, `--no-service` for an
 existing process manager, and `--no-agents` to skip client changes. Agent
-entries and service files use ownership receipts. Uninstall preserves memory,
-credentials, sessions, and entries edited after setup.
+entries and service files use ownership receipts. On Linux the service keeps
+its stderr in the journal with rate limiting; on macOS the launchd template
+owns a private stderr startup file under `<state>/logs/` that setup creates
+and rotates at 8 MiB, so startup failures stay discoverable without an
+unbounded stdout file. Application events go to the `observe/` log files read
+by `ohya logs`; the service stderr files only carry what the process prints
+before its own logging starts. Setup also prunes stale `observe/` instances
+under the retention rules above and never touches a live instance. Uninstall
+preserves memory, credentials, sessions, entries edited after setup, and the
+diagnostic files: `observe/` and the stderr startup logs survive an uninstall.
 
 Pi versions with native MCP use their user MCP settings. Pi 0.84.2 uses an
 owned compatibility extension; other versions without native MCP are reported

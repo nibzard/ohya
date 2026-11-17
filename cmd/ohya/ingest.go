@@ -45,6 +45,7 @@ type ingestOptions struct {
 	stdout         io.Writer
 	stderr         io.Writer
 	observer       observe.Observer
+	events         observe.EventSink
 }
 
 var errDegraded = errors.New("ingest completed with a failed or stopped source")
@@ -108,7 +109,7 @@ func runIngest(ctx context.Context, o ingestOptions) error {
 		if err != nil {
 			return err
 		}
-		runners[i] = newIngestor(hub, w, root.agent, deviceID, o.maxRecordBytes, o.stderr, o.observer)
+		runners[i] = newIngestor(hub, w, root.agent, deviceID, o.maxRecordBytes, o.stderr, o.observer, o.events)
 	}
 
 	for pass := 1; ; pass++ {
@@ -171,6 +172,7 @@ type ingestor struct {
 	maxRecordBytes  int64
 	stderr          io.Writer
 	observer        observe.Observer
+	events          observe.EventSink
 	reported        map[string]int64
 	missingReported map[string]bool
 	noProgress      map[string]noProgressMark
@@ -188,16 +190,23 @@ type noProgressMark struct {
 	recordTooLarge bool
 }
 
-func newIngestor(hub *store.DB, w *watch.Watcher, agent, deviceID string, maxRecordBytes int64, stderr io.Writer, observer observe.Observer) *ingestor {
+func newIngestor(hub *store.DB, w *watch.Watcher, agent, deviceID string, maxRecordBytes int64, stderr io.Writer, observer observe.Observer, events observe.EventSink) *ingestor {
 	if observer == nil {
 		observer = observe.Disabled
 	}
 	return &ingestor{
 		hub: hub, watcher: w, agent: agent, deviceID: deviceID,
-		maxRecordBytes: maxRecordBytes, stderr: stderr, observer: observer, reported: map[string]int64{},
+		maxRecordBytes: maxRecordBytes, stderr: stderr, observer: observer, events: events, reported: map[string]int64{},
 		missingReported: map[string]bool{}, noProgress: map[string]noProgressMark{}, tails: map[string]int64{},
 		registered: map[string]string{}, workspacesDue: true,
 	}
+}
+
+func (r *ingestor) event(level observe.Level, code observe.EventCode, outcome string, counts map[string]int64) {
+	if r.events == nil {
+		return
+	}
+	r.events.Event("ingest", level, code, outcome, counts)
 }
 
 type passStats struct {
@@ -247,6 +256,7 @@ func (r *ingestor) poll(ctx context.Context, dirs []agentDir, allowEmpty bool) (
 		}
 		if r.missingReported[o.SourceID] {
 			r.observer.Add("watch_source_events", 1, "returned")
+			r.event(observe.LevelInfo, observe.EventSourceReturned, "", nil)
 		}
 		delete(r.missingReported, o.SourceID)
 		stats.sources++
@@ -265,6 +275,7 @@ func (r *ingestor) poll(ctx context.Context, dirs []agentDir, allowEmpty bool) (
 			if err := r.hub.RegisterSource(ctx, o.SourceID, r.deviceID, r.agent, o.Path); err != nil {
 				r.reportSource(o.Path, err)
 				r.observer.Add("ingest_failures", 1, "commit")
+				r.event(observe.LevelWarn, observe.EventCommitFailed, "register", nil)
 				stats.failed++
 				pendingComplete += o.End - o.Cursor
 				continue
@@ -316,6 +327,7 @@ func (r *ingestor) poll(ctx context.Context, dirs []agentDir, allowEmpty bool) (
 		if err := r.watcher.Acknowledge(o.Path, o.SourceID, committed); err != nil {
 			r.reportSource(o.Path, err)
 			r.observer.Add("ingest_failures", 1, "checkpoint")
+			r.event(observe.LevelWarn, observe.EventCheckpointFailed, "acknowledge", nil)
 			stats.failed++
 			continue
 		}
@@ -341,6 +353,7 @@ func (r *ingestor) poll(ctx context.Context, dirs []agentDir, allowEmpty bool) (
 	if err := r.watcher.Flush(); err != nil {
 		r.observer.Observe("ingest_checkpoint_duration", time.Since(checkpointStart))
 		r.observer.Add("ingest_failures", 1, "checkpoint")
+		r.event(observe.LevelWarn, observe.EventCheckpointFailed, "flush", nil)
 		return stats, err
 	}
 	r.observer.Observe("ingest_checkpoint_duration", time.Since(checkpointStart))
@@ -403,11 +416,14 @@ func (r *ingestor) ingestSource(ctx context.Context, o watch.Outcome) (int, int6
 		r.observer.Add("parse_records", uint64(len(res.Events)), "normalized")
 		if stopped {
 			r.observer.Add("parse_records", 1, "stopped")
+			stopCode := "invalid"
 			if stop.RecordTooLarge {
 				r.observer.Add("parse_stops", 1, "oversize")
+				stopCode = "oversize"
 			} else {
 				r.observer.Add("parse_stops", 1, "invalid")
 			}
+			r.event(observe.LevelWarn, observe.EventSourceStopped, stopCode, nil)
 		}
 		if len(res.Events) > 0 {
 			r.observer.Add("ingest_batches", 1, "attempted")
@@ -421,6 +437,7 @@ func (r *ingestor) ingestSource(ctx context.Context, o watch.Outcome) (int, int6
 					r.observer.Add("ingest_batches", 1, "rejected")
 				} else {
 					r.observer.Add("ingest_batches", 1, "rolled_back")
+					r.event(observe.LevelWarn, observe.EventCommitFailed, "ingest", nil)
 				}
 				return inserted, o.Cursor, nil, err
 			}
@@ -458,6 +475,7 @@ func (r *ingestor) reportMissing(o watch.Outcome) {
 		return
 	}
 	r.missingReported[o.SourceID] = true
+	r.event(observe.LevelWarn, observe.EventSourceMissing, "", nil)
 	fmt.Fprintf(r.stderr,
 		"ohya: %s: source %s disappeared; the acknowledged checkpoint is kept and ingestion resumes if the file returns\n",
 		o.Path, o.SourceID)

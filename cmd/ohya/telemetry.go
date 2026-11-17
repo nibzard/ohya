@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/nibzard/ohya/internal/mcpserver"
 	"github.com/nibzard/ohya/internal/observe"
@@ -13,6 +14,8 @@ type telemetry struct {
 	recorder  *observe.Recorder
 	publisher *observe.Publisher
 	usage     *observe.UsageWriter
+	logs      *observe.LogWriter
+	component string
 }
 
 func startTelemetry(stateDir string, observeOn bool, sampleFiles map[string]string, roles ...observe.Role) *telemetry {
@@ -23,7 +26,8 @@ func startTelemetry(stateDir string, observeOn bool, sampleFiles map[string]stri
 		fmt.Fprintf(os.Stderr, "ohya: observability disabled: %v\n", err)
 		return nil
 	}
-	t := &telemetry{}
+	component := strings.Join(roleNames(roles), "+")
+	t := &telemetry{component: component}
 	if usageEligible(roles...) {
 		if usage, err := observe.NewUsageWriter(observe.UsageWriterConfig{
 			Dir:      filepath.Join(stateDir, "observe"),
@@ -43,6 +47,23 @@ func startTelemetry(stateDir string, observeOn bool, sampleFiles map[string]stri
 		fmt.Fprintf(os.Stderr, "ohya: observability disabled: %v\n", err)
 		return t
 	}
+	logs, err := observe.NewLogWriter(observe.LogWriterConfig{
+		Dir:      filepath.Join(stateDir, "observe"),
+		Instance: instance,
+		Clock:    clock,
+		Recorder: recorder,
+		Stderr:   os.Stderr,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ohya: application logs disabled: %v\n", err)
+	} else {
+		t.logs = logs
+		config := map[string]int64{"roles": int64(len(roles))}
+		if t.usage != nil {
+			config["usage_records"] = 1
+		}
+		logs.Event(component, observe.LevelInfo, observe.EventStartup, "", config)
+	}
 	publisher, err := observe.NewPublisher(observe.PublisherConfig{
 		Dir:         filepath.Join(stateDir, "observe"),
 		Recorder:    recorder,
@@ -58,11 +79,26 @@ func startTelemetry(stateDir string, observeOn bool, sampleFiles map[string]stri
 	return t
 }
 
+func roleNames(roles []observe.Role) []string {
+	out := make([]string, len(roles))
+	for i, role := range roles {
+		out[i] = string(role)
+	}
+	return out
+}
+
 func (t *telemetry) observer() observe.Observer {
 	if t == nil || t.recorder == nil {
 		return observe.Disabled
 	}
 	return t.recorder
+}
+
+func (t *telemetry) eventsSink() observe.EventSink {
+	if t == nil || t.logs == nil {
+		return nil
+	}
+	return t.logs
 }
 
 func (t *telemetry) usageSink() mcpserver.UsageSink {
@@ -75,6 +111,12 @@ func (t *telemetry) usageSink() mcpserver.UsageSink {
 func (t *telemetry) close() {
 	if t == nil {
 		return
+	}
+	if t.logs != nil {
+		t.logs.Event(t.component, observe.LevelInfo, observe.EventShutdown, "", nil)
+		if err := t.logs.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "ohya: application log write failure: %v\n", err)
+		}
 	}
 	if t.publisher != nil {
 		if err := t.publisher.Close(); err != nil {

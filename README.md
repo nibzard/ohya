@@ -224,6 +224,8 @@ directories and sends only the normalized value to the hub.
 | `ohya doctor` | Read-only health checks |
 | `ohya status` | Runtime state from published local snapshots: freshness, backlog, resources |
 | `ohya metrics` | Counter rates and duration quantiles over 1m/5m/1h/24h windows |
+| `ohya logs` | Structured application logs from local instances, with `--follow` |
+| `ohya diagnose` | Export one private, sanitized diagnostics artifact |
 | `ohya usage` | Report how agents use the `sql` and `annotate` tools |
 | `ohya version` | Build, parser, and schema versions |
 
