@@ -1,0 +1,1 @@
+Context: follow-up to the v0.2.0 cut; the release runbook's schema-registration step was skipped and CI's tag guard caught it.
