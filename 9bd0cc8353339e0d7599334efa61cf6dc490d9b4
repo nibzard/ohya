@@ -1,0 +1,1 @@
+Follow-up to d62ce93: the first cut of the set measured only Codex tool outputs; T102's index-share analysis says Claude tool results dominate, so the O6 measurement now exercises both predicates.
