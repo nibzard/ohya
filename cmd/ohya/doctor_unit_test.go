@@ -225,3 +225,28 @@ func TestDoctorHubUnitRunningReplacedExecutable(t *testing.T) {
 		t.Fatalf("remedy misses the restart step: %s", f.Remedy)
 	}
 }
+
+func TestDoctorExplicitRemoteJoinStateDoesNotDoubleAppendJoin(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	joinDir := filepath.Join(dir, ".ohya", "join")
+	if err := os.MkdirAll(filepath.Join(joinDir, "setup"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(joinDir, "setup", "connection.json"), []byte(`{"mode":"remote"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deviceID := "0123456789abcdef0123456789abcdef"
+	if err := os.WriteFile(filepath.Join(joinDir, "device.json"), []byte(`{"version":1,"device_id":"`+deviceID+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(joinDir, "credential.json"), []byte(`{"version":1,"device_id":"`+deviceID+`","secret":"secret"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, out, _ := runCLI("doctor", "--state", joinDir)
+	f := soleFinding(t, parseDoctorFindings(t, out), "device_identity")
+	if f.Severity != sevOK || !strings.Contains(f.Detail, deviceID) {
+		t.Fatalf("device_identity finding = %+v (all output:\n%s), want ok with device %s", f, out, deviceID)
+	}
+}

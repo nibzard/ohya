@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -400,11 +401,16 @@ func statusServices(ctx context.Context, o statusOptions) []statusService {
 	var out []statusService
 	for _, name := range []string{"service.json", "hub-service.json"} {
 		receipt := filepath.Join(o.setupState, "setup", name)
-		if _, err := os.Stat(receipt); err != nil {
+		raw, err := os.ReadFile(receipt)
+		if err != nil {
 			continue
 		}
+		var header struct {
+			Path string `json:"path"`
+		}
+		_ = json.Unmarshal(raw, &header)
 		platform := "linux"
-		if filepath.Ext(receipt) == ".plist" {
+		if filepath.Ext(header.Path) == ".plist" {
 			platform = "darwin"
 		}
 		label := strings.TrimSuffix(name, filepath.Ext(name))

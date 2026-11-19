@@ -437,3 +437,30 @@ func TestStatusBacklogFindingCarriesBytes(t *testing.T) {
 		t.Errorf("upload bytes per agent must be surfaced: %+v", backlog.UploadBytes)
 	}
 }
+
+func TestStatusServicesDetectsDarwinFromReceiptPath(t *testing.T) {
+	dir := t.TempDir()
+	setupDir := filepath.Join(dir, "setup")
+	if err := os.MkdirAll(setupDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	receipt := `{"path":"/Users/dev/Library/LaunchAgents/com.nibzard.ohya.plist"}`
+	if err := os.WriteFile(filepath.Join(setupDir, "service.json"), []byte(receipt), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var gotCmd []string
+	services := statusServices(context.Background(), statusOptions{
+		setupState: dir,
+		loadedRun: func(_ context.Context, args []string) error {
+			gotCmd = append([]string(nil), args...)
+			return nil
+		},
+		checkRun: func(context.Context, []string) error { return nil },
+	})
+	if len(services) != 1 || services[0].Loaded == nil || !*services[0].Loaded || services[0].Running == nil || !*services[0].Running {
+		t.Fatalf("services = %+v", services)
+	}
+	if len(gotCmd) == 0 || gotCmd[0] != "launchctl" {
+		t.Fatalf("darwin receipt ran %q, want launchctl", gotCmd)
+	}
+}

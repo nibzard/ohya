@@ -93,6 +93,7 @@ func runDoctorCommand(args []string, stdout, stderr io.Writer) error {
 	if *maxRecordBytes <= 0 {
 		return c.usageErrorf("--max-record-bytes must be positive")
 	}
+	explicitState := *state != ""
 	stateDir := *state
 	if stateDir == "" {
 		stateDir = filepath.Dir(*db)
@@ -109,7 +110,7 @@ func runDoctorCommand(args []string, stdout, stderr io.Writer) error {
 		}
 	})
 	remote := connection.Mode == "remote" && !explicitDB
-	if connection.Mode == "remote" {
+	if !explicitState && connection.Mode == "remote" {
 		stateDir = filepath.Join(setupState, "join")
 	}
 	findings, transport, err := runDoctor(context.Background(), doctorOptions{
