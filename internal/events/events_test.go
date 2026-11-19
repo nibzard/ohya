@@ -537,3 +537,40 @@ func TestPiAnthropicFixtureThroughWritePath(t *testing.T) {
 		}
 	}
 }
+
+func TestFromClaudeCodeIgnoresNegativeAndNullUsage(t *testing.T) {
+	ctx := context.Background()
+	hub, err := store.Open(ctx, filepath.Join(t.TempDir(), "hub.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hub.Close()
+	if err := hub.RegisterSource(ctx, "src-1", "device-a", "claude-code", "/s.jsonl"); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Join([]string{
+		`{"type":"assistant","sessionId":"sess-neg","message":{"id":"msg-neg","role":"assistant","content":"hi","usage":{"input_tokens":-1,"output_tokens":5}}}`,
+		`{"type":"assistant","sessionId":"sess-neg","message":{"id":"msg-null","role":"assistant","content":"hi","usage":null}}`,
+		`{"type":"assistant","sessionId":"sess-neg","message":{"id":"msg-ok","role":"assistant","content":"hi","usage":{"input_tokens":10,"output_tokens":3}}}`,
+	}, "\n") + "\n"
+	parsed, err := Parse("claude-code", []byte(lines), 0, Options{SourceScope: "src-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Events[0].HasUsage {
+		t.Fatalf("negative usage accepted: %+v", parsed.Events[0].Usage)
+	}
+	if parsed.Events[1].HasUsage {
+		t.Fatalf("null usage accepted: %+v", parsed.Events[1].Usage)
+	}
+	if !parsed.Events[2].HasUsage {
+		t.Fatal("valid usage dropped")
+	}
+	if _, err := hub.Ingest(ctx, store.Batch{SourceID: "src-1", DeviceID: "device-a", Events: parsed.Events}); err != nil {
+		t.Fatalf("ingest failed on negative/null usage: %v", err)
+	}
+	var count int
+	if err := hub.Writer().QueryRow(`SELECT count(*) FROM session_token_usage`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("token usage rows = %d, %v; want 1", count, err)
+	}
+}

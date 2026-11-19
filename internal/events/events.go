@@ -94,9 +94,11 @@ func FromClaudeCode(r claudecode.Record) store.Event {
 	if r.Kind == "user" && observed.ContentForm == "string" {
 		e.Prompt = r.Text
 	}
-	if len(r.Usage) > 0 {
+	if len(r.Usage) > 0 && string(r.Usage) != "null" {
 		var u usageFields
-		if err := json.Unmarshal(r.Usage, &u); err == nil {
+		if err := json.Unmarshal(r.Usage, &u); err == nil &&
+			u.InputTokens >= 0 && u.CacheCreationInputTokens >= 0 &&
+			u.CacheReadInputTokens >= 0 && u.OutputTokens >= 0 {
 			e.Usage = store.Usage{
 				InputTokens:              u.InputTokens,
 				CacheCreationInputTokens: u.CacheCreationInputTokens,

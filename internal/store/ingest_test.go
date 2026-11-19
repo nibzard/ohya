@@ -101,14 +101,16 @@ func eventFromRecord(r claudecode.Record) Event {
 	if r.Kind == "user" && md.ContentForm == "string" {
 		e.Prompt = r.Text
 	}
-	if len(r.Usage) > 0 {
+	if len(r.Usage) > 0 && string(r.Usage) != "null" {
 		var u struct {
 			InputTokens              int64 `json:"input_tokens"`
 			CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
 			CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
 			OutputTokens             int64 `json:"output_tokens"`
 		}
-		if err := json.Unmarshal(r.Usage, &u); err == nil {
+		if err := json.Unmarshal(r.Usage, &u); err == nil &&
+			u.InputTokens >= 0 && u.CacheCreationInputTokens >= 0 &&
+			u.CacheReadInputTokens >= 0 && u.OutputTokens >= 0 {
 			e.Usage = Usage{
 				InputTokens:              u.InputTokens,
 				CacheCreationInputTokens: u.CacheCreationInputTokens,
