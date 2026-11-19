@@ -14,6 +14,8 @@ import (
 
 const backupStepPages = 128
 
+const backupStepYield = time.Millisecond
+
 const backupMinBytesPerSecond = 256 << 10
 
 const backupMinBudget = 2 * time.Minute
@@ -49,8 +51,8 @@ func Backup(ctx context.Context, source, destination string, progress func(done,
 		return err
 	}
 	defer src.Close()
-	var pageSize int64
-	if err := src.QueryRowContext(ctx, `PRAGMA page_size`).Scan(&pageSize); err != nil {
+	pageSize, pageCount, err := sourcePageMetrics(ctx, src)
+	if err != nil {
 		return fmt.Errorf("store: backup: %w", err)
 	}
 	err = dst.Raw(func(dstRaw any) error {
@@ -67,7 +69,7 @@ func Backup(ctx context.Context, source, destination string, progress func(done,
 			if err != nil {
 				return err
 			}
-			copyCtx, cancel := context.WithTimeout(ctx, backupBudget(int64(backup.PageCount())*pageSize))
+			copyCtx, cancel := context.WithTimeout(ctx, backupBudget(pageCount*pageSize))
 			defer cancel()
 			for {
 				if err := copyCtx.Err(); err != nil {
@@ -90,7 +92,7 @@ func Backup(ctx context.Context, source, destination string, progress func(done,
 				case <-copyCtx.Done():
 					_ = backup.Close()
 					return copyCtx.Err()
-				case <-time.After(5 * time.Millisecond):
+				case <-time.After(backupStepYield):
 				}
 			}
 		})
@@ -110,6 +112,16 @@ func Backup(ctx context.Context, source, destination string, progress func(done,
 	}
 	defer dir.Close()
 	return dir.Sync()
+}
+
+func sourcePageMetrics(ctx context.Context, conn *sql.Conn) (pageSize, pageCount int64, err error) {
+	if err := conn.QueryRowContext(ctx, `PRAGMA page_size`).Scan(&pageSize); err != nil {
+		return 0, 0, err
+	}
+	if err := conn.QueryRowContext(ctx, `PRAGMA page_count`).Scan(&pageCount); err != nil {
+		return 0, 0, err
+	}
+	return pageSize, pageCount, nil
 }
 
 func backupBudget(totalBytes int64) time.Duration {

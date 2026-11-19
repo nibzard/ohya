@@ -117,3 +117,30 @@ func TestBackupBudget(t *testing.T) {
 		}
 	}
 }
+
+func TestSourcePageMetricsReflectsDatabaseSize(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	db, source := createBackupSource(t, dir, "hub.db", true)
+	defer db.Close()
+
+	ro, err := OpenReadOnly(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+	conn, err := ro.readers.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	pageSize, pageCount, err := sourcePageMetrics(ctx, conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	total := pageSize * pageCount
+	if pageSize <= 0 || pageCount <= 0 || total < 1<<20 {
+		t.Fatalf("sourcePageMetrics = (%d, %d) (%d bytes), want > 1 MiB", pageSize, pageCount, total)
+	}
+}
