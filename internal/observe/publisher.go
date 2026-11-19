@@ -53,6 +53,7 @@ type Publisher struct {
 	writeErrs         map[string]uint64
 	lastErr           error
 	lastHistoryWallMS int64
+	lastPruneWallMS   int64
 	writeSnapshot     func(path string, data []byte) error
 	appendHistory     func(path string, data []byte) error
 }
@@ -204,6 +205,8 @@ func (p *Publisher) recordHistory() {
 	p.pruneHistory(now)
 }
 
+const historyPruneInterval = 15 * time.Minute
+
 func (p *Publisher) pruneHistory(nowMS int64) {
 	path := filepath.Join(p.dir, historyFileName)
 	info, err := os.Lstat(path)
@@ -217,6 +220,18 @@ func (p *Publisher) pruneHistory(nowMS int64) {
 		p.recordWriteError("history", fmt.Errorf("observe: history file %s is a symlink", path))
 		return
 	}
+	if info.Size() <= p.cfg.MaxHistoryBytes {
+		pruneEvery := min(historyPruneInterval, p.cfg.MaxHistoryAge/4)
+		p.mu.Lock()
+		lastPrune := p.lastPruneWallMS
+		p.mu.Unlock()
+		if lastPrune != 0 && pruneEvery > 0 && nowMS-lastPrune < pruneEvery.Milliseconds() {
+			return
+		}
+	}
+	p.mu.Lock()
+	p.lastPruneWallMS = nowMS
+	p.mu.Unlock()
 	raw, err := readBounded(path, p.cfg.MaxHistoryBytes+MaxSnapshotFileBytes+1)
 	if err != nil {
 		p.recordWriteError("history", fmt.Errorf("observe: read history: %w", err))

@@ -31,42 +31,26 @@ func ProbePID(pid int) string {
 
 const procUserHz = 100
 
-func selfProcStat() ([]string, bool) {
-	raw, err := os.ReadFile("/proc/self/stat")
+func parseProcStat(raw string) (cpuSeconds float64, rssPages float64, ok bool) {
+	rparen := strings.LastIndexByte(raw, ')')
+	if rparen < 0 || rparen+1 >= len(raw) {
+		return 0, 0, false
+	}
+	after := strings.Fields(raw[rparen+1:])
+	if len(after) < 22 {
+		return 0, 0, false
+	}
+	user, err := strconv.ParseFloat(after[11], 64)
 	if err != nil {
-		return nil, false
+		return 0, 0, false
 	}
-	fields := strings.Fields(string(raw))
-	if len(fields) < 24 {
-		return nil, false
-	}
-	return fields, true
-}
-
-func SelfCPUSeconds() (float64, bool) {
-	fields, ok := selfProcStat()
-	if !ok {
-		return 0, false
-	}
-	user, err := strconv.ParseFloat(fields[13], 64)
+	system, err := strconv.ParseFloat(after[12], 64)
 	if err != nil {
-		return 0, false
+		return 0, 0, false
 	}
-	system, err := strconv.ParseFloat(fields[14], 64)
+	pages, err := strconv.ParseFloat(after[21], 64)
 	if err != nil {
-		return 0, false
+		return 0, 0, false
 	}
-	return (user + system) / procUserHz, true
-}
-
-func SelfRSSBytes() (float64, bool) {
-	fields, ok := selfProcStat()
-	if !ok {
-		return 0, false
-	}
-	pages, err := strconv.ParseFloat(fields[23], 64)
-	if err != nil {
-		return 0, false
-	}
-	return pages * float64(os.Getpagesize()), true
+	return (user + system) / procUserHz, pages, true
 }

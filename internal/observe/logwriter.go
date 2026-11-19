@@ -158,6 +158,7 @@ func (w *LogWriter) Event(component string, level Level, code EventCode, outcome
 				held.Counts = map[string]int64{}
 			}
 			held.Counts["coalesced"]++
+			w.pending[key] = held
 			w.mu.Unlock()
 			w.coalesced.Add(1)
 			if w.cfg.Recorder != nil {
@@ -246,7 +247,7 @@ func (w *LogWriter) run() {
 			w.mu.Unlock()
 			return
 		case entry := <-w.queue:
-			w.claim(entry)
+			entry = w.claim(entry)
 			w.write(entry)
 		case <-summary.C:
 			w.emitSummary(false)
@@ -259,7 +260,7 @@ func (w *LogWriter) drain() {
 	for {
 		select {
 		case entry := <-w.queue:
-			w.claim(entry)
+			entry = w.claim(entry)
 			w.write(entry)
 		default:
 			return
@@ -270,16 +271,20 @@ func (w *LogWriter) drain() {
 	}
 }
 
-func (w *LogWriter) claim(entry LogEntry) {
+func (w *LogWriter) claim(entry LogEntry) LogEntry {
 	key := coalesceKey(entry)
 	w.mu.Lock()
 	if key != "" {
-		delete(w.pending, key)
+		if held, ok := w.pending[key]; ok {
+			entry = held
+			delete(w.pending, key)
+		}
 	}
 	w.mu.Unlock()
 	if w.cfg.Recorder != nil {
 		w.cfg.Recorder.Set("instrumentation_queue_depth", float64(len(w.queue)))
 	}
+	return entry
 }
 
 func (w *LogWriter) write(entry LogEntry) {

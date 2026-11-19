@@ -1,12 +1,14 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/nibzard/ohya/internal/claudecode"
@@ -282,6 +284,9 @@ func recentWarningEntries(stateDir string, limit int) []observe.LogEntry {
 	if len(all) == 0 {
 		return nil
 	}
+	slices.SortStableFunc(all, func(a, b observe.LogEntry) int {
+		return cmp.Compare(a.TimeMS, b.TimeMS)
+	})
 	if len(all) > limit {
 		all = all[len(all)-limit:]
 	}

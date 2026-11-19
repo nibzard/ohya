@@ -186,19 +186,23 @@ func (o logsOptions) matches(entry observe.LogEntry, sinceMS int64) bool {
 }
 
 func runLogs(ctx context.Context, o logsOptions, stdout, stderr io.Writer) error {
-	views, truncated, err := observe.DiscoverInstances(filepath.Join(o.stateDir, "observe"))
-	if err != nil {
-		return err
-	}
-	if truncated {
-		return fmt.Errorf("more than %d instances publish under %s; pass --instance to select one", observe.MaxLiveInstances, o.stateDir)
-	}
+	var views []observe.InstanceView
 	if o.instanceID != "" {
 		view, err := observe.LoadInstanceView(filepath.Join(o.stateDir, "observe"), o.instanceID)
 		if err != nil {
 			return err
 		}
 		views = []observe.InstanceView{view}
+	} else {
+		var truncated bool
+		var err error
+		views, truncated, err = observe.DiscoverInstances(filepath.Join(o.stateDir, "observe"))
+		if err != nil {
+			return err
+		}
+		if truncated {
+			return fmt.Errorf("more than %d instances publish under %s; pass --instance to select one", observe.MaxLiveInstances, o.stateDir)
+		}
 	}
 	selected := []observe.InstanceView{}
 	for _, view := range views {

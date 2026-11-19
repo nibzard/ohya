@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -253,6 +254,23 @@ func TestLogsPayloadCapDropsOldestEntries(t *testing.T) {
 	}
 }
 
+type syncBuf struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuf) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuf) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 func TestLogsFollowReplaysWindowThenStreamsAndSurvivesRotation(t *testing.T) {
 	stateDir := t.TempDir()
 	id := strings.Repeat("f", 32)
@@ -260,7 +278,7 @@ func TestLogsFollowReplaysWindowThenStreamsAndSurvivesRotation(t *testing.T) {
 	instanceDir := seedLogInstance(t, stateDir, id, "ingest", now.UnixMilli(), []observe.LogEntry{
 		logEntryAt(id, "ingest", observe.LevelInfo, observe.EventStartup, now.Add(-time.Minute)),
 	})
-	var stdout bytes.Buffer
+	var stdout syncBuf
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {

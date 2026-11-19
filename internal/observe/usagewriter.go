@@ -112,18 +112,19 @@ func (w *UsageWriter) Failed() uint64 { return w.failed.Load() }
 
 func (w *UsageWriter) Close() error {
 	w.mu.Lock()
-	if w.closed {
-		w.mu.Unlock()
-		return w.err
+	if !w.closed {
+		w.closed = true
+		close(w.queue)
 	}
-	w.closed = true
-	close(w.queue)
 	w.mu.Unlock()
 	select {
 	case <-w.done:
 	case <-time.After(UsageFlushTimeout):
 	}
-	return w.err
+	w.mu.Lock()
+	err := w.err
+	w.mu.Unlock()
+	return err
 }
 
 func (w *UsageWriter) run() {
