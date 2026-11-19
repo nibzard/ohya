@@ -29,6 +29,8 @@ ingest     import agent session history, then poll for new records
 serve      run the hub for devices: transport, sync, remote tools
 join       pair a device with a hub and upload its agent sessions
 mcp        serve the sql and annotate MCP tools on stdio
+search     find sessions by keyword in the stored events
+show       print one session's newest events
 devices    manage device pairing and revocation
 sources    manage stored sources on the hub
 purge      plan or apply an owner-decided purge of stored sessions
@@ -73,6 +75,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runJoinCommand(rest, stdout, stderr)
 	case "mcp":
 		return runMcpCommand(rest, stdout, stderr)
+	case "search":
+		return runSearchCommand(rest, stdout, stderr)
+	case "show":
+		return runShowCommand(rest, stdout, stderr)
 	case "devices":
 		return runDevicesCommand(rest, stdout, stderr)
 	case "purge":

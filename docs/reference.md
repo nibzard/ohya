@@ -15,6 +15,8 @@ make build
 ./bin/ohya ingest --once       # one pass, then exit
 ./bin/ohya mcp                 # serve the sql and annotate MCP tools on stdio
 ./bin/ohya mcp --remote        # same tools, through the joined device
+./bin/ohya search "auth AND refresh"   # find sessions by keyword, print excerpts
+./bin/ohya show SESSION_ID     # print one session's newest events
 ./bin/ohya devices list        # show paired devices and invitations
 ./bin/ohya devices revoke ID   # revoke a device, final for its identity
 ./bin/ohya purge               # plan a purge of stored sessions (dry run)
@@ -338,6 +340,51 @@ not at all, values are valid JSON of at most 64 KiB stored compacted, and
 the result reports `applied` and `unchanged` counts. Identical retries
 change nothing, not even timestamps. Agents query annotations through the
 `sql` tool like any other table.
+
+### Operator recall
+
+`ohya search` and `ohya show` give a human the same recall the `sql` tool
+gives an agent, without sqlite3, an agent session, or MCP wiring. Both are
+print-only and never prompt.
+
+```sh
+ohya search "auth AND refresh" --repo github.com/owner/name --agent claude-code
+ohya show claude-code:dev1:sess-1 --last 50
+```
+
+`ohya search <query>` runs one bounded read-only FTS5 query with BM25
+ranking over stored events (the `events` table, so live sessions are
+searchable too) and prints the best 20 matches, each as two lines: the
+event id, session id, agent, repo (`-` when the session stored none), and
+UTC time, then an indented excerpt. The query is SQLite FTS5 syntax, for
+example `error AND panic`, `"exact phrase"`, or `auth OR token`; an
+apostrophe must sit inside a double-quoted phrase, because a bare one is an
+FTS5 syntax error. `--repo` and `--agent` narrow the match to sessions of
+one repository (`host/path`, as stored in `sessions.repo`) or one agent. A
+query with no matches prints `no matches` and exits 0; an FTS5 syntax error
+exits 1 with SQLite's message.
+
+`ohya show <session-id>` prints one session's header — agent, device,
+native id, repo, working directory, branch, model, first prompt, timing,
+and event count — followed by its `--last` newest events (default 20),
+excerpted, oldest first, one line per event with its id, time, kind (with
+role and tool when stored), and excerpt. Byte-identical replay duplicates
+stay hidden. The session id is the `agent:device:native` value that
+`ohya search` prints; an unknown id exits 1 and points at `ohya search`.
+
+Both commands query one path: the local hub database (opened read-only;
+they never write or migrate it) or, with `--remote`, the joined hub through
+the saved pairing credential and the tailcat transport, following
+`ohya mcp --remote`. A setup state whose saved connection selects remote
+memory switches the default to `--remote` on its own unless `--db` names a
+database explicitly. The query itself always runs through the `sql` tool's
+engine, so its read-only enforcement, its 500-row and 256 KiB output
+bounds, and its 5 second deadline apply unchanged; excerpts are clipped to
+200 characters and control bytes are neutralized before printing. Flags:
+`--db` for the database (ignored with `--remote`), `--state` for the join
+state with `--remote` or the setup state root otherwise, and `--remote`.
+Exit codes follow the CLI contract: 0 for a printed report, 1 for a failed
+query or unknown session, 2 for a usage error.
 
 ### Usage records
 

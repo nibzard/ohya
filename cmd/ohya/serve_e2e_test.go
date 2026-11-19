@@ -423,6 +423,30 @@ func TestServeJoinEndToEnd(t *testing.T) {
 	assertRemoteCount(secondSession, wantEvents)
 	t.Log("two remote MCP processes serve queries next to the uploader")
 
+	var searchOut bytes.Buffer
+	if err := runSearchCommand([]string{"--remote", "--state", devState, "prime"}, &searchOut, io.Discard); err != nil {
+		t.Fatalf("remote search: %v; serve stderr:\n%s", err, serveLog.String())
+	}
+	sessionID := ""
+	for _, field := range strings.Fields(searchOut.String()) {
+		if strings.HasPrefix(field, "session=") {
+			sessionID = strings.TrimPrefix(field, "session=")
+		}
+	}
+	if sessionID == "" || !strings.Contains(searchOut.String(), "prime") {
+		t.Fatalf("remote search output holds no session id or excerpt:\n%s", searchOut.String())
+	}
+	var showOut bytes.Buffer
+	if err := runShowCommand([]string{"--remote", "--state", devState, sessionID}, &showOut, io.Discard); err != nil {
+		t.Fatalf("remote show %s: %v; serve stderr:\n%s", sessionID, err, serveLog.String())
+	}
+	for _, want := range []string{"first prompt: Find the highest prime below 20.", "The highest prime below 20 is 19."} {
+		if !strings.Contains(showOut.String(), want) {
+			t.Fatalf("remote show output lacks %q:\n%s", want, showOut.String())
+		}
+	}
+	t.Log("remote search and show recalled the joined history without a local database")
+
 	appendAndWait := func(uuid string, want int, timeout time.Duration) {
 		t.Helper()
 		appendFile, err := os.OpenFile(filepath.Join(claudeRoot, "session.jsonl"), os.O_APPEND|os.O_WRONLY, 0)

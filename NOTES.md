@@ -2004,3 +2004,36 @@ How to use this file:
   recurs, close the channel after the query takes the slot (engine hook) or
   poll for a busy-observed flag instead.
 
+- Operator recall shipped (2026-11-19, T141, cmd/ohya/recall.go): `ohya
+  search <query> [--repo] [--agent]` and `ohya show <session-id> [--last N]`
+  publish the engine's recall to humans. Facts future work must keep:
+  - One query path only: both commands run SQL through the mcpserver Engine
+    (local: store.OpenReadOnly + hub.Reader + NewEngine(reader, nil, ...),
+    remote: hubsync.RemoteSession behind the same two-method interface);
+    bounds and the read-only policy are inherited, never re-implemented.
+    The engine takes inline SQL text only (no bound parameters), so user
+    input enters as doubled-quote SQL string literals; a bare apostrophe in
+    an FTS query is therefore an FTS5 syntax error (exit 1), while a
+    double-quoted phrase with an apostrophe matches — verified against the
+    bundled SQLite.
+  - Target resolution follows doctor/status, not just the mcp flag: a setup
+    state whose setup/connection.json selects remote memory switches the
+    default to --remote (join state <setup>/join) unless --db is explicit;
+    explicit --remote alone defaults the join state to ~/.ohya/join like
+    mcp. Local misses get the ingest remedy; remote unpaired states get the
+    join remedy, both before any dial.
+  - Presentation choices: search prints the best 20 by BM25 rank as
+    two-line hits (event id, session id, agent, repo-or-dash, UTC time,
+    indented 200-char excerpt); show prints the session header then the
+    newest N events oldest-first with duplicates hidden
+    (duplicate_of IS NULL). Excerpts neutralize control bytes (terminal
+    escape injection from untrusted transcript text) and empty-text events
+    print kind only. search reads `events`, not `events_settled` — the
+    10-minute settled guard protects agents from their own live session,
+    not an operator inspecting the hub.
+  - Verified on the live 16 GB hub (read-only): search "tailcat AND derp"
+    194 ms, show of a 450-event session 11 ms — the acceptance ("a human
+    finds sessions by keyword and inspects one without sqlite3 or an
+    agent") holds on real scale. Remote wiring is pinned in-process by the
+    serve e2e (runSearchCommand/runShowCommand against the joined dev
+    state).
