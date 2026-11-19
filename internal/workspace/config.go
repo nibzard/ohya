@@ -14,7 +14,7 @@ func parseRemotes(config string) []remote {
 	lines := strings.Split(config, "\n")
 	for i := 0; i < len(lines); i++ {
 		line := strings.TrimSpace(strings.TrimSuffix(lines[i], "\r"))
-		for strings.HasSuffix(line, "\\") && !strings.HasSuffix(line, "\\\\") && i+1 < len(lines) {
+		for hasOddTrailingBackslashes(line) && i+1 < len(lines) {
 			i++
 			line = line[:len(line)-1] + strings.TrimSuffix(lines[i], "\r")
 		}
@@ -45,14 +45,45 @@ func parseRemotes(config string) []remote {
 	return remotes
 }
 
+func hasOddTrailingBackslashes(s string) bool {
+	n := 0
+	for i := len(s) - 1; i >= 0 && s[i] == '\\'; i-- {
+		n++
+	}
+	return n%2 == 1
+}
+
 func parseSection(line string) (string, string) {
-	end := strings.LastIndexByte(line, ']')
+	end := -1
+	inQuote := false
+	for i := 1; i < len(line); i++ {
+		c := line[i]
+		if inQuote {
+			if c == '\\' && i+1 < len(line) {
+				i++
+				continue
+			}
+			if c == '"' {
+				inQuote = false
+			}
+			continue
+		}
+		if c == '"' {
+			inQuote = true
+			continue
+		}
+		if c == ']' {
+			end = i
+			break
+		}
+	}
 	if end < 0 {
 		return "", ""
 	}
 	header := strings.TrimSpace(line[1:end])
-	if name, rest, ok := strings.Cut(header, " "); ok {
-		rest = strings.TrimSpace(rest)
+	if sep := strings.IndexAny(header, " \t"); sep >= 0 {
+		name := header[:sep]
+		rest := strings.TrimSpace(header[sep+1:])
 		if len(rest) >= 2 && rest[0] == '"' && rest[len(rest)-1] == '"' {
 			return strings.ToLower(name), unescape(rest[1 : len(rest)-1])
 		}

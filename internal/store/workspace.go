@@ -127,9 +127,10 @@ func (d *DB) PendingWorkspaces(ctx context.Context, deviceID, agent string, limi
 	rows, err := d.writer.QueryContext(ctx,
 		`SELECT DISTINCT s.cwd FROM sessions s
 		 WHERE s.device_id = ? AND s.agent = ? AND s.cwd IS NOT NULL AND s.repo IS NULL
+		   AND length(CAST(s.cwd AS BLOB)) <= ?
 		   AND NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.device_id = s.device_id AND w.path = s.cwd)
 		 ORDER BY s.cwd LIMIT ?`,
-		deviceID, agent, limit)
+		deviceID, agent, MaxWorkspacePathBytes, limit)
 	if err != nil {
 		return nil, fmt.Errorf("store: pending workspaces of device %s: %w", deviceID, err)
 	}

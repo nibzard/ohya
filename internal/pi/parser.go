@@ -16,7 +16,7 @@ const AgentName = "pi"
 
 const SyntheticNativeIDPrefix = "ohya-synthetic:"
 
-const OutputVersion = 2
+const OutputVersion = 3
 
 const DefaultMaxRecordBytes = 32 << 20
 
@@ -226,7 +226,7 @@ func normalizeMessage(rec *Record, obj map[string]any, md map[string]any) {
 		rec.Text, rec.ToolName = text, tool
 		rec.Model, _ = stringValue(msg, "model")
 		rec.MessageID, _ = stringValue(msg, "responseId")
-		if u, ok := msg["usage"]; ok {
+		if u, ok := msg["usage"].(map[string]any); ok {
 			if b, err := json.Marshal(u); err == nil {
 				rec.Usage = b
 			}
@@ -330,11 +330,13 @@ func blockText(v any) string {
 }
 
 func compactJSON(v any) string {
-	b, err := json.Marshal(v)
-	if err != nil {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
 		return ""
 	}
-	return string(b)
+	return strings.TrimSuffix(buf.String(), "\n")
 }
 
 func stringValue(m map[string]any, key string) (string, bool) {

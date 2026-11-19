@@ -213,7 +213,7 @@ func parseRecord(line []byte, offset int64, native, scope string) (Record, error
 		}
 	case "token_usage_record":
 		rec.ResponseID, _ = stringValue(payload, "response_id")
-		if u, ok := payload["usage"]; ok {
+		if u, ok := payload["usage"].(map[string]any); ok {
 			if b, err := json.Marshal(u); err == nil {
 				rec.Usage = b
 			}

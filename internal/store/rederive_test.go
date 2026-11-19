@@ -164,7 +164,7 @@ func TestReDeriveIsNoOpWhenCurrent(t *testing.T) {
 	}
 	before := dumpHub(t, hub)
 
-	res, err := hub.ReDerive(context.Background(), []ParserDeriver{claudeDeriver(1, nil)})
+	res, err := hub.ReDerive(context.Background(), []ParserDeriver{claudeDeriver(claudecode.OutputVersion, nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,8 +179,10 @@ func TestReDeriveIsNoOpWhenCurrent(t *testing.T) {
 func TestReDeriveReproducesRowsAndIsIdempotent(t *testing.T) {
 	hub, _ := ingestFixtureHub(t)
 	before := dumpHub(t, hub)
+	cur := claudecode.OutputVersion
+	next := cur + 1
 
-	res, err := hub.ReDerive(context.Background(), []ParserDeriver{claudeDeriver(2, nil)})
+	res, err := hub.ReDerive(context.Background(), []ParserDeriver{claudeDeriver(next, nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,14 +190,16 @@ func TestReDeriveReproducesRowsAndIsIdempotent(t *testing.T) {
 		t.Fatalf("rebuild result = %+v, want work done", res)
 	}
 	rebuilt := dumpHub(t, hub)
-	if strings.Count(rebuilt, "pv=1") != 0 || strings.Count(rebuilt, "pv=2") != strings.Count(before, "pv=1") {
-		t.Fatalf("rebuild did not stamp version 2 everywhere:\n%s", rebuilt)
+	curTag := fmt.Sprintf("pv=%d", cur)
+	nextTag := fmt.Sprintf("pv=%d", next)
+	if strings.Count(rebuilt, curTag) != 0 || strings.Count(rebuilt, nextTag) != strings.Count(before, curTag) {
+		t.Fatalf("rebuild did not stamp version %d everywhere:\n%s", next, rebuilt)
 	}
 	if stripVersions(rebuilt) != stripVersions(before) {
 		t.Fatalf("rebuild changed derived state beyond the version stamp:\n%s", diffSnip(before, rebuilt))
 	}
 
-	res2, err := hub.ReDerive(context.Background(), []ParserDeriver{claudeDeriver(2, nil)})
+	res2, err := hub.ReDerive(context.Background(), []ParserDeriver{claudeDeriver(next, nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +238,7 @@ func TestReDeriveRewritesTextSessionsAndFTS(t *testing.T) {
 	}
 	oldPrime := matchCount(t, hub, "prime")
 
-	res, err := hub.ReDerive(ctx, []ParserDeriver{claudeDeriver(2, func(ev *Event) {
+	res, err := hub.ReDerive(ctx, []ParserDeriver{claudeDeriver(claudecode.OutputVersion+1, func(ev *Event) {
 		if ev.Text != "" {
 			ev.Text = ev.Text + " nineteen"
 		}
@@ -288,7 +292,7 @@ func TestReDeriveMovesSessions(t *testing.T) {
 	hub, _ := ingestFixtureHub(t)
 	old := SessionID(deviceHex, "claude-code", "00000000-0000-4000-8000-0000000000a1")
 
-	res, err := hub.ReDerive(context.Background(), []ParserDeriver{claudeDeriver(2, func(ev *Event) {
+	res, err := hub.ReDerive(context.Background(), []ParserDeriver{claudeDeriver(claudecode.OutputVersion+1, func(ev *Event) {
 		ev.NativeID = "thread-renamed"
 	})})
 	if err != nil {
@@ -352,7 +356,7 @@ func TestReDeriveReassignsDuplicatesInWalkOrder(t *testing.T) {
 		t.Fatalf("precondition: arrival made page %d the original of orig %d", pageRow.ID, origRow.ID)
 	}
 
-	if _, err := hub.ReDerive(context.Background(), []ParserDeriver{ordinalDeriver(2)}); err != nil {
+	if _, err := hub.ReDerive(context.Background(), []ParserDeriver{ordinalDeriver(claudecode.OutputVersion + 1)}); err != nil {
 		t.Fatal(err)
 	}
 	pageRow, origRow = eventAt(t, hub, "page", 0), eventAt(t, hub, "orig", 0)
@@ -387,7 +391,7 @@ func TestReDeriveKeepsDistinctRecordsAtOneOrdinal(t *testing.T) {
 	mustIngest(t, hub, Batch{SourceID: "orig", Events: []Event{o2}})
 	mustIngest(t, hub, Batch{SourceID: "replay", Events: []Event{r2}})
 
-	if _, err := hub.ReDerive(context.Background(), []ParserDeriver{ordinalDeriver(2)}); err != nil {
+	if _, err := hub.ReDerive(context.Background(), []ParserDeriver{ordinalDeriver(claudecode.OutputVersion + 1)}); err != nil {
 		t.Fatal(err)
 	}
 	oRow, pRow, rRow := eventAt(t, hub, "orig", 0), eventAt(t, hub, "page", 0), eventAt(t, hub, "replay", 0)
@@ -413,12 +417,12 @@ func TestReDeriveKeepsDistinctRecordsAtOneOrdinal(t *testing.T) {
 
 func TestReDeriveRefusesNewerStoredVersions(t *testing.T) {
 	hub, _ := ingestFixtureHub(t)
-	if _, err := hub.Writer().Exec(`UPDATE events SET parser_version = 3`); err != nil {
+	if _, err := hub.Writer().Exec(`UPDATE events SET parser_version = ?`, claudecode.OutputVersion+2); err != nil {
 		t.Fatal(err)
 	}
 	before := dumpHub(t, hub)
 
-	_, err := hub.ReDerive(context.Background(), []ParserDeriver{claudeDeriver(2, nil)})
+	_, err := hub.ReDerive(context.Background(), []ParserDeriver{claudeDeriver(claudecode.OutputVersion+1, nil)})
 	if err == nil || !strings.Contains(err.Error(), "upgrade") {
 		t.Fatalf("newer-version error = %v, want an upgrade refusal", err)
 	}
@@ -431,7 +435,7 @@ func TestReDeriveRollsBackOnDeriveFailure(t *testing.T) {
 	hub, _ := ingestFixtureHub(t)
 	before := dumpHub(t, hub)
 
-	_, err := hub.ReDerive(context.Background(), []ParserDeriver{claudeDeriver(2, func(ev *Event) {
+	_, err := hub.ReDerive(context.Background(), []ParserDeriver{claudeDeriver(claudecode.OutputVersion+1, func(ev *Event) {
 		if ev.Offset > 0 {
 			ev.Text = ""
 			ev.NativeID = ""
@@ -473,7 +477,8 @@ func TestReDeriveWalksMoreThanOneChunk(t *testing.T) {
 	}
 	mustIngest(t, hub, Batch{SourceID: "s1", Events: events})
 
-	res, err := hub.ReDerive(context.Background(), []ParserDeriver{claudeDeriver(2, nil)})
+	next := claudecode.OutputVersion + 1
+	res, err := hub.ReDerive(context.Background(), []ParserDeriver{claudeDeriver(next, nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -484,8 +489,8 @@ func TestReDeriveWalksMoreThanOneChunk(t *testing.T) {
 	if row.EventCount != len(events) {
 		t.Fatalf("event_count = %d, want %d", row.EventCount, len(events))
 	}
-	if n := countEvents(t, hub, `SELECT count(*) FROM events WHERE parser_version = 2`); n != len(events) {
-		t.Fatalf("version-2 rows = %d, want %d", n, len(events))
+	if n := countEvents(t, hub, fmt.Sprintf(`SELECT count(*) FROM events WHERE parser_version = %d`, next)); n != len(events) {
+		t.Fatalf("version-%d rows = %d, want %d", next, n, len(events))
 	}
 }
 
@@ -529,7 +534,7 @@ func TestReDeriveMatchesIngestionAcrossSources(t *testing.T) {
 		mustIngest(t, hub, Batch{SourceID: source, Events: records[split:]})
 	}
 	before := dumpHub(t, hub)
-	if _, err := hub.ReDerive(context.Background(), []ParserDeriver{claudeDeriver(2, nil)}); err != nil {
+	if _, err := hub.ReDerive(context.Background(), []ParserDeriver{claudeDeriver(claudecode.OutputVersion+1, nil)}); err != nil {
 		t.Fatal(err)
 	}
 	after := dumpHub(t, hub)
@@ -555,7 +560,7 @@ func TestReDeriveSkipsTextlessRowsInFTSAndSurvivesDeleteReuse(t *testing.T) {
 	textless.Prompt = ""
 	mustIngest(t, hub, Batch{SourceID: "s2", Events: []Event{textless}})
 
-	if _, err := hub.ReDerive(ctx, []ParserDeriver{claudeDeriver(2, nil)}); err != nil {
+	if _, err := hub.ReDerive(ctx, []ParserDeriver{claudeDeriver(claudecode.OutputVersion+1, nil)}); err != nil {
 		t.Fatal(err)
 	}
 

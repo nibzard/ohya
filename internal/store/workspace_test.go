@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/nibzard/ohya/internal/claudecode"
 	"github.com/nibzard/ohya/internal/workspace"
 )
 
@@ -181,7 +183,7 @@ func TestReDeriveKeepsObservedRepositories(t *testing.T) {
 		t.Fatalf("observe = %+v", res)
 	}
 	before := dumpHub(t, hub)
-	if _, err := hub.ReDerive(context.Background(), []ParserDeriver{claudeDeriver(2, nil)}); err != nil {
+	if _, err := hub.ReDerive(context.Background(), []ParserDeriver{claudeDeriver(claudecode.OutputVersion+1, nil)}); err != nil {
 		t.Fatal(err)
 	}
 	after := dumpHub(t, hub)
@@ -200,4 +202,22 @@ func fixtureNative(t *testing.T, hub *DB) string {
 		t.Fatal(err)
 	}
 	return native
+}
+
+func TestPendingWorkspacesSkipsOversizedCwd(t *testing.T) {
+	ctx := context.Background()
+	hub := ingestHub(t)
+	mustRegister(t, hub, "s1", "/s1.jsonl")
+	longCwd := "/" + strings.Repeat("a", MaxWorkspacePathBytes+10)
+	e1 := sessionAt(0, "n1", longCwd)
+	e2 := sessionAt(e1.End, "n2", "/work/normal")
+	mustIngest(t, hub, Batch{SourceID: "s1", Events: []Event{e1, e2}})
+
+	pending, err := hub.PendingWorkspaces(ctx, deviceHex, "claude-code", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(pending, []string{"/work/normal"}) {
+		t.Fatalf("PendingWorkspaces = %v, want only [/work/normal]", pending)
+	}
 }

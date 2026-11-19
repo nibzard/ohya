@@ -14,7 +14,7 @@ const AgentName = "claude-code"
 
 const SyntheticNativeIDPrefix = "ohya-synthetic:"
 
-const OutputVersion = 1
+const OutputVersion = 2
 
 const DefaultMaxRecordBytes = 32 << 20
 
@@ -41,23 +41,25 @@ type Options struct {
 }
 
 type Record struct {
-	Offset    int64
-	End       int64
-	Raw       string
-	Native    string
-	Synthetic bool
-	Kind      string
-	Role      string
-	ToolName  string
-	Text      string
-	HasTime   bool
-	TimeMS    int64
-	Cwd       string
-	GitBranch string
-	Model     string
-	MessageID string
-	Usage     json.RawMessage
-	Metadata  string
+	Offset      int64
+	End         int64
+	Raw         string
+	Native      string
+	Synthetic   bool
+	Kind        string
+	Role        string
+	ToolName    string
+	Text        string
+	HasTime     bool
+	TimeMS      int64
+	Cwd         string
+	GitBranch   string
+	Model       string
+	MessageID   string
+	ContentForm string
+	IsSidechain bool
+	Usage       json.RawMessage
+	Metadata    string
 }
 
 type Result struct {
@@ -173,6 +175,7 @@ func parseRecord(line []byte, offset int64, o Options) (Record, error) {
 		md["parentUuid"] = v
 	}
 	if v, ok := obj["isSidechain"].(bool); ok && v {
+		rec.IsSidechain = true
 		md["isSidechain"] = true
 	}
 	if v, ok := stringValue(obj, "agentId"); ok {
@@ -200,7 +203,7 @@ func parseRecord(line []byte, offset int64, o Options) (Record, error) {
 		if v, ok := stringValue(msg, "model"); ok {
 			rec.Model = v
 		}
-		if u, ok := msg["usage"]; ok {
+		if u, ok := msg["usage"].(map[string]any); ok {
 			if b, err := json.Marshal(u); err == nil {
 				rec.Usage = b
 			}
@@ -208,8 +211,10 @@ func parseRecord(line []byte, offset int64, o Options) (Record, error) {
 		switch content := msg["content"].(type) {
 		case string:
 			rec.Text = content
+			rec.ContentForm = "string"
 			md["contentForm"] = "string"
 		case []any:
+			rec.ContentForm = "array"
 			md["contentForm"] = "array"
 			text, tool, blocks := normalizeContent(content)
 			rec.Text = text
@@ -340,9 +345,11 @@ func stringValue(m map[string]any, key string) (string, bool) {
 }
 
 func compactJSON(v any) string {
-	b, err := json.Marshal(v)
-	if err != nil {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
 		return ""
 	}
-	return string(b)
+	return strings.TrimSuffix(buf.String(), "\n")
 }

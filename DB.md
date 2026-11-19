@@ -337,12 +337,14 @@ Output version history:
 | Parser | Version | Change |
 |---|---|---|
 | `claudecode` | 1 | Output when the marker was introduced |
+| `claudecode` | 2 | Ignores `"usage": null`, avoids HTML escaping in compact JSON tool payloads, and excludes sidechain subagent prompts from `first_prompt` |
 | `codex` | 1 | Output when the marker was introduced |
 | `codex` | 2 | Adds `Record.Repo`, derived from `session_meta.git.repository_url` |
 | `codex` | 3 | `Record.Repo` uses `workspace.NormalizeRemote`: drops a port from a URL with a scheme, drops all user information up to the last `@`, and rejects an invalid host |
-| `codex` | 4 | Hardens `workspace.NormalizeRemote` (case-insensitive schemes, strict scheme/host/numeric-port/path checks, query/fragment stripping, SCP userinfo stripping before `:`, and `MaxRepoBytes` bound) |
+| `codex` | 4 | Hardens `workspace.NormalizeRemote` (case-insensitive schemes, strict scheme/host/numeric-port/path checks, query/fragment stripping, SCP userinfo stripping before `:`, and `MaxRepoBytes` bound) and ignores `"usage": null` |
 | `pi` | 1 | Output when the marker was introduced |
 | `pi` | 2 | Adds `Record.EntryID`, the usage-row key when a provider emits no `responseId` (verified 2026-11-14: `openai-completions` records never carry one) |
+| `pi` | 3 | Ignores `"usage": null`, guards against signed `int64` token-sum overflow, and avoids HTML escaping in compact JSON tool payloads |
 
 Add a row in the same commit that bumps a constant.
 

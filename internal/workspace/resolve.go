@@ -53,7 +53,7 @@ func Resolve(path string) (Observation, error) {
 func findGitDir(dir string) (string, error) {
 	for {
 		dotGit := filepath.Join(dir, ".git")
-		info, err := os.Lstat(dotGit)
+		info, err := os.Stat(dotGit)
 		switch {
 		case err == nil && info.IsDir():
 			return dotGit, nil

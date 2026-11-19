@@ -89,6 +89,9 @@ func TestResolveRemoteChoice(t *testing.T) {
 		{"legacy section syntax", "[remote.origin]\n\turl = https://github.com/x/a\n", "github.com/x/a"},
 		{"section name is case-insensitive", "[Remote \"origin\"]\n\turl = https://github.com/x/a\n", "github.com/x/a"},
 		{"subsection is case-sensitive", "[remote \"Origin\"]\n\turl = https://github.com/x/a\n[remote \"b\"]\n\turl = https://github.com/x/b\n", ""},
+		{"trailing comment with bracket on section header", "[remote \"origin\"] # [comment]\n\turl = https://github.com/x/a\n", "github.com/x/a"},
+		{"tab separator in section header", "[remote\t\"origin\"]\n\turl = https://github.com/x/a\n", "github.com/x/a"},
+		{"odd trailing backslash continuation", "[remote \"origin\"]\n\turl = https://github.com/x/a\\\n\t\n", "github.com/x/a"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := t.TempDir()
@@ -165,6 +168,22 @@ func TestResolveDoesNotHangOnFIFOConfigOrCommonDir(t *testing.T) {
 	}
 	if got := resolve(t, repo); got != "" {
 		t.Fatalf("FIFO git metadata resolved to %q, want empty", got)
+	}
+}
+
+func TestResolveFollowsSymlinkedDotGit(t *testing.T) {
+	root := t.TempDir()
+	realGit := filepath.Join(root, "real-git")
+	writeFile(t, filepath.Join(realGit, "config"), repoConfig("[remote \"origin\"]\n\turl = https://github.com/x/sym.git\n"))
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realGit, filepath.Join(repo, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolve(t, repo); got != "github.com/x/sym" {
+		t.Fatalf("symlinked .git resolved to %q, want github.com/x/sym", got)
 	}
 }
 

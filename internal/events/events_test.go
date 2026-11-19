@@ -574,3 +574,51 @@ func TestFromClaudeCodeIgnoresNegativeAndNullUsage(t *testing.T) {
 		t.Fatalf("token usage rows = %d, %v; want 1", count, err)
 	}
 }
+
+func TestParsersIgnoreNullUsageAvoidHTMLEscapingAndOverflow(t *testing.T) {
+	codexLines := strings.Join([]string{
+		`{"timestamp":"2026-04-01T10:00:00Z","type":"session_meta","payload":{"id":"codex-null-u"}}`,
+		`{"timestamp":"2026-04-01T10:00:01Z","type":"token_usage_record","payload":{"response_id":"r1","usage":null}}`,
+	}, "\n") + "\n"
+	codexParsed, err := Parse("codex", []byte(codexLines), 0, Options{SourceScope: "src-c"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if codexParsed.Events[1].HasUsage {
+		t.Fatalf("codex null usage accepted: %+v", codexParsed.Events[1].Usage)
+	}
+
+	piLines := strings.Join([]string{
+		`{"type":"session","version":3,"id":"pi-null-u","timestamp":"2026-04-01T10:00:00Z","cwd":"/w"}`,
+		`{"type":"message","id":"m1","timestamp":"2026-04-01T10:00:01Z","message":{"role":"assistant","responseId":"r1","content":[{"type":"toolCall","name":"run","arguments":{"cmd":"a < b && c > d"}}],"usage":null}}`,
+		`{"type":"message","id":"m2","timestamp":"2026-04-01T10:00:02Z","message":{"role":"assistant","responseId":"r2","content":[{"type":"text","text":"overflow"}],"usage":{"input":9223372036854775807,"output":9223372036854775807,"cacheRead":2,"cacheWrite":0,"totalTokens":0}}}`,
+	}, "\n") + "\n"
+	piParsed, err := Parse("pi", []byte(piLines), 0, Options{SourceScope: "src-p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if piParsed.Events[1].HasUsage {
+		t.Fatalf("pi null usage accepted: %+v", piParsed.Events[1].Usage)
+	}
+	if !strings.Contains(piParsed.Events[1].Text, "a < b && c > d") {
+		t.Fatalf("pi compactJSON escaped HTML: %q", piParsed.Events[1].Text)
+	}
+	if piParsed.Events[2].HasUsage {
+		t.Fatalf("pi int64-overflow usage accepted: %+v", piParsed.Events[2].Usage)
+	}
+
+	ccLines := strings.Join([]string{
+		`{"type":"user","sessionId":"cc-side","isSidechain":true,"timestamp":"2026-04-01T10:00:00Z","message":{"role":"user","content":"subagent prompt"}}`,
+		`{"type":"assistant","sessionId":"cc-side","timestamp":"2026-04-01T10:00:01Z","message":{"role":"assistant","content":[{"type":"tool_use","name":"bash","input":{"cmd":"x < y && z > w"}}]}}`,
+	}, "\n") + "\n"
+	ccParsed, err := Parse("claude-code", []byte(ccLines), 0, Options{SourceScope: "src-cc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ccParsed.Events[0].Prompt != "" {
+		t.Fatalf("sidechain prompt should not set Prompt, got %q", ccParsed.Events[0].Prompt)
+	}
+	if !strings.Contains(ccParsed.Events[1].Text, "x < y && z > w") {
+		t.Fatalf("claudecode compactJSON escaped HTML: %q", ccParsed.Events[1].Text)
+	}
+}

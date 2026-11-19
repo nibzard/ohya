@@ -87,12 +87,21 @@ func FromClaudeCode(r claudecode.Record) store.Event {
 		Cwd: r.Cwd, GitBranch: r.GitBranch, Model: r.Model,
 		MessageID: r.MessageID, ParserVersion: claudecode.OutputVersion,
 	}
-	var observed struct {
-		ContentForm string `json:"contentForm"`
-	}
-	_ = json.Unmarshal([]byte(r.Metadata), &observed)
-	if r.Kind == "user" && observed.ContentForm == "string" {
-		e.Prompt = r.Text
+	if r.Kind == "user" && !r.IsSidechain {
+		contentForm := r.ContentForm
+		isSidechain := r.IsSidechain
+		if contentForm == "" && r.Metadata != "" {
+			var observed struct {
+				ContentForm string `json:"contentForm"`
+				IsSidechain bool   `json:"isSidechain"`
+			}
+			_ = json.Unmarshal([]byte(r.Metadata), &observed)
+			contentForm = observed.ContentForm
+			isSidechain = observed.IsSidechain
+		}
+		if contentForm == "string" && !isSidechain {
+			e.Prompt = r.Text
+		}
 	}
 	if len(r.Usage) > 0 && string(r.Usage) != "null" {
 		var u usageFields
@@ -136,7 +145,7 @@ func FromCodex(r codex.Record) store.Event {
 		HasOrdinal: r.HasOrdinal, Ordinal: r.Ordinal,
 		ParserVersion: codex.OutputVersion,
 	}
-	if len(r.Usage) > 0 {
+	if len(r.Usage) > 0 && string(r.Usage) != "null" {
 		var u codexUsage
 		if err := json.Unmarshal(r.Usage, &u); err == nil &&
 			u.CachedInputTokens >= 0 && u.OutputTokens >= 0 && u.CachedInputTokens <= u.InputTokens {
@@ -182,11 +191,9 @@ func FromPi(r pi.Record) store.Event {
 		MessageID: messageID, Prompt: r.Prompt,
 		ParserVersion: pi.OutputVersion,
 	}
-	if len(r.Usage) > 0 {
+	if len(r.Usage) > 0 && string(r.Usage) != "null" {
 		var u piUsage
-		if err := json.Unmarshal(r.Usage, &u); err == nil &&
-			u.Input >= 0 && u.Output >= 0 && u.CacheRead >= 0 && u.CacheWrite >= 0 &&
-			u.Input+u.CacheRead+u.CacheWrite+u.Output == u.TotalTokens {
+		if err := json.Unmarshal(r.Usage, &u); err == nil && piUsageSumMatches(u) {
 			e.Usage = store.Usage{
 				InputTokens:              u.Input,
 				CacheReadInputTokens:     u.CacheRead,
@@ -197,6 +204,20 @@ func FromPi(r pi.Record) store.Event {
 		}
 	}
 	return e
+}
+
+func piUsageSumMatches(u piUsage) bool {
+	if u.Input < 0 || u.Output < 0 || u.CacheRead < 0 || u.CacheWrite < 0 || u.TotalTokens < 0 {
+		return false
+	}
+	rem := u.TotalTokens
+	for _, part := range []int64{u.Input, u.CacheRead, u.CacheWrite, u.Output} {
+		if part > rem {
+			return false
+		}
+		rem -= part
+	}
+	return rem == 0
 }
 
 func FromPiRecords(records []pi.Record) []store.Event {
