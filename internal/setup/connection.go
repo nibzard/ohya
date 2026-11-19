@@ -47,7 +47,7 @@ func SaveConnection(state string, c Connection) error {
 	return err
 }
 
-func BindRemote(state string, c Connection) error {
+func CheckRemoteBinding(state string, c Connection) error {
 	path := filepath.Join(state, "setup", "connection.json")
 	if _, err := os.Lstat(path); err == nil {
 		previous, err := LoadConnection(state)
@@ -58,6 +58,13 @@ func BindRemote(state string, c Connection) error {
 			return errors.New("this join state belongs to a different setup mode; use a new setup state directory")
 		}
 	} else if !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+func BindRemote(state string, c Connection) error {
+	if err := CheckRemoteBinding(state, c); err != nil {
 		return err
 	}
 	return SaveConnection(state, c)

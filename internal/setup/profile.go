@@ -91,10 +91,26 @@ func loadProfileReceipt(path string) (profileReceipt, error) {
 	return r, nil
 }
 
+func removeBlock(raw, block []byte) []byte {
+	idx := bytes.Index(raw, block)
+	if idx < 0 {
+		return raw
+	}
+	before := raw[:idx]
+	after := raw[idx+len(block):]
+	out := make([]byte, 0, len(before)+len(after)+1)
+	out = append(out, before...)
+	if len(before) > 0 && before[len(before)-1] != '\n' && len(after) > 0 && after[0] != '\n' {
+		out = append(out, '\n')
+	}
+	out = append(out, after...)
+	return out
+}
+
 func profileBase(raw []byte, r profileReceipt) ([]byte, error) {
 	for _, block := range [][]byte{r.Content, r.Previous} {
 		if len(block) > 0 && bytes.Count(raw, block) == 1 && bytes.Count(raw, []byte(profileBegin)) == 1 && bytes.Count(raw, []byte(profileEnd)) == 1 {
-			return bytes.Replace(raw, block, nil, 1), nil
+			return removeBlock(raw, block), nil
 		}
 	}
 	if bytes.Contains(raw, []byte(profileBegin)) || bytes.Contains(raw, []byte(profileEnd)) {

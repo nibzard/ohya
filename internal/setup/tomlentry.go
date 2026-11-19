@@ -98,7 +98,7 @@ func ownedTOML(raw []byte, r tomlReceipt) ([]byte, error) {
 			return nil, err
 		}
 		if reflect.DeepEqual(actual, expected.Servers["ohya"]) {
-			return bytes.Replace(raw, []byte(block), nil, 1), nil
+			return removeBlock(raw, []byte(block)), nil
 		}
 	}
 	return nil, errors.New("Codex ohya entry has been edited; preserve it")

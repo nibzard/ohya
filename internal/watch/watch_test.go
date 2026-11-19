@@ -1109,3 +1109,33 @@ func TestFingerprintReaderDistinguishesIOErrorFromShortRead(t *testing.T) {
 		t.Fatalf("EOF error = %v, want errShortRead", err)
 	}
 }
+
+func TestTrackedPathReplacedByHardlinkToTrackedFileDoesNotDuplicate(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.jsonl")
+	b := filepath.Join(dir, "b.jsonl")
+	writeFile(t, a, "line a\n")
+	writeFile(t, b, "line b\n")
+
+	w := mustNew(t, dir)
+	first := poll(t, w, a, b)
+	ingestAll(t, w, first)
+	idA := first[0].SourceID
+	idB := first[1].SourceID
+
+	if err := os.Remove(b); err != nil {
+		t.Fatal(err)
+	}
+	hardlink(t, a, b)
+
+	next := poll(t, w, a, b)
+	if len(next) != 2 {
+		t.Fatalf("outcomes = %+v, want 2", next)
+	}
+	if next[0].SourceID != idA || next[0].Missing || next[0].Fresh {
+		t.Fatalf("a outcome = %+v, want original source %s kept", next[0], idA)
+	}
+	if next[1].SourceID != idB || !next[1].Missing || next[1].Fresh {
+		t.Fatalf("b outcome = %+v, want missing original source %s instead of duplicate registration", next[1], idB)
+	}
+}

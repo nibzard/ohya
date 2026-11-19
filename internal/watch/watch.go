@@ -175,10 +175,27 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 		changed = true
 	}
 
+	claimed := make(map[string]bool, len(w.state.Sources))
+	for key, entry := range w.state.Sources {
+		if pr, ok := probes[key]; ok && pr.identity != "" && pr.identity == entry.FileIdentity {
+			claimed[pr.identity] = true
+		}
+	}
+
 	for _, key := range slices.Sorted(maps.Keys(w.state.Sources)) {
 		entry := w.state.Sources[key]
 		pr, live := probes[key]
 		if !live {
+			missing++
+			delete(w.lastPass, key)
+			w.observer.Add("watch_source_events", 1, "missing")
+			outcomes = append(outcomes, Outcome{
+				Path: key, SourceID: entry.SourceID,
+				Cursor: entry.CursorBytes, Missing: true,
+			})
+			continue
+		}
+		if pr.identity != entry.FileIdentity && pr.identity != "" && claimed[pr.identity] {
 			missing++
 			delete(w.lastPass, key)
 			w.observer.Add("watch_source_events", 1, "missing")
@@ -222,18 +239,15 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 		if err != nil {
 			return nil, err
 		}
+		if pr.identity != "" {
+			claimed[pr.identity] = true
+		}
 		outcome.ReplacedSourceID = entry.SourceID
 		outcome.ReplacedCursor = entry.CursorBytes
 		outcomes = append(outcomes, outcome)
 		changed = true
 	}
 
-	claimed := make(map[string]bool, len(w.state.Sources))
-	for key, entry := range w.state.Sources {
-		if pr, ok := probes[key]; ok && pr.identity != "" && pr.identity == entry.FileIdentity {
-			claimed[pr.identity] = true
-		}
-	}
 	for _, key := range slices.Sorted(maps.Keys(probes)) {
 		if _, tracked := w.state.Sources[key]; tracked {
 			continue

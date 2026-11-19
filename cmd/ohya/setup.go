@@ -200,18 +200,20 @@ func runSetupCommand(args []string, stdout, stderr io.Writer) error {
 		if err := setup.SavePreferences(absState, preferences); err != nil {
 			return err
 		}
-		if err := setup.SaveConnection(absState, connection); err != nil {
-			return err
-		}
 		if connection.Mode == "remote" {
-			if err := setup.BindRemote(dataState, connection); err != nil {
+			if err := setup.CheckRemoteBinding(dataState, connection); err != nil {
 				return err
 			}
 			pairCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 			defer cancel()
-			return runJoin(pairCtx, joinOptions{pairOnly: true, stateDir: dataState, code: code, stderr: stderr})
+			if err := runJoin(pairCtx, joinOptions{pairOnly: true, stateDir: dataState, code: code, stderr: stderr}); err != nil {
+				return err
+			}
+			if err := setup.BindRemote(dataState, connection); err != nil {
+				return err
+			}
 		}
-		return nil
+		return setup.SaveConnection(absState, connection)
 	}
 	options.Progress = func(line string) { fmt.Fprintf(stderr, "ohya: %s\n", line) }
 	printed := 0
