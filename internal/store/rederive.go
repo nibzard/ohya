@@ -123,7 +123,11 @@ func (d *DB) ReDerive(ctx context.Context, parsers []ParserDeriver) (ReDeriveRes
 		}
 	}
 
-	if _, err := tx.ExecContext(ctx, `INSERT INTO events_fts(events_fts) VALUES ('rebuild')`); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO events_fts(events_fts) VALUES ('delete-all')`); err != nil {
+		return ReDeriveResult{}, fmt.Errorf("store: re-derive: clear events_fts: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO events_fts(rowid, text) SELECT id, text FROM events WHERE text IS NOT NULL AND length(text) > 0`); err != nil {
 		return ReDeriveResult{}, fmt.Errorf("store: re-derive: rebuild events_fts: %w", err)
 	}
 	if err := tx.Commit(); err != nil {

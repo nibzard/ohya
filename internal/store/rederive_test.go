@@ -537,3 +537,43 @@ func TestReDeriveMatchesIngestionAcrossSources(t *testing.T) {
 		t.Fatalf("rebuild changed state:\n%s", diffSnip(before, after))
 	}
 }
+
+func TestReDeriveSkipsTextlessRowsInFTSAndSurvivesDeleteReuse(t *testing.T) {
+	ctx := context.Background()
+	hub := ingestHub(t)
+	mustRegister(t, hub, "s1", "/s1.jsonl")
+	mustRegister(t, hub, "s2", "/s2.jsonl")
+
+	e1 := mkEvent(0, rawUser("alpha token"))
+	mustIngest(t, hub, Batch{SourceID: "s1", Events: []Event{e1}})
+
+	textless := mkEvent(0, `{"type":"cost-state","sessionId":"sess-2"}`)
+	textless.NativeID = "sess-2"
+	textless.Kind = "cost-state"
+	textless.Role = ""
+	textless.Text = ""
+	textless.Prompt = ""
+	mustIngest(t, hub, Batch{SourceID: "s2", Events: []Event{textless}})
+
+	if _, err := hub.ReDerive(ctx, []ParserDeriver{claudeDeriver(2, nil)}); err != nil {
+		t.Fatal(err)
+	}
+
+	var docsizeCount int
+	if err := hub.writer.QueryRowContext(ctx, `SELECT count(*) FROM events_fts_docsize`).Scan(&docsizeCount); err != nil {
+		t.Fatal(err)
+	}
+	if docsizeCount != 1 {
+		t.Fatalf("events_fts_docsize count = %d, want 1 (textless row must not be indexed)", docsizeCount)
+	}
+
+	if _, err := hub.writer.ExecContext(ctx, `DELETE FROM events WHERE source_id = 's2'`); err != nil {
+		t.Fatal(err)
+	}
+	e3 := mkEvent(e1.End, rawUser("beta token reusing rowid"))
+	mustIngest(t, hub, Batch{SourceID: "s1", Events: []Event{e3}})
+
+	if err := hub.FTSIndexConsistent(ctx); err != nil {
+		t.Fatalf("FTSIndexConsistent after rederive + delete + insert: %v", err)
+	}
+}
