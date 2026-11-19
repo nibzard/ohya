@@ -24,6 +24,12 @@ const (
 	DefaultMaxConcurrency = 4
 
 	DefaultMaxAnnotateRequestBytes = 1 << 20
+
+	minSQLiteLimitLength         = 4 << 20
+	sqliteLimitExprDepth         = 64
+	sqliteLimitCompoundSelect    = 16
+	sqliteLimitLikePatternLength = 256
+	sqliteLimitColumn            = 128
 )
 
 var (
@@ -99,7 +105,8 @@ type Engine struct {
 
 func NewEngine(readers, writer *sql.DB, o EngineOptions) *Engine {
 	o = o.withDefaults()
-	denied := make(map[string]bool, len(o.DenyTables))
+	denied := make(map[string]bool, len(o.DenyTables)+1)
+	denied["purged_sources"] = true
 	for _, t := range o.DenyTables {
 		denied[strings.ToLower(t)] = true
 	}
@@ -183,6 +190,11 @@ func (e *Engine) query(ctx context.Context, query string, trace *queryTrace) (Re
 			return fmt.Errorf("reader connection is %T, want *sqlite3.SQLiteConn", c)
 		}
 		sqliteConn.RegisterAuthorizer(authorize)
+		sqliteConn.SetLimit(sqlite3.SQLITE_LIMIT_LENGTH, max(e.options.MaxOutputBytes*2, minSQLiteLimitLength))
+		sqliteConn.SetLimit(sqlite3.SQLITE_LIMIT_EXPR_DEPTH, sqliteLimitExprDepth)
+		sqliteConn.SetLimit(sqlite3.SQLITE_LIMIT_COMPOUND_SELECT, sqliteLimitCompoundSelect)
+		sqliteConn.SetLimit(sqlite3.SQLITE_LIMIT_LIKE_PATTERN_LENGTH, sqliteLimitLikePatternLength)
+		sqliteConn.SetLimit(sqlite3.SQLITE_LIMIT_COLUMN, sqliteLimitColumn)
 		return nil
 	}); err != nil {
 		return Result{}, err
@@ -210,10 +222,15 @@ func (e *Engine) query(ctx context.Context, query string, trace *queryTrace) (Re
 			result.Truncated, result.TruncationReason = true, TruncationReasonRows
 			break
 		}
-		row, err := scanRow(rows, len(result.Columns))
+		rawValues, err := scanRawRow(rows, len(result.Columns))
 		if err != nil {
 			return Result{}, err
 		}
+		if rawRowExceedsLimit(rawValues, e.options.MaxOutputBytes-bytes) {
+			result.Truncated, result.TruncationReason = true, TruncationReasonBytes
+			break
+		}
+		row := encodeRowValues(rawValues)
 		encoded, err := json.Marshal(row)
 		if err != nil {
 			return Result{}, fmt.Errorf("encode row: %w", err)
@@ -239,7 +256,7 @@ func (e *Engine) query(ctx context.Context, query string, trace *queryTrace) (Re
 	return result, nil
 }
 
-func scanRow(rows *sql.Rows, width int) ([]any, error) {
+func scanRawRow(rows *sql.Rows, width int) ([]any, error) {
 	values := make([]any, width)
 	targets := make([]any, width)
 	for i := range values {
@@ -248,10 +265,33 @@ func scanRow(rows *sql.Rows, width int) ([]any, error) {
 	if err := rows.Scan(targets...); err != nil {
 		return nil, fmt.Errorf("read row: %w", err)
 	}
+	return values, nil
+}
+
+func rawRowExceedsLimit(values []any, remaining int) bool {
+	if remaining < 2 {
+		return true
+	}
+	est := 2
+	for _, v := range values {
+		switch t := v.(type) {
+		case []byte:
+			est += base64.StdEncoding.EncodedLen(len(t)) + 2
+		case string:
+			est += len(t) + 2
+		}
+		if est > remaining {
+			return true
+		}
+	}
+	return false
+}
+
+func encodeRowValues(values []any) []any {
 	for i, v := range values {
 		values[i] = jsonValue(v)
 	}
-	return values, nil
+	return values
 }
 
 func jsonValue(v any) any {
@@ -295,7 +335,7 @@ func (e *Engine) authorize(op int, arg1, arg2, _ string) int {
 		}
 		return sqlite3.SQLITE_OK
 	case sqlite3.SQLITE_PRAGMA:
-		if allowedPragmas[strings.ToLower(arg1)] {
+		if allowedPragmas[strings.ToLower(arg1)] && !e.deniedTbls[strings.ToLower(arg2)] {
 			return sqlite3.SQLITE_OK
 		}
 		return sqlite3.SQLITE_DENY
