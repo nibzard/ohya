@@ -121,3 +121,63 @@ func TestRemoteSessionRefusesWrongCredential(t *testing.T) {
 		t.Fatalf("query with a wrong credential err = %v; want ErrRemoteUnauthorized", err)
 	}
 }
+
+func TestRemoteSessionMapsCodeAuthAfterReconnectRetry(t *testing.T) {
+	db := newTestDB(t)
+	readers, err := db.Reader()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { readers.Close() })
+	engine := mcpserver.NewEngine(readers, db.Writer(), mcpserver.EngineOptions{WriterID: "hub"})
+	auth := &helloAuth{secret: "cred-1", device: deviceB}
+	s := startEndpoint(t, db, auth, Options{Remote: engine})
+
+	session := NewRemoteSession(
+		func(ctx context.Context) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "tcp", s.addr)
+		}, "cred-1", RemoteSessionOptions{})
+	t.Cleanup(func() { session.Close() })
+
+	if _, err := session.Query(context.Background(), "SELECT 1"); err != nil {
+		t.Fatalf("initial query: %v", err)
+	}
+
+	auth.secret = "rotated"
+	s.ep.closeDevice(deviceB)
+
+	_, err = session.Query(context.Background(), "SELECT 1")
+	if !errors.Is(err, ErrRemoteUnauthorized) {
+		t.Fatalf("post-revocation retry err = %v; want ErrRemoteUnauthorized", err)
+	}
+}
+
+func TestRemoteClientCancelsDuringRead(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	go func() {
+		buf := make([]byte, 4096)
+		_, _ = serverConn.Read(buf)
+		<-time.After(5 * time.Second)
+	}()
+
+	client := NewRemoteClient(clientConn)
+	client.Timeout = 10 * time.Second
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	_, err := client.Query(ctx, "SELECT 1")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled query err = %v; want context.Canceled", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("canceled query blocked for %s waiting on read", elapsed)
+	}
+}

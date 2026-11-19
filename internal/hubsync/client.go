@@ -35,10 +35,15 @@ func (c *RemoteClient) Close() error { return c.conn.Close() }
 func (c *RemoteClient) Query(ctx context.Context, query string) (mcpserver.Result, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if err := c.exchange(ctx, func(w io.Writer) error { return WriteQuery(w, query) }); err != nil {
-		return mcpserver.Result{}, err
-	}
-	result, perr, err := ReadQueryReply(c.br)
+	var result mcpserver.Result
+	var perr *Error
+	err := c.roundTrip(ctx,
+		func(w io.Writer) error { return WriteQuery(w, query) },
+		func(r io.Reader) error {
+			var rerr error
+			result, perr, rerr = ReadQueryReply(r)
+			return rerr
+		})
 	if err != nil {
 		return mcpserver.Result{}, fmt.Errorf("hubsync: remote query: %w", err)
 	}
@@ -51,10 +56,15 @@ func (c *RemoteClient) Query(ctx context.Context, query string) (mcpserver.Resul
 func (c *RemoteClient) Annotate(ctx context.Context, request []byte) (store.AnnotateResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if err := c.exchange(ctx, func(w io.Writer) error { return WriteAnnotate(w, request) }); err != nil {
-		return store.AnnotateResult{}, err
-	}
-	result, perr, err := ReadAnnotateReply(c.br)
+	var result store.AnnotateResult
+	var perr *Error
+	err := c.roundTrip(ctx,
+		func(w io.Writer) error { return WriteAnnotate(w, request) },
+		func(r io.Reader) error {
+			var rerr error
+			result, perr, rerr = ReadAnnotateReply(r)
+			return rerr
+		})
 	if err != nil {
 		return store.AnnotateResult{}, fmt.Errorf("hubsync: remote annotate: %w", err)
 	}
@@ -64,7 +74,10 @@ func (c *RemoteClient) Annotate(ctx context.Context, request []byte) (store.Anno
 	return result, nil
 }
 
-func (c *RemoteClient) exchange(ctx context.Context, write func(io.Writer) error) error {
+func (c *RemoteClient) roundTrip(ctx context.Context, write func(io.Writer) error, read func(io.Reader) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	timeout := c.Timeout
 	if timeout <= 0 {
 		timeout = DefaultRemoteTimeout
@@ -79,10 +92,22 @@ func (c *RemoteClient) exchange(ctx context.Context, write func(io.Writer) error
 
 	bw := bufio.NewWriterSize(c.conn, 64<<10)
 	if err := write(bw); err != nil {
-		return fmt.Errorf("hubsync: remote exchange: %w", err)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return err
 	}
 	if err := bw.Flush(); err != nil {
-		return fmt.Errorf("hubsync: remote exchange: %w", err)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return err
+	}
+	if err := read(c.br); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return err
 	}
 	return nil
 }

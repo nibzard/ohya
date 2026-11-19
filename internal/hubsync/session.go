@@ -98,18 +98,42 @@ func (s *RemoteSession) call(ctx context.Context, exchange func(*RemoteClient) e
 	if err == nil {
 		return nil
 	}
-	var perr *Error
-	if errors.As(err, &perr) {
-		if perr.Code == CodeAuth {
-			return fmt.Errorf("%w: %v", ErrRemoteUnauthorized, perr)
-		}
-		return err
+	retry, mapped := s.finishAttemptLocked(ctx, err)
+	if !retry {
+		return mapped
 	}
 	_ = s.dropLocked()
 	if err := s.connectLocked(ctx); err != nil {
 		return err
 	}
-	return exchange(s.client)
+	err = exchange(s.client)
+	if err == nil {
+		return nil
+	}
+	_, mapped = s.finishAttemptLocked(ctx, err)
+	return mapped
+}
+
+func (s *RemoteSession) finishAttemptLocked(ctx context.Context, err error) (retry bool, mapped error) {
+	if ctx.Err() != nil {
+		_ = s.dropLocked()
+		return false, err
+	}
+	if errors.Is(err, ErrTooLarge) {
+		return false, err
+	}
+	var perr *Error
+	if errors.As(err, &perr) {
+		switch perr.Code {
+		case CodeAuth:
+			_ = s.dropLocked()
+			return false, fmt.Errorf("%w: %v", ErrRemoteUnauthorized, perr)
+		case CodeVersion, CodeMalformed, CodeTooLarge, CodeBusy:
+			_ = s.dropLocked()
+		}
+		return false, err
+	}
+	return true, err
 }
 
 func (s *RemoteSession) connectLocked(ctx context.Context) error {
@@ -119,10 +143,16 @@ func (s *RemoteSession) connectLocked(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("hubsync: remote session dial: %w", err)
 	}
+	deadline := time.Now().Add(s.timeout)
+	if d, ok := dctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	_ = conn.SetWriteDeadline(deadline)
 	if err := WriteHello(conn, s.credential); err != nil {
 		conn.Close()
 		return fmt.Errorf("hubsync: remote session hello: %w", err)
 	}
+	_ = conn.SetWriteDeadline(time.Time{})
 	s.client = NewRemoteClient(conn)
 	s.client.Timeout = s.timeout
 	return nil
