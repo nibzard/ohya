@@ -125,10 +125,20 @@ func (e *Endpoint) Serve(ctx context.Context, ln net.Listener) error {
 		e.wg.Add(1)
 		go func() {
 			defer e.wg.Done()
-			_ = e.authz.WatchRevocations(ctx, func(deviceID string) {
-				e.observer.Add("hub_authorization", 1, "revoked")
-				e.closeDevice(deviceID)
-			})
+			for {
+				err := e.authz.WatchRevocations(ctx, func(deviceID string) {
+					e.observer.Add("hub_authorization", 1, "revoked")
+					e.closeDevice(deviceID)
+				})
+				if err == nil || ctx.Err() != nil {
+					return
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(100 * time.Millisecond):
+				}
+			}
 		}()
 	}
 	for {
@@ -138,6 +148,9 @@ func (e *Endpoint) Serve(ctx context.Context, ln net.Listener) error {
 				e.wg.Wait()
 				return nil
 			}
+			cancel()
+			e.closeAll()
+			e.wg.Wait()
 			return fmt.Errorf("hubsync: accept: %w", err)
 		}
 		select {
@@ -152,10 +165,16 @@ func (e *Endpoint) Serve(ctx context.Context, ln net.Listener) error {
 		}
 		cctx, ccancel := context.WithCancel(ctx)
 		session := &connSession{ctx: cctx, conn: conn, cancel: ccancel}
-		e.track(session)
+		if !e.track(session) {
+			ccancel()
+			_ = conn.Close()
+			<-e.slots
+			continue
+		}
 		e.wg.Add(1)
 		go func() {
 			defer e.wg.Done()
+			defer ccancel()
 			defer e.untrack(session)
 			defer func() { <-e.slots }()
 			e.serveConn(cctx, session)
@@ -174,6 +193,13 @@ func (e *Endpoint) serveConn(ctx context.Context, session *connSession) {
 	}
 	e.observer.Add("hub_connections", 1, "active")
 	e.bind(session, deviceID)
+	if e.authz != nil {
+		if err := e.authz.Authorize(ctx, deviceID); err != nil {
+			e.observer.Add("hub_authorization", 1, "rejected")
+			_ = WriteError(session, CodeAuth, err.Error())
+			return
+		}
+	}
 	br := bufio.NewReaderSize(conn, 64<<10)
 	for {
 		frame, err := ReadFrame(br)
@@ -254,12 +280,15 @@ func (e *Endpoint) handleBatch(ctx context.Context, w io.Writer, deviceID string
 	}
 
 	gateStart := time.Now()
-	release := e.gates.acquire(b.SourceID)
+	release, err := e.gates.acquire(ctx, b.SourceID)
 	e.observer.Observe("hub_gate_wait_duration", time.Since(gateStart))
+	if err != nil {
+		return true
+	}
 	defer release()
 
 	var st store.SourceState
-	err := Retry(ctx, e.opts.Retry, permanentStoreError, func() error {
+	err = Retry(ctx, e.opts.Retry, permanentStoreError, func() error {
 		var err error
 		st, err = e.db.SourceState(ctx, b.SourceID)
 		return err
@@ -503,12 +532,17 @@ func (e *Endpoint) replyDecodeError(w io.Writer, err error) {
 	_ = WriteError(w, code, err.Error())
 }
 
-func (e *Endpoint) track(s *connSession) {
+func (e *Endpoint) track(s *connSession) bool {
 	e.mu.Lock()
+	if e.closed {
+		e.mu.Unlock()
+		return false
+	}
 	e.conns[s] = struct{}{}
 	open := len(e.conns)
 	e.mu.Unlock()
 	e.observer.Set("hub_active_connections", float64(open))
+	return true
 }
 
 func (e *Endpoint) untrack(s *connSession) {
@@ -575,32 +609,40 @@ type sourceGates struct {
 }
 
 type sourceGate struct {
-	mu   sync.Mutex
+	ch   chan struct{}
 	refs int
 }
 
-func (g *sourceGates) acquire(sourceID string) func() {
+func (g *sourceGates) acquire(ctx context.Context, sourceID string) (func(), error) {
 	g.mu.Lock()
 	if g.locks == nil {
 		g.locks = map[string]*sourceGate{}
 	}
 	gate := g.locks[sourceID]
 	if gate == nil {
-		gate = &sourceGate{}
+		gate = &sourceGate{ch: make(chan struct{}, 1)}
 		g.locks[sourceID] = gate
 	}
 	gate.refs++
 	g.mu.Unlock()
 
-	gate.mu.Lock()
-
-	return func() {
-		gate.mu.Unlock()
-		g.mu.Lock()
-		gate.refs--
-		if gate.refs == 0 {
-			delete(g.locks, sourceID)
-		}
-		g.mu.Unlock()
+	select {
+	case gate.ch <- struct{}{}:
+		return func() {
+			<-gate.ch
+			g.releaseRef(sourceID, gate)
+		}, nil
+	case <-ctx.Done():
+		g.releaseRef(sourceID, gate)
+		return nil, ctx.Err()
 	}
+}
+
+func (g *sourceGates) releaseRef(sourceID string, gate *sourceGate) {
+	g.mu.Lock()
+	gate.refs--
+	if gate.refs == 0 {
+		delete(g.locks, sourceID)
+	}
+	g.mu.Unlock()
 }

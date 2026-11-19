@@ -401,7 +401,7 @@ func (d *DB) WatchRevocations(ctx context.Context, interval time.Duration, fn fu
 	}
 	seen, err := d.revokedSet(ctx)
 	if err != nil {
-		return err
+		seen = map[string]bool{}
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
