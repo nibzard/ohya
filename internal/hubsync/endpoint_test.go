@@ -151,6 +151,14 @@ func (d *deviceConn) send(b Batch) {
 	}
 }
 
+func (d *deviceConn) sendCompressed(b Batch) {
+	d.t.Helper()
+	d.deadline()
+	if err := WriteBatchCompressed(d.conn, b); err != nil {
+		d.t.Fatal(err)
+	}
+}
+
 func (d *deviceConn) reply() (Ack, *Error) {
 	d.t.Helper()
 	d.deadline()
@@ -741,6 +749,58 @@ func TestMalformedRecordCommitsPrefixAndStops(t *testing.T) {
 		Start: off1, End: off1 + int64(len(embedded)) + 1,
 		Records: []Record{{Offset: off1, JSON: embedded}}})
 	d.wantError(CodeRejected, "exactly one record")
+}
+
+func TestCapabilityNegotiationAnswersWelcome(t *testing.T) {
+	db := newTestDB(t)
+	s := startEndpoint(t, db, nil, Options{})
+
+	negotiating := dial(t, s.addr)
+	negotiating.deadline()
+	if err := WriteCapabilities(negotiating.conn, CapZstdBatches|Capabilities(1<<15)); err != nil {
+		t.Fatal(err)
+	}
+	caps, perr, err := ReadWelcome(negotiating.br)
+	if err != nil || perr != nil {
+		t.Fatalf("welcome = %+v, %v", perr, err)
+	}
+	if caps != CapZstdBatches {
+		t.Fatalf("welcome caps = %b; want only %b for a hub without the offered bit", caps, CapZstdBatches)
+	}
+	mustRegisterVia(t, negotiating, deviceA, "src-1", "/a.jsonl")
+
+	plain := dial(t, s.addr)
+	mustRegisterVia(t, plain, deviceA, "src-2", "/a.jsonl")
+	recs := fixtureRecords(t)
+	plain.send(fixtureBatch(deviceA, "src-2", recs))
+	plain.mustAck(Ack{Cursor: 6528, Inserted: 16})
+}
+
+func TestCompressedBatchCommitsLikePlain(t *testing.T) {
+	db := newTestDB(t)
+	s := startEndpoint(t, db, nil, Options{Retry: RetryPolicy{Base: time.Millisecond}})
+
+	recs := fixtureRecords(t)
+	batch := fixtureBatch(deviceA, "src-1", recs)
+
+	compressed := dial(t, s.addr)
+	mustRegisterVia(t, compressed, deviceA, "src-1", "/a.jsonl")
+	compressed.sendCompressed(batch)
+	compressed.mustAck(Ack{Cursor: 6528, Inserted: 16})
+	compressed.sendCompressed(batch)
+	compressed.mustAck(Ack{Cursor: 6528, Inserted: 0})
+
+	plain := dial(t, s.addr)
+	mustRegisterVia(t, plain, deviceA, "src-2", "/a.jsonl")
+	plain.send(fixtureBatch(deviceA, "src-2", recs))
+	plain.mustAck(Ack{Cursor: 6528, Inserted: 16})
+
+	if got := queryInt(t, db, `SELECT count(*) FROM events`); got != 32 {
+		t.Fatalf("events = %d, want 16 from each path", got)
+	}
+	if got := queryInt(t, db, `SELECT cursor_bytes FROM sources WHERE id='src-1'`); got != 6528 {
+		t.Fatalf("compressed cursor = %d, want 6528", got)
+	}
 }
 
 func TestRegistrationLifecycle(t *testing.T) {

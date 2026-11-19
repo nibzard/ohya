@@ -62,3 +62,9 @@ encoder and decoder to measure compression ratios and decode cost on a
 real hub; no version changed and no release binary imports it outside
 the existing module graph. A storage design that adopts zstd at rest
 will make the import production-facing and needs its own ADR.
+
+Production-facing since 2026-11-19 (T145): the sync protocol imports the
+zstd encoder and decoder for compressed batch upload frames
+([ADR 0014](0014-zstd-compressed-batch-upload.md)); the version stays
+pinned at v1.20.0 and the approval, bounds, and mixed-version rules are
+recorded there.

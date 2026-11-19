@@ -1,13 +1,16 @@
 package hubsync
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"sync"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/nibzard/ohya/internal/claudecode"
 	"github.com/nibzard/ohya/internal/mcpserver"
 	"github.com/nibzard/ohya/internal/store"
@@ -55,7 +58,38 @@ const (
 	markerAnnotateRes  = 'K'
 	markerWorkspaces   = 'W'
 	markerPending      = 'D'
+	markerCaps         = 'V'
+	markerWelcome      = 'v'
+	markerZBatch       = 'Z'
 )
+
+type Capabilities uint16
+
+const CapZstdBatches Capabilities = 1 << 0
+
+var hubCapabilities = CapZstdBatches
+
+const batchRecordFrameBytes = 12
+
+const compressionLevel = 3
+
+var batchEncoder = sync.OnceValue(func() *zstd.Encoder {
+	enc, err := zstd.NewWriter(nil,
+		zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(compressionLevel)),
+		zstd.WithEncoderCRC(true))
+	if err != nil {
+		panic(fmt.Sprintf("hubsync: batch encoder options rejected: %v", err))
+	}
+	return enc
+})
+
+var batchDecoder = sync.OnceValue(func() *zstd.Decoder {
+	dec, err := zstd.NewReader(nil, zstd.WithDecodeAllCapLimit(true))
+	if err != nil {
+		panic(fmt.Sprintf("hubsync: batch decoder options rejected: %v", err))
+	}
+	return dec
+})
 
 var ErrTooLarge = errors.New("hubsync: frame exceeds its bounds")
 
@@ -167,6 +201,7 @@ type WorkspacesReply struct {
 type Frame struct {
 	Registration *Registration
 	Batch        *Batch
+	Capabilities *Capabilities
 	Query        *Query
 	Annotate     *Annotate
 	Workspaces   *Workspaces
@@ -268,6 +303,22 @@ func ReadFrame(r io.Reader) (Frame, error) {
 			return Frame{}, err
 		}
 		return Frame{Batch: b}, nil
+	case markerZBatch:
+		b, err := readZBatch(fr)
+		if err != nil {
+			return Frame{}, err
+		}
+		return Frame{Batch: b}, nil
+	case markerCaps:
+		caps, err := fr.u16()
+		if err != nil {
+			return Frame{}, err
+		}
+		if caps == 0 {
+			return Frame{}, fmt.Errorf("hubsync: capability frame offers no capabilities")
+		}
+		c := Capabilities(caps)
+		return Frame{Capabilities: &c}, nil
 	case markerQuery:
 		q, err := readQuery(fr)
 		if err != nil {
@@ -318,64 +369,129 @@ func readRegistration(fr *frameReader) (*Registration, error) {
 	return &reg, nil
 }
 
-func readBatch(fr *frameReader) (*Batch, error) {
+func readBatchHead(fr *frameReader) (*Batch, uint32, error) {
 	var b Batch
 	var err error
 	if b.DeviceID, err = fr.str16(maxDeviceIDLen, "device ID"); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if b.SourceID, err = fr.str16(maxSourceIDLen, "source ID"); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if b.Start, err = fr.i64(); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if b.End, err = fr.i64(); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	count, err := fr.u32()
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	switch {
 	case b.Start < 0:
-		return nil, fmt.Errorf("hubsync: batch start %d is negative", b.Start)
+		return nil, 0, fmt.Errorf("hubsync: batch start %d is negative", b.Start)
 	case b.End < b.Start:
-		return nil, fmt.Errorf("hubsync: batch end %d precedes its start %d", b.End, b.Start)
+		return nil, 0, fmt.Errorf("hubsync: batch end %d precedes its start %d", b.End, b.Start)
 	case b.End-b.Start > MaxBatchBytes:
-		return nil, fmt.Errorf("%w: batch spans %d bytes, want at most %d", ErrTooLarge, b.End-b.Start, MaxBatchBytes)
+		return nil, 0, fmt.Errorf("%w: batch spans %d bytes, want at most %d", ErrTooLarge, b.End-b.Start, MaxBatchBytes)
 	case count > MaxRecords:
-		return nil, fmt.Errorf("%w: batch carries %d records, want at most %d", ErrTooLarge, count, MaxRecords)
+		return nil, 0, fmt.Errorf("%w: batch carries %d records, want at most %d", ErrTooLarge, count, MaxRecords)
 	}
+	return &b, count, nil
+}
+
+func readBatchRecords(fr *frameReader, b *Batch, count uint32) error {
 	b.Records = make([]Record, 0, min(int(count), 1024))
 	total := int64(0)
 	for i := uint32(0); i < count; i++ {
 		offset, err := fr.i64()
 		if err != nil {
-			return nil, err
+			return err
 		}
 		n, err := fr.u32()
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if offset < 0 {
-			return nil, fmt.Errorf("hubsync: batch record %d has negative offset %d", i, offset)
+			return fmt.Errorf("hubsync: batch record %d has negative offset %d", i, offset)
 		}
 		if int64(n) > MaxRecordBytes {
-			return nil, fmt.Errorf("%w: batch record %d at offset %d is %d bytes, want at most %d",
+			return fmt.Errorf("%w: batch record %d at offset %d is %d bytes, want at most %d",
 				ErrTooLarge, i, offset, n, MaxRecordBytes)
 		}
 		total += int64(n)
 		if total > MaxBatchBytes {
-			return nil, fmt.Errorf("%w: batch records total %d bytes, want at most %d", ErrTooLarge, total, MaxBatchBytes)
+			return fmt.Errorf("%w: batch records total %d bytes, want at most %d", ErrTooLarge, total, MaxBatchBytes)
 		}
 		json, err := fr.bytes(n, MaxRecordBytes, "record")
 		if err != nil {
-			return nil, err
+			return err
 		}
 		b.Records = append(b.Records, Record{Offset: offset, JSON: json})
 	}
-	return &b, nil
+	return nil
+}
+
+func readBatch(fr *frameReader) (*Batch, error) {
+	b, count, err := readBatchHead(fr)
+	if err != nil {
+		return nil, err
+	}
+	if err := readBatchRecords(fr, b, count); err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+func readZBatch(fr *frameReader) (*Batch, error) {
+	b, count, err := readBatchHead(fr)
+	if err != nil {
+		return nil, err
+	}
+	rawLen, err := fr.i64()
+	if err != nil {
+		return nil, err
+	}
+	bound := int64(MaxBatchBytes) + int64(count)*batchRecordFrameBytes
+	if rawLen < 0 || rawLen > bound {
+		return nil, fmt.Errorf("%w: compressed batch declares %d payload bytes for %d records, want at most %d",
+			ErrTooLarge, rawLen, count, bound)
+	}
+	compLen, err := fr.u32()
+	if err != nil {
+		return nil, err
+	}
+	payload, err := fr.bytes(compLen, MaxBatchBytes, "compressed batch payload")
+	if err != nil {
+		return nil, err
+	}
+	section, err := decompressBatch(payload, rawLen)
+	if err != nil {
+		return nil, err
+	}
+	src := bytes.NewReader(section)
+	if err := readBatchRecords(&frameReader{r: src}, b, count); err != nil {
+		return nil, err
+	}
+	if src.Len() != 0 {
+		return nil, fmt.Errorf("hubsync: compressed batch holds %d trailing bytes after %d records", src.Len(), count)
+	}
+	return b, nil
+}
+
+func decompressBatch(payload []byte, rawLen int64) ([]byte, error) {
+	section, err := batchDecoder().DecodeAll(payload, make([]byte, 0, rawLen))
+	if err != nil {
+		if errors.Is(err, zstd.ErrDecoderSizeExceeded) {
+			return nil, fmt.Errorf("%w: compressed batch expands past its declared %d payload bytes", ErrTooLarge, rawLen)
+		}
+		return nil, fmt.Errorf("hubsync: decompress batch payload: %w", err)
+	}
+	if int64(len(section)) != rawLen {
+		return nil, fmt.Errorf("hubsync: compressed batch decodes to %d bytes, but declares %d", len(section), rawLen)
+	}
+	return section, nil
 }
 
 func readQuery(fr *frameReader) (*Query, error) {
@@ -727,7 +843,7 @@ func WriteRegistration(w io.Writer, r Registration) error {
 	return nil
 }
 
-func WriteBatch(w io.Writer, b Batch) error {
+func validateBatch(b Batch) error {
 	if b.DeviceID == "" || b.SourceID == "" {
 		return fmt.Errorf("hubsync: batch has an empty device or source ID")
 	}
@@ -754,7 +870,10 @@ func WriteBatch(w io.Writer, b Batch) error {
 			return fmt.Errorf("%w: batch records total %d bytes, want at most %d", ErrTooLarge, total, MaxBatchBytes)
 		}
 	}
-	head := []byte{markerBatch, ProtocolVersion}
+	return nil
+}
+
+func appendBatchHead(head []byte, b Batch) []byte {
 	head = appendLen16(head, b.DeviceID)
 	head = append(head, b.DeviceID...)
 	head = appendLen16(head, b.SourceID)
@@ -764,14 +883,30 @@ func WriteBatch(w io.Writer, b Batch) error {
 	head = append(head, wide[:]...)
 	binary.BigEndian.PutUint64(wide[:], uint64(b.End))
 	head = append(head, wide[:]...)
-	var n32 [4]byte
-	binary.BigEndian.PutUint32(n32[:], uint32(len(b.Records)))
-	head = append(head, n32[:]...)
+	return binary.BigEndian.AppendUint32(head, uint32(len(b.Records)))
+}
+
+func appendRecordSection(section []byte, b Batch) []byte {
+	for _, r := range b.Records {
+		var rh [batchRecordFrameBytes]byte
+		binary.BigEndian.PutUint64(rh[:8], uint64(r.Offset))
+		binary.BigEndian.PutUint32(rh[8:], uint32(len(r.JSON)))
+		section = append(section, rh[:]...)
+		section = append(section, r.JSON...)
+	}
+	return section
+}
+
+func WriteBatch(w io.Writer, b Batch) error {
+	if err := validateBatch(b); err != nil {
+		return err
+	}
+	head := appendBatchHead([]byte{markerBatch, ProtocolVersion}, b)
 	if _, err := w.Write(head); err != nil {
 		return fmt.Errorf("hubsync: write batch: %w", err)
 	}
 	for _, r := range b.Records {
-		var rh [12]byte
+		var rh [batchRecordFrameBytes]byte
 		binary.BigEndian.PutUint64(rh[:8], uint64(r.Offset))
 		binary.BigEndian.PutUint32(rh[8:], uint32(len(r.JSON)))
 		if _, err := w.Write(rh[:]); err != nil {
@@ -784,6 +919,74 @@ func WriteBatch(w io.Writer, b Batch) error {
 		}
 	}
 	return nil
+}
+
+func WriteBatchCompressed(w io.Writer, b Batch) error {
+	if err := validateBatch(b); err != nil {
+		return err
+	}
+	if len(b.Records) == 0 {
+		return WriteBatch(w, b)
+	}
+	section := make([]byte, 0, int64(len(b.Records))*batchRecordFrameBytes+b.End-b.Start)
+	section = appendRecordSection(section, b)
+	comp := batchEncoder().EncodeAll(section, nil)
+	if len(comp) >= len(section) {
+		return WriteBatch(w, b)
+	}
+	head := appendBatchHead([]byte{markerZBatch, ProtocolVersion}, b)
+	head = binary.BigEndian.AppendUint64(head, uint64(len(section)))
+	head = binary.BigEndian.AppendUint32(head, uint32(len(comp)))
+	head = append(head, comp...)
+	if _, err := w.Write(head); err != nil {
+		return fmt.Errorf("hubsync: write batch: %w", err)
+	}
+	return nil
+}
+
+func WriteCapabilities(w io.Writer, caps Capabilities) error {
+	if caps == 0 {
+		return fmt.Errorf("hubsync: capability frame offers no capabilities")
+	}
+	head := []byte{markerCaps, ProtocolVersion}
+	head = binary.BigEndian.AppendUint16(head, uint16(caps))
+	if _, err := w.Write(head); err != nil {
+		return fmt.Errorf("hubsync: write capabilities: %w", err)
+	}
+	return nil
+}
+
+func WriteWelcome(w io.Writer, caps Capabilities) error {
+	head := []byte{markerWelcome, ProtocolVersion}
+	head = binary.BigEndian.AppendUint16(head, uint16(caps))
+	if _, err := w.Write(head); err != nil {
+		return fmt.Errorf("hubsync: write welcome: %w", err)
+	}
+	return nil
+}
+
+func ReadWelcome(r io.Reader) (Capabilities, *Error, error) {
+	fr := &frameReader{r: r}
+	marker, err := replyHead(fr)
+	if err != nil {
+		return 0, nil, err
+	}
+	switch marker {
+	case markerWelcome:
+		caps, err := fr.u16()
+		if err != nil {
+			return 0, nil, err
+		}
+		return Capabilities(caps), nil, nil
+	case markerError:
+		perr, err := readErrorFrame(fr)
+		if err != nil {
+			return 0, nil, err
+		}
+		return 0, perr, nil
+	default:
+		return 0, nil, fmt.Errorf("hubsync: bad welcome marker %q", marker)
+	}
 }
 
 func WriteAck(w io.Writer, a Ack) error {

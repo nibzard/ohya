@@ -76,6 +76,9 @@ type Uploader struct {
 	offline      bool
 	advances     uint32
 
+	hubCaps hubsync.Capabilities
+	capsOff bool
+
 	workspacesDue bool
 	workspacesOff bool
 	drain         *backlogDrain
@@ -360,7 +363,7 @@ func (u *Uploader) syncSource(ctx context.Context, o watch.Outcome, stats *Stats
 		delete(u.idle, o.SourceID)
 		u.observer.Add("upload_batches", 1, "attempted")
 		u.observer.Add("upload_payload_bytes", uint64(b.End-b.Start))
-		ack, perr, err := u.exchange(ctx, func(w io.Writer) error { return hubsync.WriteBatch(w, b) })
+		ack, perr, err := u.exchange(ctx, func(w io.Writer) error { return u.sendBatch(w, b) })
 		if err != nil {
 			return err
 		}
@@ -595,6 +598,32 @@ func (u *Uploader) connect(ctx context.Context) error {
 		}
 		u.Close()
 	}
+	for {
+		if err := u.dialHello(ctx); err != nil {
+			return err
+		}
+		if u.capsOff {
+			return nil
+		}
+		caps, perr, err := u.negotiate(ctx)
+		if err != nil {
+			return err
+		}
+		if perr == nil {
+			u.hubCaps = caps
+			return nil
+		}
+		u.Close()
+		if perr.Code != hubsync.CodeMalformed && perr.Code != hubsync.CodeVersion {
+			u.protocolFailure(perr)
+			return connError(perr)
+		}
+		u.capsOff = true
+		u.logf("the hub does not accept capability negotiation (%v); uploading plain frames until this process restarts", perr)
+	}
+}
+
+func (u *Uploader) dialHello(ctx context.Context) error {
 	dctx, cancel := context.WithTimeout(ctx, u.opts.RequestTimeout)
 	defer cancel()
 	c, err := u.dial(dctx)
@@ -609,6 +638,7 @@ func (u *Uploader) connect(ctx context.Context) error {
 		return u.disconnected(ctx, err)
 	}
 	u.conn = &conn{c: c, br: bufio.NewReaderSize(c, 64<<10)}
+	u.hubCaps = 0
 	u.ready = map[string]bool{}
 	u.workspacesDue = true
 	if u.offline {
@@ -617,6 +647,58 @@ func (u *Uploader) connect(ctx context.Context) error {
 		u.event(observe.LevelInfo, observe.EventTransportOnline, "", nil)
 	}
 	return nil
+}
+
+func (u *Uploader) negotiate(ctx context.Context) (hubsync.Capabilities, *hubsync.Error, error) {
+	c := u.conn
+	deadline := time.Now().Add(u.opts.RequestTimeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	_ = c.c.SetDeadline(deadline)
+	stop := context.AfterFunc(ctx, func() { _ = c.c.SetDeadline(time.Unix(1, 0)) })
+	defer stop()
+	if err := hubsync.WriteCapabilities(c.c, hubsync.CapZstdBatches); err != nil {
+		_ = c.c.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		if _, perr, rerr := hubsync.ReadReply(c.br); rerr == nil && perr != nil {
+			u.Close()
+			u.protocolFailure(perr)
+			return 0, nil, connError(perr)
+		}
+		u.Close()
+		u.observer.Add("upload_failures", 1, "write")
+		return 0, nil, u.disconnected(ctx, err)
+	}
+	caps, perr, err := hubsync.ReadWelcome(c.br)
+	if err != nil {
+		u.Close()
+		u.observer.Add("upload_failures", 1, "read")
+		return 0, nil, u.disconnected(ctx, err)
+	}
+	return caps, perr, nil
+}
+
+type countWriter struct {
+	w io.Writer
+	n int64
+}
+
+func (cw *countWriter) Write(p []byte) (int, error) {
+	n, err := cw.w.Write(p)
+	cw.n += int64(n)
+	return n, err
+}
+
+func (u *Uploader) sendBatch(w io.Writer, b hubsync.Batch) error {
+	cw := &countWriter{w: w}
+	var err error
+	if u.hubCaps&hubsync.CapZstdBatches != 0 {
+		err = hubsync.WriteBatchCompressed(cw, b)
+	} else {
+		err = hubsync.WriteBatch(cw, b)
+	}
+	u.observer.Add("upload_wire_bytes", uint64(cw.n))
+	return err
 }
 
 func (u *Uploader) exchange(ctx context.Context, write func(io.Writer) error) (hubsync.Ack, *hubsync.Error, error) {

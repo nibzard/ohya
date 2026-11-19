@@ -337,6 +337,15 @@ a device knows permanent rejections from transient ones; transient write
 failures retry with capped backoff inside the hub. One in-flight batch per
 source is enforced by a per-source gate across connections, and a bounded
 connection count rejects the excess explicitly.
+Implemented (T145): a device compresses its data batches as `zbatch` frames —
+zstd at level 3 over the record section, carrying the uncompressed length —
+after a per-connection capability negotiation (`caps`/`welcome`) that falls
+back to plain frames against an older hub, so the upgrade order is hub first
+([ADR 0014](docs/adr/0014-zstd-compressed-batch-upload.md)). The hub
+decompresses before record validation with the allocation capped at the
+declared length; corrupt or oversize decompression is a deterministic
+protocol error, never an unbounded allocation. The capability changes no
+batch/ack behavior, so the TLA+ sync model is unchanged.
 [docs/sync-protocol.md](docs/sync-protocol.md) specifies the frames, their
 bounds, the error codes, and the endpoint and uploader rules.
 

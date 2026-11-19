@@ -203,6 +203,214 @@ func TestWritersRefuseOversizedFrames(t *testing.T) {
 	}
 }
 
+func pseudoRandom(n int, seed uint64) []byte {
+	out := make([]byte, n)
+	x := seed | 1
+	for i := range out {
+		x ^= x << 13
+		x ^= x >> 7
+		x ^= x << 17
+		out[i] = byte(x)
+	}
+	return out
+}
+
+func compressedPayload(t *testing.T, b Batch) ([]byte, []byte) {
+	t.Helper()
+	section := appendRecordSection(nil, b)
+	return section, batchEncoder().EncodeAll(section, nil)
+}
+
+func rawZBatch(b Batch, rawLen int64, payload []byte) []byte {
+	out := []byte{markerZBatch, ProtocolVersion}
+	out = appendLen16(out, b.DeviceID)
+	out = append(out, b.DeviceID...)
+	out = appendLen16(out, b.SourceID)
+	out = append(out, b.SourceID...)
+	out = binary.BigEndian.AppendUint64(out, uint64(b.Start))
+	out = binary.BigEndian.AppendUint64(out, uint64(b.End))
+	out = binary.BigEndian.AppendUint32(out, uint32(len(b.Records)))
+	out = binary.BigEndian.AppendUint64(out, uint64(rawLen))
+	out = binary.BigEndian.AppendUint32(out, uint32(len(payload)))
+	return append(out, payload...)
+}
+
+func TestCompressedBatchRoundTrip(t *testing.T) {
+	records := withEnds(testRecords())
+	batch := Batch{DeviceID: testDevice, SourceID: testSource,
+		Start: 0, End: records[len(records)-1].End(), Records: records}
+	var buf bytes.Buffer
+	if err := WriteBatchCompressed(&buf, batch); err != nil {
+		t.Fatal(err)
+	}
+	if buf.Len() == 0 || buf.Bytes()[0] != markerZBatch {
+		t.Fatalf("frame marker = %q; want the compressed marker %q", buf.Bytes()[0], markerZBatch)
+	}
+	frame, err := ReadFrame(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame.Batch == nil {
+		t.Fatal("compressed batch frame did not decode")
+	}
+	got := frame.Batch
+	if got.DeviceID != batch.DeviceID || got.SourceID != batch.SourceID ||
+		got.Start != batch.Start || got.End != batch.End || len(got.Records) != len(batch.Records) {
+		t.Fatalf("compressed batch round trip = %+v", got)
+	}
+	for i := range got.Records {
+		if got.Records[i].Offset != batch.Records[i].Offset ||
+			!bytes.Equal(got.Records[i].JSON, batch.Records[i].JSON) {
+			t.Fatalf("record %d round trip = %+v", i, got.Records[i])
+		}
+	}
+
+	buf.Reset()
+	incompressible := []Record{
+		{Offset: 0, JSON: pseudoRandom(4096, 1)},
+		{Offset: 0, JSON: pseudoRandom(4096, 2)},
+	}
+	incompressible = withEnds(incompressible)
+	plain := Batch{DeviceID: testDevice, SourceID: testSource,
+		Start: 0, End: incompressible[len(incompressible)-1].End(), Records: incompressible}
+	if err := WriteBatchCompressed(&buf, plain); err != nil {
+		t.Fatal(err)
+	}
+	if buf.Bytes()[0] != markerBatch {
+		t.Fatalf("incompressible batch marker = %q; want the plain marker %q", buf.Bytes()[0], markerBatch)
+	}
+	frame, err = ReadFrame(&buf)
+	if err != nil || frame.Batch == nil {
+		t.Fatalf("plain fallback decode = %+v, %v", frame.Batch, err)
+	}
+
+	buf.Reset()
+	probe := Batch{DeviceID: testDevice, SourceID: testSource, Start: 6528, End: 6528}
+	if err := WriteBatchCompressed(&buf, probe); err != nil {
+		t.Fatal(err)
+	}
+	if buf.Bytes()[0] != markerBatch {
+		t.Fatalf("empty batch marker = %q; want the plain marker %q", buf.Bytes()[0], markerBatch)
+	}
+}
+
+func TestReadFrameRejectsBrokenCompressedBatches(t *testing.T) {
+	records := withEnds(testRecords())
+	batch := Batch{DeviceID: testDevice, SourceID: testSource,
+		Start: 0, End: records[len(records)-1].End(), Records: records}
+	section, payload := compressedPayload(t, batch)
+
+	for _, tc := range []struct {
+		name string
+		why  error
+		sub  string
+	}{
+		{"declared length too small", ErrTooLarge, "expands past"},
+		{"declared length too large", nil, "decodes to"},
+		{"declared length past the bound", ErrTooLarge, "payload bytes"},
+		{"truncated compressed stream", nil, "decompress"},
+		{"corrupt compressed stream", nil, "decompress"},
+		{"expansion past the declared length", ErrTooLarge, "expands past"},
+		{"oversized compressed payload", ErrTooLarge, "compressed batch payload"},
+		{"trailing record-section bytes", nil, "trailing bytes"},
+	} {
+		var frame []byte
+		switch tc.name {
+		case "declared length too small":
+			frame = rawZBatch(batch, int64(len(section))-1, payload)
+		case "declared length too large":
+			frame = rawZBatch(batch, int64(len(section))+1, payload)
+		case "declared length past the bound":
+			bound := int64(MaxBatchBytes) + int64(len(batch.Records))*batchRecordFrameBytes
+			frame = rawZBatch(batch, bound+1, payload)
+		case "truncated compressed stream":
+			frame = rawZBatch(batch, int64(len(section)), payload[:len(payload)/2])
+		case "corrupt compressed stream":
+			bad := bytes.Clone(payload)
+			bad[len(bad)/2] ^= 0xff
+			frame = rawZBatch(batch, int64(len(section)), bad)
+		case "expansion past the declared length":
+			bomb := batchEncoder().EncodeAll(bytes.Repeat([]byte{0}, 1<<20), nil)
+			frame = rawZBatch(batch, 1<<19, bomb)
+		case "oversized compressed payload":
+			head := rawZBatch(batch, 0, nil)
+			head = head[:len(head)-4]
+			head = binary.BigEndian.AppendUint32(head, uint32(MaxBatchBytes+1))
+			frame = head
+		case "trailing record-section bytes":
+			withTail := appendRecordSection(nil, batch)
+			withTail = append(withTail, "trailing"...)
+			frame = rawZBatch(batch, int64(len(withTail)), batchEncoder().EncodeAll(withTail, nil))
+		}
+		_, err := ReadFrame(bytes.NewReader(frame))
+		if err == nil {
+			t.Fatalf("%s: decode succeeded, want failure", tc.name)
+		}
+		if tc.why != nil && !errors.Is(err, tc.why) {
+			t.Fatalf("%s: err = %v; want %v", tc.name, err, tc.why)
+		}
+		if !strings.Contains(err.Error(), tc.sub) {
+			t.Fatalf("%s: err = %v; want text %q", tc.name, err, tc.sub)
+		}
+	}
+
+	var valid bytes.Buffer
+	if err := WriteBatchCompressed(&valid, batch); err != nil {
+		t.Fatal(err)
+	}
+	frame := valid.Bytes()
+	for cut := 1; cut < len(frame); cut++ {
+		if _, err := ReadFrame(bytes.NewReader(frame[:cut])); err == nil {
+			t.Fatalf("prefix of %d bytes decoded, want failure", cut)
+		}
+	}
+}
+
+func TestCapabilityFrames(t *testing.T) {
+	var buf bytes.Buffer
+	if err := WriteCapabilities(&buf, CapZstdBatches); err != nil {
+		t.Fatal(err)
+	}
+	frame, err := ReadFrame(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame.Capabilities == nil || *frame.Capabilities != CapZstdBatches {
+		t.Fatalf("capability frame = %+v", frame.Capabilities)
+	}
+
+	buf.Reset()
+	if err := WriteWelcome(&buf, CapZstdBatches); err != nil {
+		t.Fatal(err)
+	}
+	caps, perr, err := ReadWelcome(&buf)
+	if err != nil || perr != nil || caps != CapZstdBatches {
+		t.Fatalf("welcome = %v, %+v, %v", caps, perr, err)
+	}
+
+	buf.Reset()
+	if err := WriteError(&buf, CodeMalformed, "bad frame marker 'V'"); err != nil {
+		t.Fatal(err)
+	}
+	caps, perr, err = ReadWelcome(&buf)
+	if err != nil || perr == nil || perr.Code != CodeMalformed || caps != 0 {
+		t.Fatalf("welcome over error = %v, %+v, %v", caps, perr, err)
+	}
+
+	buf.Reset()
+	if err := WriteCapabilities(&buf, 0); err == nil {
+		t.Fatal("zero capability mask was framed")
+	}
+	if _, err := ReadFrame(bytes.NewReader([]byte{markerCaps, ProtocolVersion, 0, 0})); err == nil ||
+		!strings.Contains(err.Error(), "no capabilities") {
+		t.Fatalf("zero capability mask err = %v", err)
+	}
+	if _, _, err := ReadWelcome(bytes.NewReader([]byte{markerAck, ProtocolVersion})); err == nil ||
+		!strings.Contains(err.Error(), "bad welcome marker") {
+		t.Fatalf("bad welcome marker err = %v", err)
+	}
+}
+
 func FuzzReadFrame(f *testing.F) {
 	var buf bytes.Buffer
 	records := withEnds(testRecords())
@@ -212,6 +420,13 @@ func FuzzReadFrame(f *testing.F) {
 	}
 	if err := WriteBatch(&buf, Batch{DeviceID: testDevice, SourceID: testSource,
 		Start: 0, End: records[1].End(), Records: records}); err != nil {
+		f.Fatal(err)
+	}
+	if err := WriteBatchCompressed(&buf, Batch{DeviceID: testDevice, SourceID: testSource,
+		Start: 0, End: records[1].End(), Records: records}); err != nil {
+		f.Fatal(err)
+	}
+	if err := WriteCapabilities(&buf, CapZstdBatches); err != nil {
 		f.Fatal(err)
 	}
 	if err := WriteAck(&buf, Ack{Stopped: true, Cursor: 3, Stop: "stopped"}); err != nil {
@@ -239,6 +454,8 @@ func FuzzReadFrame(f *testing.F) {
 			err = WriteRegistration(&out, *frame.Registration)
 		case frame.Batch != nil:
 			err = WriteBatch(&out, *frame.Batch)
+		case frame.Capabilities != nil:
+			err = WriteCapabilities(&out, *frame.Capabilities)
 		case frame.Query != nil:
 			err = WriteQuery(&out, frame.Query.SQL)
 		case frame.Annotate != nil:
@@ -255,6 +472,7 @@ func FuzzReadFrame(f *testing.F) {
 		}
 		if (frame.Registration == nil) != (again.Registration == nil) ||
 			(frame.Batch == nil) != (again.Batch == nil) ||
+			(frame.Capabilities == nil) != (again.Capabilities == nil) ||
 			(frame.Query == nil) != (again.Query == nil) ||
 			(frame.Annotate == nil) != (again.Annotate == nil) ||
 			(frame.Workspaces == nil) != (again.Workspaces == nil) {

@@ -31,6 +31,10 @@ written as `name(n)`.
 registration = 'R' ver(1) devLen(2) dev srcLen(2) src agentLen(2) agent pathLen(4) path
 batch        = 'B' ver(1) devLen(2) dev srcLen(2) src start(8) end(8) count(4)
                  count * [ offset(8) len(4) json ]
+zbatch       = 'Z' ver(1) devLen(2) dev srcLen(2) src start(8) end(8) count(4)
+                 rawLen(8) compLen(4) payload
+caps         = 'V' ver(1) caps(2)
+welcome      = 'v' ver(1) caps(2)
 ack          = 'A' ver(1) status(1) cursor(8) inserted(8) stopOffset(8) stopLen(2) stop
 error        = 'E' ver(1) code(1) msgLen(2) msg
 hello        = 'H' ver(1) credLen(2) cred
@@ -56,6 +60,26 @@ pending      = 'D' ver(1) applied(8) unchanged(8) ignored(8) count(2)
   the JSON text without its terminator; its end is `offset + len + 1`. A
   batch never splits a record. A batch with no records is a cursor probe,
   and its `start` must equal its `end`.
+- `zbatch` is the same batch with its record section zstd-compressed
+  ([ADR 0014](adr/0014-zstd-compressed-batch-upload.md)). The header is the
+  plain batch header; `payload` is one zstd stream (encoder level 3, frame
+  CRC on) over exactly the bytes a plain batch carries after its header —
+  `count` times `offset(8) len(4) json` — and `rawLen` is that section's
+  uncompressed length. The writer sends `zbatch` only when compression wins
+  and only after the hub's `welcome` offered it; probes and incompressible
+  batches travel as plain `batch` frames. The hub decompresses before
+  validating the records: `rawLen` must fit the maximum plain record section
+  (64 MiB of records plus 12 framing bytes per record), `compLen` must fit
+  the 64 MiB batch bound, decompression allocates exactly `rawLen` and fails
+  deterministically on any expansion past it, and the decoded section then
+  passes the plain batch's per-record, total, and exact-consumption checks.
+- `caps` offers a 16-bit capability mask as the first request frame after a
+  successful `hello`; `welcome` answers with the mask the hub honors, the
+  intersection of the offer and the hub's support. Bit 0 (`0x0001`) is zstd
+  batch compression; the mask must be nonzero, and a hub supporting nothing
+  offered answers with zero. An old hub answers `caps` with `CodeMalformed`
+  like any unknown marker, which is how a device detects it and falls back
+  to plain frames; an old device sends no `caps` frame and is unaffected.
 - `ack` acknowledges a registration or a batch. The hub writes it only after
   the durable commit. `cursor` is the committed cursor, and `inserted`
   counts only new events, so a replayed batch reports 0. `status` 1 means
@@ -97,6 +121,8 @@ the connection closes.
 | Record | 32 MiB | The parser's own record limit |
 | Batch record bytes | 64 MiB | Holds the largest record and its newline (ADR 0004 amendment) |
 | Batch record count | 65,536 | Bounds normalization work for tiny records |
+| Uncompressed zbatch section | 64 MiB + 12 B per record | The plain record section's own maximum, given the validated count (ADR 0014) |
+| Compressed zbatch payload | 64 MiB | The batch bound; honest writers send plain when compression does not shrink |
 | Query text | 64 KiB | The `sql` tool's input limit |
 | Query result | 4 MiB | 16 times the engine's default output bound |
 | Annotate request | 1 MiB | The `annotate` tool's request limit |
@@ -115,7 +141,7 @@ String fields with a 2-byte length must not be empty, except `repo` in `workspac
 | `CodeVersion` | 2 | Unsupported protocol version | Closes |
 | `CodeMalformed` | 3 | Undecodable frame | Closes |
 | `CodeTooLarge` | 4 | A record or batch above its bound | Closes |
-| `CodeRejected` | 5 | Deterministic rejection: a gap ahead of the cursor, conflicting content, invalid boundaries, or a denied query | Stays open |
+| `CodeRejected` | 5 | Deterministic rejection: a gap ahead of the cursor, conflicting content, invalid boundaries, a purged source ([ADR 0013](adr/0013-owner-scoped-session-purge.md)), or a denied query | Stays open |
 | `CodeOwnership` | 6 | The source belongs to another device | Stays open |
 | `CodeUnknownSource` | 7 | The hub never registered the source | Stays open |
 | `CodeUnsupported` | 8 | The hub has no parser for the agent | Stays open |
@@ -140,6 +166,14 @@ String fields with a 2-byte length must not be empty, except `repo` in `workspac
 - A per-source gate keeps one batch in flight per source across all
   connections. A second uploader of the same source waits and validates
   against the first commit.
+- A `caps` frame is answered by one `welcome` with the offered capabilities
+  this hub honors, and holds no connection state: a `zbatch` is
+  self-describing and bounded per frame, so the hub accepts it on any
+  connection. Decompression failures are deterministic decode errors —
+  `CodeTooLarge` for a declared or expanded size past its bound,
+  `CodeMalformed` for a corrupt stream, a length mismatch, or trailing
+  bytes — and close the connection; the hub never allocates beyond the
+  declared uncompressed length (ADR 0014).
 - Before parsing, the endpoint checks that the records are contiguous, start
   at the batch start, and end at the batch end. Normalization uses
   `events.Parse` with the record bound passed explicitly, so it cannot drift
@@ -150,7 +184,11 @@ String fields with a 2-byte length must not be empty, except `repo` in `workspac
 - Transient write failures, such as an external lock past the busy timeout,
   retry with the hub policy: 3 attempts, waits from 100 ms doubling up to
   2 s, no jitter. Deterministic rejections (`ErrBatchRejected`,
-  `ErrSourceOwnership`, `ErrSourceNotRegistered`) never retry.
+  `ErrSourceOwnership`, `ErrSourceNotRegistered`, `ErrSourcePurged`) never
+  retry. A purged source's registration and batches are answered with
+  `CodeRejected` and the refusal text names the purge date and the
+  `ohya sources reallow` remedy; the connection stays open, so the device's
+  other sources are unaffected.
 - A `workspaces` frame that names another device closes the connection, like
   a batch. An unknown agent gets `CodeUnsupported` and a value that is not
   in normalized form gets `CodeRejected`; both stay open.
@@ -185,10 +223,30 @@ The uploader (`internal/uploader`) implements the `SendBatch` and
   source locally, because sending it would close the connection. A parse
   stop is not sent again until the file grows. A source refused for a
   reason retrying cannot fix is blocked for the rest of the process; a
-  changed file is a new source and starts clean.
+  changed file is a new source and starts clean. A purged source is exactly
+  such a refusal: the hub's message names the purge and the remedy, the
+  uploader blocks that one source and keeps uploading the others, and the
+  device's checkpoint and file stay untouched
+  ([ADR 0013](adr/0013-owner-scoped-session-purge.md)). After the owner
+  re-admits the source, the next registration succeeds and the probe finds
+  the hub cursor at the purge point, so history resumes from there and the
+  purged bytes are never replayed.
 - The uploader reports bytes it can see were lost before upload: a replaced
   file whose observed end passed its acknowledged cursor, and a deleted file
   with unsent bytes. Each loss and gap is reported once.
+- After the hello, the uploader offers its capabilities with one `caps`
+  frame and compresses data batches with `zbatch` while the hub's `welcome`
+  offers it ([ADR 0014](adr/0014-zstd-compressed-batch-upload.md)). A hub
+  that refuses the offer with `CodeMalformed` or `CodeVersion` is old: the
+  uploader marks it plain for the rest of the process, reconnects once with
+  a plain hello, and never offers again. The capability changes no
+  checkpoint, batch, or acknowledgment behavior — a compressed batch is the
+  same `SendBatch` action with a different encoding. Because only a new hub
+  answers `welcome` and only a new device asks, the supported upgrade order
+  is hub first: devices then pick up compression as they are upgraded, and
+  no mixed pair ever exchanges a compressed frame. `ohya mcp --remote` and
+  pairing send the plain hello and no `caps` frame; remote queries and
+  annotate stay plain in protocol version 1.
 - Each exchange has a 60 s timeout. Failed passes reconnect with backoff from
   1 s doubling up to 1 min. `Run` stops only on `ErrUnauthorized` (the
   credential was refused, for example after revocation), `ErrIncompatible`

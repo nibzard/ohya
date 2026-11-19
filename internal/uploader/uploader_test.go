@@ -1,6 +1,7 @@
 package uploader
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -114,9 +115,15 @@ type faultConn struct {
 func (c *faultConn) Write(p []byte) (int, error) {
 	if c.frameStart && len(p) > 0 {
 		c.frameStart = false
-		c.dataBatch = p[0] == 'B' && bytes.IndexByte(p, '{') >= 0
-		if c.dataBatch {
+		switch p[0] {
+		case 'Z':
+			c.dataBatch = true
 			c.d.batches.Add(1)
+		case 'B':
+			c.dataBatch = bytes.IndexByte(p, '{') >= 0
+			if c.dataBatch {
+				c.d.batches.Add(1)
+			}
 		}
 	}
 	return c.Conn.Write(p)
@@ -1115,5 +1122,162 @@ func TestBacklogSmallAppendStaysQuiet(t *testing.T) {
 	agent := claudecode.AgentName
 	if got := f.obs.Gauge("upload_backlog_bytes", agent); got != 0 {
 		t.Fatalf("backlog gauge after a small drained append = %v; want 0", got)
+	}
+}
+
+func TestCompressedUploadNegotiated(t *testing.T) {
+	f := newFixture(t, Options{})
+	h := serve(t, openHubDB(t, filepath.Join(t.TempDir(), "hub.db")), f.reg, hubsync.Options{})
+	f.dialer.point(h.addr)
+	a := filepath.Join(f.dir, "a.jsonl")
+	one := line(sessA, "one")
+	two := line(sessA, "two")
+	writeFile(t, a, strings.Repeat(one, 200)+two)
+
+	stats := f.mustSync()
+	if stats.Inserted != 201 {
+		t.Fatalf("stats = %+v; want 201 events", stats)
+	}
+	wire := f.obs.Counter("upload_wire_bytes")
+	payload := f.obs.Counter("upload_payload_bytes")
+	if wire == 0 || wire >= payload {
+		t.Fatalf("wire bytes = %d, payload bytes = %d; want compression on the wire", wire, payload)
+	}
+	if got := count(t, h.db, `SELECT count(*) FROM events`); got != 201 {
+		t.Fatalf("hub events = %d, want 201", got)
+	}
+	if got, want := f.checkpoint(a), size(t, a); got != want {
+		t.Fatalf("checkpoint = %d, want %d", got, want)
+	}
+}
+
+type oldHub struct {
+	t          *testing.T
+	ln         net.Listener
+	mu         sync.Mutex
+	conns      map[net.Conn]struct{}
+	refused    atomic.Int32
+	plain      atomic.Int32
+	compressed atomic.Int32
+}
+
+func serveOldHub(t *testing.T) *oldHub {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &oldHub{t: t, ln: ln, conns: map[net.Conn]struct{}{}}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			h.mu.Lock()
+			h.conns[c] = struct{}{}
+			h.mu.Unlock()
+			go h.serve(c)
+		}
+	}()
+	return h
+}
+
+func (h *oldHub) kick() {
+	h.mu.Lock()
+	conns := make([]net.Conn, 0, len(h.conns))
+	for c := range h.conns {
+		conns = append(conns, c)
+	}
+	h.mu.Unlock()
+	for _, c := range conns {
+		c.Close()
+	}
+}
+
+func (h *oldHub) serve(c net.Conn) {
+	defer c.Close()
+	h.mu.Lock()
+	delete(h.conns, c)
+	h.mu.Unlock()
+	br := bufio.NewReader(c)
+	hello, _, err := hubsync.ReadAuthFrame(br)
+	if err != nil || hello == nil {
+		return
+	}
+	_ = c.SetDeadline(time.Now().Add(30 * time.Second))
+	for {
+		head, err := br.Peek(1)
+		if err != nil {
+			return
+		}
+		if head[0] == 'V' {
+			h.refused.Add(1)
+			_ = hubsync.WriteError(c, hubsync.CodeMalformed,
+				fmt.Sprintf("hubsync: bad frame marker %q", head[0]))
+			return
+		}
+		if head[0] == 'Z' {
+			h.compressed.Add(1)
+			return
+		}
+		frame, err := hubsync.ReadFrame(br)
+		if err != nil {
+			return
+		}
+		switch {
+		case frame.Registration != nil:
+			_ = hubsync.WriteAck(c, hubsync.Ack{})
+		case frame.Batch != nil:
+			b := frame.Batch
+			if len(b.Records) > 0 {
+				h.plain.Add(1)
+			}
+			_ = hubsync.WriteAck(c, hubsync.Ack{Cursor: b.End, Inserted: int64(len(b.Records))})
+		case frame.Workspaces != nil:
+			_ = hubsync.WriteError(c, hubsync.CodeUnsupported, "agent has no parser at this hub")
+		default:
+			return
+		}
+	}
+}
+
+func TestOldHubFallsBackToPlainFrames(t *testing.T) {
+	f := newFixture(t, Options{})
+	old := serveOldHub(t)
+	f.dialer.point(old.ln.Addr().String())
+	a := filepath.Join(f.dir, "a.jsonl")
+	one := line(sessA, "one")
+	two := line(sessA, "two")
+	writeFile(t, a, one+two)
+
+	stats := f.mustSync()
+	if stats.Inserted != 2 {
+		t.Fatalf("stats = %+v; want 2 events", stats)
+	}
+	if got := old.refused.Load(); got != 1 {
+		t.Fatalf("capability refusals = %d, want exactly one on first contact", got)
+	}
+	if got := old.compressed.Load(); got != 0 {
+		t.Fatalf("compressed batches = %d, want none against an old hub", got)
+	}
+	if got := old.plain.Load(); got != 1 {
+		t.Fatalf("plain data batches = %d, want 1", got)
+	}
+	if !strings.Contains(f.log.String(), "capability negotiation") {
+		t.Fatalf("log misses the fallback line:\n%s", f.log)
+	}
+	if got, want := f.checkpoint(a), size(t, a); got != want {
+		t.Fatalf("checkpoint = %d, want %d", got, want)
+	}
+
+	old.kick()
+	appendFile(t, a, two)
+	f.mustSync()
+	if got := old.refused.Load(); got != 1 {
+		t.Fatalf("capability refusals after reconnect = %d, want the process to stay plain", got)
+	}
+	if got := old.plain.Load(); got != 2 {
+		t.Fatalf("plain data batches after reconnect = %d, want 2", got)
 	}
 }

@@ -94,7 +94,13 @@ calls from both agents over at least 2 weeks.
 Evaluate only after D2:
 
 - **O2:** content-addressed large strings (33% duplicate bytes measured).
-- **O5:** compressed sync batches with a shared dictionary.
+- **O5:** compressed sync batches with a shared dictionary. Partially
+  delivered 2026-11-19 (T145) by operator decision ahead of D2: batch
+  upload frames are zstd-compressed with per-connection negotiation and
+  plain-frame fallback
+  ([ADR 0014](../docs/adr/0014-zstd-compressed-batch-upload.md)). The
+  shared dictionary remains open, to be evaluated by T146 only on a
+  material measured gain.
 - **O6:** index fewer low-value bytes in FTS; needs the plan 003 R5
   recall evaluation first.
 

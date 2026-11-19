@@ -224,6 +224,8 @@ func (e *Endpoint) serveConn(ctx context.Context, session *connSession) {
 			closeConn = e.handleRegistration(ctx, session, deviceID, *frame.Registration)
 		case frame.Batch != nil:
 			closeConn = e.handleBatch(ctx, session, deviceID, *frame.Batch)
+		case frame.Capabilities != nil:
+			closeConn = e.handleCapabilities(session, *frame.Capabilities)
 		case frame.Query != nil:
 			closeConn = e.handleQuery(ctx, session, deviceID, *frame.Query)
 		case frame.Annotate != nil:
@@ -329,6 +331,11 @@ func (e *Endpoint) handleBatch(ctx context.Context, w io.Writer, deviceID string
 	ackStart := time.Now()
 	_ = WriteAck(w, ack)
 	e.observer.Observe("hub_ack_write_duration", time.Since(ackStart))
+	return false
+}
+
+func (e *Endpoint) handleCapabilities(w io.Writer, offered Capabilities) bool {
+	_ = WriteWelcome(w, offered&hubCapabilities)
 	return false
 }
 

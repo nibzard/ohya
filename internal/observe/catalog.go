@@ -71,6 +71,7 @@ var Catalog = []Metric{
 	{Name: "ingest_failures", Kind: Counter, Labels: []string{"failure_kind"}, Help: "local ingest registration, read, and checkpoint failures by kind"},
 	{Name: "upload_batches", Kind: Counter, Labels: []string{"batch_result"}, Help: "upload batches by result"},
 	{Name: "upload_payload_bytes", Kind: Counter, Help: "attempted upload payload bytes; resubmissions counted again"},
+	{Name: "upload_wire_bytes", Kind: Counter, Help: "frame bytes written for upload batches; below upload_payload_bytes while compression is negotiated"},
 	{Name: "upload_ack_bytes", Kind: Counter, Help: "acknowledged byte advancement within one source incarnation"},
 	{Name: "upload_checkpoint_advances", Kind: Counter, Help: "locally persisted checkpoint advancements after acknowledgment"},
 	{Name: "upload_events_inserted", Kind: Counter, Help: "events the hub reported as newly inserted"},
