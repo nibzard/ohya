@@ -169,6 +169,46 @@ func TestRemoteQueryBoundsSurviveTheWire(t *testing.T) {
 	big.expectClosed()
 }
 
+func TestRemoteQueryRedactsSecretShapedValues(t *testing.T) {
+	s, _, _ := remoteFixtureHub(t, mcpserver.EngineOptions{})
+	auth := s.ep.auth.(*peerAuth)
+	a := dial(t, s.addr)
+	auth.assign(a.conn, deviceA)
+	mustRegisterVia(t, a, deviceA, "src-9", "/secrets.jsonl")
+	line := rawLine("sess-9", "deploy with GITHUB_TOKEN=ghp_"+strings.Repeat("f", 36)+
+		" and AKIAIOSFODNN7EXAMPLE")
+	a.send(Batch{DeviceID: deviceA, SourceID: "src-9",
+		Start: 0, End: int64(len(line)) + 1,
+		Records: []Record{{Offset: 0, JSON: line}}})
+	a.mustAck(Ack{Cursor: int64(len(line)) + 1, Inserted: 1})
+
+	b := dialDevice(t, s, auth, deviceB)
+	res, err := b.Query(context.Background(),
+		`SELECT text, raw_json FROM events WHERE source_id = 'src-9'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.RowCount != 1 {
+		t.Fatalf("remote rows = %+v", res)
+	}
+	for i, cell := range res.Rows[0] {
+		text, ok := cell.(string)
+		if !ok {
+			t.Fatalf("cell %d = %#v; want text", i, cell)
+		}
+		if strings.Contains(text, "ghp_") || strings.Contains(text, "AKIAIOSFODNN7EXAMPLE") {
+			t.Fatalf("remote cell %d still holds secret text: %q", i, text)
+		}
+		if !strings.Contains(text, "[redacted:github-token]") ||
+			!strings.Contains(text, "[redacted:aws-access-key-id]") {
+			t.Fatalf("remote cell %d lacks kind-labeled markers: %q", i, text)
+		}
+	}
+	if res.Redactions != 4 {
+		t.Fatalf("remote redactions = %d; want 4 (two cells, two matches each)", res.Redactions)
+	}
+}
+
 func TestRemoteQueryResultFrameBound(t *testing.T) {
 	s, _, _ := remoteFixtureHub(t, mcpserver.EngineOptions{
 		MaxOutputBytes: 8 << 20, Deadline: 30 * time.Second})
@@ -297,6 +337,7 @@ func TestRemoteResultJSONShape(t *testing.T) {
 		RowCount:         2,
 		Truncated:        true,
 		TruncationReason: "row_limit",
+		Redactions:       3,
 	}
 	if err := WriteQueryResult(&buf, want); err != nil {
 		t.Fatal(err)

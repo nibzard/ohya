@@ -34,6 +34,7 @@ show       print one session's newest events
 devices    manage device pairing and revocation
 sources    manage stored sources on the hub
 purge      plan or apply an owner-decided purge of stored sessions
+secrets    report secret-shaped values found in stored records
 rederive   rebuild normalized rows and events_fts after a parser upgrade
 doctor     run read-only health checks the sql tool cannot answer
 status     report runtime state from published local snapshots
@@ -83,6 +84,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runDevicesCommand(rest, stdout, stderr)
 	case "purge":
 		return runPurgeCommand(rest, stdout, stderr)
+	case "secrets":
+		return runSecretsCommand(rest, stdout, stderr)
 	case "sources":
 		return runSourcesCommand(rest, stdout, stderr)
 	case "rederive":

@@ -238,6 +238,7 @@ directories and sends only the normalized value to the hub.
 | `ohya logs` | Structured application logs from local instances, with `--follow` |
 | `ohya diagnose` | Export one private, sanitized diagnostics artifact |
 | `ohya usage` | Report how agents use the `sql` and `annotate` tools |
+| `ohya secrets scan` | Count secret-shaped values in stored records; never prints matched text |
 | `ohya version` | Build, parser, and schema versions |
 
 Every command takes `--help`. Reporting commands take `--json`. No command
@@ -248,6 +249,13 @@ exit codes, and failure behavior.
 
 - Transcript content and SQL are untrusted. The SQL authorizer denies writes,
   `ATTACH`, extensions, and state-changing pragmas.
+- The `sql` tool replaces secret-shaped values (AWS key ids, GitHub,
+  Anthropic, OpenAI, Slack, and Google tokens, private-key blocks, and
+  secret-named assignments) with kind-labeled markers before results leave
+  the hub — best-effort risk reduction, never a guarantee; stored records
+  stay untouched ([ADR 0015](docs/adr/0015-egress-secret-redaction.md)).
+  `ohya secrets scan` reports what the same pattern table finds in stored
+  records without ever printing matched text.
 - Devices pair with one-time, expiring invitations. Revocation is final and
   is checked on every request.
 - The hub sets the annotation writer from the authenticated device. A caller

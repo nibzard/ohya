@@ -69,7 +69,8 @@ func TestServerServesSQLTool(t *testing.T) {
 	for _, want := range []string{
 		"Current writer ID", "dev1", "events_fts", "events_settled", "event_annotations",
 		"session_token_usage", "sqlite_master", "one statement per call",
-		"truncated", "MATCH",
+		"truncated", "MATCH", "Secret redaction", "[redacted:", "redactions",
+		"best-effort risk reduction, never a guarantee", "ohya purge",
 	} {
 		if !strings.Contains(description, want) {
 			t.Fatalf("tool description misses %q:\n%s", want, description)

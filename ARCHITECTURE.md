@@ -589,6 +589,17 @@ Engine details (`internal/mcpserver`):
 - Output truncation drops whole rows, never parts of a row, and reports
   `row_limit` or `byte_limit`. BLOBs become base64 text, and non-finite
   floats become their names.
+- Egress secret redaction: after the rows are read, every string cell
+  passes the fixed pattern table in `internal/secrets`
+  ([ADR 0015](docs/adr/0015-egress-secret-redaction.md)). A match becomes a
+  kind-labeled marker such as `[redacted:github-token]`, the variable name of
+  a matched assignment stays readable, and the result carries one additive
+  `redactions` count (omitted when zero, so the wire shape is unchanged for
+  clean results). The pass runs inside the engine, so the stdio tool, the
+  remote query frames, and the operator recall commands all share it. It is
+  best-effort risk reduction over untouched stored records, never a
+  guarantee; `ohya secrets scan` reports the same table's findings per
+  event, session, and pattern without ever printing matched text.
 - The annotate handler decodes strictly: unknown fields and trailing data
   are refused, and pointer fields keep absent, null, and empty values apart.
   Content refusals wrap `ErrAnnotateRejected` before the database is

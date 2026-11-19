@@ -2037,3 +2037,85 @@ How to use this file:
     agent") holds on real scale. Remote wiring is pinned in-process by the
     serve e2e (runSearchCommand/runShowCommand against the joined dev
     state).
+
+- Egress secret redaction shipped (2026-11-19, T142, internal/secrets +
+  internal/mcpserver + cmd/ohya/secrets.go, ADR 0015): the sql Engine
+  passes every string result cell through one fixed pattern table before
+  the Result is returned, so stdio, the hubsync remote query frames, and
+  search/show all ship `[redacted:<pattern-id>]` markers; `Result.redactions`
+  (omitempty) carries one additive count. Facts future work must keep:
+  - Pattern-table semantics: patterns apply sequentially in table order,
+    tokens before `env-assignment`, so `ANTHROPIC_API_KEY=sk-ant-…` keeps
+    the precise `anthropic-api-key` marker and the variable name; the env
+    value charset excludes `[` so a marker is never re-matched (redaction
+    is idempotent — pinned by table tests and FuzzRedact). The env name is
+    UPPER_SNAKE with a secret suffix (API_KEY, ACCESS_KEY, SECRET_KEY,
+    PRIVATE_KEY, TOKEN, SECRET, PASSWORD, PASSPHRASE, PASSWD; bare KEY and
+    PWD are deliberately absent so `PUBLIC_KEY=` and `OLDPWD=` stay
+    readable), value at least 8 chars, `=` with no spaces, and the
+    unquoted value charset also stops at quotes, whitespace, `[`, `{`, `)`,
+    `,`, `;` and refuses `$` as the first char (an env-var reference is not
+    a secret).
+  - An anchor prefilter (strings.Contains over the literals every pattern
+    requires: AKIA, ASIA, ghp_, github_pat_, sk-, xox, AIza,
+    "PRIVATE KEY", =) keeps secret-free results nearly free; correctness
+    is pinned by the positive fixtures running through the same path.
+  - Count semantics are shared: `secrets.Count` runs the same sequential
+    passes, so `ohya secrets scan` counts exactly what the engine would
+    redact. The scan reads `raw_json` only (the derived `text` is a subset
+    of the record's bytes; duplicates carry NULL text but full raw_json),
+    pages by event id (500 per page), opens read-only, and never prints
+    matched text — counts, pattern ids, event ids, session ids only.
+  - Known accepted false positives: a long random base64 run can collide
+    with the AIza and AKIA shapes; over-redaction is chosen over egress of
+    a real secret.
+  - Truncation interplay: redaction runs after row collection, so a
+    `substr()`-cut excerpt can cut a secret shape in half and pass it
+    through — best-effort by design and stated in the tool description.
+  - If the pattern table ever changes, keep the near-miss negatives in
+    internal/secrets/secrets_test.go in step so false positives cannot
+    drift in; no schema or parser version is involved (the table is
+    egress-only code).
+  - Measured (2026-11-19, real write path): a 54.8 MiB fixgen claude-code
+    corpus (16,948 events, 139 MB database) scans in 3.4 s wall ≈ 3.4 s CPU
+    — about 16 MB/s of raw_json, so the deployed 16 GB hub (~10 GB raw)
+    extrapolates to roughly 10 minutes of mostly-CPU scan. The same run
+    found exactly the 3 seeded secrets and zero false positives across the
+    16,947 clean real-shaped events; `ohya search` over the seeded record
+    prints `GITHUB_TOKEN=[redacted:github-token]` with every name kept.
+  - Operational lesson from the same day: an unbounded `ohya ingest` smoke
+    (claude root set, default codex/pi roots left active) ingested the
+    machine's real ~3 GB codex corpus into a throwaway database and filled
+    the nearly-full VM volume (195 GB at ~97% before the run). Always pass
+    `--codex-root "" --pi-root ""` (or every explicit root) for fixture
+    ingests, and check free space first; the live hub survived the
+    disk-full window unharmed (its service kept importing, 0 failed).
+
+- TestTimeoutRetries was load-flaky under the full suite (2026-11-19,
+  T142 verification): its `RequestTimeout: 300ms` sat within reach of real
+  round-trip latencies while `go test ./...` runs every package in
+  parallel on this VM (98%-full volume; cmd/ohya alone took 589s in the
+  failing run). Two failure shapes, same root: (a) a pre-batch round trip
+  on the first connection (hello, capability negotiation, registration,
+  probe) missed 300ms, so the one-shot `stallAck` fault stayed armed and
+  stalled the *recovery* acknowledgment on the second connection;
+  (b) a recovery round trip itself missed 300ms. The recorded failure log
+  (unreachable -> reconnected -> unreachable on a second local port) is
+  shape (a). Fix: `RequestTimeout: 2s` — the injected stall blocks
+  indefinitely, so the timeout under test fires at any deadline — plus a
+  `batches == 1` pin after the first failed sync so the fault provably
+  armed the data-batch acknowledgment and not an earlier round trip.
+  Guideline: an injected-fault deadline must be far above machine
+  latencies, because the fault only needs the deadline to exist.
+
+- TestHubSetupTwoStepFlow failed twice (2026-11-19, 20:35–21:03) in
+  full-package runs with `the hub did not answer through its relay …
+  context deadline exceeded` while this VM's root volume sat at 98%
+  (4.4 GB free); the identical tree passed the same test isolated
+  (29 s), paired with TestServeJoinEndToEnd (31 s), and in a whole
+  `make check` (407 s for cmd/ohya) after the volume dropped to 68%
+  (63 GB free). No code change: the child-serve hub startup plus the
+  30 s `hubProbeWait` relay probe cannot absorb fsync latency on a
+  nearly full volume. If it recurs, check `df -h /` before suspecting
+  the transport; a bigger `hubProbeWait` is a product decision, not a
+  test fix.

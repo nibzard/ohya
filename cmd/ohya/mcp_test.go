@@ -197,6 +197,48 @@ func TestMCPStdioEndToEnd(t *testing.T) {
 	}
 }
 
+func TestMCPStdioRedactsSecretShapedValues(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "hub", "hub.db")
+	stateDir := filepath.Join(dir, "state")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	hub, err := store.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := "ghp_" + strings.Repeat("f", 36)
+	for _, q := range []string{
+		`INSERT INTO sessions(id,agent,device_id,native_id,first_prompt)
+		 VALUES('claude:dev1:sess-1','claude','dev1','sess-1','deploy')`,
+		`INSERT INTO sources(id,device_id,agent,path) VALUES('src-1','dev1','claude','/repo/a.jsonl')`,
+		`INSERT INTO events(id,session_id,source_id,source_offset,kind,raw_json,text)
+		 VALUES(7,'claude:dev1:sess-1','src-1',0,'message','` + sqlString(`{"content":"export GITHUB_TOKEN=`+token+`"}`) + `',
+		 'export GITHUB_TOKEN=` + sqlString(token) + `')`,
+	} {
+		if _, err := hub.Writer().Exec(q); err != nil {
+			hub.Close()
+			t.Fatalf("seed %q: %v", q, err)
+		}
+	}
+	hub.Close()
+
+	session := startMcpProcess(t, dbPath, stateDir)
+	result := callSql(t, session, `SELECT text FROM events WHERE id = 7`)
+	if result.IsError {
+		t.Fatalf("stdio query failed: %+v", result)
+	}
+	raw, _ := json.Marshal(result.StructuredContent)
+	if strings.Contains(string(raw), token) {
+		t.Fatalf("stdio result still holds the token: %s", raw)
+	}
+	if !strings.Contains(string(raw), "export GITHUB_TOKEN=[redacted:github-token]") ||
+		!strings.Contains(string(raw), `"redactions":1`) {
+		t.Fatalf("stdio result lacks the marker or the count: %s", raw)
+	}
+}
+
 func TestMCPStdioAnnotateEndToEnd(t *testing.T) {
 	dbPath, stateDir := seedMcpDatabase(t)
 	session := startMcpProcess(t, dbPath, stateDir)

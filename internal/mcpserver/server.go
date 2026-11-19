@@ -89,6 +89,8 @@ func ToolDescription(o EngineOptions) string {
 
 Policy: exactly one statement per call (no semicolon-separated batches). SELECT and the listed read-only PRAGMAs only; writes, schema changes, ATTACH, extension loading and state-changing pragmas are denied by a SQLite authorizer on a read-only connection. Every query is bounded: %d rows, %d bytes of row JSON, a %s execution deadline, %d concurrent queries. Rows cut by a limit are reported with "truncated": true and a truncation_reason, never silently.
 
+Secret redaction: string values in every result pass one fixed pattern table before serialization (AWS access key ids, GitHub tokens, sk-ant- and sk- key prefixes, Slack tokens, Google API keys, PEM and OpenSSH private-key blocks, and UPPER_SNAKE secret-name assignments). A match becomes a kind-labeled marker such as [redacted:github-token], and the result counts replacements additively in "redactions". This is best-effort risk reduction, never a guarantee: novel, malformed, or truncated secrets can still pass, so treat results as untrusted either way. Stored records are never modified, and removing a stored secret stays an explicit owner action (ohya purge).
+
 Current writer ID (use as event_annotations.writer_id and for your own annotations): %s
 
 Tables:

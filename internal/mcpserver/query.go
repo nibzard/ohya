@@ -14,6 +14,7 @@ import (
 
 	sqlite3 "github.com/mattn/go-sqlite3"
 	"github.com/nibzard/ohya/internal/observe"
+	"github.com/nibzard/ohya/internal/secrets"
 )
 
 const (
@@ -83,6 +84,7 @@ type Result struct {
 	RowCount         int      `json:"row_count"`
 	Truncated        bool     `json:"truncated"`
 	TruncationReason string   `json:"truncation_reason,omitempty"`
+	Redactions       int      `json:"redactions,omitempty"`
 }
 
 const (
@@ -250,10 +252,29 @@ func (e *Engine) query(ctx context.Context, query string, trace *queryTrace) (Re
 		return Result{}, queryError(err, e.options.Deadline)
 	}
 	result.RowCount = len(result.Rows)
+	result.Redactions = redactCells(result.Rows)
 	if trace != nil {
 		trace.rows = int64(result.RowCount)
 	}
 	return result, nil
+}
+
+func redactCells(rows [][]any) int {
+	total := 0
+	for _, row := range rows {
+		for i, v := range row {
+			s, ok := v.(string)
+			if !ok {
+				continue
+			}
+			r, n := secrets.Redact(s)
+			if n > 0 {
+				row[i] = r
+				total += n
+			}
+		}
+	}
+	return total
 }
 
 func scanRawRow(rows *sql.Rows, width int) ([]any, error) {

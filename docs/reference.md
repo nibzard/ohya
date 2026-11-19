@@ -27,6 +27,7 @@ make build
 ./bin/ohya status              # runtime state from published local snapshots
 ./bin/ohya metrics             # counter rates and durations over a time window
 ./bin/ohya usage               # report how agents use the sql and annotate tools
+./bin/ohya secrets scan        # count secret-shaped values in stored records
 ./bin/ohya version             # print the build, parser, and schema versions
 ```
 
@@ -53,7 +54,8 @@ command prompts for input: ohya is non-interactive by design.
 
 The commands that report facts also print machine-readable output:
 `ingest --once`, `devices list`, `devices invite`, `devices revoke`,
-`purge`, `sources reallow`, `rederive`, `doctor`, `usage`, and `version`
+`purge`, `sources reallow`, `rederive`, `doctor`, `usage`,
+`secrets scan`, and `version`
 take `--json` (text stays the default)
 and print exactly one JSON object on stdout, for example
 
@@ -307,7 +309,15 @@ call — `SELECT` and read-only `PRAGMA` only — on a restricted read-only
 connection guarded by a SQLite authorizer. Writes, schema changes,
 `ATTACH`, extension loading, and state-changing pragmas are denied; queries
 run under a 5 second deadline, return at most 500 rows and 256 KiB of row
-JSON, and report truncation explicitly instead of silently. The tool
+JSON, and report truncation explicitly instead of silently. String values
+in every result also pass a fixed secret pattern table at egress
+([ADR 0015](adr/0015-egress-secret-redaction.md)): AWS access key ids,
+GitHub, Anthropic, OpenAI, Slack, and Google token shapes, PEM and
+OPENSSH private-key blocks, and secret-named `UPPER_SNAKE=VALUE`
+assignments become kind-labeled markers such as
+`[redacted:github-token]`, and the result counts replacements in
+`redactions`. This is best-effort risk reduction, never a guarantee;
+stored records are never modified. The tool
 description publishes the schema, SQL examples, the limits, and this
 device's writer ID, and steers agents to the `events_settled` view —
 `events` without sessions active in the last 10 minutes — so a querying
@@ -451,6 +461,44 @@ window defaults to the last 30 days and ends now; `--since` and `--until`
 move it (`--since` takes `30d` or a Go duration, `--until` an RFC 3339
 time). The command takes the same `--db` and `--state` flags as `ingest`
 and opens the database read-only.
+
+### Secret scan
+
+`ohya secrets scan` reports secret-shaped values the hub has stored. The
+`sql` tool already replaces such values with kind-labeled markers before
+results leave the hub (see the `ohya mcp` section above); the scan answers
+the operator's question behind that — what is actually in the records.
+
+```sh
+ohya secrets scan
+ohya secrets scan --db /path/to/hub.db --json
+```
+
+The scan runs the same fixed pattern table
+([ADR 0015](adr/0015-egress-secret-redaction.md)) over the original record
+of every stored event (`raw_json`, including replay duplicates) and prints
+match counts per pattern, per session, and per event:
+
+```text
+3 matches in 3 events across 2 sessions
+patterns:
+  github-token  1
+  aws-access-key-id  1
+session claude-code:dev1:sess-1  matches=2  events=2  patterns=aws-access-key-id,github-token
+  event 2  matches=1  patterns=github-token
+```
+
+It never prints matched text, field values, or excerpts — output holds
+counts, pattern ids, event ids, and session ids only. `--json` returns the
+same data in the [ADR 0005](adr/0005-json-output.md) envelope.
+
+The scan is read-only (it opens the database in read-only mode and never
+migrates it) and pages through events in id order, so it is safe to run on
+a live hub. It is best effort: a fixed table without a classifier finds
+only the shapes it knows, so a clean report is not proof that no secret is
+stored. Redaction and scanning change nothing on disk; removing stored
+secret material stays a separate owner action, for example `ohya purge`
+with its selectors.
 
 ## Local observability
 
@@ -752,7 +800,10 @@ See [CONTRIBUTING.md](../CONTRIBUTING.md) for build requirements and checks,
 limits (ingestion rate, query latency, database size, memory) and the
 benchmarks behind them. The Tailcat address transport lives in
 `internal/transport/address`; the hub sync endpoint
-lives in `internal/hubsync`. The transport selection decision is
+lives in `internal/hubsync`; the secret pattern table behind the sql
+tool's egress redaction and `ohya secrets scan` lives in
+`internal/secrets` ([ADR 0015](adr/0015-egress-secret-redaction.md)).
+The transport selection decision is
 [ADR 0011](adr/0011-tailcat-address-transport.md). The sync cursor and
 acknowledgment protocol and the authorization, pairing, and revocation
 rules are model-checked with TLA+/TLC in `tla/`

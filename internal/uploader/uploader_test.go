@@ -429,7 +429,7 @@ func TestLostAcknowledgment(t *testing.T) {
 }
 
 func TestTimeoutRetries(t *testing.T) {
-	f := newFixture(t, Options{RequestTimeout: 300 * time.Millisecond})
+	f := newFixture(t, Options{RequestTimeout: 2 * time.Second})
 	h := serve(t, openHubDB(t, filepath.Join(t.TempDir(), "hub.db")), f.reg, hubsync.Options{})
 	f.dialer.point(h.addr)
 	a := filepath.Join(f.dir, "a.jsonl")
@@ -439,6 +439,9 @@ func TestTimeoutRetries(t *testing.T) {
 	_, err := f.sync()
 	if !errors.Is(err, ErrDisconnected) || !strings.Contains(err.Error(), "timeout") {
 		t.Fatalf("Sync error = %v; want a timeout wrapping ErrDisconnected", err)
+	}
+	if got := f.dialer.batches.Load(); got != 1 {
+		t.Fatalf("data batches before the timeout = %d; want 1: the stalled acknowledgment, not an earlier round trip, must consume the fault\nlog:\n%s", got, f.log)
 	}
 	if got := f.checkpoint(a); got != 0 {
 		t.Fatalf("checkpoint after a timeout = %d; want 0", got)
