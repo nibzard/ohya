@@ -465,10 +465,18 @@ func queryErrorCode(err error) ErrorCode {
 }
 
 func annotateErrorCode(err error) ErrorCode {
-	if errors.Is(err, mcpserver.ErrAnnotateRejected) || errors.Is(err, store.ErrAnnotationRejected) {
+	switch {
+	case errors.Is(err, mcpserver.ErrBusy):
+		return CodeBusy
+	case errors.Is(err, mcpserver.ErrAnnotateRejected),
+		errors.Is(err, store.ErrAnnotationRejected),
+		errors.Is(err, mcpserver.ErrDeadline),
+		errors.Is(err, context.Canceled),
+		errors.Is(err, context.DeadlineExceeded):
 		return CodeRejected
+	default:
+		return CodeInternal
 	}
-	return CodeInternal
 }
 
 func validateBoundaries(b Batch) error {

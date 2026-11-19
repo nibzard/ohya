@@ -42,10 +42,26 @@ func TestQueryDeniesPurgedSourcesByDefault(t *testing.T) {
 		`SELECT * FROM purged_sources`,
 		`SELECT count(*) FROM purged_sources`,
 		`PRAGMA table_info(purged_sources)`,
+		"SELECT 1\x00; DROP TABLE events",
 	} {
 		_, err := e.Query(ctx, q)
 		if !errors.Is(err, ErrDenied) {
 			t.Errorf("%q error = %v, want ErrDenied", q, err)
 		}
+	}
+}
+
+func TestAnnotateStrictTrailingTokensAndConcurrencySlot(t *testing.T) {
+	e := newTestEngine(t, EngineOptions{WriterID: "dev1", MaxConcurrency: 1})
+	ctx := context.Background()
+
+	if _, err := e.Annotate(ctx, []byte(`{"operations":[]}}`)); !errors.Is(err, ErrAnnotateRejected) {
+		t.Fatalf("trailing brace error = %v, want ErrAnnotateRejected", err)
+	}
+
+	e.slots <- struct{}{}
+	defer func() { <-e.slots }()
+	if _, err := e.Annotate(ctx, []byte(`{"operations":[{"op":"delete","event_id":1,"namespace":"ns","key":"k"}]}`)); !errors.Is(err, ErrBusy) {
+		t.Fatalf("saturated annotate error = %v, want ErrBusy", err)
 	}
 }

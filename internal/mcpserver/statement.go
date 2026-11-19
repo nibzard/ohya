@@ -6,6 +6,9 @@ import (
 )
 
 func singleStatement(query string) error {
+	if strings.IndexByte(query, 0) >= 0 {
+		return fmt.Errorf("%w: NUL byte is not allowed", ErrDenied)
+	}
 	var sawStatement, terminated, sawAfterTerminator bool
 	i, n := 0, len(query)
 	for i < n {

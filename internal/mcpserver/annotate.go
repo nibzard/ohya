@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/nibzard/ohya/internal/observe"
@@ -90,6 +91,10 @@ func (e *Engine) annotateAs(ctx context.Context, writerID string, raw json.RawMe
 	if request.Operations == nil {
 		return store.AnnotateResult{}, fmt.Errorf("%w: arguments: missing operations", ErrAnnotateRejected)
 	}
+	if len(request.Operations) > store.MaxAnnotationOperations {
+		return store.AnnotateResult{}, fmt.Errorf("%w: %d operations exceed the limit of %d",
+			ErrAnnotateRejected, len(request.Operations), store.MaxAnnotationOperations)
+	}
 	operations := make([]store.AnnotationOp, 0, len(request.Operations))
 	for i, rawOp := range request.Operations {
 		op, err := e.decodeOperation(i, rawOp)
@@ -104,9 +109,20 @@ func (e *Engine) annotateAs(ctx context.Context, writerID string, raw json.RawMe
 		}
 		operations = append(operations, op)
 	}
+	select {
+	case e.slots <- struct{}{}:
+		defer func() { <-e.slots }()
+	default:
+		return store.AnnotateResult{}, ErrBusy
+	}
+	runCtx, cancel := context.WithTimeout(ctx, e.options.Deadline)
+	defer cancel()
 	storeStart := time.Now()
-	result, err := store.Annotate(ctx, e.writer, writerID, operations)
+	result, err := store.Annotate(runCtx, e.writer, writerID, operations)
 	e.observer.Observe("annotate_duration", time.Since(storeStart))
+	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+		return store.AnnotateResult{}, fmt.Errorf("%w (%s per call): %w", ErrDeadline, e.options.Deadline, err)
+	}
 	return result, err
 }
 
@@ -161,8 +177,9 @@ func decodeStrict(data []byte, v any) error {
 	if err := dec.Decode(v); err != nil {
 		return err
 	}
-	if dec.More() {
-		return fmt.Errorf("input holds more than one JSON value")
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		return fmt.Errorf("input holds trailing content after JSON value")
 	}
 	return nil
 }

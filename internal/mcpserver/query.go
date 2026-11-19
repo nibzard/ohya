@@ -315,6 +315,10 @@ func queryError(err error, deadline time.Duration) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("%w (%s per call): %w", ErrDeadline, deadline, err)
 	}
+	var serr sqlite3.Error
+	if errors.As(err, &serr) && serr.Code == sqlite3.ErrAuth {
+		return fmt.Errorf("%w: %w", ErrDenied, err)
+	}
 	if msg := err.Error(); strings.Contains(msg, "not authorized") ||
 		strings.Contains(msg, "is prohibited") ||
 		strings.Contains(msg, "authorization denied") {
