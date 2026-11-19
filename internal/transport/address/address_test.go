@@ -504,3 +504,73 @@ func TestValidateRegion(t *testing.T) {
 		}
 	}
 }
+
+func TestDeviceFailedDialDoesNotKillSiblingConnection(t *testing.T) {
+	region := startLocalDERP(t)
+	state := t.TempDir()
+
+	hub, err := NewHub(HubOptions{StateDir: state, Region: region})
+	if err != nil {
+		t.Fatalf("NewHub: %v", err)
+	}
+	ln, err := hub.Listen(context.Background())
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer hub.Close()
+	serveEcho(t, ln)
+	addr := hub.Addr()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	device := NewDevice(DeviceOptions{})
+	defer device.Close()
+
+	conn, err := device.Dial(ctx, addr)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.Close()
+	exchange(t, conn, "before sibling failure")
+
+	canceled, ccancel := context.WithCancel(ctx)
+	ccancel()
+	if _, err := device.Dial(canceled, addr); err == nil {
+		t.Fatal("canceled dial succeeded")
+	}
+
+	expired, ecancel := context.WithDeadline(ctx, time.Now().Add(-time.Second))
+	defer ecancel()
+	if _, err := device.Dial(expired, addr); err == nil {
+		t.Fatal("expired dial succeeded")
+	}
+
+	exchange(t, conn, "after sibling failure")
+}
+
+func TestHubAndDeviceLifecycleGuards(t *testing.T) {
+	region := startLocalDERP(t)
+	hub, err := NewHub(HubOptions{StateDir: t.TempDir(), Region: region})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report := hub.PeerPath(nil); report.Path != PathUnknown {
+		t.Fatalf("PeerPath(nil) = %+v", report)
+	}
+	if report := hub.PeerPath(&net.TCPAddr{IP: net.ParseIP("fd7a:115c:a1e0::1"), Port: 1234}); report.Path != PathUnknown {
+		t.Fatalf("PeerPath before Listen = %+v", report)
+	}
+	if err := hub.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.Drain(context.Background()); err != nil {
+		t.Fatalf("Hub.Drain after Close: %v", err)
+	}
+	dev := NewDevice(DeviceOptions{})
+	if err := dev.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := dev.Drain(context.Background()); err != nil {
+		t.Fatalf("Device.Drain after Close: %v", err)
+	}
+}

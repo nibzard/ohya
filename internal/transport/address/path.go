@@ -52,16 +52,17 @@ func (d *Device) PathInfo(ctx context.Context, addr string) (PathReport, error) 
 	}
 	if d.addr == "" {
 		d.addr = tailcat.Addr(addr)
-		d.client.Server = d.addr
+		d.slot.client.Server = d.addr
 	}
-	client := d.client
+	slot := d.slot
+	slot.dialing++
 	d.mu.Unlock()
 
 	report := PathReport{Path: PathUnknown}
 	var err error
 	for range pathPingAttempts {
 		var res *ipnstate.PingResult
-		res, err = client.DiscoPing(ctx)
+		res, err = slot.client.DiscoPing(ctx)
 		if err != nil {
 			break
 		}
@@ -69,6 +70,24 @@ func (d *Device) PathInfo(ctx context.Context, addr string) (PathReport, error) 
 		if report.Path == PathDirect {
 			break
 		}
+	}
+	d.mu.Lock()
+	slot.dialing--
+	if d.closed {
+		toClose := d.releaseSlotLocked(slot)
+		d.mu.Unlock()
+		if toClose != nil {
+			_ = toClose.Close()
+		}
+		return PathReport{Path: PathUnknown}, net.ErrClosed
+	}
+	if err == nil && d.slot == slot {
+		d.started = true
+	}
+	toClose := d.releaseSlotLocked(slot)
+	d.mu.Unlock()
+	if toClose != nil {
+		_ = toClose.Close()
 	}
 	if err != nil {
 		return PathReport{Path: PathUnknown}, fmt.Errorf("address: measure the path to the hub: %w", err)
@@ -90,6 +109,15 @@ func reportFromDisco(res *ipnstate.PingResult) PathReport {
 }
 
 func (h *Hub) PeerPath(remote net.Addr) PathReport {
+	if remote == nil {
+		return PathReport{Path: PathUnknown}
+	}
+	h.mu.Lock()
+	ready := h.started && !h.closed
+	h.mu.Unlock()
+	if !ready {
+		return PathReport{Path: PathUnknown}
+	}
 	host, _, err := net.SplitHostPort(remote.String())
 	if err != nil {
 		return PathReport{Path: PathUnknown}

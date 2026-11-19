@@ -115,26 +115,29 @@ func (h *Hub) Listen(ctx context.Context) (net.Listener, error) {
 	h.started = true
 	h.addr = string(h.srv.TailcatAddr())
 	if h.fresh {
+		failListen := func(err error) (net.Listener, error) {
+			_ = ln.Close()
+			_ = h.srv.Close()
+			h.started = false
+			h.addr = ""
+			return nil, err
+		}
 		ci, err := tailcat.ParseAddr(h.srv.TailcatAddr())
 		if err != nil {
-			ln.Close()
-			return nil, fmt.Errorf("address: parse the generated hub address: %w", err)
+			return failListen(fmt.Errorf("address: parse the generated hub address: %w", err))
 		}
 		if len(ci.Region) == 0 {
-			ln.Close()
-			return nil, errors.New("address: the started hub reports no DERP region")
+			return failListen(errors.New("address: the started hub reports no DERP region"))
 		}
 		if h.ident.Region == nil {
 			h.ident.Region = ci.Region[0]
 		}
 		data, err := json.Marshal(h.ident)
 		if err != nil {
-			ln.Close()
-			return nil, fmt.Errorf("address: encode hub identity: %w", err)
+			return failListen(fmt.Errorf("address: encode hub identity: %w", err))
 		}
 		if err := durablefile.Write(h.path, data); err != nil {
-			ln.Close()
-			return nil, err
+			return failListen(err)
 		}
 		h.fresh = false
 	}
@@ -166,8 +169,9 @@ func LoadHubAddr(stateDir string) (string, error) {
 func (h *Hub) Drain(ctx context.Context) error {
 	h.mu.Lock()
 	started := h.started
+	closed := h.closed
 	h.mu.Unlock()
-	if !started {
+	if !started || closed {
 		return nil
 	}
 	return h.srv.DrainTCP(ctx)
@@ -190,11 +194,20 @@ type DeviceOptions struct {
 	Logf Logf
 }
 
+type clientSlot struct {
+	client  *tailcat.Client
+	open    int
+	dialing int
+	retired bool
+	closed  bool
+}
+
 type Device struct {
-	client *tailcat.Client
-	logf   Logf
+	logf Logf
 
 	mu      sync.Mutex
+	slot    *clientSlot
+	retired map[*clientSlot]struct{}
 	addr    tailcat.Addr
 	closed  bool
 	started bool
@@ -208,8 +221,9 @@ func NewDevice(opts DeviceOptions) *Device {
 		logf = func(string, ...any) {}
 	}
 	return &Device{
-		client: &tailcat.Client{Key: key.NewNode(), Logf: logf},
-		logf:   logf,
+		slot:    &clientSlot{client: &tailcat.Client{Key: key.NewNode(), Logf: logf}},
+		retired: map[*clientSlot]struct{}{},
+		logf:    logf,
 	}
 }
 
@@ -229,9 +243,10 @@ func (d *Device) Dial(ctx context.Context, addr string) (net.Conn, error) {
 	}
 	if d.addr == "" {
 		d.addr = tailcat.Addr(addr)
-		d.client.Server = d.addr
+		d.slot.client.Server = d.addr
 	}
-	client := d.client
+	slot := d.slot
+	slot.dialing++
 	d.mu.Unlock()
 
 	dialCtx := ctx
@@ -240,55 +255,128 @@ func (d *Device) Dial(ctx context.Context, addr string) (net.Conn, error) {
 		dialCtx, cancel = context.WithTimeout(ctx, dialTimeout)
 		defer cancel()
 	}
-	if _, err := client.Ping(dialCtx); err != nil {
-		d.resetClient(client)
+	if _, err := slot.client.Ping(dialCtx); err != nil {
+		d.finishDialFailure(slot, ctx.Err() == nil)
 		return nil, fmt.Errorf("address: reach the hub through its relay: %w", err)
 	}
-	conn, err := client.DialTCPPort(dialCtx, HubPort)
+	conn, err := slot.client.DialTCPPort(dialCtx, HubPort)
 	if err != nil {
-		d.resetClient(client)
+		d.finishDialFailure(slot, ctx.Err() == nil)
 		return nil, fmt.Errorf("address: dial the hub on port %d: %w", HubPort, err)
 	}
 	d.mu.Lock()
-	if d.client == client {
+	slot.dialing--
+	if d.closed {
+		toClose := d.releaseSlotLocked(slot)
+		d.mu.Unlock()
+		_ = conn.Close()
+		if toClose != nil {
+			_ = toClose.Close()
+		}
+		return nil, net.ErrClosed
+	}
+	slot.open++
+	if d.slot == slot {
 		d.started = true
 	}
 	d.mu.Unlock()
-	return conn, nil
+	return &deviceConn{Conn: conn, dev: d, slot: slot}, nil
 }
 
-func (d *Device) resetClient(old *tailcat.Client) {
+func (d *Device) finishDialFailure(slot *clientSlot, reset bool) {
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.closed || d.client != old {
-		return
+	slot.dialing--
+	if reset && !d.closed && d.slot == slot {
+		slot.retired = true
+		d.retired[slot] = struct{}{}
+		fresh := &tailcat.Client{Key: key.NewNode(), Logf: d.logf}
+		fresh.Server = d.addr
+		d.slot = &clientSlot{client: fresh}
+		d.started = false
 	}
-	_ = old.Close()
-	fresh := &tailcat.Client{Key: key.NewNode(), Logf: d.logf}
-	fresh.Server = d.addr
-	d.client = fresh
-	d.started = false
+	toClose := d.releaseSlotLocked(slot)
+	d.mu.Unlock()
+	if toClose != nil {
+		_ = toClose.Close()
+	}
+}
+
+func (d *Device) releaseSlotLocked(slot *clientSlot) *tailcat.Client {
+	if slot.closed {
+		return nil
+	}
+	if d.closed {
+		if slot.dialing == 0 {
+			slot.closed = true
+			delete(d.retired, slot)
+		}
+		return slot.client
+	}
+	if slot.retired && slot.open == 0 && slot.dialing == 0 {
+		slot.closed = true
+		delete(d.retired, slot)
+		return slot.client
+	}
+	return nil
+}
+
+type deviceConn struct {
+	net.Conn
+	dev  *Device
+	slot *clientSlot
+	once sync.Once
+}
+
+func (c *deviceConn) Close() error {
+	err := c.Conn.Close()
+	c.once.Do(func() {
+		c.dev.mu.Lock()
+		c.slot.open--
+		toClose := c.dev.releaseSlotLocked(c.slot)
+		c.dev.mu.Unlock()
+		if toClose != nil {
+			_ = toClose.Close()
+		}
+	})
+	return err
 }
 
 func (d *Device) Drain(ctx context.Context) error {
 	d.mu.Lock()
-	client := d.client
+	slot := d.slot
 	started := d.started
+	closed := d.closed
 	d.mu.Unlock()
-	if !started {
+	if !started || closed {
 		return nil
 	}
-	return client.DrainTCP(ctx)
+	return slot.client.DrainTCP(ctx)
 }
 
 func (d *Device) Close() error {
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	if d.closed {
+		d.mu.Unlock()
 		return nil
 	}
 	d.closed = true
-	return d.client.Close()
+	var toClose []*tailcat.Client
+	if c := d.releaseSlotLocked(d.slot); c != nil {
+		toClose = append(toClose, c)
+	}
+	for s := range d.retired {
+		if c := d.releaseSlotLocked(s); c != nil {
+			toClose = append(toClose, c)
+		}
+	}
+	d.mu.Unlock()
+	var firstErr error
+	for _, c := range toClose {
+		if err := c.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 type identity struct {
