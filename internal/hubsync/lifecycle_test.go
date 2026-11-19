@@ -95,3 +95,59 @@ func TestEndpointTrackRefusesAfterClose(t *testing.T) {
 		t.Fatal("track returned true after closeAll")
 	}
 }
+
+type errAuth struct {
+	err error
+}
+
+func (a errAuth) Authenticate(context.Context, net.Conn) (string, error) {
+	return "", a.err
+}
+
+func TestEndpointClassifiesAuthProtocolErrors(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want ErrorCode
+	}{
+		{"version", ErrVersion, CodeVersion},
+		{"too large", ErrTooLarge, CodeTooLarge},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := newTestDB(t)
+			s := startEndpoint(t, db, errAuth{err: tc.err}, Options{})
+			d := dial(t, s.addr)
+			_ = d.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			_, perr, err := ReadReply(d.br)
+			if err != nil {
+				t.Fatalf("ReadReply: %v", err)
+			}
+			if perr == nil || perr.Code != tc.want {
+				t.Fatalf("reply = %+v, want %q", perr, tc.want)
+			}
+		})
+	}
+}
+
+func TestEndpointIdleTimeoutReleasesSlot(t *testing.T) {
+	db := newTestDB(t)
+	s := startEndpoint(t, db, StaticAuthenticator(deviceA), Options{
+		MaxConns:    1,
+		IdleTimeout: 80 * time.Millisecond,
+	})
+	stalled := dial(t, s.addr)
+	_ = stalled
+	time.Sleep(180 * time.Millisecond)
+
+	fresh := dial(t, s.addr)
+	if err := WriteRegistration(fresh.conn, Registration{
+		DeviceID: deviceA, SourceID: "src-idle", Agent: "claude-code", Path: "/a.jsonl",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_ = fresh.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, perr, err := ReadReply(fresh.br); err != nil || perr != nil {
+		t.Fatalf("fresh conn after idle eviction: perr=%v err=%v", perr, err)
+	}
+}

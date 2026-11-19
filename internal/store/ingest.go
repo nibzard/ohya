@@ -174,7 +174,7 @@ func sourceState(ctx context.Context, db *sql.DB, id, deviceID string) (SourceSt
 		}
 		if purged.SourceID != "" {
 			if deviceID != "" && purged.DeviceID != deviceID {
-				return SourceState{}, fmt.Errorf("store: source %s: belongs to device %s, not %s: %w",
+				return SourceState{}, fmt.Errorf("store: source %s: source belongs to device %s, but the batch claims device %s: %w",
 					id, purged.DeviceID, deviceID, ErrSourceOwnership)
 			}
 			return SourceState{}, purged.refusal()
@@ -185,7 +185,7 @@ func sourceState(ctx context.Context, db *sql.DB, id, deviceID string) (SourceSt
 		return SourceState{}, fmt.Errorf("store: read source %s: %w", id, err)
 	}
 	if deviceID != "" && storedDevice != deviceID {
-		return SourceState{}, fmt.Errorf("store: source %s: belongs to device %s, not %s: %w",
+		return SourceState{}, fmt.Errorf("store: source %s: source belongs to device %s, but the batch claims device %s: %w",
 			id, storedDevice, deviceID, ErrSourceOwnership)
 	}
 	st.FirstNativeID = native.String

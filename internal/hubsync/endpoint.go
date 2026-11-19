@@ -21,6 +21,10 @@ const DefaultMaxConns = 16
 
 const DefaultAuthTimeout = 30 * time.Second
 
+const DefaultIdleTimeout = 5 * time.Minute
+
+const DefaultWriteTimeout = 30 * time.Second
+
 type Authenticator interface {
 	Authenticate(ctx context.Context, conn net.Conn) (deviceID string, err error)
 }
@@ -43,11 +47,13 @@ type RemoteEngine interface {
 }
 
 type Options struct {
-	MaxConns    int
-	Retry       RetryPolicy
-	AuthTimeout time.Duration
-	Remote      RemoteEngine
-	Observer    observe.Observer
+	MaxConns     int
+	Retry        RetryPolicy
+	AuthTimeout  time.Duration
+	IdleTimeout  time.Duration
+	WriteTimeout time.Duration
+	Remote       RemoteEngine
+	Observer     observe.Observer
 }
 
 type Endpoint struct {
@@ -67,15 +73,19 @@ type Endpoint struct {
 }
 
 type connSession struct {
-	ctx      context.Context
-	conn     net.Conn
-	deviceID string
-	cancel   context.CancelFunc
+	ctx          context.Context
+	conn         net.Conn
+	deviceID     string
+	cancel       context.CancelFunc
+	writeTimeout time.Duration
 }
 
 func (s *connSession) Write(p []byte) (int, error) {
 	if err := s.ctx.Err(); err != nil {
 		return 0, err
+	}
+	if s.writeTimeout > 0 {
+		_ = s.conn.SetWriteDeadline(time.Now().Add(s.writeTimeout))
 	}
 	return s.conn.Write(p)
 }
@@ -94,6 +104,12 @@ func NewEndpoint(db *store.DB, auth Authenticator, opts Options) (*Endpoint, err
 	opts.MaxConns = maxConns
 	if opts.AuthTimeout <= 0 {
 		opts.AuthTimeout = DefaultAuthTimeout
+	}
+	if opts.IdleTimeout <= 0 {
+		opts.IdleTimeout = DefaultIdleTimeout
+	}
+	if opts.WriteTimeout <= 0 {
+		opts.WriteTimeout = DefaultWriteTimeout
 	}
 	authz, _ := auth.(SessionAuthorizer)
 	observer := opts.Observer
@@ -158,13 +174,14 @@ func (e *Endpoint) Serve(ctx context.Context, ln net.Listener) error {
 			e.observer.Add("hub_connections", 1, "admitted")
 		default:
 			e.observer.Add("hub_connections", 1, "rejected")
+			_ = conn.SetWriteDeadline(time.Now().Add(e.opts.WriteTimeout))
 			_ = WriteError(conn, CodeBusy,
 				fmt.Sprintf("hub is serving its limit of %d connections", e.opts.MaxConns))
 			_ = conn.Close()
 			continue
 		}
 		cctx, ccancel := context.WithCancel(ctx)
-		session := &connSession{ctx: cctx, conn: conn, cancel: ccancel}
+		session := &connSession{ctx: cctx, conn: conn, cancel: ccancel, writeTimeout: e.opts.WriteTimeout}
 		if !e.track(session) {
 			ccancel()
 			_ = conn.Close()
@@ -188,7 +205,14 @@ func (e *Endpoint) serveConn(ctx context.Context, session *connSession) {
 	deviceID, err := e.authenticate(ctx, conn)
 	if err != nil {
 		e.observer.Add("hub_authorization", 1, "rejected")
-		_ = WriteError(session, CodeAuth, err.Error())
+		code := CodeAuth
+		switch {
+		case errors.Is(err, ErrVersion):
+			code = CodeVersion
+		case errors.Is(err, ErrTooLarge):
+			code = CodeTooLarge
+		}
+		_ = WriteError(session, code, err.Error())
 		return
 	}
 	e.observer.Add("hub_connections", 1, "active")
@@ -202,12 +226,16 @@ func (e *Endpoint) serveConn(ctx context.Context, session *connSession) {
 	}
 	br := bufio.NewReaderSize(conn, 64<<10)
 	for {
+		_ = conn.SetReadDeadline(time.Now().Add(e.opts.IdleTimeout))
 		frame, err := ReadFrame(br)
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
 				e.observer.Add("hub_failures", 1, "read")
 			}
-			e.replyDecodeError(session, err)
+			var ne net.Error
+			if !(errors.As(err, &ne) && ne.Timeout()) && !errors.Is(err, io.EOF) {
+				e.replyDecodeError(session, err)
+			}
 			return
 		}
 		if e.authz != nil {
@@ -266,8 +294,7 @@ func (e *Endpoint) handleRegistration(ctx context.Context, w io.Writer, deviceID
 		_ = WriteError(w, storeErrorCode(err), err.Error())
 		return false
 	}
-	_ = WriteAck(w, Ack{})
-	return false
+	return WriteAck(w, Ack{}) != nil
 }
 
 func (e *Endpoint) handleBatch(ctx context.Context, w io.Writer, deviceID string, b Batch) bool {
@@ -329,14 +356,13 @@ func (e *Endpoint) handleBatch(ctx context.Context, w io.Writer, deviceID string
 		ack.Stop = stop.Error()
 	}
 	ackStart := time.Now()
-	_ = WriteAck(w, ack)
+	werr := WriteAck(w, ack)
 	e.observer.Observe("hub_ack_write_duration", time.Since(ackStart))
-	return false
+	return werr != nil
 }
 
 func (e *Endpoint) handleCapabilities(w io.Writer, offered Capabilities) bool {
-	_ = WriteWelcome(w, offered&hubCapabilities)
-	return false
+	return WriteWelcome(w, offered&hubCapabilities) != nil
 }
 
 func (e *Endpoint) handleQuery(ctx context.Context, w io.Writer, deviceID string, q Query) bool {
@@ -357,8 +383,10 @@ func (e *Endpoint) handleQuery(ctx context.Context, w io.Writer, deviceID string
 	}
 	if err := WriteQueryResult(w, result); err != nil {
 		e.observer.Add("hub_failures", 1, "write")
-		_ = WriteError(w, CodeInternal, err.Error())
-		return false
+		if errors.Is(err, ErrTooLarge) {
+			return WriteError(w, CodeInternal, err.Error()) != nil
+		}
+		return true
 	}
 	return false
 }
@@ -379,8 +407,7 @@ func (e *Endpoint) handleAnnotate(ctx context.Context, w io.Writer, deviceID str
 		_ = WriteError(w, annotateErrorCode(err), err.Error())
 		return false
 	}
-	_ = WriteAnnotateResult(w, result)
-	return false
+	return WriteAnnotateResult(w, result) != nil
 }
 
 func (e *Endpoint) handleWorkspaces(ctx context.Context, wr io.Writer, deviceID string, w Workspaces) bool {
@@ -411,7 +438,13 @@ func (e *Endpoint) handleWorkspaces(ctx context.Context, wr io.Writer, deviceID 
 		_ = WriteError(wr, storeErrorCode(err), err.Error())
 		return false
 	}
-	_ = WriteWorkspacesReply(wr, reply)
+	if err := WriteWorkspacesReply(wr, reply); err != nil {
+		e.observer.Add("hub_failures", 1, "write")
+		if errors.Is(err, ErrTooLarge) {
+			return WriteError(wr, CodeInternal, err.Error()) != nil
+		}
+		return true
+	}
 	return false
 }
 
