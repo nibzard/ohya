@@ -163,6 +163,9 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 		movedPass := make(map[string]probe, len(w.lastPass))
 		for key, pr := range w.lastPass {
 			if target, ok := moves[key]; ok {
+				if cur, live := probes[target]; live && cur.identity == pr.identity && cur.size == pr.size && cur.modTime.Equal(pr.modTime) {
+					pr.ctime = cur.ctime
+				}
 				movedPass[target] = pr
 			} else {
 				movedPass[key] = pr
