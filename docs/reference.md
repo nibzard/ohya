@@ -424,6 +424,20 @@ keeping at most eight per role and seven days of files, and never removes
 a live instance. Pass `--observe off` to any long-running command to run
 without publication for baseline measurements.
 
+To compare a candidate against that baseline with the same fixture and
+limits, pair the runs and publish every sample, as
+docs/performance.md ("Instrumentation overhead baseline") does: run the
+benchmark suites with `OHYA_BENCH_OBSERVE=off|metrics|on` (recorder
+off, recorder only, or recorder plus usage records) and compare the raw
+outputs with benchstat; run whole daemons with
+`go run ./perf/observeoverhead`, which imports the same corpus with
+observation on and off, interleaved, and reports import wall, steady
+RSS, telemetry write volume, and the `status` read latency against the
+plan 001 budgets; for the full serve/join stack, run the freshness
+harness with `OHYA_FRESH_OBSERVE=off` against the default. State what
+stayed unmeasured (for example the relay path) rather than implying
+coverage.
+
 A snapshot older than thirty seconds is stale. A valid recent snapshot is
 evidence of recent activity, not proof that the process is alive, so
 liveness is probed separately; a pid that no process answers reads as

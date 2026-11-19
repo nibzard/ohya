@@ -1353,6 +1353,232 @@ Comparison rules, each with its source:
 
 <!-- livehub:rows:end -->
 
+## Instrumentation overhead baseline (T097, plan 001 milestone 6)
+
+Measured 2026-11-19 on the reference machine above, Go 1.27.3, against
+the budgets in plans/001-runtime-observability.md ("Cost and retention
+budgets"). The instrumentation under test is everything the observability
+milestones put on the hot paths: the recorder (T090/T091), the snapshot
+publisher and history sampler (T093), the structured logs (T096), and —
+added by plans/002 on the same paths — one usage record per `sql` and
+`annotate` call (T092).
+
+### Method
+
+Three paired vehicles, each running the identical workload with
+observation on and off. All raw samples are published; nothing below is
+a cherry-picked run. Raw outputs live under `perf/t097/` (gitignored).
+
+1. In-process benchmarks with the real recorder injected:
+   `OHYA_BENCH_OBSERVE=off|metrics|on go test -run '^$' -bench .
+   -benchmem -count 6 ./internal/events ./internal/mcpserver`. The `on`
+   side opens the benchmark hub with `store.WithObserver(recorder)` and
+   the query engine with `Observer` and `Usage` set — exactly what
+   `ohya serve` and `ohya mcp` run. The `metrics` side sets the observer
+   only (no usage writer), which separates the plan 001 recorder cost
+   from the plan 002 usage record. The `off` side is the historical
+   benchmark. benchstat compares the raw files.
+2. End-to-end daemon pairs: `go run ./perf/observeoverhead` runs the
+   built binary as continuous `ohya ingest` daemons over a 24 MiB fixgen
+   corpus (seed 7) plus two stop fixtures — a malformed complete record
+   and a record over the 1 MiB limit — six paired repetitions, the on/off
+   order alternating between repetitions so disk-state drift hits both
+   sides. Each side imports to completion, idles 75 s (past several
+   snapshot intervals and at least one history sample), answers 20
+   `status --json` and 20 `ohya version` invocations against the live
+   daemon, and stops on SIGTERM. It records import wall, steady RSS
+   (1 s /proc sampling), process write bytes, telemetry tree size, and
+   the final event count.
+3. Live stack pairs: `TestFreshnessSmoke` (serve, join, and remote mcp
+   children on the local Tailcat path) with `OHYA_FRESH_OBSERVE=off`
+   versus the default `on`, five pairs at one seed per pair, plus three
+   pairs under contention (1.5 MiB/s backlog on a second source plus a
+   fixed-query session). Every child in a run carries the same mode.
+
+Timing methodology: all wall clocks are monotonic `time.Since`; the
+daemon pairs interleave sides inside one window; the benchmark pairing
+runs whole files per side (see the caveat on the 4 MiB row below).
+
+### Budget verdicts
+
+| Budget (plans/001) | Measurement | Verdict |
+|---|---|---|
+| Median wall-time/throughput overhead <=3% | Daemon import wall, median over 6 interleaved pairs: +0.0% (four pairs identical at 10 ms resolution; both nonzero deltas are off-side disk spikes). Bench sec/op for ingest rows is fsync-bound and cannot resolve it (below) | pass |
+| Allocation increase <=5% | Ingest benchmarks: allocs/op geomean +0.03%, B/op +0.11% (n=6). Query path: see the attribution below — the plan 002 usage record exceeds 5% on microbenchmarks with tiny baselines | pass on ingest; documented exception on queries |
+| Steady added RSS <=16 MiB per daemon | Median on-minus-off over 6 daemon pairs: +0.2 MiB (range −0.6 to +1.2 MiB); live-stack serve/join peaks identical at 42/38 MiB in every pair | pass |
+| No disk I/O per successful Event or query from instrumentation | Recorder is in-memory (code and tests); daemon idle writes 36 KiB per 75 s on versus 0 off — the 10 s snapshot cadence, nothing per event. The plan 002 usage record writes one queued row per query (below) | pass for plan 001 families; plan 002 addition quantified |
+| `status --json` cached read p95 <=100 ms (startup excluded) | CLI end-to-end p95 across on-runs 8.6 ms (range 6.0–8.6), including process startup; the `ohya version` baseline in the same windows is 4.9–7.8 ms, so the cached read itself is single-digit milliseconds | pass |
+| Retained telemetry ceiling 24 MiB logs + 16 MiB history + 256 KiB snapshot | 8 KiB across 3 files per instance after a full run; the caps are enforced by rotation and truncation tests (see below) | pass |
+| A diagnostics failure cannot block a domain operation | Producer calls never block and write failures are counted, not propagated (tests below) | pass (structural) |
+
+### In-process benchmark deltas (benchstat, n=6 per side)
+
+Ingestion (`internal/events`): allocations are the decisive, noise-free
+signal — allocs/op +0.02% to +0.06% and B/op +0.0% to +0.11% on every
+corpus benchmark (claude-code, codex, pi, mix; the full table is in
+`perf/t097/benchstat.txt`). The recorder adds nothing measurable to the
+write path because it emits per batch, per pass, and per transaction,
+not per record. Wall time on these rows is fsync-bound: the 4 MiB
+claude-code row diverged +587% between the two whole-file runs, and an
+interleaved re-probe (alternating single counts, `perf/t097/interleave-4mib.log`)
+gave per-pair deltas of −13% to +70% with a median of +4% — the same
+side swings ±30% against itself between adjacent runs, so the row
+resolves disk state, not instrumentation. The interleaved daemon pairs
+above carry the ingest wall verdict.
+
+Queries (`internal/mcpserver`, the `sql` tool engine), three-way:
+
+| Pattern | sec/op off | +metrics | +metrics+usage | allocs/op off | +metrics | +metrics+usage |
+|---|---|---|---|---|---|---|
+| FTS-selective | 110.5µ | +9.3% | +12.1% | 236 | +48 | +62 |
+| FTS-wide | 4.750m | ~ | ~ | 236 | +48 | +62 |
+| session-token-totals | 271.7µ | +3.9% | ~ | 349 | +19 | +29 |
+| recent-sessions | 55.07µ | +2.4% | +18.8% | 358 | +16 | +25 |
+| session-event-range | 1.480m | ~ | +6.2% | 6,859 | +20 | +32 |
+| annotation-paging | 98.59µ | +2.2% | +9.5% | 666 | +18 | +28 |
+
+(`~` means benchstat found no statistically distinguishable difference;
+percentages are vs the off side; B/op tracks allocs — FTS rows +1.9 KiB
+at metrics-only, +3.9 KiB with usage.)
+
+Attribution and decision, per the plan's rule that a crossed threshold
+is investigated, not silently raised:
+
+- The plan 001 recorder alone (metrics column) costs about +10 µs and
+  +1.9 KiB per query. On realistic result shapes (session-event-range,
+  1,480 µs and 6,859 allocs before instrumentation) that is +0.3% to
+  +0.5% — inside every budget. It exceeds 5%/20% only on the two FTS
+  microbenchmarks, whose uninstrumented baseline is 236 allocs and
+  8.6 KiB: a fixed per-call cost is percent-large against a near-empty
+  query.
+- The plan 002 usage record adds the rest (about +14 allocs, +2 KiB,
+  and the usage writer's background JSON encode). It fires once per
+  `sql`/`annotate` call through a 256-deep async queue with no fsync —
+  accepted deliberately when plans/002 and ADR 0010 scoped per-call
+  usage recording; the absolute cost is four orders of magnitude inside
+  the 5 s query deadline.
+- Decision: keep both as delivered. The percentage budgets hold on the
+  workloads they were written for (daemon-scale import, append,
+  freshness — all above); the microbenchmark percentages are an artifact
+  of tiny baselines, and cutting them would mean removing the per-call
+  usage record or the traced authorizer that feeds it, both of which are
+  the feature. Reopen only if a real workload shows query overhead
+  mattering: the levers are sampling the usage record or a cheaper
+  trace, and the three-way knob (`OHYA_BENCH_OBSERVE=metrics`) exists to
+  re-measure the split after any such change.
+- A regression guard pins the hot-path allocation contract:
+  `TestRecorderHotPathAllocations` (internal/observe) fails if a
+  pass-shaped Add/Observe/Set call set allocates more than 6 times
+  (measured: 4 — two per labeled call from label rendering; unlabeled
+  calls allocate nothing).
+
+### End-to-end daemon pairs (perf/observeoverhead, 6 reps)
+
+All samples (full file `perf/t097/daemon-pairs.md`):
+
+| rep | on: import s / RSS MiB / idle writes | off: import s / RSS MiB / idle writes | wall Δ% | RSS Δ MiB |
+|---|---|---|---|---|
+| 1 | 1.61 / 44.2 / 36 KiB | 1.61 / 43.0 / 0 | +0.1 | +1.2 |
+| 2 | 1.61 / 44.1 / 36 KiB | 2.01 / 43.5 / 0 | −20.0 | +0.5 |
+| 3 | 1.61 / 44.3 / 36 KiB | 1.61 / 44.1 / 0 | +0.1 | +0.2 |
+| 4 | 1.61 / 44.0 / 36 KiB | 1.61 / 44.3 / 0 | +0.0 | −0.3 |
+| 5 | 2.62 / 42.5 / 36 KiB | 4.22 / 43.0 / 0 | −38.0 | −0.6 |
+| 6 | 1.61 / 43.4 / 36 KiB | 1.61 / 42.9 / 0 | +0.0 | +0.5 |
+
+Both sides reached exactly 6,797 events in every repetition (the two
+stop fixtures hold three ingestible records; the rest of their lines
+must never appear, and never did). Idle CPU 0.05–0.07 s per 75 s window
+on both sides. `status --json` exited 0 or 3 (3 is the degraded-verdict
+code: these daemons legitimately contain stopped sources) at 6.0–8.6 ms
+p95 CLI end-to-end. The on side retained 8 KiB of telemetry in 3 files
+and wrote 36 KiB per 75 s idle — snapshot cadence only. The on side's
+`events.jsonl` holds the `source_stopped` entries (two per fixture:
+first detection plus the confirming pass; quiet afterwards, matching
+the skip-reread rule), proving failure-path telemetry fires without
+changing the stops themselves.
+
+### Live stack pairs (TestFreshnessSmoke, local direct path)
+
+Steady configuration (5 pairs, same seed per pair, 100 appends each;
+every run: 0 errors, 0 timeouts, 100/100 visible):
+
+| seed | on: lag p50/p95 | off: lag p50/p95 | on: serve/join peak RSS | off: serve/join peak RSS |
+|---|---|---|---|---|
+| 4101 | 1.069 s / 2.027 s | 1.100 s / 2.036 s | 42 / 38 MiB | 42 / 38 MiB |
+| 4102 | 1.077 s / 2.049 s | 1.172 s / 2.098 s | 42 / 38 MiB | 42 / 38 MiB |
+| 4103 | 1.222 s / 2.156 s | 1.168 s / 2.084 s | 42 / 38 MiB | 42 / 37 MiB |
+| 4104 | 1.043 s / 2.021 s | 1.079 s / 2.047 s | 42 / 38 MiB | 42 / 38 MiB |
+| 4105 | 1.109 s / 1.975 s | 1.061 s / 2.039 s | 43 / 38 MiB | 42 / 38 MiB |
+
+Medians: p50 1.077 s on versus 1.079 s off; p95 2.027 s on versus
+2.047 s off — the same distribution, sitting just under the 2 s upload
+interval exactly as the T070 matrix recorded without instrumentation.
+
+Contention configuration (3 pairs; 1.5 MiB/s second-source backlog plus
+a fixed-query session):
+
+| seed | on: lag p50/p95 | off: lag p50/p95 | note |
+|---|---|---|---|
+| 4201 | 1.469 s / 2.889 s | 1.473 s / 2.893 s | identical |
+| 4202 | 1.516 s / 2.925 s | 1.711 s / 3.940 s | on side faster |
+| 4203 | 6.541 s / 12.528 s | 1.743 s / 3.565 s | on side slower — see attribution |
+
+The seed-4203 pair is the one crossed threshold, investigated rather
+than discarded: the on run ended with 14.9 MiB of backlog outstanding
+against 6.9 MiB in its off twin (written 37.8 versus 39.2 MiB), so its
+uploader spent the window draining rather than idle. Its loaded queries
+were faster than the off twin's (FTS-wide p95 49 ms versus 73 ms) and
+it had zero errors and zero timeouts — the hub was not slower; the
+workload simply progressed differently. Backlog-drain luck, not
+telemetry, owns that row; a fresh pair would need to control drain
+state to claim otherwise, which is a workload-harness question, not an
+instrumentation one.
+
+### Scenario coverage (plan milestone 6 verification list)
+
+| Scenario | Vehicle | Result |
+|---|---|---|
+| Synthetic live append | Freshness pairs above | On/off distributions identical (medians 1.077 s vs 1.079 s p50) |
+| Bulk import | Daemon pairs + ingest benchmarks | Median wall +0.0%; allocs +0.03% |
+| Selective/wide query | Three-way query benchmarks | Deltas and decision above |
+| Offline replay (duplicate batches) | `BenchmarkIngestReplay` pair | allocs +0.06%, B/op +0.00%; wall −8.5% (fsync noise; replay inserts nothing) |
+| Hub restart | `TestHubRestartReconnect` (make check; children default observation on) | Exercised with telemetry on; recovery behavior unchanged (36.2 s in T074, same test) — no paired cost claim, the scenario is event-driven |
+| Contention | Contention pairs above | No consistent delta; the seed-4203 attribution above |
+| Parse stop | Daemon stop fixture (malformed record) | Identical stop offsets and event counts on/off; `source_stopped` log entries on the on side only, as designed |
+| Oversized record | Daemon stop fixture (record over `--max-record-bytes`) | Same |
+
+Structural guarantees behind the numbers, each pinned by an existing
+test: producers never block and drops are counted
+(`TestLogWriterDropsWhenQueueIsFull`); write failures are recorded and
+survived (`TestPublisherRecordsOwnGaugesAndSurvivesWriteFailures`,
+`TestUsageWriterCountsWriteFailures`); the stderr fallback is bounded
+and rate limited (`TestLogWriterStderrFallbackIsBoundedAndRateLimited`);
+the snapshot truncates at 256 KiB keeping counters
+(`TestPublisherSnapshotBoundTruncatesDetailsAndKeepsCounters`); history
+prunes at 16 MiB and 24 h
+(`TestPublisherHistoryAppendsPerIntervalAndPrunesByBytes`); logs rotate
+at 8 MiB plus two files (`TestLogWriterRotatesAtBoundAndKeepsBoundedFiles`).
+
+### Gaps
+
+- Relay path: every live-stack pair ran on the direct local path (same
+  host, local DERP relay). Repeating the pairs over a forced-relay or
+  cross-host path stays open — the same explicit gap the T070/T074
+  matrix carries. The knobs (`OHYA_FRESH_OBSERVE`, `--observe off`)
+  make that a run away whenever a second host exists.
+- macOS: unmeasured (no darwin machine available to this task). The
+  harness and knobs are platform-neutral; the recorder hot path has no
+  platform-specific code.
+- The `ohya mcp` stdio process is short-lived and was not paired
+  end-to-end; its per-query cost is the engine benchmark above plus one
+  process start, and `status` reads cover the cached-data path it
+  publishes.
+- The plan's optional follow-ons are deliberately not delivered and stay
+  independently reviewable: `ohya diagnose --storage` (page and dbstat
+  analysis) and bounded launch-time profiling (`--cpu-profile`). The
+  basic overhead passed, which is the precondition the plan set for
+  starting them.
+
 ## Limits and open items
 
 - All fsync-sensitive numbers (import rate, append latency) vary several-fold

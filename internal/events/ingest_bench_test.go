@@ -7,14 +7,38 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/nibzard/ohya/internal/claudecode"
 	"github.com/nibzard/ohya/internal/codex"
 	"github.com/nibzard/ohya/internal/fixgen"
+	"github.com/nibzard/ohya/internal/observe"
 	"github.com/nibzard/ohya/internal/pi"
 	"github.com/nibzard/ohya/internal/store"
 )
+
+var benchObserveOnce sync.Once
+var benchObserveSink observe.Observer = observe.Disabled
+
+func benchObserver() observe.Observer {
+	benchObserveOnce.Do(func() {
+		if os.Getenv("OHYA_BENCH_OBSERVE") != "on" {
+			return
+		}
+		clock := observe.NewSystemClock()
+		instance, err := observe.NewInstance("bench", "", false, clock, observe.RoleIngest)
+		if err != nil {
+			panic(err)
+		}
+		recorder, err := observe.NewRecorder(instance, clock)
+		if err != nil {
+			panic(err)
+		}
+		benchObserveSink = recorder
+	})
+	return benchObserveSink
+}
 
 func benchMIB() int {
 	var n int
@@ -68,7 +92,8 @@ func corpusBytes(files []fixgen.File) int64 {
 
 func openBenchHub(b *testing.B) *store.DB {
 	b.Helper()
-	hub, err := store.Open(context.Background(), filepath.Join(b.TempDir(), "hub.db"))
+	hub, err := store.Open(context.Background(), filepath.Join(b.TempDir(), "hub.db"),
+		store.WithObserver(benchObserver()))
 	if err != nil {
 		b.Fatal(err)
 	}

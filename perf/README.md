@@ -39,6 +39,24 @@ The capture log, capture state, and reports stay outside the repository
 (`<state>/perf/`, mode 0600); anything written under `perf/` in a
 checkout is already gitignored.
 
+## Paired instrumentation-overhead runs
+
+```sh
+make build
+go run ./perf/observeoverhead -bin bin/ohya -reps 6 -corpus-mib 24 \
+    -idle 75s -out perf/t097/daemon-pairs.md
+```
+
+Runs continuous `ohya ingest` daemons over a generated corpus plus two
+stop fixtures (a malformed record and an oversized one), observation on
+and off in alternating order, and reports import wall time, steady RSS,
+idle write bytes, retained telemetry, and the `status --json` read
+latency against the plan 001 budgets (docs/performance.md,
+"Instrumentation overhead baseline"). The in-process counterpart is
+`OHYA_BENCH_OBSERVE=off|metrics|on` on the benchmark suites, compared
+with benchstat. Unlike the programs above, this one starts the real
+binary as child processes; it needs no build tag.
+
 ## FTS index share by event category
 
 ```sh

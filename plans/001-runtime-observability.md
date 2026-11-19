@@ -1,10 +1,12 @@
 # Runtime observability for ohya
 
-Status: in delivery. Milestones 1 through 4 are implemented (T090–T093,
-T096, delivered 2026-11-16 to 2026-11-17): recorder and schemas, path
-instrumentation, snapshots with `ohya status` and `ohya metrics`, and
-logs with `ohya logs` and `ohya diagnose`. Milestone 5, remote aggregates
-(T098), and milestone 6, the overhead baseline (T097), are open.
+Status: in delivery. Milestones 1 through 4 and milestone 6 are
+implemented (T090–T093, T096, delivered 2026-11-16 to 2026-11-17;
+T097, the overhead baseline, delivered 2026-11-19): recorder and
+schemas, path instrumentation, snapshots with `ohya status` and
+`ohya metrics`, logs with `ohya logs` and `ohya diagnose`, and the
+paired observation on/off overhead baseline in docs/performance.md.
+Milestone 5, remote aggregates (T098), is open.
 Priority P1; effort L, delivered in small increments. Planned against
 `33df75d`, 2026-11-15.
 

@@ -1939,3 +1939,48 @@ How to use this file:
     setup run (release-operations "Purge and recovery points"); freed
     pages stay in the file — no VACUUM by design.
 
+- Instrumentation overhead baseline (2026-11-19, T097, plans/001 milestone 6):
+  numbers, verdicts, and the scenario table are in docs/performance.md
+  "Instrumentation overhead baseline"; raw samples under perf/t097/
+  (gitignored). Facts future work must keep:
+  - Pairing knobs: `OHYA_BENCH_OBSERVE=off|metrics|on` on the benchmark
+    suites (`metrics` = recorder without the usage writer — the split that
+    attributes plan 001 vs plan 002 cost), `OHYA_FRESH_OBSERVE=on|off` on
+    the freshness stack (child-serve now parses `--observe`; the remote
+    usage-record assertion is skipped for off runs), and
+    `perf/observeoverhead` for whole-daemon pairs (imports a corpus with
+    two stop fixtures, alternates sides, checks identical event counts,
+    status p95, idle writes, and telemetry size).
+  - Ingest verdict: recorder cost is unmeasurable against the write path —
+    allocs +0.03%, median import wall +0.0% over six interleaved daemon
+    pairs, steady RSS +0.2 MiB against the 16 MiB budget, idle disk writes
+    exactly the snapshot cadence (36 KiB per 75 s), `status --json` CLI
+    end-to-end p95 8.6 ms against the 100 ms budget.
+  - Query verdict: plan 001 metrics cost ~+10 µs/+1.9 KiB per query
+    (+0.3–0.5% on realistic shapes; +20% allocs only against the
+    236-alloc FTS microbench rows); the plan 002 usage record adds ~14
+    allocs/+2 KiB. Decision recorded in performance.md: keep both (ADR
+    0010 scoped per-call usage recording); reopen trigger is a real
+    workload showing query overhead. The engine's traced authorizer runs
+    whenever Observer OR Usage is set, so observer-only engines still pay
+    the usage-shaped trace.
+  - Measurement traps proven again: whole-file bench pairing cannot
+    resolve fsync-bound rows (the 4 MiB claude row swung +587% from a disk
+    window; an interleaved re-probe gave median +4% with ±30% same-side
+    swings) — interleave sides or use the daemon harness; freshness
+    contention pairs are owned by backlog-drain luck (seed 4203: 14.9 MiB
+    outstanding vs 6.9 MiB in the twin moved p50 to 6.5 s while the same
+    run's loaded queries were FASTER), so attribute drain state before
+    blaming telemetry.
+  - Stop-fixture log shape: `source_stopped` fires once per detection —
+    twice per stopped source in these runs (first pass plus the
+    confirming pass), then silent through the skip-reread rule; stderr
+    stays once per stop offset per run. events.jsonl is therefore the
+    bounded record of stops, not a per-pass spam source.
+  - Hot-path allocation contract pinned by TestRecorderHotPathAllocations
+    (internal/observe): a pass-shaped Add/Observe/Set set allocates 4
+    times (all from label rendering on labeled calls; unlabeled calls
+    allocate nothing); ceiling 6.
+  - Gaps stated in the doc: relay-path and macOS pairs unmeasured (no
+    second host, no darwin machine); the knobs make both a run away.
+

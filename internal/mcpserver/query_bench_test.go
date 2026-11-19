@@ -15,8 +15,52 @@ import (
 	"github.com/nibzard/ohya/internal/claudecode"
 	"github.com/nibzard/ohya/internal/events"
 	"github.com/nibzard/ohya/internal/fixgen"
+	"github.com/nibzard/ohya/internal/observe"
 	"github.com/nibzard/ohya/internal/store"
 )
+
+var benchTelemetry struct {
+	once     sync.Once
+	observer observe.Observer
+	usage    UsageSink
+	dir      string
+}
+
+func benchEngineOptions() EngineOptions {
+	benchTelemetry.once.Do(func() {
+		mode := os.Getenv("OHYA_BENCH_OBSERVE")
+		if mode != "on" && mode != "metrics" {
+			return
+		}
+		clock := observe.NewSystemClock()
+		instance, err := observe.NewInstance("bench", "", false, clock, observe.RoleMCP)
+		if err != nil {
+			panic(err)
+		}
+		recorder, err := observe.NewRecorder(instance, clock)
+		if err != nil {
+			panic(err)
+		}
+		benchTelemetry.observer = recorder
+		if mode == "on" {
+			dir, err := os.MkdirTemp("", "ohya-query-bench-observe-")
+			if err != nil {
+				panic(err)
+			}
+			usage, err := observe.NewUsageWriter(observe.UsageWriterConfig{
+				Dir:      filepath.Join(dir, "observe"),
+				Instance: instance,
+				Clock:    clock,
+			})
+			if err != nil {
+				panic(err)
+			}
+			benchTelemetry.usage = usage
+			benchTelemetry.dir = dir
+		}
+	})
+	return EngineOptions{WriterID: "dev-bench", Observer: benchTelemetry.observer, Usage: benchTelemetry.usage}
+}
 
 var benchHub struct {
 	once sync.Once
@@ -113,7 +157,7 @@ func finishBenchHub(hub *store.DB, dir string) (*store.DB, *Engine, string, erro
 	if err != nil {
 		return nil, nil, "", err
 	}
-	return hub, NewEngine(readers, hub.Writer(), EngineOptions{WriterID: "dev-bench"}), dir, nil
+	return hub, NewEngine(readers, hub.Writer(), benchEngineOptions()), dir, nil
 }
 
 func acquireBenchEngine(tb testing.TB) *Engine {
@@ -134,6 +178,14 @@ func TestMain(m *testing.M) {
 	}
 	if benchHub.dir != "" {
 		os.RemoveAll(benchHub.dir)
+	}
+	if benchTelemetry.usage != nil {
+		if w, ok := benchTelemetry.usage.(*observe.UsageWriter); ok {
+			w.Close()
+		}
+	}
+	if benchTelemetry.dir != "" {
+		os.RemoveAll(benchTelemetry.dir)
 	}
 	os.Exit(code)
 }

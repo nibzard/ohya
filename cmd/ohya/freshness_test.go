@@ -41,6 +41,7 @@ type freshnessOptions struct {
 	timeout     time.Duration
 	uploadEvery time.Duration
 	seed        uint64
+	observe     string
 
 	backlogBPS    int
 	queriesEvery  time.Duration
@@ -49,6 +50,22 @@ type freshnessOptions struct {
 	deviceMiB     int
 	pairLead      time.Duration
 	idleSampleFor time.Duration
+}
+
+func freshnessObserveEnv(t *testing.T) string {
+	t.Helper()
+	raw := os.Getenv("OHYA_FRESH_OBSERVE")
+	if raw == "" {
+		return "on"
+	}
+	if raw != "on" && raw != "off" {
+		t.Fatalf("OHYA_FRESH_OBSERVE = %q: want on or off", raw)
+	}
+	return raw
+}
+
+func freshnessObserveArgs(mode string) []string {
+	return []string{"--observe", mode}
 }
 
 type freshnessSample struct {
@@ -111,6 +128,7 @@ type freshnessStack struct {
 	devState     string
 	sessionPath  string
 	backlogPath  string
+	observe      string
 	serveCmd     *exec.Cmd
 	serveLog     *bytes.Buffer
 	joinCmd      *exec.Cmd
@@ -174,6 +192,7 @@ func freshnessOptionsFromEnv(t *testing.T) freshnessOptions {
 		timeout:     freshnessDurationEnv(t, "OHYA_FRESH_TIMEOUT", 30*time.Second),
 		uploadEvery: freshnessDurationEnv(t, "OHYA_FRESH_UPLOAD_EVERY", 2*time.Second),
 		seed:        freshnessSeedEnv(t),
+		observe:     freshnessObserveEnv(t),
 
 		backlogBPS:    freshnessIntEnv(t, "OHYA_FRESH_BACKLOG_BPS", 0),
 		queriesEvery:  freshnessDurationEnv(t, "OHYA_FRESH_QUERIES_EVERY", 0),
@@ -401,6 +420,7 @@ func startFreshnessStack(t *testing.T, opts freshnessOptions) *freshnessStack {
 		devState:    filepath.Join(dir, "dev-state"),
 		sessionPath: filepath.Join(dir, "claude-projects", "session.jsonl"),
 		backlogPath: filepath.Join(dir, "claude-projects", "zbacklog.jsonl"),
+		observe:     opts.observe,
 		serveLog:    &bytes.Buffer{},
 		joinLog:     &bytes.Buffer{},
 	}
@@ -428,8 +448,9 @@ func startFreshnessStack(t *testing.T, opts freshnessOptions) *freshnessStack {
 	t.Cleanup(st.sampler.stopAndWait)
 
 	regionFile := writeDERPRegionFile(t, startLocalDERP(t))
-	st.serveCmd = exec.Command(os.Args[0], "child-serve",
-		"--db", st.hubDB, "--state", st.hubState)
+	serveArgs := append([]string{"child-serve",
+		"--db", st.hubDB, "--state", st.hubState}, freshnessObserveArgs(opts.observe)...)
+	st.serveCmd = exec.Command(os.Args[0], serveArgs...)
 	st.serveCmd.Env = append(os.Environ(), "OHYA_TEST_DERP_REGION_FILE="+regionFile)
 	st.serveCmd.Stderr = st.serveLog
 	serveOut, err := st.serveCmd.StdoutPipe()
@@ -484,11 +505,13 @@ func startFreshnessStack(t *testing.T, opts freshnessOptions) *freshnessStack {
 		t.Fatalf("join code = %q; want an ohya1 code: %v", code, err)
 	}
 
-	st.joinCmd = exec.Command(os.Args[0], "child-join",
+	joinArgs := append([]string{"child-join",
 		"--state", st.devState,
 		"--claude-root", filepath.Dir(st.sessionPath), "--codex-root", "", "--pi-root", "",
-		"--interval", opts.uploadEvery.String(),
-		code)
+		"--interval", opts.uploadEvery.String()},
+		freshnessObserveArgs(opts.observe)...)
+	joinArgs = append(joinArgs, code)
+	st.joinCmd = exec.Command(os.Args[0], joinArgs...)
 	st.joinCmd.Stderr = st.joinLog
 	if err := st.joinCmd.Start(); err != nil {
 		t.Fatal(err)
@@ -515,8 +538,8 @@ func startFreshnessStack(t *testing.T, opts freshnessOptions) *freshnessStack {
 		}
 	}
 
-	mcpCmd := exec.Command(os.Args[0], "child-mcp",
-		"--remote", "--state", st.devState)
+	mcpCmd := exec.Command(os.Args[0], append([]string{"child-mcp",
+		"--remote", "--state", st.devState}, freshnessObserveArgs(opts.observe)...)...)
 	client := mcp.NewClient(&mcp.Implementation{Name: "freshness-observer", Version: "v0"}, nil)
 	st.mcpCtx, st.mcpCancel = context.WithTimeout(context.Background(), 30*time.Minute)
 	session, err := client.Connect(st.mcpCtx, &mcp.CommandTransport{Command: mcpCmd}, nil)
@@ -636,8 +659,8 @@ func (r *freshnessReport) logTo(t *testing.T, st *freshnessStack) {
 	visible, timedOut, overdue, outstanding := r.counts()
 	t.Logf("freshness %s: appended=%d visible=%d timedOut=%d overdue=%d outstandingAtDrain=%d deliveredLate=%d neverDelivered=%d",
 		r.run, len(r.samples), visible, timedOut, overdue, outstanding, r.deliveredLate, r.neverDelivered)
-	t.Logf("freshness %s: uploadInterval=%s appendEvery=%s pollEvery=%s timeout=%s phaseOffset=%s seed=%d",
-		r.run, r.opts.uploadEvery, r.opts.appendEvery, r.opts.pollEvery, r.opts.timeout, r.phaseOffset, r.opts.seed)
+	t.Logf("freshness %s: uploadInterval=%s appendEvery=%s pollEvery=%s timeout=%s phaseOffset=%s seed=%d observe=%s",
+		r.run, r.opts.uploadEvery, r.opts.appendEvery, r.opts.pollEvery, r.opts.timeout, r.phaseOffset, r.opts.seed, r.opts.observe)
 	t.Logf("freshness %s: lag p50=%s p95=%s p99=%s max=%s (timed-out samples stay in the distribution at drain lower bounds)",
 		r.run, freshnessPct(lags, 50).Round(time.Millisecond), freshnessPct(lags, 95).Round(time.Millisecond),
 		freshnessPct(lags, 99).Round(time.Millisecond), lags[len(lags)-1].Round(time.Millisecond))
@@ -767,8 +790,8 @@ type loadedQueryRunner struct {
 
 func startLoadedQuerySession(t *testing.T, st *freshnessStack, stop <-chan struct{}, timeout, period time.Duration) *loadedQueryRunner {
 	t.Helper()
-	cmd := exec.Command(os.Args[0], "child-mcp",
-		"--remote", "--state", st.devState)
+	cmd := exec.Command(os.Args[0], append([]string{"child-mcp",
+		"--remote", "--state", st.devState}, freshnessObserveArgs(st.observe)...)...)
 	client := mcp.NewClient(&mcp.Implementation{Name: "freshness-load", Version: "v0"}, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: cmd}, nil)
@@ -919,11 +942,12 @@ func measureFreshness(t *testing.T, st *freshnessStack, opts freshnessOptions) *
 
 	loadStop := make(chan struct{})
 	for i, dev := range st.extraDevices {
-		dev.cmd = exec.Command(os.Args[0], "child-join",
+		devArgs := append([]string{"child-join",
 			"--state", dev.stateDir,
 			"--claude-root", dev.claudeRoot, "--codex-root", "", "--pi-root", "",
-			"--interval", opts.uploadEvery.String(),
-			dev.code)
+			"--interval", opts.uploadEvery.String()},
+			freshnessObserveArgs(opts.observe)...)
+		dev.cmd = exec.Command(os.Args[0], append(devArgs, dev.code)...)
 		dev.cmd.Stderr = dev.log
 		if err := dev.cmd.Start(); err != nil {
 			t.Fatal(err)
@@ -1132,7 +1156,9 @@ func TestFreshnessSmoke(t *testing.T) {
 	st := startFreshnessStack(t, opts)
 	rep := measureFreshness(t, st, opts)
 	rep.logTo(t, st)
-	assertRemoteUsageRecords(t, st, rep)
+	if opts.observe == "on" {
+		assertRemoteUsageRecords(t, st, rep)
+	}
 	visible, timedOut, overdue, outstanding := rep.counts()
 	loaded := opts.backlogBPS > 0 || opts.devices > 1 || opts.queriesEvery > 0
 	if rep.queryErrors > 0 {

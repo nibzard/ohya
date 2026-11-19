@@ -187,7 +187,12 @@ func runChildServe(args []string) error {
 	fs := flag.NewFlagSet("child-serve", flag.ContinueOnError)
 	db := fs.String("db", "", "hub database path")
 	state := fs.String("state", "", "state directory")
+	observe := fs.String("observe", "on", "publish observability data: on or off")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	observeOn, err := parseObserveFlag(*observe)
+	if err != nil {
 		return err
 	}
 	path := os.Getenv("OHYA_TEST_DERP_REGION_FILE")
@@ -207,6 +212,7 @@ func runChildServe(args []string) error {
 	return runServe(ctx, serveOptions{
 		dbPath:   *db,
 		stateDir: *state,
+		observe:  observeOn,
 		stdout:   os.Stdout,
 		region:   region,
 	})
