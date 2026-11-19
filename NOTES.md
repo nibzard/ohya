@@ -31,6 +31,21 @@ How to use this file:
 
 - Codex `archived_sessions/` ingestion gap (verified 2026-11-15): `~/.codex/archived_sessions` is a sibling of `sessions/` and holds rollouts moved out of it (6 plain-JSONL files, 1.5 MB, Feb–Sep 2026, none duplicated under `sessions/`; the directory was absent again on 2026-11-16 while `sessions/` remained). Resolved 2026-11-16 (T081): ohya now watches `$CODEX_HOME/archived_sessions` as a second default codex root on both ingest and join (one watcher per agent covers both roots, so a file moving between them keeps its checkpoint by file identity), and a watched source whose path stops being statable prints one diagnostic per disappearance on both paths instead of stopping silently. Watching all of `~/.codex` stays wrong: it would ingest `session_index.jsonl`, `history.jsonl`, and vendor JSONL.
 
+- Competitive clock — Atuin threads (verified 2026-11-19): Atuin shipped
+  "threads" (v18.24.0, 2026-10-15; renamed from "AI sessions" in the same
+  cycle) — daemon file-tailing capture of Claude Code/Codex/Pi/OpenCode and 5+
+  more harnesses from the same JSONL sources ohya watches, encrypted record
+  store + derived SQLite FTS5/BM25 projection (threads.db), per-user E2EE sync
+  through hosted or self-hosted relay, `atuin mcp` list/read/search tools for
+  agent self-recall, TUI resume/fork across harnesses; lossy capture (secrets
+  redacted, 64 KiB tool-I/O clip). It is single-user; the live "Threads for
+  teams" beta is hosted-hub-only and uploads shared threads in plaintext
+  inside TLS. Open flanks: no delete/retention (#4434), no per-machine sync
+  opt-out (#4660), one home per harness (#4687), keyword-only search (#4589).
+  ohya's wedge stays: operator-owned shared hub with no third-party server,
+  lossless raw records, bounded arbitrary SQL + annotate, TLA+-verified
+  sync/auth. Full study: /notes/2026-11-19-atuin-threads-vs-ohya.md.
+
 - Competitive clock (observed 2026-11-15, openai/codex main): Codex is landing first-party memory (`memories/write`; `memories_1.sqlite` now present in `~/.codex`), a SQLite-backed `message-board` + message-board-mcp crate, and `external-agent-migration` importing Claude Code sessions. Cross-agent, local-first, shared remain ohya's wedge; factor into launch sequencing. Their session search still greps raw JSONL (ripgrep with JSON-escaped terms, search.rs) plus a bolted-on SQLite listing index — converging on ohya's design from both sides.
 
 - Parser format facts cross-checked against agentsview (2026-11-13, commit
