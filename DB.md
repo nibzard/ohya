@@ -14,7 +14,10 @@ creates `events_settled`, the view over sessions idle at least 10 minutes
 [007_workspaces.sql](internal/store/migrations/007_workspaces.sql)
 adds `workspaces`, the device-observed repository of each session working
 directory, and the `sessions (device_id, cwd)` index (see "Repository
-derivation").
+derivation");
+[008_purged_sources.sql](internal/store/migrations/008_purged_sources.sql)
+adds `purged_sources`, the tombstones of owner-purged sources (see
+"Source lifecycle" and [ADR 0013](docs/adr/0013-owner-scoped-session-purge.md)).
 Do not duplicate the DDL here.
 Databases ship with releases: v0.1.0 and v0.1.1 ship schema 6, and v0.1.2 and
 v0.2.0 ship schema 7
@@ -80,6 +83,48 @@ writer.
 | `events_fts` | Search index over event text, maintained transactionally |
 | `events_settled` | View over `events` holding only records of sessions idle at least 10 minutes |
 | `workspaces` | Write-once repository observation for one session working directory on one device |
+| `purged_sources` | Tombstone of one owner-purged source; refuses the write path until the owner re-admits it |
+
+## Source lifecycle
+
+A source moves through three states ([ADR 0013](docs/adr/0013-owner-scoped-session-purge.md)):
+
+```text
+registered --ohya purge --apply--> purged --ohya sources reallow--> registered (at the purged cursor)
+```
+
+- **registered**: the `sources` row exists and the write path accepts batches.
+- **purged**: an owner purge deleted the session's rows — events,
+  annotations, token totals, the sessions row, orphaned `workspaces` rows
+  whose `(device_id, path)` no remaining session references, and the source
+  row — and wrote a `purged_sources` tombstone carrying the source identity,
+  device, agent, path, the authoritative committed cursor read inside the
+  purge transaction, the purged session's native ID, the source's offset-0
+  `first_native_id`, the purge scope, and the timestamp. `purged_sources` is
+  denied to the MCP `sql` tool by default (`EngineOptions.DenyTables`).
+  Registration and batches for the tombstoned source ID are refused
+  deterministically with the purge date and the `ohya sources reallow` remedy
+  (`store.ErrSourcePurged`), for any device: the tombstone keeps the freed
+  source ID from being re-registered, exactly as ownership did while the row
+  lived.
+- **registered again**: reallow deletes the tombstone and restores the
+  source row with `cursor_bytes` and `first_native_id` from the tombstone
+  (so header-first parsers such as Codex and Pi can resume and re-derive past
+  offset 0 after their offset-0 event was evicted). Because a running
+  `ohya join` caches refused sources for its process lifetime, restart
+  `ohya join` on the device after reallow; its probe finds the hub cursor at
+  (or past) its checkpoint and resumes from there, while a below-cursor
+  replay is refused by the existing write-path rule because no stored records
+  sit below that cursor. Purged bytes never return automatically.
+
+A purge plan selects real sessions (never the `ohya-synthetic:` companions,
+which follow their source) and evicts every source holding the selected
+sessions' events — each source holds at most one real session plus its own
+source-scoped synthetic session (verified on the whole deployed hub, guarded
+in both `PlanPurge` and `purgeOneSource`, and pinned by tests; see ADR 0013).
+One transaction per source (detaching cross-source `duplicate_of` references
+before deleting the source's events) keeps the WAL bounded and reruns
+resumable. Freed pages stay in the database file; there is no VACUUM.
 
 Use Unix milliseconds; absent observations remain NULL. Ingestion JSON metadata contains
 only deterministic observations, not inferred outcomes. Raw JSON preserves the
@@ -144,6 +189,11 @@ queries that deliberately want the live tail.
   `agent + ":" + device_id + ":" + native_id`. Agent names and device IDs
   cannot contain a colon, so the first two separators always split the
   identity; a native ID may contain colons (synthetic IDs do).
+- A source holds events of at most one real session, plus at most the
+  synthetic session scoped to that source (`ohya-synthetic:<source-id>`).
+  Verified against the whole deployed hub and pinned by tests, this is what
+  lets a session purge always evict whole sources without touching another
+  session's events ([ADR 0013](docs/adr/0013-owner-scoped-session-purge.md)).
 - Source IDs survive restarts; replacement/truncation creates a new incarnation.
 - `(source_id, source_offset)` deduplicates retransmission, not copied history.
 - `(session_id, ordinal, raw content)` deduplicates records that another file
@@ -255,6 +305,10 @@ Error classes let the sync endpoint tell permanent rejections from transient fai
 - `ErrSourceNotRegistered`: call `RegisterSource` before the first batch. Re-registering the same
   source is a no-op that only follows a path move. Agent names follow the watcher rule
   (`^[a-z0-9][a-z0-9._-]{0,63}$`), which keeps them free of colons for the session ID encoding.
+- `ErrSourcePurged`: the source was purged by the owner and is tombstoned. Registration, batches,
+  and state reads for its source ID are refused with the purge date and the `ohya sources reallow`
+  remedy, for every device, until the owner re-admits it (see "Source lifecycle" and
+  [ADR 0013](docs/adr/0013-owner-scoped-session-purge.md)).
 
 `store.SourceState` returns the source's agent, cursor, and `FirstNativeID`, the native ID of the
 record at offset 0, which the Codex and Pi parsers need past offset 0.
@@ -286,6 +340,7 @@ Output version history:
 | `codex` | 1 | Output when the marker was introduced |
 | `codex` | 2 | Adds `Record.Repo`, derived from `session_meta.git.repository_url` |
 | `codex` | 3 | `Record.Repo` uses `workspace.NormalizeRemote`: drops a port from a URL with a scheme, drops all user information up to the last `@`, and rejects an invalid host |
+| `codex` | 4 | Hardens `workspace.NormalizeRemote` (case-insensitive schemes, strict scheme/host/numeric-port/path checks, query/fragment stripping, SCP userinfo stripping before `:`, and `MaxRepoBytes` bound) |
 | `pi` | 1 | Output when the marker was introduced |
 | `pi` | 2 | Adds `Record.EntryID`, the usage-row key when a provider emits no `responseId` (verified 2026-11-14: `openai-completions` records never carry one) |
 
@@ -300,7 +355,9 @@ are untouched; it recomputes session aggregates and token totals, reassigns
 byte-identical replay duplicates in deterministic `(source_id, source_offset)`
 order instead of arrival order, keeps distinct records that share an ordinal as
 separate originals, drops sessions that lost all events, and rebuilds `events_fts`
-from the content table with the external-content `rebuild` command. Re-derived
+by clearing the index (`delete-all`) and re-inserting only rows with non-empty
+`events.text` (matching the insert/delete triggers so text-less rows never leave
+orphaned `docsize` entries across future purges). Re-derived
 text is stored once in `events.text`; the FTS index references it as external
 content, duplicates keep NULL text, and the aggregates recomputed in the same
 transaction are the only derived copies. A failed pass rolls back completely,
@@ -311,7 +368,9 @@ first, then re-derive.
 The walk reads one agent's sources in source ID order and each source's records in offset order, in
 chunks of 128 records with keyset pagination on the offset. Each chunk closes before any update, so
 the scan never observes the rows it changes, and memory stays bounded even for gigabyte rollouts.
-The record at offset 0 establishes the native session, and each later record receives the native ID
+Each source seeds its native session from `sources.first_native_id` (so a reallowed Codex or Pi
+source whose offset-0 event was purged still re-derives past offset 0), the record at offset 0
+establishes or updates it when present, and each later record receives the native ID
 of the record before it, exactly like a fresh parse. A deriver must return an event that frames
 exactly the stored record (offset, end, and raw JSON), names a session, and carries the version it
 was bound with. The pass clears replay-original marks and token totals before the walk, so the

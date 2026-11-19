@@ -434,6 +434,19 @@ The uploader reports each loss it can see: a replaced, truncated or rewritten
 file whose observed bytes passed its acknowledged cursor, and a deleted file
 with unsent bytes. Bytes appended and lost between two polls stay invisible.
 
+An owner purge adds one terminal state to a source
+([ADR 0013](docs/adr/0013-owner-scoped-session-purge.md)): `ohya purge`
+deletes whole sessions and every source that holds their events, one
+transaction per source, and replaces each source row with a tombstone.
+Registration and batches for a tombstoned source ID are refused
+deterministically with the purge date and the `ohya sources reallow`
+remedy — for any device, so the freed source ID cannot be re-registered —
+while other sources on the same connection continue. Devices keep their
+checkpoints and files; after the owner re-admits a source, it is restored
+at its purged cursor and history resumes from that point, so purged bytes
+never return through replay. `tla/Sync.tla` and `tla/Auth.tla` carry the
+purged state, its refusal, and the re-admission rules.
+
 Model-check cursor advancement, retries, crashes and lost acknowledgments before
 network sync implementation. State source-retention and durable-storage assumptions;
 liveness assumes eventual reconnection and retries. Test implementation separately.

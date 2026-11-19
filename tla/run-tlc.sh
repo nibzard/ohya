@@ -36,7 +36,7 @@ check() {
         echo ""
         echo "=== $cfg ==="
         java -XX:+UseParallelGC -XX:MaxRAMPercentage=75 \
-            -cp "$JAR" tlc2.TLC -deadlock -config "${cfg}.cfg" "$module.tla"
+            -cp "$JAR" tlc2.TLC -workers auto -deadlock -config "${cfg}.cfg" "$module.tla"
     done
 }
 

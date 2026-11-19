@@ -44,10 +44,17 @@ day. That context stays in one tool on one machine, until it is lost.
   sync over an encrypted tailnet to a hub that you run.
 - **Plain SQL:** agents query with `SELECT` and FTS5/BM25. There is no
   ingestion model, no vector store, and no AI pipeline.
-- **Lossless:** every original JSONL record is kept byte for byte. Parser
-  upgrades re-derive rows from the stored records.
+- **Lossless while retained:** every original JSONL record is kept byte for
+  byte. Parser upgrades re-derive rows from the stored records.
+- **Owner-decided retention:** nothing is deleted automatically, and nothing
+  is kept forever against your will. `ohya purge` plans (dry-run by default)
+  and deletes whole sessions by session, repository, agent, or age; purged
+  sources are tombstoned so their devices are refused until you re-admit
+  them, and purged bytes never return on their own
+  ([ADR 0013](docs/adr/0013-owner-scoped-session-purge.md)).
 - **Durable:** Claude Code deletes transcripts after 30 days by default
-  (`cleanupPeriodDays`). ohya keeps every record that it has ingested.
+  (`cleanupPeriodDays`). ohya keeps every record that it has ingested until
+  you decide otherwise.
 
 ## How it works
 
@@ -220,6 +227,8 @@ directories and sends only the normalized value to the hub.
 | `ohya serve` | Run the hub: Tailcat transport and sync endpoint, no open port |
 | `ohya join CODE` | Pair this device with a hub and upload its sessions |
 | `ohya devices invite\|list\|revoke` | Manage paired devices |
+| `ohya purge` | Plan or apply an owner-decided purge of stored sessions (dry run by default) |
+| `ohya sources reallow` | Re-admit a purged source so its device syncs again |
 | `ohya rederive` | Rebuild normalized rows after a parser upgrade |
 | `ohya doctor` | Read-only health checks |
 | `ohya status` | Runtime state from published local snapshots: freshness, backlog, resources |
@@ -247,7 +256,8 @@ exit codes, and failure behavior.
 ## Status and roadmap
 
 - **Works now:** Claude Code, Codex, and Pi ingestion; `sql` and `annotate`;
-  pairing, sync, and revocation; remote MCP; integrated setup.
+  pairing, sync, and revocation; remote MCP; integrated setup;
+  owner-scoped purge with source tombstones.
 - **Open:** Developer ID signing and notarization for macOS; a Homebrew tap.
 - **Next:** an OpenCode source (OpenCode stores sessions in SQLite).
 - **Not planned:** embeddings, vector search, built-in AI classification,

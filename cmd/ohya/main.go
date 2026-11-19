@@ -30,6 +30,8 @@ serve      run the hub for devices: transport, sync, remote tools
 join       pair a device with a hub and upload its agent sessions
 mcp        serve the sql and annotate MCP tools on stdio
 devices    manage device pairing and revocation
+sources    manage stored sources on the hub
+purge      plan or apply an owner-decided purge of stored sessions
 rederive   rebuild normalized rows and events_fts after a parser upgrade
 doctor     run read-only health checks the sql tool cannot answer
 status     report runtime state from published local snapshots
@@ -73,6 +75,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runMcpCommand(rest, stdout, stderr)
 	case "devices":
 		return runDevicesCommand(rest, stdout, stderr)
+	case "purge":
+		return runPurgeCommand(rest, stdout, stderr)
+	case "sources":
+		return runSourcesCommand(rest, stdout, stderr)
 	case "rederive":
 		return runRederiveCommand(rest, stdout, stderr)
 	case "doctor":

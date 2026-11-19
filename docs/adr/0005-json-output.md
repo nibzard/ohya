@@ -17,7 +17,9 @@ The commands that report facts take a `--json` flag. Text stays the default;
 nothing about the text output changes.
 
 - Covered commands: `ingest --once`, `devices list`, `devices invite`,
-  `devices revoke`, `rederive`, `doctor`, `version`.
+  `devices revoke`, `purge`, `sources reallow`, `rederive`, `doctor`,
+  `usage`, `version` (the observability reports `status`, `metrics`,
+  `logs`, and `diagnose` also follow the envelope; see their own docs).
 - Not covered, deliberately: `serve`, `mcp`, `join`, and the polling `ingest`
   are long-running or stream-oriented; a single trailing object helps no
   consumer of a process that never exits. No output-format registry and no
@@ -73,6 +75,14 @@ Timestamps are RFC 3339 UTC strings.
 - `devices invite`: `code` (the full join code — the output the operator
   asked for) and `expires_at`.
 - `devices revoke`: `device_id`.
+- `purge`: `dry_run` (`true` without `--apply`), `scope` (the selector
+  text), `sessions` and `sources` (empty arrays, never `null`; a session
+  carries `id`, `agent`, `device_id`, `native_id`, `events`; a source
+  carries `id`, `agent`, `device_id`, `path`, `cursor_bytes`, `events`,
+  `native_id`, and — only with `--apply` — `purged_at`), plus the
+  `events` and `bytes` totals. The bytes are the evicted sources'
+  committed cursors, the mirrored-transcript measure of ADR 0013.
+- `sources reallow`: `source_id` and `cursor_bytes` (the restored cursor).
 - `rederive`: `events`, `sessions`, `duration_ms`.
 - `doctor`: `findings`, one entry per check: `check`, `severity`
   (`ok`, `warn`, `error`), `detail`, and `remedy` (the one-line remedy, `""`

@@ -152,8 +152,9 @@ func clearDerived(ctx context.Context, tx *sql.Tx, agent string) error {
 }
 
 type rederiveSource struct {
-	id     string
-	device string
+	id          string
+	device      string
+	firstNative string
 }
 
 type storedEvent struct {
@@ -166,17 +167,19 @@ const rederiveChunk = 128
 
 func rederiveAgent(ctx context.Context, tx *sql.Tx, p ParserDeriver, states map[string]*rebuiltSession) (int, error) {
 	srcRows, err := tx.QueryContext(ctx,
-		`SELECT id, device_id FROM sources WHERE agent = ? ORDER BY id`, p.Agent)
+		`SELECT id, device_id, first_native_id FROM sources WHERE agent = ? ORDER BY id`, p.Agent)
 	if err != nil {
 		return 0, fmt.Errorf("store: re-derive agent %s: list sources: %w", p.Agent, err)
 	}
 	var sources []rederiveSource
 	for srcRows.Next() {
 		var s rederiveSource
-		if err := srcRows.Scan(&s.id, &s.device); err != nil {
+		var firstNative sql.NullString
+		if err := srcRows.Scan(&s.id, &s.device, &firstNative); err != nil {
 			srcRows.Close()
 			return 0, fmt.Errorf("store: re-derive agent %s: read source: %w", p.Agent, err)
 		}
+		s.firstNative = firstNative.String
 		sources = append(sources, s)
 	}
 	if err := srcRows.Err(); err != nil {
@@ -187,7 +190,7 @@ func rederiveAgent(ctx context.Context, tx *sql.Tx, p ParserDeriver, states map[
 
 	walked := 0
 	for _, src := range sources {
-		native := ""
+		native := src.firstNative
 		lastOffset := int64(-1)
 		for {
 			var chunk []storedEvent
@@ -225,6 +228,14 @@ func rederiveAgent(ctx context.Context, tx *sql.Tx, p ParserDeriver, states map[
 				}
 				if err := checkDerived(p, ev, e.id, e.offset, e.raw); err != nil {
 					return 0, fmt.Errorf("store: re-derive source %s: %w", src.id, err)
+				}
+				if e.offset == 0 && ev.NativeID != src.firstNative {
+					if _, err := tx.ExecContext(ctx,
+						`UPDATE sources SET first_native_id = ? WHERE id = ?`,
+						ev.NativeID, src.id); err != nil {
+						return 0, fmt.Errorf("store: re-derive source %s: update first native ID: %w", src.id, err)
+					}
+					src.firstNative = ev.NativeID
 				}
 				native = ev.NativeID
 				lastOffset = e.offset

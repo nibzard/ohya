@@ -75,7 +75,7 @@ func sqliteOutcome(err error) (string, bool) {
 		return "error", true
 	}
 	if errors.Is(err, ErrBatchRejected) || errors.Is(err, ErrSourceOwnership) ||
-		errors.Is(err, ErrSourceNotRegistered) {
+		errors.Is(err, ErrSourceNotRegistered) || errors.Is(err, ErrSourcePurged) {
 		return "", false
 	}
 	return "error", true

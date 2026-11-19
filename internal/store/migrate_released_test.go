@@ -212,6 +212,9 @@ func assertReleasedRowsSurviveUpgrade(t *testing.T, db *sql.DB, fromSchema, toSc
 			}
 		}
 	}
+	if !tableExists(t, db, "purged_sources") {
+		t.Fatal("purged_sources table missing after upgrade")
+	}
 }
 
 func ingestAfterReleasedUpgrade(t *testing.T, hub *DB) {

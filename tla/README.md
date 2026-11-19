@@ -4,7 +4,9 @@ Two executable specifications live here. `Sync.tla` specifies the sync
 cursor and acknowledgment protocol from the "Sync contract" in
 [ARCHITECTURE.md](../ARCHITECTURE.md); `Auth.tla` specifies the
 authorization, pairing, and revocation rules from its "Authorization and
-SQL" and "Agent annotations" sections.
+SQL" and "Agent annotations" sections. Both carry the owner purge
+lifecycle of [ADR 0013](../docs/adr/0013-owner-scoped-session-purge.md):
+the tombstoned source, its refusal, and re-admission.
 TLC checks the models against the properties recorded here. The sync
 endpoint (T017, `internal/hubsync`), the uploader (T019), and pairing
 with revocation (T018, `internal/registry`) must implement these state
@@ -46,7 +48,11 @@ specification first when the contract changes.
 The model abstracts one source to record indices: byte offsets and
 record-boundary validation are implementation detail (Go tests cover
 them), while the cursor/acknowledgment state machine is the protocol
-under check.
+under check. Frame encoding is likewise outside the model: a plain or
+zstd-compressed batch frame (ADR 0014) is the same `SendBatch` action, and
+the capability negotiation that selects the encoding happens before any
+batch exists and degrades to plain frames, changing no batch/ack state.
+Extend the model only if a capability changes the state machine itself.
 
 | Domain concept | Model element |
 |---|---|
@@ -57,6 +63,7 @@ under check.
 | Aggregate event count (inserts only) | `eventCount[s]` |
 | Device's durable checkpoint (acknowledgment) | `ackCursor[s]` |
 | Acknowledgment on the wire | `wireAck[s]` (highest value only; acks are monotone) |
+| Purge tombstone (ADR 0013) | `purged[s]`, with the eviction mark `purgeMark[s]` and the owner action counters `purgeCount[s]`, `reallowCount[s]` |
 
 | Constant | Meaning |
 |---|---|
@@ -64,6 +71,7 @@ under check.
 | `MaxBatch` | The most records in one batch; batches may split a file |
 | `Sources` | The set of sources; each source is one watched file |
 | `ReliableNet` | `FALSE` enables message loss and crashes |
+| `MaxPurges` | The most owner purges one source may receive; `0` disables the purge actions entirely |
 
 `NoBatch` (the empty tuple) and `NoAck` (`MaxLen + 1`, above every real
 cursor) mark an empty channel. They keep each channel single-typed,
@@ -83,8 +91,10 @@ Actions and the failure scenarios they cover:
 |---|---|
 | `AppendRecord` | The agent appends records; appends interleave with sync arbitrarily |
 | `SendBatch` | Batch upload from the durable checkpoint; one in-flight batch per source |
-| `HubCommit` | One durable transaction: insert new records, count them once, advance the hub cursor, emit the ack; a repeated batch is a no-op that returns the existing cursor |
+| `HubCommit` | One durable transaction: insert new records, count them once, advance the hub cursor, emit the ack; a repeated batch is a no-op that returns the existing cursor; refused (no transition) while the source is tombstoned |
 | `DeliverAck` | The device durably persists the acknowledged cursor; a stale ack that arrives late changes nothing |
+| `PurgeSource` | The owner purges a source (ADR 0013): storage empties, the eviction mark freezes at the committed cursor, the tombstone is set; the cursor itself never moves |
+| `ReallowSource` | The owner re-admits a purged source: the tombstone clears, storage stays empty, sync resumes from the frozen cursor |
 | `DropBatch` | Batch lost in transit, or connection timeout and reset; the device retries from its checkpoint |
 | `DropAck` | Lost acknowledgment; the device retries, the hub replays the overlap |
 | `CrashClient` | Device crash: durable checkpoint survives, in-flight messages for its source vanish — the window between hub commit and local persistence |
@@ -95,19 +105,42 @@ contract rule "reject gaps ahead of the stored cursor". Batches start at
 `ackCursor`, which never passes `hubCursor`, so the guard always holds in
 the model. The hub checks it anyway.
 
+`PurgeSource` and `ReallowSource` model the owner actions of ADR 0013.
+Records below the eviction mark are the purged content: `HubCommit` never
+stores them again, because it only stores records at or beyond the
+committed cursor and purge never lowers that cursor. The bound `MaxPurges`
+keeps the counters (and the state space) finite; the liveness configuration
+sets it to `0`, because a purged source legitimately stops syncing — its
+refusal is required behavior, not a starvation bug. The purged state is
+per-source, so with two sources every interleaving of a refused source and
+a healthy one is explored: the refusal cannot wedge unrelated sources.
+
 ## Safety invariants
 
 Every configuration checks all of these.
 
 - `AckLeCommit` — no acknowledged cursor passes the hub's committed
-  cursor. Cursor advancement never precedes durable storage.
+  cursor. Cursor advancement never precedes durable storage. Holds for
+  purged sources too, because purge never lowers the hub cursor.
 - `AckedRecordsStored` — every record below an acknowledged cursor is
-  durably stored at the hub. Events are not lost after acknowledged
-  commits.
-- `StoredPrefixContiguous` — the hub stores exactly the contiguous prefix
-  below its cursor. Records of one source become visible in file order,
-  whatever the interleaving across sources. No phantom record sits beyond
-  the cursor.
+  durably stored at the hub, or lies below a purge mark: the owner's purge
+  is the only way an acknowledged record stops being stored. Events are
+  not lost after acknowledged commits by any other path.
+- `StoredPrefixContiguous` — the hub stores exactly the contiguous range
+  from the purge mark to the committed cursor (the mark is 0 for a source
+  that was never purged, so this is the original prefix property).
+  Records of one source become visible in file order, whatever the
+  interleaving across sources. No phantom record sits beyond the cursor,
+  and none sits below a purge mark.
+- `NoResurrection` — no record below a purge mark is ever stored again.
+  Named separately from `StoredPrefixContiguous` (which implies it) because
+  it is the property the tombstone exists for.
+- `PurgedSourceStoresNothing` — a tombstoned source stores nothing; only
+  `ReallowSource` reopens the write path.
+- `TombstoneConsistent` — the tombstone is set exactly when the purge
+  count exceeds the reallow count, so it flips only through the paired
+  owner actions: an acknowledged-then-purged source stays purged until the
+  owner re-admits it.
 - `EventsCountedOnce` — aggregates count each stored record exactly once.
   Retries and reconnections create no duplicate events.
 - `HubWithinFile` — the hub never commits records the file does not hold.
@@ -118,13 +151,21 @@ Every configuration checks all of these.
 - `WireAckLeCommit` — an acknowledgment on the wire never passes the
   committed cursor.
 
+Two action properties hold as well: `HubCursorNeverRegresses` (no cursor
+regression — not even a purge moves the hub cursor) and
+`PurgeMarkNeverRegresses` (the eviction mark only grows, so re-purging
+after a reallow can only widen the purged range, never shrink it).
+
 ## Liveness property
 
-`EventualSync`: every appended record is eventually stored at the hub, and
-every stored record is eventually acknowledged. Checked under weak
+`EventualSync`: every appended record is eventually stored at the hub — or
+lies below a purge mark, the owner's terminal decision for it — and every
+stored record is eventually acknowledged. Checked under weak
 fairness per source on retries (`SendBatch`), commits (`HubCommit`), and
 checkpoint persistence (`DeliverAck`). Appends stay unfair: the protocol
-must sync whatever has arrived, on any schedule.
+must sync whatever has arrived, on any schedule. The liveness configuration
+disables the purge actions (`MaxPurges = 0`); under purge, the escape
+clause is what the property means.
 
 ## Assumptions
 
@@ -159,14 +200,22 @@ must sync whatever has arrived, on any schedule.
 - **Fixed ownership.** Each source's device is fixed. Authentication,
   spoofing, revocation, and ownership binding are the authorization model
   (`Auth.tla`, below), not this one.
+- **Purge and reallow are owner actions** (ADR 0013), assumed correct and
+  not subject to protocol fairness; `MaxPurges` bounds their counts so the
+  state space stays finite, and the liveness configuration disables them,
+  because a purged source legitimately stops syncing. The device-side
+  below-cursor replay they must survive cannot arise through the uploader
+  (every new connection probes the hub cursor first and reconciles), so
+  its deterministic rejection is pinned by write-path tests in
+  `internal/store`, and the resumed-sync behavior by the uploader e2e.
 
 ## Models
 
-| Configuration | Bounds | What it exercises | Size (checked 2026-11-13) |
+| Configuration | Bounds | What it exercises | Size (checked 2026-11-19) |
 |---|---|---|---|
-| `SyncConcurrent.cfg` | 2 sources, `MaxLen` 5, `MaxBatch` 2, loss and crashes | Cross-device interleaving under every failure action | 53,824 states, ~2 s |
-| `SyncFailures.cfg` | 1 source, `MaxLen` 12, `MaxBatch` 3, loss and crashes | Long retry chains, many partial batches, every loss/crash window | 2,057 states, <1 s |
-| `SyncLiveness.cfg` | 2 sources, `MaxLen` 4, `MaxBatch` 2, reliable network | `EventualSync` under fairness, plus all invariants | 12,100 states, ~13 s |
+| `SyncConcurrent.cfg` | 2 sources, `MaxLen` 5, `MaxBatch` 2, 1 purge per source, loss and crashes | Cross-device interleaving under every failure action, including purge and reallow against a still-syncing neighbor | 929,296 states, ~30 s |
+| `SyncFailures.cfg` | 1 source, `MaxLen` 12, `MaxBatch` 3, 1 purge, loss and crashes | Long retry chains, many partial batches, every loss/crash window, purge between commit and acknowledgment | 13,711 states, <1 s |
+| `SyncLiveness.cfg` | 2 sources, `MaxLen` 4, `MaxBatch` 2, no purge, reliable network | `EventualSync` under fairness, plus all invariants | 12,100 states, ~13 s |
 
 All runs use `-deadlock`: the drained system legitimately reaches a
 quiescent fixed point where no action changes state, and that is not an
@@ -184,6 +233,21 @@ each produced a TLC violation:
   `EventsCountedOnce` violated.
 - Hub advances the cursor while skipping one record insert:
   `StoredPrefixContiguous` violated.
+
+Three further mutations, run 2026-11-19 against `SyncConcurrent.cfg` when
+the purge actions were added (ADR 0013), were each caught:
+
+- `HubCommit` drops the tombstone guard (a purged source keeps committing):
+  `PurgedSourceStoresNothing` violated.
+- `PurgeSource` sets the eviction mark one below the committed cursor (a
+  purge that leaves the newest record resurrectable):
+  `StoredPrefixContiguous` violated, because the still-stored records no
+  longer match the range above the mark.
+- `PurgeSource` resets `hubCursor` to 0 instead of freezing it: the
+  in-flight acknowledgment passes the reset cursor, so `WireAckLeCommit`
+  reports the violation first and `HubCursorNeverRegresses` holds the same
+  step — the modeled equivalent of restoring a reallowed source at cursor
+  0, which would invite a full replay.
 
 ## Not proved here
 
@@ -224,6 +288,7 @@ fixed source ownership — this model is that assumption, checked.
 | Credential provenance of a device | `pairedVia[d]`, set once at admission |
 | Revocation history | `revokedEver`, the set of ever-revoked devices |
 | Session (connection) | `sesDevice[c]`, permanent binding, and `sesLive[c]` |
+| Source registration lifecycle (ADR 0013) | `srcReg[s]`: registered ↔ purged through the owner actions, with counters `srcPurges[s]`, `srcReallows[s]` |
 | Source ownership | `srcOwner[s]`, with history `srcEverOwned[s]` |
 | Annotation slot (event, namespace, key) | constant `Annotations`; the writer completes the identity |
 | Annotation rows and their writers | `annRows[a]`, `annRowSes[a][d]` |
@@ -238,6 +303,7 @@ fixed source ownership — this model is that assumption, checked.
 | `Annotations` | Annotation slots: the `(event_id, namespace, key)` part of the annotation identity. The `writer_id` part is state (the row owner), not a constant |
 | `Workspaces` | Workspace paths. The device part of the `(device_id, path)` identity is state, not a constant |
 | `Repos` | Observed values, including the "no repository" value |
+| `MaxPurges` | The most owner purges one source may receive; bounds the counters so the state space stays finite |
 
 `None` is one sentinel string for "no device", "no invitation", and "no
 session". The domains are disjoint, and no predicate compares sentinels
@@ -264,7 +330,8 @@ Actions and the scenarios they cover:
 | `RevokeDevice` | Registry flips to revoked and every live session of the device closes with its in-flight requests cancelled, in one step |
 | `OpenSession` | Only an active device establishes a session; the slot binds to it permanently |
 | `CloseSession` | A session ends; the device binding survives |
-| `Upload` | The first accepted upload binds the source to the session's device; the same device's retries are accepted; any other device — stranger, paired, or the revoked former owner — is rejected |
+| `Upload` | The first accepted upload binds the source to the session's device; the same device's retries are accepted; any other device — stranger, paired, or the revoked former owner — is rejected; refused while the source is tombstoned (ADR 0013) |
+| `PurgeSource` / `ReallowSource` | The owner's purge and re-admission of a source (ADR 0013): the registration flips registered ↔ purged, nothing else moves — ownership, the registry, and sessions are untouched |
 | `Annotate` / `DeleteAnnotation` | Upsert or delete of the session device's own row on a slot; the request carries no writer, so another device's row is not addressable. Deleting an absent row succeeds and removes nothing |
 | `Observe` | A workspace observation for the session device's own workspace. The first one is stored; a repeat, with the same or another value, changes nothing |
 
@@ -288,7 +355,15 @@ Every configuration checks all of these.
 - `RevocationIrreversible` — a device revoked at any time is revoked now.
 - `OwnershipImmobile` / `OwnerIsRegistrar` — a source is bound by at most
   one device ever, and the live owner is exactly that registrar. Source
-  ownership cannot move between devices.
+  ownership cannot move between devices, and a purge or reallow moves it
+  nothing: the tombstone keeps a purged source's ID bound exactly as the
+  row did.
+- `TombstoneMatchesOwnerActions` — the registration is purged exactly when
+  the purge count exceeds the reallow count, so the tombstone flips only
+  through the paired owner actions. Together with the `Upload` guard this
+  is the checked half of "revocation still wins over re-admission": after
+  `RevokeDevice`, no reallow can make the revoked owner's uploads pass, and
+  before a reallow no device's uploads pass.
 - `AnnotationWriterFromSession` / `AnnotationRowTouched` — every recorded
   annotation write or delete went through a session bound to the row's
   writer. The writer comes from the session, never from the request.
@@ -346,10 +421,10 @@ observation, and its writer, never change.
 
 ## Models
 
-| Configuration | Bounds | What it exercises | Size (checked 2026-11-13) |
+| Configuration | Bounds | What it exercises | Size (checked 2026-11-19) |
 |---|---|---|---|
-| `Auth.cfg` | 2 devices, 2 invitations, 3 sessions, 2 sources, 1 workspace, 2 values | Full interleaving: pairing races, revocation under live sessions, cross-writer annotations on one slot, competing observations of one workspace | 515,033 states, ~5 s (checked 2026-11-16) |
-| `AuthWide.cfg` | 3 devices, 2 invitations, 3 sessions, 2 sources, 1 workspace, 2 values | Pairing scarcity: one device stays a stranger whatever happens; one device owning both sources while another owns none | 1,480,461 states, ~12 s (checked 2026-11-16) |
+| `Auth.cfg` | 2 devices, 2 invitations, 3 sessions, 2 sources, 1 workspace, 2 values, 1 purge per source | Full interleaving: pairing races, revocation under live sessions, cross-writer annotations on one slot, competing observations of one workspace, purge and reallow racing uploads and revocation | 4,635,297 states, ~2 min |
+| `AuthWide.cfg` | 3 devices, 2 invitations, 3 sessions, 2 sources, 1 workspace, 2 values, 1 purge per source | Pairing scarcity: one device stays a stranger whatever happens; one device owning both sources while another owns none | 13,324,149 states, ~9 min |
 
 In `Auth.cfg`, three session slots let both devices hold live sessions
 and still close a session and open a new one on a fresh slot. In
@@ -389,6 +464,15 @@ One further mutation survived by design: an already-active device
 consuming a second invitation violates no stated property (each
 invitation is still single-use); the specification blocks it anyway with
 the "absent" guard.
+
+A purge mutation also survived by design (checked 2026-11-19, when the
+registration lifecycle was added): dropping the `srcReg` guard from
+`Upload` violates no property here, because an upload to an owned purged
+source changes no authorization state. The refusal's observable content —
+no recreated source row, no stored records — is what `Sync.tla` checks
+(`PurgedSourceStoresNothing` and its mutations above); this model pins
+that purge and reallow never move ownership or registry state, so
+revocation still wins over re-admission.
 
 ## No liveness property
 

@@ -17,6 +17,9 @@ make build
 ./bin/ohya mcp --remote        # same tools, through the joined device
 ./bin/ohya devices list        # show paired devices and invitations
 ./bin/ohya devices revoke ID   # revoke a device, final for its identity
+./bin/ohya purge               # plan a purge of stored sessions (dry run)
+./bin/ohya purge --apply       # delete the planned sessions and sources
+./bin/ohya sources reallow ID  # re-admit a purged source on the hub
 ./bin/ohya rederive            # rebuild normalized rows after a parser upgrade
 ./bin/ohya doctor              # run read-only health checks and report findings
 ./bin/ohya status              # runtime state from published local snapshots
@@ -48,8 +51,8 @@ command prompts for input: ohya is non-interactive by design.
 
 The commands that report facts also print machine-readable output:
 `ingest --once`, `devices list`, `devices invite`, `devices revoke`,
-`rederive`, `doctor`, `usage`, and `version` take `--json` (text stays the
-default)
+`purge`, `sources reallow`, `rederive`, `doctor`, `usage`, and `version`
+take `--json` (text stays the default)
 and print exactly one JSON object on stdout, for example
 
 ```json
@@ -264,6 +267,25 @@ identity. Sessions from failed model calls are partial by design — the
 agent flushes every entry as it goes — and their all-zero usage adds
 nothing to the session totals. Each assistant response carries its own
 usage, so session token totals sum straight over responses.
+
+`ohya purge` (same `--db` flag, run on the hub) deletes stored sessions the
+owner selects — retention is owner-decided and never automatic
+([ADR 0013](adr/0013-owner-scoped-session-purge.md)). Selectors combine
+with AND: `--session <native-id>`, `--repo <host/path>`, `--agent`, and
+`--before <RFC3339 date>` (a session matches when its observed activity
+ended before the date; sessions without timestamps never match `--before`).
+At least one selector is required. Without `--apply` the command is a dry
+run that prints the affected sessions, sources, event counts, and bytes and
+changes nothing; `--apply` deletes, one transaction per source, so an
+interrupted run resumes when rerun with the same selectors. Every evicted
+source is tombstoned: its device's registration and batches are refused
+with the purge date and the remedy, other sources keep syncing, and the
+device's own files and checkpoints are untouched. `ohya sources reallow
+<source-id>` (same `--db` flag) removes one tombstone and restores the
+source at its purged cursor, so history resumes from the purge point and
+the purged bytes never return; re-admission reauthorizes nothing else.
+Freed pages stay in the database file (no VACUUM), and a recovery copy
+taken before a purge still holds the purged data.
 
 Every stored row also names the parser output version that derived its
 normalized fields (`events.parser_version`), separate from the schema

@@ -104,6 +104,17 @@ func (d *DB) RegisterSource(ctx context.Context, id, deviceID, agent, path strin
 		Scan(&storedDevice, &storedAgent, &storedPath)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
+		purged, perr := readPurged(ctx, tx, id)
+		if perr != nil {
+			return fmt.Errorf("store: register source %s: %w", id, perr)
+		}
+		if purged.SourceID != "" {
+			if purged.DeviceID != deviceID {
+				return fmt.Errorf("store: register source %s: held by device %s, not %s: %w",
+					id, purged.DeviceID, deviceID, ErrSourceOwnership)
+			}
+			return purged.refusal()
+		}
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO sources (id, device_id, agent, path) VALUES (?, ?, ?, ?)`,
 			id, deviceID, agent, path); err != nil {
@@ -136,23 +147,46 @@ type SourceState struct {
 }
 
 func (d *DB) SourceState(ctx context.Context, id string) (SourceState, error) {
-	return sourceState(ctx, d.writer, id)
+	return sourceState(ctx, d.writer, id, "")
 }
 
-func sourceState(ctx context.Context, db *sql.DB, id string) (SourceState, error) {
+func (d *DB) SourceStateForDevice(ctx context.Context, id, deviceID string) (SourceState, error) {
+	return sourceState(ctx, d.writer, id, deviceID)
+}
+
+func sourceState(ctx context.Context, db *sql.DB, id, deviceID string) (SourceState, error) {
 	var st SourceState
+	var storedDevice string
 	var native sql.NullString
 	err := db.QueryRowContext(ctx,
-		`SELECT src.agent, src.cursor_bytes,
-		        (SELECT s.native_id FROM events e JOIN sessions s ON s.id = e.session_id
-		         WHERE e.source_id = src.id AND e.source_offset = 0)
+		`SELECT src.device_id, src.agent, src.cursor_bytes,
+		        COALESCE(
+		          (SELECT s.native_id FROM events e JOIN sessions s ON s.id = e.session_id
+		           WHERE e.source_id = src.id AND e.source_offset = 0),
+		          src.first_native_id
+		        )
 		 FROM sources src WHERE src.id = ?`, id).
-		Scan(&st.Agent, &st.Cursor, &native)
+		Scan(&storedDevice, &st.Agent, &st.Cursor, &native)
 	if errors.Is(err, sql.ErrNoRows) {
+		purged, perr := readPurged(ctx, db, id)
+		if perr != nil {
+			return SourceState{}, fmt.Errorf("store: source %s: %w", id, perr)
+		}
+		if purged.SourceID != "" {
+			if deviceID != "" && purged.DeviceID != deviceID {
+				return SourceState{}, fmt.Errorf("store: source %s: belongs to device %s, not %s: %w",
+					id, purged.DeviceID, deviceID, ErrSourceOwnership)
+			}
+			return SourceState{}, purged.refusal()
+		}
 		return SourceState{}, fmt.Errorf("store: source %s is not registered: %w", id, ErrSourceNotRegistered)
 	}
 	if err != nil {
 		return SourceState{}, fmt.Errorf("store: read source %s: %w", id, err)
+	}
+	if deviceID != "" && storedDevice != deviceID {
+		return SourceState{}, fmt.Errorf("store: source %s: belongs to device %s, not %s: %w",
+			id, storedDevice, deviceID, ErrSourceOwnership)
 	}
 	st.FirstNativeID = native.String
 	return st, nil
@@ -188,6 +222,17 @@ func (d *DB) Ingest(ctx context.Context, b Batch) (res IngestResult, err error) 
 		`SELECT cursor_bytes, device_id, agent FROM sources WHERE id = ?`, b.SourceID).
 		Scan(&cursor, &deviceID, &agent)
 	if errors.Is(err, sql.ErrNoRows) {
+		purged, perr := readPurged(ctx, tx, b.SourceID)
+		if perr != nil {
+			return IngestResult{}, fmt.Errorf("store: ingest source %s: %w", b.SourceID, perr)
+		}
+		if purged.SourceID != "" {
+			if purged.DeviceID != b.DeviceID {
+				return IngestResult{}, fmt.Errorf("store: ingest source %s: source belongs to device %s, but the batch claims device %s: %w",
+					b.SourceID, purged.DeviceID, b.DeviceID, ErrSourceOwnership)
+			}
+			return IngestResult{}, purged.refusal()
+		}
 		return IngestResult{}, fmt.Errorf("store: ingest: source %s is not registered; register a source before its first batch: %w",
 			b.SourceID, ErrSourceNotRegistered)
 	}
@@ -238,6 +283,13 @@ func (d *DB) Ingest(ctx context.Context, b Batch) (res IngestResult, err error) 
 			`UPDATE sources SET cursor_bytes = ?, updated_at_ms = ? WHERE id = ?`,
 			newCursor, time.Now().UnixMilli(), b.SourceID); err != nil {
 			return IngestResult{}, fmt.Errorf("store: ingest source %s: advance cursor: %w", b.SourceID, err)
+		}
+	}
+	if b.Events[0].Offset == 0 {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE sources SET first_native_id = ? WHERE id = ? AND first_native_id IS NULL`,
+			b.Events[0].NativeID, b.SourceID); err != nil {
+			return IngestResult{}, fmt.Errorf("store: ingest source %s: record first native ID: %w", b.SourceID, err)
 		}
 	}
 	if err := tx.Commit(); err != nil {

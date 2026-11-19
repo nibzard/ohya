@@ -79,9 +79,13 @@ func TestReaderConnectionsAreRestricted(t *testing.T) {
 			t.Fatalf("reader connection accepted %q", query)
 		}
 	}
+	wantVersions, err := SchemaVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
 	var versions int
-	if err := readers.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&versions); err != nil || versions != 7 {
-		t.Fatalf("reader saw %d applied migrations, %v; want 7", versions, err)
+	if err := readers.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&versions); err != nil || versions != wantVersions {
+		t.Fatalf("reader saw %d applied migrations, %v; want %d", versions, err, wantVersions)
 	}
 }
 
@@ -124,12 +128,16 @@ func TestOpenAppliesRealMigrationsAndReopensCleanly(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer hub.Close()
+	wantVersions, err := SchemaVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
 	var sessions, versions int
 	if err := hub.Writer().QueryRow(`SELECT count(*) FROM sessions`).Scan(&sessions); err != nil || sessions != 1 {
 		t.Fatalf("sessions after reopen = %d, %v; want 1", sessions, err)
 	}
-	if err := hub.Writer().QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&versions); err != nil || versions != 7 {
-		t.Fatalf("applied migrations after reopen = %d, %v; want 7", versions, err)
+	if err := hub.Writer().QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&versions); err != nil || versions != wantVersions {
+		t.Fatalf("applied migrations after reopen = %d, %v; want %d", versions, err, wantVersions)
 	}
 }
 

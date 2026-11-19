@@ -1898,3 +1898,44 @@ How to use this file:
   server records after the ack bytes are already on the wire, so a preempted
   server goroutine loses the assertion; that one counter now uses
   observertest.Recorder.AwaitDurationCount.
+
+- Owner-scoped purge shipped (2026-11-19, T144, ADR 0013): `ohya purge`
+  (dry-run default, --apply) selects real sessions by --session/--repo/
+  --agent/--before, evicts whole sources one transaction each, and
+  tombstones every evicted source (migration 008, purged_sources);
+  `ohya sources reallow <id>` removes a tombstone and restores the source
+  at its purged cursor. Facts future work must keep:
+  - The "one source, one session" premise needed a correction: a source
+    holds at most one REAL session plus at most its own source-scoped
+    synthetic session. Measured on the whole live hub (read-only,
+    2026-11-19): 292 claude-code sources mix a real session with their own
+    synthetic companion (subagent started/result records carry no
+    sessionId); 0 sources hold two real sessions, a foreign synthetic
+    session, more than two sessions, or a synthetic session spanning
+    sources. Synthetic sessions are therefore never selectable on their
+    own (they follow their source), and the invariant is pinned by
+    internal/store TestNoSourceHoldsTwoRealSessions.
+  - Reallow must restore the source row at the PURGED cursor, never at 0:
+    cursor 0 would make the device rewind and replay the whole retained
+    file back into the hub (resurrection). With the purged cursor, the
+    device's probe reconciles and history resumes from the purge point; a
+    below-cursor replay then fails the existing no-stored-record rule.
+    tla/Sync.tla pins this: PurgeSource freezes hubCursor; the mutation
+    that resets it to 0 is caught (WireAckLeCommit fires first).
+  - The endpoint maps the purge refusal (store.ErrSourcePurged) to
+    CodeRejected, which the uploader treats as a per-source block carrying
+    the hub's message — so the remedy text ("ohya sources reallow <id>")
+    reaches the device log without any protocol change. Revocation of the
+    device still wins over reallow (Auth.tla, checked).
+  - Purge model cost: SyncConcurrent grew 53k → 929k states with the
+    purge dimension (MaxPurges=1); Auth.cfg 515k → 4.6M. Liveness cfg sets
+    MaxPurges=0 — a purged source legitimately stops syncing, so
+    EventualSync needed the "or below a purge mark" escape. One Auth
+    mutation survives by design (dropping Upload's srcReg guard changes no
+    authorization state; the storage content of the refusal is owned by
+    Sync.tla) — documented beside the existing survived-mutation
+    precedent.
+  - Migration 008 forces one more size-aware recovery copy at the next
+    setup run (release-operations "Purge and recovery points"); freed
+    pages stay in the file — no VACUUM by design.
+

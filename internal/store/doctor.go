@@ -58,7 +58,7 @@ func (d *DB) MaxParserVersions(ctx context.Context) (map[string]int, error) {
 }
 
 func (d *DB) ReadOnlySourceState(ctx context.Context, id string) (SourceState, error) {
-	return sourceState(ctx, d.readers, id)
+	return sourceState(ctx, d.readers, id, "")
 }
 
 func (d *DB) FTSIndexConsistent(ctx context.Context) error {
@@ -74,7 +74,15 @@ func (d *DB) FTSIndexConsistent(ctx context.Context) error {
 		return fmt.Errorf("store: open integrity snapshot connection: %w", err)
 	}
 	defer dst.Close()
-	src, err := d.readers.Conn(ctx)
+	readers := d.readers
+	if readers == nil {
+		readers, err = d.Reader()
+		if err != nil {
+			return err
+		}
+		defer readers.Close()
+	}
+	src, err := readers.Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("store: open reader connection: %w", err)
 	}

@@ -141,6 +141,22 @@ copy leaves no partial recovery point behind: the copy is staged under a
 hidden directory and renamed into place only after it succeeds, and staging
 left by a killed run is removed on the next run.
 
+## Purge and recovery points
+
+Migration 008 (`purged_sources`, [ADR 0013](adr/0013-owner-scoped-session-purge.md))
+is schema-only, but the next `ohya setup` run after the upgrade takes one
+more full recovery copy, so the cost above applies once per hub. Beyond that:
+
+- `ohya purge` frees pages but does not shrink the database file; the freed
+  pages are reused by later writes. Shrinking needs an operator-run VACUUM,
+  which is deliberately not part of the command.
+- A recovery copy taken before a purge still contains the purged data, and
+  restoring it undoes the purge completely — the deleted rows return and the
+  tombstones vanish, so devices keep syncing normally afterwards. Treat every
+  pre-purge recovery point as still holding everything the purge removed, and
+  prune recovery points after a deliberate purge if the removed data must not
+  survive in copies.
+
 ## Current verification limits
 
 - v0.1.0 (commit `8fb3d2e`, dirty=false) was published on 2026-11-15 for

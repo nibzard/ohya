@@ -197,6 +197,8 @@ func (u *Uploader) Sync(ctx context.Context, candidates []string) (stats Stats, 
 	u.observer.Set("watch_sources", float64(len(u.stops)), "stopped")
 	u.observer.Set("watch_sources", float64(len(u.blocked)), "blocked")
 	defer func() {
+		u.observer.Set("watch_sources", float64(len(u.stops)), "stopped")
+		u.observer.Set("watch_sources", float64(len(u.blocked)), "blocked")
 		if ferr := u.watcher.Flush(); ferr != nil {
 			u.logf("persist acknowledgments: %v", ferr)
 			u.observer.Add("upload_failures", 1, "checkpoint")
@@ -290,6 +292,11 @@ func (u *Uploader) noteLoss(o watch.Outcome) {
 		}
 		delete(u.seen, old)
 		delete(u.lossReported, old)
+		delete(u.stops, old)
+		delete(u.blocked, old)
+		delete(u.idle, old)
+		delete(u.ready, old)
+		delete(u.gapReported, old)
 	case o.Missing:
 		if u.lossReported[o.SourceID] {
 			return
@@ -313,13 +320,16 @@ func (u *Uploader) noteLoss(o watch.Outcome) {
 }
 
 func (u *Uploader) syncSource(ctx context.Context, o watch.Outcome, stats *Stats) error {
+	if u.blocked[o.SourceID] {
+		if !o.Missing {
+			stats.Sources++
+		}
+		return nil
+	}
 	if o.Missing {
 		return u.checkGap(ctx, o)
 	}
 	stats.Sources++
-	if u.blocked[o.SourceID] {
-		return nil
-	}
 	if !u.ready[o.SourceID] {
 		cursor, ok, err := u.prepare(ctx, o)
 		if err != nil || !ok {
@@ -379,6 +389,7 @@ func (u *Uploader) syncSource(ctx context.Context, o watch.Outcome, stats *Stats
 				u.event(observe.LevelWarn, observe.EventCheckpointFailed, "upload", nil)
 				return nil
 			}
+			delete(u.stops, o.SourceID)
 			u.advances++
 			u.observer.Add("upload_ack_bytes", uint64(ack.Cursor-o.Cursor))
 			u.advanceBacklog(ack.Cursor - o.Cursor)
@@ -486,7 +497,7 @@ func (u *Uploader) batchRefused(ctx context.Context, o watch.Outcome, perr *hubs
 		if err != nil {
 			return 0, false, err
 		}
-		if perr2 == nil && hub < o.Cursor {
+		if perr2 == nil && hub != o.Cursor {
 			cursor, ok := u.reconcile(o, hub)
 			return cursor, ok, nil
 		}
@@ -706,9 +717,13 @@ func (u *Uploader) logf(format string, args ...any) {
 func (u *Uploader) updateBacklog(outcomes []watch.Outcome) {
 	var pending int64
 	for _, o := range outcomes {
-		if !o.Missing {
-			pending += o.End - o.Cursor
+		if o.Missing || u.blocked[o.SourceID] {
+			continue
 		}
+		if s, ok := u.stops[o.SourceID]; ok && s.offset == o.Cursor && s.end == o.End && s.modTime.Equal(o.ModTime) {
+			continue
+		}
+		pending += o.End - o.Cursor
 	}
 	now := time.Now()
 	switch {

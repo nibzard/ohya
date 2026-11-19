@@ -178,6 +178,7 @@ type ingestor struct {
 	noProgress      map[string]noProgressMark
 	tails           map[string]int64
 	registered      map[string]string
+	purged          map[string]bool
 	workspacesDue   bool
 }
 
@@ -198,7 +199,7 @@ func newIngestor(hub *store.DB, w *watch.Watcher, agent, deviceID string, maxRec
 		hub: hub, watcher: w, agent: agent, deviceID: deviceID,
 		maxRecordBytes: maxRecordBytes, stderr: stderr, observer: observer, events: events, reported: map[string]int64{},
 		missingReported: map[string]bool{}, noProgress: map[string]noProgressMark{}, tails: map[string]int64{},
-		registered: map[string]string{}, workspacesDue: true,
+		registered: map[string]string{}, purged: map[string]bool{}, workspacesDue: true,
 	}
 }
 
@@ -265,15 +266,25 @@ func (r *ingestor) poll(ctx context.Context, dirs []agentDir, allowEmpty bool) (
 				delete(r.noProgress, o.ReplacedSourceID)
 				delete(r.tails, o.ReplacedSourceID)
 				delete(r.registered, o.ReplacedSourceID)
+				delete(r.purged, o.ReplacedSourceID)
 			}
 			if o.Reason != "new file" {
 				fmt.Fprintf(r.stderr, "ohya: %s: new source %s re-imports from byte zero: %s\n",
 					o.Path, o.SourceID, o.Reason)
 			}
 		}
+		if r.purged[o.SourceID] {
+			continue
+		}
 		if r.registered[o.SourceID] != o.Path {
 			if err := r.hub.RegisterSource(ctx, o.SourceID, r.deviceID, r.agent, o.Path); err != nil {
 				r.reportSource(o.Path, err)
+				if errors.Is(err, store.ErrSourcePurged) {
+					r.purged[o.SourceID] = true
+					delete(r.registered, o.SourceID)
+					delete(r.tails, o.SourceID)
+					continue
+				}
 				r.observer.Add("ingest_failures", 1, "commit")
 				r.event(observe.LevelWarn, observe.EventCommitFailed, "register", nil)
 				stats.failed++
@@ -300,6 +311,12 @@ func (r *ingestor) poll(ctx context.Context, dirs []agentDir, allowEmpty bool) (
 		inserted, committed, stop, err := r.ingestSource(ctx, o)
 		if err != nil {
 			r.reportSource(o.Path, err)
+			if errors.Is(err, store.ErrSourcePurged) {
+				r.purged[o.SourceID] = true
+				delete(r.registered, o.SourceID)
+				delete(r.tails, o.SourceID)
+				continue
+			}
 			stats.failed++
 			pendingComplete += o.End - o.Cursor
 			if errors.Is(err, store.ErrSourceNotRegistered) {
@@ -395,7 +412,9 @@ func (r *ingestor) ingestSource(ctx context.Context, o watch.Outcome) (int, int6
 		if chunk.Cursor > 0 {
 			st, err := r.hub.SourceState(ctx, o.SourceID)
 			if err != nil {
-				r.observer.Add("ingest_failures", 1, "read")
+				if !errors.Is(err, store.ErrSourcePurged) {
+					r.observer.Add("ingest_failures", 1, "read")
+				}
 				return inserted, o.Cursor, nil, err
 			}
 			opts.FirstNative = st.FirstNativeID
@@ -433,9 +452,10 @@ func (r *ingestor) ingestSource(ctx context.Context, o watch.Outcome) (int, int6
 				Events:   res.Events,
 			})
 			if err != nil {
-				if errors.Is(err, store.ErrBatchRejected) {
+				switch {
+				case errors.Is(err, store.ErrBatchRejected), errors.Is(err, store.ErrSourcePurged):
 					r.observer.Add("ingest_batches", 1, "rejected")
-				} else {
+				default:
 					r.observer.Add("ingest_batches", 1, "rolled_back")
 					r.event(observe.LevelWarn, observe.EventCommitFailed, "ingest", nil)
 				}

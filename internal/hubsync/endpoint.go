@@ -290,7 +290,7 @@ func (e *Endpoint) handleBatch(ctx context.Context, w io.Writer, deviceID string
 	var st store.SourceState
 	err = Retry(ctx, e.opts.Retry, permanentStoreError, func() error {
 		var err error
-		st, err = e.db.SourceState(ctx, b.SourceID)
+		st, err = e.db.SourceStateForDevice(ctx, b.SourceID, deviceID)
 		return err
 	})
 	if err != nil {
@@ -505,7 +505,8 @@ func permanentStoreError(err error) bool {
 	return errors.Is(err, store.ErrBatchRejected) ||
 		errors.Is(err, store.ErrObservationRejected) ||
 		errors.Is(err, store.ErrSourceOwnership) ||
-		errors.Is(err, store.ErrSourceNotRegistered)
+		errors.Is(err, store.ErrSourceNotRegistered) ||
+		errors.Is(err, store.ErrSourcePurged)
 }
 
 func storeErrorCode(err error) ErrorCode {
@@ -514,7 +515,8 @@ func storeErrorCode(err error) ErrorCode {
 		return CodeOwnership
 	case errors.Is(err, store.ErrSourceNotRegistered):
 		return CodeUnknownSource
-	case errors.Is(err, store.ErrBatchRejected), errors.Is(err, store.ErrObservationRejected):
+	case errors.Is(err, store.ErrBatchRejected), errors.Is(err, store.ErrObservationRejected),
+		errors.Is(err, store.ErrSourcePurged):
 		return CodeRejected
 	default:
 		return CodeInternal
