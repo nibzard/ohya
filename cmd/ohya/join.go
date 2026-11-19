@@ -10,6 +10,9 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -53,6 +56,8 @@ func runJoinCommand(args []string, stdout, stderr io.Writer) error {
 	c := newCommandFlags(joinSpec)
 	state := c.fs.String("state", filepath.Join(home, ".ohya", "join"),
 		"join state `directory`: device identity, pairing credential, hub address, and this hub's upload checkpoints")
+	codeEnv := c.fs.String("join-code-env", "",
+		"environment variable holding the join code (avoids exposing it in process listings)")
 	rootFlags := newAgentRootFlags(c.fs, home)
 	allowEmpty := c.fs.Bool("allow-empty", false, "wait for session roots that do not yet exist")
 	interval := c.fs.Duration("interval", 2*time.Second,
@@ -68,6 +73,24 @@ func runJoinCommand(args []string, stdout, stderr io.Writer) error {
 	}
 	if c.fs.NArg() == 1 {
 		code = c.fs.Arg(0)
+	}
+	if *codeEnv != "" {
+		if code != "" {
+			return c.usageErrorf("pass either a positional join code or --join-code-env, not both")
+		}
+		if !regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString(*codeEnv) {
+			return c.usageErrorf("invalid join code environment variable name")
+		}
+		code = strings.TrimSpace(os.Getenv(*codeEnv))
+		if code == "" {
+			return c.usageErrorf("join code environment variable is empty")
+		}
+		if _, _, err := parseJoinCode(code); err != nil {
+			return c.usageErrorf("join code environment variable does not hold one: %v", err)
+		}
+		if err := os.Unsetenv(*codeEnv); err != nil {
+			return err
+		}
 	}
 	if *interval <= 0 {
 		return c.usageErrorf("--interval must be positive")
@@ -150,7 +173,11 @@ func runJoin(ctx context.Context, o joinOptions) error {
 	dial := func(ctx context.Context) (net.Conn, error) { return node.Dial(ctx, hubAddr) }
 	errs := make(chan error, len(o.roots))
 	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	var wg sync.WaitGroup
+	defer func() {
+		cancel()
+		wg.Wait()
+	}()
 	for _, root := range o.roots {
 		w, err := watch.New(o.stateDir, root.agent, watch.Options{Observer: telem.observer()})
 		if err != nil {
@@ -167,7 +194,9 @@ func runJoin(ctx context.Context, o joinOptions) error {
 			return err
 		}
 		dirs := root.dirs
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			errs <- up.Run(runCtx, func() ([]string, error) {
 				return discoverSessionFiles(dirs, o.allowEmpty)
 			})
@@ -176,10 +205,12 @@ func runJoin(ctx context.Context, o joinOptions) error {
 	select {
 	case <-ctx.Done():
 		cancel()
+		wg.Wait()
 		drainDevice(node)
 		return nil
 	case err := <-errs:
 		cancel()
+		wg.Wait()
 		drainDevice(node)
 		return err
 	}
@@ -288,7 +319,9 @@ func reportJoinBacklog(stateDir string, roots []agentRoot, stderr io.Writer) {
 			if err != nil {
 				continue
 			}
-			pending += info.Size() - byPath[path]
+			if delta := info.Size() - byPath[path]; delta > 0 {
+				pending += delta
+			}
 		}
 	}
 	fmt.Fprintf(stderr, "ohya: upload backlog: %d bytes\n", pending)
