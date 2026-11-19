@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -1009,5 +1011,101 @@ func TestRewindRefusesChangedBytes(t *testing.T) {
 	f.Close()
 	if err := w.Rewind(path, o.SourceID, 0); err == nil {
 		t.Fatal("Rewind over rewritten bytes succeeded")
+	}
+}
+
+func TestInPlaceRewriteWithRestoredMtimeDetectedByCtime(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.jsonl")
+	writeFile(t, path, "0123456789\n")
+
+	w := mustNew(t, dir)
+	first := sole(t, poll(t, w, path))
+	ingestAll(t, w, []Outcome{first})
+	origInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origMod := origInfo.ModTime()
+	_ = poll(t, w, path)
+
+	time.Sleep(15 * time.Millisecond)
+	f, err := os.OpenFile(path, os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteAt([]byte("Z"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, origMod, origMod); err != nil {
+		t.Fatal(err)
+	}
+
+	outcome := sole(t, poll(t, w, path))
+	if !outcome.Fresh || outcome.SourceID == first.SourceID {
+		t.Fatalf("outcome = %+v, want a fresh source after same-size mtime-restored rewrite", outcome)
+	}
+}
+
+func TestTransientFingerprintReadErrorRetriesNextPoll(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads mode-0 files")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.jsonl")
+	writeFile(t, path, "0123456789\n")
+
+	w := mustNew(t, dir)
+	first := sole(t, poll(t, w, path))
+	ingestAll(t, w, []Outcome{first})
+
+	f, err := os.OpenFile(path, os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteAt([]byte("X"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+
+	during := sole(t, poll(t, w, path))
+	if during.Fresh || during.SourceID != first.SourceID {
+		t.Fatalf("during unreadable poll = %+v, want checkpoint kept", during)
+	}
+
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	after := sole(t, poll(t, w, path))
+	if !after.Fresh || after.SourceID == first.SourceID {
+		t.Fatalf("after readable poll = %+v, want rewrite caught on retry", after)
+	}
+}
+
+type stubReaderAt func(p []byte, off int64) (int, error)
+
+func (fn stubReaderAt) ReadAt(p []byte, off int64) (int, error) { return fn(p, off) }
+
+func TestFingerprintReaderDistinguishesIOErrorFromShortRead(t *testing.T) {
+	_, err := fingerprintReader(stubReaderAt(func([]byte, int64) (int, error) {
+		return 0, syscall.EIO
+	}), "/fake.jsonl", 10, 10)
+	if err == nil || errors.Is(err, errShortRead) || !errors.Is(err, syscall.EIO) {
+		t.Fatalf("EIO error = %v, want wrapped EIO and not errShortRead", err)
+	}
+	_, err = fingerprintReader(stubReaderAt(func([]byte, int64) (int, error) {
+		return 3, io.EOF
+	}), "/fake.jsonl", 10, 10)
+	if !errors.Is(err, errShortRead) {
+		t.Fatalf("EOF error = %v, want errShortRead", err)
 	}
 }

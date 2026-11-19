@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"maps"
 	"os"
@@ -72,6 +73,7 @@ type probe struct {
 	identity string
 	size     int64
 	modTime  time.Time
+	ctime    int64
 }
 
 func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
@@ -88,7 +90,12 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 		if err != nil || !info.Mode().IsRegular() {
 			continue
 		}
-		probes[norm] = probe{identity: platformFileIdentity(info), size: info.Size(), modTime: info.ModTime()}
+		probes[norm] = probe{
+			identity: platformFileIdentity(info),
+			size:     info.Size(),
+			modTime:  info.ModTime(),
+			ctime:    platformFileChangeTime(info),
+		}
 	}
 
 	byIdentity := make(map[string]string, len(probes))
@@ -153,12 +160,15 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 			}
 		}
 		w.state.Sources = moved
-		for key, target := range moves {
-			if pr, ok := w.lastPass[key]; ok {
-				w.lastPass[target] = pr
-				delete(w.lastPass, key)
+		movedPass := make(map[string]probe, len(w.lastPass))
+		for key, pr := range w.lastPass {
+			if target, ok := moves[key]; ok {
+				movedPass[target] = pr
+			} else {
+				movedPass[key] = pr
 			}
 		}
+		w.lastPass = movedPass
 		changed = true
 	}
 
@@ -179,6 +189,7 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 		observedBytes += pr.size
 		reason := ""
 		watchEvent := ""
+		verified := true
 		switch {
 		case pr.identity != entry.FileIdentity:
 			reason = "platform file identity changed: the path holds a different file incarnation"
@@ -188,9 +199,13 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 				pr.size, entry.CursorBytes)
 			watchEvent = "truncation"
 		case w.lastPass[key] != pr:
-			reason, watchEvent = w.verifyFingerprint(key, entry)
+			reason, watchEvent, verified = w.verifyFingerprint(key, entry)
 		}
-		w.lastPass[key] = pr
+		if verified {
+			w.lastPass[key] = pr
+		} else {
+			delete(w.lastPass, key)
+		}
 		if reason == "" {
 			outcomes = append(outcomes, Outcome{
 				Path: key, SourceID: entry.SourceID,
@@ -265,18 +280,20 @@ func (w *Watcher) Flush() error {
 	return nil
 }
 
-func (w *Watcher) verifyFingerprint(path string, entry sourceCheckpoint) (string, string) {
+func (w *Watcher) verifyFingerprint(path string, entry sourceCheckpoint) (string, string, bool) {
 	if entry.CursorBytes == 0 {
-		return "", ""
+		return "", "", true
 	}
 	sum, err := w.fingerprint(path, entry.CursorBytes, entry.FingerprintWindow)
 	switch {
 	case err == nil && sum != entry.FingerprintSHA256:
-		return "content before the acknowledged cursor changed: the file was rewritten in place", "replacement"
+		return "content before the acknowledged cursor changed: the file was rewritten in place", "replacement", true
+	case err == nil:
+		return "", "", true
 	case errors.Is(err, errShortRead):
-		return "the acknowledged prefix became unreadable during verification: the file shrank", "truncation"
+		return "the acknowledged prefix became unreadable during verification: the file shrank", "truncation", true
 	default:
-		return "", ""
+		return "", "", false
 	}
 }
 
@@ -396,6 +413,12 @@ func (w *Watcher) checkpoint(p string, entry sourceCheckpoint, end int64) error 
 	entry.FingerprintWindow = window
 	entry.FingerprintSHA256 = sum
 	w.state.Sources[p] = entry
+	w.lastPass[p] = probe{
+		identity: platformFileIdentity(info),
+		size:     info.Size(),
+		modTime:  info.ModTime(),
+		ctime:    platformFileChangeTime(info),
+	}
 	w.dirty = true
 	return nil
 }
@@ -437,13 +460,20 @@ func fingerprintFile(path string, cursor, window int64) (string, error) {
 		return "", fmt.Errorf("watch: open %s: %w", path, err)
 	}
 	defer f.Close()
+	return fingerprintReader(f, path, cursor, window)
+}
+
+func fingerprintReader(r io.ReaderAt, path string, cursor, window int64) (string, error) {
 	buf := make([]byte, window)
-	n, err := f.ReadAt(buf, cursor-window)
-	if n < int(window) {
-		return "", errShortRead
-	}
+	n, err := r.ReadAt(buf, cursor-window)
 	if err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return "", errShortRead
+		}
 		return "", fmt.Errorf("watch: read %s: %w", path, err)
+	}
+	if int64(n) < window {
+		return "", errShortRead
 	}
 	digest := sha256.Sum256(buf)
 	return hex.EncodeToString(digest[:]), nil
