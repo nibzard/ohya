@@ -17,7 +17,7 @@ const AgentName = "codex"
 
 const SyntheticNativeIDPrefix = "ohya-synthetic:"
 
-const OutputVersion = 3
+const OutputVersion = 4
 
 const DefaultMaxRecordBytes = 32 << 20
 

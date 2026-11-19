@@ -39,7 +39,7 @@ func Resolve(path string) (Observation, error) {
 	}
 	config, err := readBounded(filepath.Join(commonDir(gitDir), "config"), maxConfigBytes)
 	switch {
-	case gone(err) || errors.Is(err, errTooLarge):
+	case gone(err) || errors.Is(err, errTooLarge) || errors.Is(err, errNotRegular):
 		return none, nil
 	case err != nil:
 		return none, fmt.Errorf("workspace: %s: read git config: %w", path, err)
@@ -73,7 +73,7 @@ func findGitDir(dir string) (string, error) {
 func pointedGitDir(dir, dotGit string) (string, error) {
 	data, err := readBounded(dotGit, maxPointerBytes)
 	switch {
-	case gone(err) || errors.Is(err, errTooLarge):
+	case gone(err) || errors.Is(err, errTooLarge) || errors.Is(err, errNotRegular):
 		return "", nil
 	case err != nil:
 		return "", fmt.Errorf("workspace: read %s: %w", dotGit, err)
@@ -123,12 +123,21 @@ func repoFromRemote(url string) string {
 
 var errTooLarge = errors.New("workspace: file exceeds its size bound")
 
+var errNotRegular = errors.New("workspace: path is not a regular file")
+
 func readBounded(path string, max int64) ([]byte, error) {
-	f, err := os.Open(path)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errNotRegular
+	}
 	data, err := io.ReadAll(io.LimitReader(f, max+1))
 	if err != nil {
 		return nil, err

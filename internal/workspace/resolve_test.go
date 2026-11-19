@@ -3,6 +3,7 @@ package workspace
 import (
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
 
@@ -147,6 +148,23 @@ func TestResolveOversizedConfigHasNoRepository(t *testing.T) {
 	writeFile(t, filepath.Join(repo, ".git", "config"), "[remote \"origin\"]\n\turl = https://github.com/x/a\n"+string(big))
 	if got := resolve(t, repo); got != "" {
 		t.Errorf("oversized config resolves to %q", got)
+	}
+}
+
+func TestResolveDoesNotHangOnFIFOConfigOrCommonDir(t *testing.T) {
+	repo := t.TempDir()
+	gitDir := filepath.Join(repo, ".git")
+	if err := os.MkdirAll(gitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(gitDir, "config"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(gitDir, "commondir"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolve(t, repo); got != "" {
+		t.Fatalf("FIFO git metadata resolved to %q, want empty", got)
 	}
 }
 
