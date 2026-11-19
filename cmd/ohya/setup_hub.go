@@ -15,6 +15,10 @@ import (
 
 const hubIdentityWait = 60 * time.Second
 
+const hubProbeWait = 30 * time.Second
+
+const hubProbeRetry = 2 * time.Second
+
 const deviceJoinCommand = "curl -fsSL https://github.com/nibzard/ohya/releases/latest/download/install.sh | sh -s -- --join"
 
 const upgradeCommand = "curl -fsSL https://github.com/nibzard/ohya/releases/latest/download/install.sh | sh"
@@ -23,11 +27,25 @@ func checkHubSetup(ctx context.Context, state string) error {
 	if err := waitForHubAddress(ctx, state); err != nil {
 		return err
 	}
-	_, err := address.ProbeHub(ctx, state)
-	if err != nil {
-		return hubProbeFailure(err)
+	return probeHubWithRetry(ctx, state, hubProbeWait, hubProbeRetry, address.ProbeHub)
+}
+
+func probeHubWithRetry(ctx context.Context, state string, wait, retry time.Duration, probe func(context.Context, string) (address.HubInfo, error)) error {
+	deadline := time.Now().Add(wait)
+	for {
+		_, err := probe(ctx, state)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, address.ErrHubUnreachable) || !time.Now().Before(deadline) {
+			return hubProbeFailure(err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(retry):
+		}
 	}
-	return nil
 }
 
 func waitForHubAddress(ctx context.Context, state string) error {

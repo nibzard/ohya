@@ -108,3 +108,10 @@ Each failure names the cause and one next step. The required cases:
 - Setup gains a hub mode with its own owned service file and receipt.
 - The README section "Share memory across machines" shrinks to the two
   steps.
+- The hub check retries for up to 30 s while the hub stays unreachable
+  through its relay (renewed 2026-11-19, T145 repair): the identity file
+  the check waits for appears before the serve service finishes connecting
+  to its relay, and a fresh relay path can also exceed the transport's
+  10 s ping budget under load. The old single probe failed that window and
+  told the user to rerun setup; the retry performs that rerun in-process.
+  A relay that cannot be reached at all still fails on the first attempt.

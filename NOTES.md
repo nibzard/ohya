@@ -1984,3 +1984,23 @@ How to use this file:
   - Gaps stated in the doc: relay-path and macOS pairs unmeasured (no
     second host, no darwin machine); the knobs make both a run away.
 
+- Transport e2e under parallel test load (observed 2026-11-19, T145 repair):
+  `TestHubSetupTwoStepFlow` failed 2 of 3 full `go test ./...` runs on this
+  VM (never isolated, never in CI) at the hub relay probe — tailcat v0.7.0's
+  `Client.ping` wraps its own 10 s deadline, and the setup probe fired the
+  moment the identity file appeared, before the child serve finished
+  connecting to its relay. `checkHubSetup` now retries `ErrHubUnreachable`
+  for 30 s (ADR 0012 consequence); `ErrRelayUnreachable` still fails on the
+  first attempt. Same lesson for any new first-write frame after hello: a
+  hub that refuses mid-handshake (CodeBusy closes before reading) resets
+  the device's write, and only `roundTrip`'s 100 ms error-frame recovery
+  read classifies it — the capability negotiation initially missed that
+  branch and lost the busy classification (found by `TestBusyHubRetries`
+  under load; every new post-hello exchange must mirror the recovery read).
+  `TestQueryBusyFailsFastAndRecovers` (internal/mcpserver) can also miss
+  under CPU starvation: it closes `started` before its goroutine enters the
+  single concurrency slot, so a starved slow query lets `SELECT 1` poll
+  succeed for the whole 5 s window; unattributed to any T145 change — if it
+  recurs, close the channel after the query takes the slot (engine hook) or
+  poll for a busy-observed flag instead.
+

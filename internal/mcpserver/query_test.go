@@ -310,25 +310,33 @@ func TestQueryBusyFailsFastAndRecovers(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	slow := `WITH RECURSIVE c(n) AS (VALUES(0) UNION ALL SELECT n+1 FROM c WHERE n < 1000000000) SELECT sum(n) FROM c`
-	started := make(chan struct{})
+	busy := make(chan error, 1)
+	stop := make(chan struct{})
 	go func() {
-		close(started)
-		_, _ = e.Query(ctx, slow)
-	}()
-	<-started
-	deadline := time.Now().Add(5 * time.Second)
-	var busy error
-	for time.Now().Before(deadline) {
-		_, busy = e.Query(context.Background(), `SELECT 1`)
-		if errors.Is(busy, ErrBusy) {
-			break
+		for {
+			_, err := e.Query(context.Background(), `SELECT 1`)
+			if errors.Is(err, ErrBusy) {
+				busy <- err
+				cancel()
+				return
+			}
+			select {
+			case <-stop:
+				return
+			case <-time.After(50 * time.Millisecond):
+			}
 		}
-		time.Sleep(50 * time.Millisecond)
+	}()
+	_, _ = e.Query(ctx, slow)
+	close(stop)
+	select {
+	case err := <-busy:
+		if !errors.Is(err, ErrBusy) {
+			t.Fatalf("second query error = %v, want ErrBusy", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the slow query never crowded out the second query")
 	}
-	if !errors.Is(busy, ErrBusy) {
-		t.Fatalf("second query error = %v, want ErrBusy", busy)
-	}
-	cancel()
 	time.Sleep(100 * time.Millisecond)
 	mustQuery(t, e, `SELECT 1`)
 }

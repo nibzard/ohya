@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nibzard/ohya/internal/hubsync"
 	"github.com/nibzard/ohya/internal/setup"
@@ -71,5 +73,48 @@ func TestCheckHubIdentityReportsMissingIdentity(t *testing.T) {
 	f := checkHubIdentity(t.TempDir())
 	if f.Severity != sevWarn || !strings.Contains(f.Detail, "no hub identity") || !strings.Contains(f.Remedy, "ohya setup --hub") {
 		t.Fatalf("finding = %+v", f)
+	}
+}
+
+func TestProbeHubWithRetryWaitsForTheServiceToAnswer(t *testing.T) {
+	attempts := 0
+	probe := func(context.Context, string) (address.HubInfo, error) {
+		attempts++
+		if attempts < 3 {
+			return address.HubInfo{}, fmt.Errorf("%w: no answer yet", address.ErrHubUnreachable)
+		}
+		return address.HubInfo{}, nil
+	}
+	if err := probeHubWithRetry(context.Background(), "", 10*time.Second, time.Millisecond, probe); err != nil {
+		t.Fatalf("retrying probe = %v, want success on the third attempt", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("attempts = %d, want 3", attempts)
+	}
+}
+
+func TestProbeHubWithRetryBoundsTheWaitPerFailureClass(t *testing.T) {
+	hubDown := func(context.Context, string) (address.HubInfo, error) {
+		return address.HubInfo{}, fmt.Errorf("%w: no answer", address.ErrHubUnreachable)
+	}
+	err := probeHubWithRetry(context.Background(), "", 5*time.Millisecond, time.Millisecond, hubDown)
+	if !strings.Contains(err.Error(), "ohya serve") || !strings.Contains(err.Error(), "no answer") {
+		t.Fatalf("persistent hub failure = %v", err)
+	}
+
+	attempts := 0
+	relay := func(context.Context, string) (address.HubInfo, error) {
+		attempts++
+		return address.HubInfo{}, fmt.Errorf("%w: 10.0.0.1 needs outbound HTTPS (TCP 443): refused", address.ErrRelayUnreachable)
+	}
+	err = probeHubWithRetry(context.Background(), "", 10*time.Second, time.Millisecond, relay)
+	if !strings.Contains(err.Error(), "outbound HTTPS (TCP 443)") || attempts != 1 {
+		t.Fatalf("relay failure = %v after %d attempts; want one attempt, no retry", err, attempts)
+	}
+
+	plain := errors.New("state directory unreadable")
+	if err := probeHubWithRetry(context.Background(), "", 10*time.Second, time.Millisecond,
+		func(context.Context, string) (address.HubInfo, error) { return address.HubInfo{}, plain }); err != plain {
+		t.Fatalf("unknown probe error = %v; want it unchanged", err)
 	}
 }
