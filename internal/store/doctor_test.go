@@ -124,3 +124,26 @@ func TestFTSIndexConsistentDetectsCorruption(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestFTSIndexConsistentRespectsCanceledContext(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hub.db")
+	w, err := Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	seedOneIndexedEvent(t, w.Writer())
+
+	ro, err := OpenReadOnly(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := ro.FTSIndexConsistent(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("FTSIndexConsistent with canceled ctx = %v, want context.Canceled", err)
+	}
+}

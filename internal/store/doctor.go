@@ -5,6 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"time"
 
 	"github.com/mattn/go-sqlite3"
 )
@@ -62,14 +65,20 @@ func (d *DB) ReadOnlySourceState(ctx context.Context, id string) (SourceState, e
 }
 
 func (d *DB) FTSIndexConsistent(ctx context.Context) error {
-	mem, err := sql.Open("sqlite3", ":memory:")
+	tmpDir, err := os.MkdirTemp("", "ohya-fts-check-*")
+	if err != nil {
+		return fmt.Errorf("store: create integrity snapshot dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+	snapPath := filepath.Join(tmpDir, "check.db")
+	snap, err := sql.Open("sqlite3", dsn(snapPath, nil))
 	if err != nil {
 		return fmt.Errorf("store: open integrity snapshot: %w", err)
 	}
-	defer mem.Close()
-	mem.SetMaxOpenConns(1)
-	mem.SetMaxIdleConns(1)
-	dst, err := mem.Conn(ctx)
+	defer snap.Close()
+	snap.SetMaxOpenConns(1)
+	snap.SetMaxIdleConns(1)
+	dst, err := snap.Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("store: open integrity snapshot connection: %w", err)
 	}
@@ -101,7 +110,30 @@ func (d *DB) FTSIndexConsistent(ctx context.Context) error {
 			if err != nil {
 				return fmt.Errorf("store: snapshot database: %w", err)
 			}
-			done, stepErr := backup.Step(-1)
+			var stepErr error
+			var done bool
+			for !done {
+				if err := ctx.Err(); err != nil {
+					stepErr = err
+					break
+				}
+				done, stepErr = backup.Step(backupStepPages)
+				if stepErr != nil {
+					break
+				}
+				if !done {
+					timer := time.NewTimer(backupStepYield)
+					select {
+					case <-ctx.Done():
+						timer.Stop()
+						stepErr = ctx.Err()
+					case <-timer.C:
+					}
+					if stepErr != nil {
+						break
+					}
+				}
+			}
 			finishErr := backup.Close()
 			switch {
 			case stepErr != nil:
@@ -117,6 +149,8 @@ func (d *DB) FTSIndexConsistent(ctx context.Context) error {
 		return err
 	}
 	for _, stmt := range []string{
+		`PRAGMA journal_mode = OFF`,
+		`PRAGMA synchronous = OFF`,
 		`DROP TRIGGER events_fts_delete`,
 		`DELETE FROM events WHERE text IS NULL OR length(text) = 0`,
 	} {
