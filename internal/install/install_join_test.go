@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -71,6 +72,7 @@ func runInstaller(ctx context.Context, t *testing.T, script, ca string, stdin *s
 	t.Helper()
 	dir := t.TempDir()
 	cmd := exec.CommandContext(ctx, "sh", append([]string{script}, args...)...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Env = append(append(os.Environ(), env...), "CURL_CA_BUNDLE="+ca, "TMPDIR="+dir)
 	if stdin != nil {
 		cmd.Stdin = stdin

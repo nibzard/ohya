@@ -38,8 +38,10 @@ read_join_code() {
     (exec 3</dev/tty) 2>/dev/null || fail 'install.sh --join found no terminal for the join code; pass --join-code-env NAME with the code in that variable'
     printf 'ohya join code: ' >/dev/tty
     stty -echo </dev/tty 2>/dev/null || fail 'cannot turn off terminal echo; pass --join-code-env NAME'
+    trap 'stty echo </dev/tty 2>/dev/null || true; trap - INT TERM HUP; exit 130' INT TERM HUP
     IFS= read -r join_code </dev/tty || join_code=
-    stty echo </dev/tty
+    stty echo </dev/tty 2>/dev/null || true
+    trap - INT TERM HUP
     [ -n "$join_code" ] || fail 'the join code read from the terminal is empty; pass --join-code-env NAME'
 }
 
