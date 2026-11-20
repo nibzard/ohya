@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/nibzard/ohya/internal/buildinfo"
 	"github.com/nibzard/ohya/internal/mcpserver"
 	"github.com/nibzard/ohya/internal/observe"
 )
@@ -19,7 +20,7 @@ type telemetry struct {
 }
 
 func startTelemetry(stateDir string, observeOn bool, sampleFiles map[string]string, roles ...observe.Role) *telemetry {
-	_, revision, dirty, _ := buildIdentity()
+	_, revision, dirty, _ := buildinfo.Identity()
 	clock := observe.NewSystemClock()
 	instance, err := observe.NewInstance(stateDir, revision, dirty == "true", clock, roles...)
 	if err != nil {

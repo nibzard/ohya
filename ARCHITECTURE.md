@@ -550,7 +550,11 @@ Publish schema and examples in the MCP tool description; permit safe schema
 inspection through SQL. Credentials and internal authorization state are not exposed.
 
 Implemented in `internal/mcpserver` and served by `ohya mcp` on stdio (official
-MCP Go SDK, pinned per ADR 0001). One statement per call is enforced by a local
+MCP Go SDK, pinned per ADR 0001). The initialize result identifies the server
+as `ohya` with the build version from `internal/buildinfo` — the same source
+`ohya version` prints — so every serving path (local stdio, remote stdio, and
+the engine behind the sync frames) reports one build identity, never a
+hardcoded constant. One statement per call is enforced by a local
 scanner before execution, because the driver executes every statement in the
 input and answers with the last one's rows. The authorizer deny-lists
 `load_extension` and `fts3_tokenizer`, allow-lists the schema-inspection pragmas

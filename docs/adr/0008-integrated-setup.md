@@ -149,7 +149,9 @@ installed executable with a rename. The receipt retains the prior hash so an
 interrupted replacement is recoverable. Failed integrated setup leaves the
 installed binary available for repair; it does not attempt a database downgrade.
 
-Release builds set `main.releaseVersion` to the exact tag and retain Go build
+Release builds set `internal/buildinfo.ReleaseVersion` (moved from
+`main.releaseVersion` on 2026-11-20 so the MCP server shares the same build
+identity) to the exact tag and retain Go build
 revision metadata. After installation, setup registers the stable destination
 path, not the temporary download path. Installer diagnostics go to stderr so
 the setup JSON result remains parseable. Native platform validation and release

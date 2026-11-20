@@ -677,6 +677,13 @@ How to use this file:
   and vcs.revision/vcs.modified are absent in those builds (revision and
   dirty print "unknown"). The root alias check (isVersionArg) runs before
   subcommand dispatch, so `ohya ingest --version` stays a usage error.
+  T139 done (2026-11-20): the build identity moved to
+  `internal/buildinfo.Identity()`; `ohya version`, install/status/telemetry,
+  and the MCP initialize serverInfo.version all read it, and release builds
+  inject the tag with `-X github.com/nibzard/ohya/internal/buildinfo.ReleaseVersion`
+  (package.sh updated; the old `main.releaseVersion` symbol is gone — release
+  tooling that sets it must move too). A dev build's serverInfo.version is the
+  pseudo-version (embeds commit + dirty), a release build's is the tag.
   T062 done (2026-11-14): --json on ingest --once, devices list/invite/
   revoke, rederive, version prints one ADR 0005 envelope
   (cmd/ohya/jsonout.go; schema_version 1). Choices worth keeping:
