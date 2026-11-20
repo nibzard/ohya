@@ -169,6 +169,48 @@ statable — deleted, or moved to a place no root watches — prints one
 diagnostic line per disappearance and keeps its checkpoint; it resumes if
 the file returns, and appends written to the new place stay uncaptured
 until that place is a root.
+
+Repeatable `--exclude GLOB` flags (on `ohya ingest`, `ohya join`, and
+`ohya setup`, which passes them into the service it writes) drop matching
+session files at discovery — the single enforcement point in front of
+registration, reading, and upload:
+
+```sh
+ohya ingest --exclude '/home/me/.codex/sessions/rollout-*-guardian-*'
+ohya join --exclude '/home/me/.claude/projects/-home-me-eval/*/*.jsonl'
+```
+
+The glob uses stdlib `path.Match` semantics only: `*` matches within one
+path segment and never crosses `/`, `?` matches one character, and `[...]`
+matches a character class — no `**`, no regex. It is matched against the
+absolute source path (a relative root counts as absolute from the working
+directory), or that path with parent symlinks resolved, so a glob written
+either way works. A malformed glob is a usage error before any pass starts.
+Exclusions are per agent in effect and in accounting: each agent's
+discovery walk applies the globs to its own roots, the `ingest` pass
+summary appends the per-agent skipped counts
+(`; 2 files excluded by --exclude (codex: 2)`), `ingest --once --json`
+carries them as the `excluded` map, and `ohya status` prints one
+`excluded` line per instance from the published
+`discovery_excluded{agent=…}` gauges. An exclusion is never silent: the
+run announces the active globs at startup, join reports each agent's skip
+count whenever it changes, and a source that was already registered prints
+one line saying it stops being captured going forward. An exclusion added
+after the first ingest is a going-forward capture control: its checkpoint
+is kept (capture resumes if the exclusion is removed) and its stored
+sessions stay on the hub — remove those with
+[`ohya purge`](#commands) ([ADR 0013](adr/0013-owner-scoped-session-purge.md)).
+The service written by `ohya setup` carries the flags, and setup saves
+them like the roots, so a regenerated service keeps them
+([ADR 0008](adr/0008-integrated-setup.md)).
+
+Deliberately not built: built-in guardian-class default exclusions (adding
+any would first need marker verification against the local 2,507-file
+Codex corpus — a separate evidence-gated task if ever), regex or
+doublestar patterns, per-source toggles, and hub-side push-down of
+exclusions. The `--<agent>-root ''` opt-out above stays the way to drop a
+whole agent on one machine.
+
 `--max-record-bytes` (default 32 MiB) bounds one record's JSON text — also a
 memory bound, since one record is held in memory up to it.
 The state directory holds `device.json`, the stable device identity,
@@ -562,7 +604,8 @@ publish. Output carries the CLI identity, topology (mode, state
 directory, agent-root counts without paths, owned service loaded/running
 facts), storage sizes with their observation time (a joined client never
 reports its old local database as the hub), one section per instance with
-freshness, liveness, source-state gauges, pending and upload backlog in
+freshness, liveness, source-state gauges, per-agent counts of files
+skipped by `--exclude`, pending and upload backlog in
 bytes, resource readings, and the raw counters, gauges, duration
 histograms, and resources from the snapshot. Findings carry a stable
 code, severity, evidence, and hint: `instance_terminated`,
@@ -729,11 +772,13 @@ under `STATE/setup/clients/*.json.backups/`. Each copy retains the original
 bytes. Uninstall preserves these copies. Restore only the needed settings;
 copying an old file over a current client file can remove later user edits.
 
-Setup saves your agent selection, session roots, client home overrides, and
+Setup saves your agent selection, session roots, discovery exclude globs,
+client home overrides, and
 service and PATH choices. Reruns reuse them. Explicit flags override saved
 choices. For example, use `--agents auto` to resume automatic discovery, or
 `--no-service=false` to enable the service after a previous skipped setup.
-An empty root still disables that source. Provider secrets are never saved.
+An empty root still disables that source, and `--exclude ''` clears saved
+exclude globs. Provider secrets are never saved.
 
 Before local setup restarts ingestion or opens an existing database whose
 schema is older or newer than this build, it saves an owner-only SQLite

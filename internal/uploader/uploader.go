@@ -54,6 +54,7 @@ type Options struct {
 	Resolve        workspace.Resolver
 	Observer       observe.Observer
 	Events         observe.EventSink
+	Excluded       func(path string) bool
 }
 
 type Stats struct {
@@ -311,6 +312,16 @@ func (u *Uploader) noteLoss(o watch.Outcome) {
 			return
 		}
 		u.lossReported[o.SourceID] = true
+		if u.opts.Excluded != nil && u.opts.Excluded(o.Path) {
+			if end, ok := u.seen[o.SourceID]; ok && end > o.Cursor {
+				u.logf("%s: source %s now matches --exclude and stops uploading going forward; bytes [%d, %d) were never uploaded and never will be; stored sessions stay on the hub",
+					o.Path, o.SourceID, o.Cursor, end)
+				return
+			}
+			u.logf("%s: source %s now matches --exclude and stops uploading going forward; the checkpoint is kept and upload resumes only if the exclusion is removed",
+				o.Path, o.SourceID)
+			return
+		}
 		if end, ok := u.seen[o.SourceID]; ok && end > o.Cursor {
 			u.logf("%s: source %s disappeared before upload: bytes [%d, %d) were never uploaded; they upload if the file returns, otherwise they are lost (no outgoing spool)",
 				o.Path, o.SourceID, o.Cursor, end)

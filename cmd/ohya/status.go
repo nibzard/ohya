@@ -106,6 +106,7 @@ type statusInstance struct {
 	Process       string                           `json:"process"`
 	ProcessDetail string                           `json:"process_detail,omitempty"`
 	Sources       statusSources                    `json:"sources"`
+	Excluded      map[string]float64               `json:"excluded,omitempty"`
 	Backlog       *statusBacklog                   `json:"backlog,omitempty"`
 	LastScanMS    *float64                         `json:"last_scan_ms"`
 	Counters      map[string]uint64                `json:"counters,omitempty"`
@@ -551,6 +552,7 @@ func buildStatusInstance(view observe.InstanceView, nowMS int64, probe func(int)
 		instance.ProcessDetail = "no process holds the pid of the newest snapshot"
 	}
 	instance.Sources = statusSourcesFromGauges(snapshot.Gauges)
+	instance.Excluded = statusExcludedFromGauges(snapshot.Gauges)
 	instance.Backlog = statusBacklogFromGauges(snapshot.Gauges)
 	if scan, ok := snapshot.Gauges["discovery_last_scan_ms"]; ok {
 		instance.LastScanMS = &scan
@@ -573,6 +575,19 @@ func statusSourcesFromGauges(gauges map[string]float64) statusSources {
 		Missing: pick("missing"),
 		Unknown: pick("unknown"),
 	}
+}
+
+func statusExcludedFromGauges(gauges map[string]float64) map[string]float64 {
+	var excluded map[string]float64
+	for key, value := range gauges {
+		if after, ok := strings.CutPrefix(key, "discovery_excluded{agent="); ok {
+			if excluded == nil {
+				excluded = map[string]float64{}
+			}
+			excluded[strings.TrimSuffix(after, "}")] = value
+		}
+	}
+	return excluded
 }
 
 func statusBacklogFromGauges(gauges map[string]float64) *statusBacklog {
@@ -771,6 +786,13 @@ func writeStatusInstanceText(w io.Writer, instance statusInstance) {
 	}
 	if len(parts) > 0 {
 		fmt.Fprintf(w, "  sources %s\n", strings.Join(parts, " "))
+	}
+	if len(instance.Excluded) > 0 {
+		excluded := make([]string, 0, len(instance.Excluded))
+		for _, agent := range sortedKeys(instance.Excluded) {
+			excluded = append(excluded, fmt.Sprintf("%s=%.0f", agent, instance.Excluded[agent]))
+		}
+		fmt.Fprintf(w, "  excluded %s\n", strings.Join(excluded, " "))
 	}
 	if instance.Backlog != nil {
 		if instance.Backlog.PendingCompleteBytes != nil {

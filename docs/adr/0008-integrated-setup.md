@@ -294,9 +294,12 @@ An edited executable is preserved and reported as a failure.
 ## Saved choices and failed attempts
 
 Setup saves only an allowlisted set of flags and client home overrides. It
-reuses agent selection, absolute session roots, disabled roots, service choices,
-and PATH choices on reruns. Explicit flags take precedence, including false
-booleans. An automatic agent selection stays automatic for new clients.
+reuses agent selection, absolute session roots, disabled roots, discovery
+exclude globs (repeatable `--exclude`, stored newline-joined and passed
+through to the regenerated service's arguments so later services keep them;
+added 2026-11-20), service choices, and PATH choices on reruns. Explicit
+flags take precedence, including false booleans. An automatic agent
+selection stays automatic for new clients.
 Provider credentials and one-time invitations are excluded from preferences.
 
 Client adapters preserve exact original file bytes in private backups before

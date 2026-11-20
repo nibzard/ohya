@@ -118,10 +118,11 @@ var ingestSpec = commandSpec{
 		"Later polls read only the bytes past each acknowledged checkpoint, so a restart resumes where the last commit ended. " +
 		"All writes commit through one transactional write path; a malformed record stops its source with a diagnostic and never skips bytes. " +
 		"With --once, a pass in which a source failed or stopped exits 3 (degraded); the poll loop keeps running and keeps its stderr diagnostics.\n" +
-		"With --json (needs --once), the pass report is one JSON object instead of the text summary (docs/adr/0005).",
+		"With --json (needs --once), the pass report is one JSON object instead of the text summary (docs/adr/0005).\n" +
+		"Repeatable --exclude GLOB flags skip matching session files at discovery: an excluded path is never registered, read, or sent, the pass summary and ohya status report per-agent skip counts, and already-stored sessions stay on the hub.",
 	argsTitle: "Arguments",
 	args:      "(none)",
-	examples:  []string{"ohya ingest --once", "ohya ingest --db ~/.ohya/hub.db"},
+	examples:  []string{"ohya ingest --once", "ohya ingest --db ~/.ohya/hub.db", "ohya ingest --exclude '/home/me/.codex/sessions/rollout-*-guardian-*'"},
 }
 
 func runIngestCommand(args []string, stdout, stderr io.Writer) error {
@@ -135,6 +136,7 @@ func runIngestCommand(args []string, stdout, stderr io.Writer) error {
 	state := c.fs.String("state", "",
 		"state `directory` for the device identity and checkpoints; defaults to the database directory")
 	rootFlags := newAgentRootFlags(c.fs, home)
+	excludes := newExcludeFlag(c.fs)
 	interval := c.fs.Duration("interval", 2*time.Second,
 		"polling `interval` in continuous mode")
 	allowEmpty := c.fs.Bool("allow-empty", false, "watch missing roots until sessions appear; used by managed setup")
@@ -180,6 +182,7 @@ func runIngestCommand(args []string, stdout, stderr io.Writer) error {
 		dbPath:         *db,
 		stateDir:       stateDir,
 		roots:          roots,
+		excludes:       *excludes,
 		interval:       *interval,
 		once:           *once,
 		allowEmpty:     *allowEmpty,

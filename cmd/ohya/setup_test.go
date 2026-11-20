@@ -2,10 +2,15 @@ package main
 
 import (
 	"bytes"
-	"github.com/nibzard/ohya/internal/setup"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
+
+	"github.com/nibzard/ohya/internal/setup"
 )
 
 func TestSetupCommandDryRun(t *testing.T) {
@@ -152,5 +157,61 @@ func TestSetupPreservesStablePackageManagerLink(t *testing.T) {
 	}
 	if got := stableBinaryPath(actual, other); got != actual {
 		t.Fatalf("adopted another executable: %s", got)
+	}
+}
+
+func TestSetupServicePreservesExcludeFlags(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	state := filepath.Join(t.TempDir(), "state")
+	previous := serviceRunnersHook
+	serviceRunnersHook = func() (func(context.Context, []string) error, func(context.Context, []string) error) {
+		notLoaded := func(context.Context, []string) error { return errors.New("not loaded in tests") }
+		noOp := func(context.Context, []string) error { return nil }
+		return noOp, notLoaded
+	}
+	t.Cleanup(func() { serviceRunnersHook = previous })
+
+	guardian := filepath.Join(home, "guardian", "*")
+	secret := "/opt/sessions/secret-*.jsonl"
+	run := func(extra ...string) {
+		t.Helper()
+		args := append([]string{"setup", "--state", state, "--binary", "/nonexistent-ohya", "--no-agents", "--no-modify-path"}, extra...)
+		var stdout, stderr bytes.Buffer
+		cliMain(args, &stdout, &stderr)
+	}
+	run("--exclude", guardian, "--exclude", secret)
+
+	service, err := setup.ServicePlan(runtime.GOOS, home, state, "/nonexistent-ohya", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := os.ReadFile(service.Path)
+	if err != nil {
+		t.Fatalf("service file: %v", err)
+	}
+	for _, want := range []string{"--exclude", guardian, secret} {
+		if !strings.Contains(string(first), want) {
+			t.Fatalf("planned unit lacks %s:\n%s", want, first)
+		}
+	}
+
+	run()
+	regenerated, err := os.ReadFile(service.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(first, regenerated) {
+		t.Fatalf("a regenerated service lost the exclude flags:\n%s\n%s", first, regenerated)
+	}
+	saved, err := setup.LoadPreferences(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Flags["exclude"] != guardian+"\n"+secret {
+		t.Fatalf("saved excludes = %q", saved.Flags["exclude"])
 	}
 }

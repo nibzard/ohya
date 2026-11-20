@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type Preferences struct {
@@ -27,6 +28,15 @@ func (p Preferences) Validate() error {
 			if value != "" && !filepath.IsAbs(value) {
 				return fmt.Errorf("saved %s must be absolute", name)
 			}
+		case "exclude":
+			if value == "" {
+				continue
+			}
+			for _, glob := range strings.Split(value, "\n") {
+				if err := validSavedExcludeGlob(glob); err != nil {
+					return fmt.Errorf("saved %s: %w", name, err)
+				}
+			}
 		default:
 			return fmt.Errorf("unknown saved setup flag %s", name)
 		}
@@ -40,6 +50,19 @@ func (p Preferences) Validate() error {
 		if path != "" && !filepath.IsAbs(path) {
 			return fmt.Errorf("saved %s must be absolute", name)
 		}
+	}
+	return nil
+}
+
+func validSavedExcludeGlob(glob string) error {
+	switch {
+	case glob == "":
+		return fmt.Errorf("glob is empty")
+	case strings.ContainsAny(glob, "\r\x00"):
+		return fmt.Errorf("glob %q contains a control character", glob)
+	}
+	if _, err := filepath.Match(glob, ""); err != nil {
+		return fmt.Errorf("glob %q: %w", glob, err)
 	}
 	return nil
 }

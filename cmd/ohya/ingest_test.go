@@ -113,6 +113,11 @@ func (e *sliceEnv) session(name string) string {
 
 func (e *sliceEnv) newRunner(t *testing.T, stderr io.Writer) (*ingestor, func()) {
 	t.Helper()
+	return e.newRunnerWithExcludes(t, nil, stderr)
+}
+
+func (e *sliceEnv) newRunnerWithExcludes(t *testing.T, excludes excludeGlobs, stderr io.Writer) (*ingestor, func()) {
+	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(e.dbPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +138,7 @@ func (e *sliceEnv) newRunner(t *testing.T, stderr io.Writer) (*ingestor, func())
 		hub.Close()
 		t.Fatal(err)
 	}
-	return newIngestor(hub, w, e.agent, deviceID, e.maxRecordBytes, stderr, nil, nil), func() { hub.Close() }
+	return newIngestor(hub, w, e.agent, deviceID, e.maxRecordBytes, excludes, stderr, nil, nil), func() { hub.Close() }
 }
 
 func (e *sliceEnv) runPass(t *testing.T) (passStats, string) {
@@ -753,8 +758,8 @@ func TestIngestCrashHelper(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	r := newIngestor(hub, w, agent, deviceID, 0, io.Discard, nil, nil)
-	candidates, err := discoverSessionFiles([]agentDir{{dir: root}}, false)
+	r := newIngestor(hub, w, agent, deviceID, 0, nil, io.Discard, nil, nil)
+	candidates, _, err := discoverSessionFiles([]agentDir{{dir: root}}, nil, false)
 	if err != nil {
 		panic(err)
 	}
@@ -846,8 +851,8 @@ func TestIngestCrashAckHelper(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	r := newIngestor(hub, w, agent, deviceID, 0, io.Discard, nil, nil)
-	candidates, err := discoverSessionFiles([]agentDir{{dir: root}}, false)
+	r := newIngestor(hub, w, agent, deviceID, 0, nil, io.Discard, nil, nil)
+	candidates, _, err := discoverSessionFiles([]agentDir{{dir: root}}, nil, false)
 	if err != nil {
 		panic(err)
 	}
@@ -1012,7 +1017,7 @@ func TestDiscoverSessionFiles(t *testing.T) {
 	writeFile(t, main, "{}\n")
 	writeFile(t, sub, "{}\n")
 
-	files, err := discoverSessionFiles([]agentDir{{dir: root}}, false)
+	files, _, err := discoverSessionFiles([]agentDir{{dir: root}}, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1067,7 +1072,7 @@ func TestDiscoverSessionFilesAcrossDirs(t *testing.T) {
 			[]string{filepath.Join(archived, "rollout-b.jsonl")}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			files, err := discoverSessionFiles(tc.dirs, tc.allowEmpty)
+			files, _, err := discoverSessionFiles(tc.dirs, nil, tc.allowEmpty)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("error = %v, want it to mention %q", err, tc.wantErr)

@@ -86,6 +86,7 @@ func runSetupCommand(args []string, stdout, stderr io.Writer) error {
 	dry := c.fs.Bool("dry-run", false, "report planned changes without writing files")
 	asJSON := c.fs.Bool("json", false, "print one versioned JSON result")
 	roots := newAgentRootFlags(c.fs, home)
+	excludes := newExcludeFlag(c.fs)
 	if config := os.Getenv("CLAUDE_CONFIG_DIR"); config != "" {
 		*roots.claude = filepath.Join(config, "projects")
 	}
@@ -172,6 +173,9 @@ func runSetupCommand(args []string, stdout, stderr io.Writer) error {
 		}
 		preferences.Flags[root.name] = dir
 		serviceArgs = append(serviceArgs, "--"+root.name, dir)
+	}
+	for _, glob := range *excludes {
+		serviceArgs = append(serviceArgs, "--exclude", glob)
 	}
 	if err := preferences.Validate(); err != nil {
 		return err

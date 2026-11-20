@@ -32,6 +32,7 @@ type joinOptions struct {
 	stateDir   string
 	code       string
 	roots      []agentRoot
+	excludes   excludeGlobs
 	interval   time.Duration
 	stderr     io.Writer
 }
@@ -42,7 +43,8 @@ var joinSpec = commandSpec{
 	usageLine: "ohya join [code] [flags]",
 	description: "Pairs this device with a hub using one join code — printed by ohya devices invite on the hub — then uploads every watched agent source: batches of original records, acknowledged durably, retried after reconnects, catching up offline from the retained files. " +
 		"A device that already holds a credential sends its hello to the hub address in the code first: when the hub accepts it, the device keeps its identity, credential, and checkpoints, and the invitation stays unused; when the hub rejects it, join fails with the reason and never pairs as a new device. " +
-		"The join state directory is deliberately its own (default ~/.ohya/join): its checkpoints hold this hub's acknowledgments and must never mix with local ingestion's.",
+		"The join state directory is deliberately its own (default ~/.ohya/join): its checkpoints hold this hub's acknowledgments and must never mix with local ingestion's.\n" +
+		"Repeatable --exclude GLOB flags skip matching session files at discovery, exactly as on ohya ingest: an excluded path is never registered, read, or sent, and ohya status reports the per-agent skip counts.",
 	argsTitle: "Arguments",
 	args:      "<code>  join code from ohya devices invite; omit it to resume an already-paired device",
 	examples:  []string{"ohya join <code>", "ohya join --state ~/.ohya/join <code>"},
@@ -59,6 +61,7 @@ func runJoinCommand(args []string, stdout, stderr io.Writer) error {
 	codeEnv := c.fs.String("join-code-env", "",
 		"environment variable holding the join code (avoids exposing it in process listings)")
 	rootFlags := newAgentRootFlags(c.fs, home)
+	excludes := newExcludeFlag(c.fs)
 	allowEmpty := c.fs.Bool("allow-empty", false, "wait for session roots that do not yet exist")
 	interval := c.fs.Duration("interval", 2*time.Second,
 		"polling `interval` between upload passes")
@@ -108,6 +111,7 @@ func runJoinCommand(args []string, stdout, stderr io.Writer) error {
 		stateDir:   *state,
 		code:       code,
 		roots:      roots,
+		excludes:   *excludes,
 		interval:   *interval,
 		stderr:     stderr,
 	})
@@ -166,7 +170,10 @@ func runJoin(ctx context.Context, o joinOptions) error {
 	if o.pairOnly {
 		return nil
 	}
-	reportJoinBacklog(o.stateDir, o.roots, o.stderr)
+	if len(o.excludes) > 0 {
+		fmt.Fprintf(o.stderr, "ohya: excluding session files matching: %s\n", strings.Join(o.excludes, ", "))
+	}
+	reportJoinBacklog(o.stateDir, o.roots, o.excludes, o.stderr)
 
 	telem := startTelemetry(o.stateDir, o.observe, nil, observe.RoleJoin)
 	defer telem.close()
@@ -183,23 +190,25 @@ func runJoin(ctx context.Context, o joinOptions) error {
 		if err != nil {
 			return err
 		}
+		dirs := root.dirs
+		agent := root.agent
+		observer := telem.observer()
+		discover, excluded := joinDiscover(dirs, agent, o.excludes, o.allowEmpty, observer, o.stderr)
 		up, err := uploader.New(w, cred, dial, uploader.Options{
 			Agent:    root.agent,
 			Interval: o.interval,
 			Observer: telem.observer(),
 			Events:   telem.eventsSink(),
 			Log:      o.stderr,
+			Excluded: excluded,
 		})
 		if err != nil {
 			return err
 		}
-		dirs := root.dirs
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errs <- up.Run(runCtx, func() ([]string, error) {
-				return discoverSessionFiles(dirs, o.allowEmpty)
-			})
+			errs <- up.Run(runCtx, discover)
 		}()
 	}
 	select {
@@ -298,10 +307,31 @@ func reportJoinTransport(ctx context.Context, node *address.Device, hubAddr stri
 	}
 }
 
-func reportJoinBacklog(stateDir string, roots []agentRoot, stderr io.Writer) {
+func joinDiscover(dirs []agentDir, agent string, excludes excludeGlobs, allowEmpty bool, observer observe.Observer, stderr io.Writer) (func() ([]string, error), func(string) bool) {
+	excludedPaths := map[string]bool{}
+	lastExcluded := -1
+	discover := func() ([]string, error) {
+		candidates, excluded, err := discoverSessionFiles(dirs, excludes, allowEmpty)
+		if err != nil {
+			return nil, err
+		}
+		if len(excludes) > 0 {
+			excludedPaths = excludedPathSet(excluded)
+			observer.Set("discovery_excluded", float64(len(excluded)), agent)
+			if len(excluded) != lastExcluded {
+				lastExcluded = len(excluded)
+				fmt.Fprintf(stderr, "ohya: %s: %d session files excluded by --exclude\n", agent, len(excluded))
+			}
+		}
+		return candidates, nil
+	}
+	return discover, func(path string) bool { return excludedPaths[path] }
+}
+
+func reportJoinBacklog(stateDir string, roots []agentRoot, excludes excludeGlobs, stderr io.Writer) {
 	var pending int64
 	for _, root := range roots {
-		candidates, err := discoverSessionFiles(root.dirs, false)
+		candidates, _, err := discoverSessionFiles(root.dirs, excludes, false)
 		if err != nil {
 			continue
 		}

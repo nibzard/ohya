@@ -464,3 +464,46 @@ func TestStatusServicesDetectsDarwinFromReceiptPath(t *testing.T) {
 		t.Fatalf("darwin receipt ran %q, want launchctl", gotCmd)
 	}
 }
+
+func TestStatusReportsExcludedCountsPerAgent(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "hub.db")
+	if err := os.WriteFile(dbPath, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeStatusFixture(t, dir, strings.Repeat("f", 32), os.Getpid(), time.Second, func(s *observe.Snapshot) {
+		s.Gauges["discovery_excluded{agent=codex}"] = 3
+		s.Gauges["discovery_excluded{agent=claude-code}"] = 0
+	})
+	envelope, _, err := runStatusForTest(t, statusArgs(dir, dbPath)...)
+	if err != nil {
+		t.Fatalf("an active exclusion is not degradation: %v", err)
+	}
+	excluded := envelope.Data.Instances[0].Excluded
+	if excluded["codex"] != 3 || excluded["claude-code"] != 0 {
+		t.Fatalf("excluded = %v, want per-agent counts", excluded)
+	}
+	var stdout bytes.Buffer
+	if err := runStatusCommand([]string{"--state", dir, "--db", dbPath}, &stdout, &stdout); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "excluded claude-code=0 codex=3") {
+		t.Fatalf("text output lacks the excluded line: %s", stdout.String())
+	}
+}
+
+func TestStatusWithoutExclusionsOmitsField(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "hub.db")
+	if err := os.WriteFile(dbPath, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeStatusFixture(t, dir, strings.Repeat("1", 32), os.Getpid(), time.Second, nil)
+	_, raw, err := runStatusForTest(t, statusArgs(dir, dbPath)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(raw, "excluded") {
+		t.Fatalf("no exclusion configured, but output mentions excluded: %s", raw)
+	}
+}

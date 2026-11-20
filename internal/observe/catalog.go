@@ -49,6 +49,7 @@ var Catalog = []Metric{
 	{Name: "discovery_errors", Kind: Counter, Labels: []string{"failure_kind"}, Help: "discovery stat and read failures"},
 	{Name: "discovery_duration", Kind: Duration, Help: "discovery scan wall time"},
 	{Name: "discovery_last_scan_ms", Kind: Gauge, Help: "monotonic milliseconds of the last completed scan"},
+	{Name: "discovery_excluded", Kind: Gauge, Labels: []string{"agent"}, Help: "candidate files dropped by --exclude globs in the last discovery scan; published only while exclusions are configured"},
 	{Name: "watch_bytes_observed", Kind: Counter, Help: "source bytes observed by the watcher"},
 	{Name: "watch_read_bytes", Kind: Counter, Help: "bytes read from watched files for verification, checkpoints, and pending records"},
 	{Name: "watch_checkpoint_saves", Kind: Counter, Help: "checkpoint state files durably saved"},

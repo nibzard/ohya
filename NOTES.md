@@ -65,6 +65,41 @@ How to use this file:
   an opener that stops matching (for example a block rewritten to start
   with DELETE) trips the count pin instead.
 
+- Device-side exclude globs landed 2026-11-20 (T147): one repeatable
+  `--exclude GLOB` flag on ingest, join, and setup; one enforcement point
+  (discoverSessionFiles in cmd/ohya/ingest.go — an excluded path is never
+  registered, read, or sent); visible accounting (pass summary clause,
+  `excluded` map in ingest --once --json, `discovery_excluded{agent}`
+  gauge rendered by `ohya status`, startup line naming the globs, join
+  logs each agent's skip count on change). Facts worth keeping:
+  - Matching is filepath.Match (path.Match semantics) against the
+    absolute path or its symlink-resolved form; `*` never crosses `/`, so
+    a deep tree needs a glob per level — deliberately no `**` (operator
+    decision 2026-11-19).
+  - Flag-time validation calls filepath.Match(glob, "") — Go's matchChunk
+    keeps validating a chunk after a mismatch, so `ok[` is caught, but a
+    malformed post-star chunk only surfaces at runtime when an earlier
+    chunk matches; discovery then fails the pass loudly.
+  - An exclusion arriving after registration: the watcher keeps reporting
+    the source Missing (its checkpoint entry survives); ingest and the
+    uploader print one exclusion-specific line instead of the
+    "disappeared" wording by recognizing the missing path in the pass's
+    excluded-path set (both path forms stored, because watch state keys
+    resolve parent symlinks — macOS t.TempDir is /var → /private/var).
+    watch_sources{state=missing} still counts it; the excluded gauge
+    reconciles.
+  - setup stores the globs newline-joined in preferences.Flags["exclude"]
+    (map[string]string forces one string; Set splits on \n, so restore and
+    a pasted multi-line value behave the same); an empty value means no
+    excludes — `--exclude ''` clears the list, the same empty-means-none
+    convention as the root flags, and Set("") must be a no-op clear or
+    every setup rerun over a saved `""` dies with "--exclude glob is
+    empty" (found by the setup e2e suites). Service args carry one
+    `--exclude GLOB` pair each.
+  - Deliberately not built: guardian-class defaults (evidence-gated task
+    against the 2,507-file Codex corpus if ever), regex/doublestar,
+    per-source toggles, hub-side push-down.
+
 - Competitive clock (observed 2026-11-15, openai/codex main): Codex is landing first-party memory (`memories/write`; `memories_1.sqlite` now present in `~/.codex`), a SQLite-backed `message-board` + message-board-mcp crate, and `external-agent-migration` importing Claude Code sessions. Cross-agent, local-first, shared remain ohya's wedge; factor into launch sequencing. Their session search still greps raw JSONL (ripgrep with JSON-escaped terms, search.rs) plus a bolted-on SQLite listing index — converging on ohya's design from both sides.
 
 - Parser format facts cross-checked against agentsview (2026-11-13, commit

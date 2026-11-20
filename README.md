@@ -162,6 +162,14 @@ make build
 ./bin/ohya ingest            # or: keep polling until stopped
 ```
 
+Skip specific session files with a repeatable `--exclude GLOB` (stdlib
+`path.Match` semantics, matched against absolute source paths); skipped
+counts show in the pass summary and `ohya status`:
+
+```sh
+./bin/ohya ingest --exclude '/home/me/.codex/sessions/rollout-*-guardian-*'
+```
+
 Register the MCP server in your agent, for example in Claude Code:
 
 ```json

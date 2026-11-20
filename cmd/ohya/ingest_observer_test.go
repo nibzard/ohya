@@ -135,7 +135,7 @@ func TestIngestIdlePassSkipsRegistrationAndFingerprintReads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := newIngestor(hub, w, claudecode.AgentName, deviceID, e.maxRecordBytes, io.Discard, obs, nil)
+	r := newIngestor(hub, w, claudecode.AgentName, deviceID, e.maxRecordBytes, nil, io.Discard, obs, nil)
 
 	if _, err := r.poll(context.Background(), e.dirs(), false); err != nil {
 		t.Fatal(err)
