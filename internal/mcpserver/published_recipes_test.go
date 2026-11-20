@@ -105,6 +105,24 @@ func openPublishedRecipesHub(t *testing.T) *Engine {
 	return NewEngine(readers, hub.Writer(), EngineOptions{WriterID: "dev1"})
 }
 
+func TestToolDescriptionStatesFtsTermQuoting(t *testing.T) {
+	var ftsExample string
+	for _, para := range strings.Split(ToolDescription(EngineOptions{WriterID: "dev1"}), "\n\n") {
+		if strings.Contains(para, "events_fts MATCH") {
+			ftsExample = para
+			break
+		}
+	}
+	if ftsExample == "" {
+		t.Fatal("tool description lacks the events_fts MATCH example")
+	}
+	for _, want := range []string{"double quotes", `'"auth-refresh"'`} {
+		if !strings.Contains(ftsExample, want) {
+			t.Fatalf("full-text search guidance lacks %q:\n%s", want, ftsExample)
+		}
+	}
+}
+
 func TestPublishedRecipesRunVerbatim(t *testing.T) {
 	e := openPublishedRecipesHub(t)
 	blocks := publishedSQLBlocks(t, ToolDescription(EngineOptions{WriterID: "dev1"}))

@@ -443,12 +443,18 @@ ranking over stored events (the `events` table, so live sessions are
 searchable too) and prints the best 20 matches, each as two lines: the
 event id, session id, agent, repo (`-` when the session stored none), and
 UTC time, then an indented excerpt. The query is SQLite FTS5 syntax, for
-example `error AND panic`, `"exact phrase"`, or `auth OR token`; an
-apostrophe must sit inside a double-quoted phrase, because a bare one is an
-FTS5 syntax error. `--repo` and `--agent` narrow the match to sessions of
-one repository (`host/path`, as stored in `sessions.repo`) or one agent. A
-query with no matches prints `no matches` and exits 0; an FTS5 syntax error
-exits 1 with SQLite's message.
+example `error AND panic`, `"exact phrase"`, or `auth OR token`; a term
+with punctuation — an apostrophe, or a hyphenated directory or branch name
+such as `auth-refresh` — must sit inside double quotes, as in
+`ohya search '"auth-refresh"'`. Left bare, `auth-refresh` parses as the
+term `auth` plus a `-refresh` column filter, and `events_fts` has no such
+column, so the query fails with `no such column: refresh`; other bare
+punctuation, for example `/`, fails with an FTS5 syntax error. `--repo`
+and `--agent` narrow the match to sessions of one repository (`host/path`,
+as stored in `sessions.repo`) or one agent. A query with no matches prints
+`no matches` and exits 0; a
+failed FTS5 parse exits 1 with SQLite's message plus a hint that names the
+double-quote remedy.
 
 `ohya show <session-id>` prints one session's header — agent, device,
 native id, repo, working directory, branch, model, first prompt, timing,

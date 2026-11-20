@@ -36,13 +36,16 @@ var searchSpec = commandSpec{
 	usageLine: "ohya search <query> [flags]",
 	description: "Runs one bounded read-only FTS5 query with BM25 ranking over stored events and prints the best " +
 		strconv.Itoa(searchHitLimit) + " matches, each with its event id, session id, agent, repo, time, and a text excerpt. " +
-		"The query is SQLite FTS5 syntax, for example 'auth AND refresh' or '\"exact phrase\"'; an apostrophe must sit inside a double-quoted phrase. " +
+		"The query is SQLite FTS5 syntax, for example 'auth AND refresh' or '\"exact phrase\"'. " +
+		"A term with punctuation — an apostrophe, or a hyphenated directory or branch name — must sit inside double quotes, as in '\"auth-refresh\"'. " +
+		"FTS5 parses '-name' as a column filter, so a bare hyphenated term fails with a no-such-column error; other bare punctuation fails with a syntax error. " +
 		"Without --remote the command reads the local hub database and never writes or migrates it; with --remote it queries the joined hub through the saved pairing credential. " +
 		"Bounds and the read-only policy are the sql tool's engine: at most 500 rows and 256 KiB per call, 5 seconds per query.",
 	argsTitle: "Arguments",
 	args:      "<query>  FTS5 query text, for example 'auth AND refresh'",
 	examples: []string{
 		`ohya search "auth AND refresh"`,
+		`ohya search '"hyphenated-name"'`,
 		`ohya search panic --repo github.com/owner/name --agent claude-code`,
 		`ohya search --remote "cursor regression"`,
 	},
@@ -97,9 +100,10 @@ func runSearchCommand(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	defer closeBackend()
-	res, err := recallQuery(ctx, backend, searchQuery(c.fs.Arg(0), *repo, *agent))
+	ftsQuery := c.fs.Arg(0)
+	res, err := recallQuery(ctx, backend, searchQuery(ftsQuery, *repo, *agent))
 	if err != nil {
-		return err
+		return ftsQuotingHint(err, ftsQuery)
 	}
 	printSearchResult(stdout, res)
 	return nil
@@ -270,6 +274,27 @@ func recallQuery(ctx context.Context, backend recallBackend, query string) (mcps
 		return res, fmt.Errorf("the hub rejected the read-only query: %w", err)
 	}
 	return res, fmt.Errorf("query failed: %w", err)
+}
+
+func ftsQuotingHint(err error, ftsQuery string) error {
+	if !ftsParseFailure(err, ftsQuery) {
+		return err
+	}
+	return fmt.Errorf("%w; wrap punctuation-bearing terms in double quotes, for example ohya search '\"auth-refresh\"'", err)
+}
+
+func ftsParseFailure(err error, ftsQuery string) bool {
+	msg := err.Error()
+	if strings.Contains(msg, "fts5: syntax error") {
+		return true
+	}
+	const missingColumn = "no such column: "
+	at := strings.Index(msg, missingColumn)
+	if at < 0 {
+		return false
+	}
+	column := strings.TrimSpace(msg[at+len(missingColumn):])
+	return column != "" && strings.Contains(ftsQuery, column)
 }
 
 func sqlString(s string) string {

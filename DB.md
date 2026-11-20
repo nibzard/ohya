@@ -406,6 +406,14 @@ enumerate indexed documents, query through `MATCH`.
 
 ## Search example
 
+In a `MATCH` string, wrap every punctuation-bearing term — a hyphenated
+branch or directory name, an apostrophe — in double quotes, as in
+`'"auth-refresh"'`. The tokenizer splits it into its phrase tokens either
+way, but bare `auth-refresh` parses as the term `auth` plus a `-refresh`
+column filter, and `events_fts` has no such column, so the query fails
+with `no such column: refresh` (other bare punctuation, for example `/`,
+is an FTS5 syntax error).
+
 ```sql
 SELECT s.repo, s.agent, s.device_id,
        e.time_ms, substr(e.text, 1, 500) AS excerpt

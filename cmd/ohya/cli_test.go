@@ -99,6 +99,23 @@ func TestRootHelpStatesContract(t *testing.T) {
 	}
 }
 
+func TestSearchHelpStatesFtsQuotingRule(t *testing.T) {
+	var stdout bytes.Buffer
+	if code := cliMain([]string{"search", "--help"}, &stdout, &bytes.Buffer{}); code != 0 {
+		t.Fatalf("exit code = %d; want 0", code)
+	}
+	flat := strings.Join(strings.Fields(stdout.String()), " ")
+	for _, want := range []string{
+		"A term with punctuation",
+		"must sit inside double quotes",
+		`ohya search '"hyphenated-name"'`,
+	} {
+		if !strings.Contains(flat, want) {
+			t.Fatalf("search help lacks %q:\n%s", want, stdout.String())
+		}
+	}
+}
+
 func TestUsageErrorsExitTwoOnStderr(t *testing.T) {
 	cases := []struct {
 		name    string
