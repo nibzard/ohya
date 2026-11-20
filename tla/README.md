@@ -399,7 +399,8 @@ observation, and its writer, never change.
   device identity; spoofing and credential theft are excluded.
   Cryptography is explicitly out of scope (ARCHITECTURE.md).
 - **Correct transport identity.** The mapping from the transport-level
-  peer identity (Tailcat `WhoIs`) to the registry device is correct.
+  peer identity (Tailcat pre-shared / node-key authentication) to the
+  registry device is correct.
 - **One serialization point.** Every request and every revocation commits
   through the single hub writer, so each atomic model action is one
   implementation transaction.

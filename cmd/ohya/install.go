@@ -6,6 +6,7 @@ import (
 	"io"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/nibzard/ohya/internal/buildinfo"
 	"github.com/nibzard/ohya/internal/install"
@@ -20,29 +21,9 @@ func runInstallCommand(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	dir := filepath.Join(home, ".local", "bin")
-	version := ""
-	var setupArgs []string
-	dry := false
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--bin-dir", "--version":
-			if i+1 >= len(args) {
-				return usageError{cmd: "ohya install", msg: args[i] + " needs a value"}
-			}
-			key := args[i]
-			i++
-			if key == "--bin-dir" {
-				dir = args[i]
-			} else {
-				version = args[i]
-			}
-		default:
-			if args[i] == "--dry-run" {
-				dry = true
-			}
-			setupArgs = append(setupArgs, args[i])
-		}
+	dir, version, dry, setupArgs, err := parseInstallArgs(args, filepath.Join(home, ".local", "bin"))
+	if err != nil {
+		return err
 	}
 	if version != "" {
 		current, _, _, _ := buildinfo.Identity()
@@ -78,4 +59,35 @@ func runInstallCommand(args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("integrated setup did not complete: %w; rerun %s setup", err, target)
 	}
 	return nil
+}
+
+func parseInstallArgs(args []string, defaultDir string) (dir, version string, dry bool, setupArgs []string, err error) {
+	dir = defaultDir
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--bin-dir" || arg == "--version":
+			if i+1 >= len(args) {
+				return "", "", false, nil, usageError{cmd: "ohya install", msg: arg + " needs a value"}
+			}
+			i++
+			if arg == "--bin-dir" {
+				dir = args[i]
+			} else {
+				version = args[i]
+			}
+		case strings.HasPrefix(arg, "--bin-dir="):
+			dir = strings.TrimPrefix(arg, "--bin-dir=")
+		case strings.HasPrefix(arg, "--version="):
+			version = strings.TrimPrefix(arg, "--version=")
+		default:
+			if arg == "--dry-run" || arg == "--dry-run=true" || arg == "--dry-run=1" {
+				dry = true
+			} else if arg == "--dry-run=false" || arg == "--dry-run=0" {
+				dry = false
+			}
+			setupArgs = append(setupArgs, arg)
+		}
+	}
+	return dir, version, dry, setupArgs, nil
 }

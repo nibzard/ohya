@@ -126,9 +126,9 @@ func runLogsCommand(args []string, stdout, stderr io.Writer) error {
 			return c.usageErrorf("--role must be one of serve, join, ingest, mcp")
 		}
 	}
-	stateDir := *state
-	if stateDir == "" {
-		stateDir = filepath.Dir(*db)
+	stateDir, _, err := resolveObserveStateDir(*state, *db)
+	if err != nil {
+		return jsonFailurePrint(*asJSON && !*follow, stdout, logsSpec.name, err)
 	}
 	o := logsOptions{
 		stateDir:   stateDir,

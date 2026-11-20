@@ -249,9 +249,9 @@ func runUsageCommand(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return c.usageErrorf("%s", err.Error())
 	}
-	stateDir := *state
-	if stateDir == "" {
-		stateDir = filepath.Dir(*db)
+	stateDir, _, err := resolveObserveStateDir(*state, *db)
+	if err != nil {
+		return jsonFailurePrint(*asJSON, stdout, usageSpec.name, err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), *deadline)
 	defer cancel()

@@ -196,20 +196,9 @@ func runStatusCommand(args []string, stdout, stderr io.Writer) error {
 			return c.usageErrorf("--role must be one of serve, join, ingest, mcp")
 		}
 	}
-	stateDir := *state
-	setupState := stateDir
-	if stateDir == "" {
-		setupState = filepath.Dir(*db)
-	}
-	connection, err := setup.LoadConnection(setupState)
+	stateDir, setupState, err := resolveObserveStateDir(*state, *db)
 	if err != nil {
 		return jsonFailurePrint(*asJSON, stdout, statusSpec.name, err)
-	}
-	if stateDir == "" && connection.Mode == "remote" {
-		stateDir = filepath.Join(setupState, "join")
-	}
-	if stateDir == "" {
-		stateDir = setupState
 	}
 	o := statusOptions{
 		remote:     *remote,
@@ -248,6 +237,25 @@ func statusDegraded(data statusData) bool {
 		}
 	}
 	return false
+}
+
+func resolveObserveStateDir(explicitState, dbPath string) (stateDir, setupState string, err error) {
+	stateDir = explicitState
+	setupState = stateDir
+	if stateDir == "" {
+		setupState = filepath.Dir(dbPath)
+	}
+	connection, err := setup.LoadConnection(setupState)
+	if err != nil {
+		return "", "", err
+	}
+	if stateDir == "" && connection.Mode == "remote" {
+		stateDir = filepath.Join(setupState, "join")
+	}
+	if stateDir == "" {
+		stateDir = setupState
+	}
+	return stateDir, setupState, nil
 }
 
 func buildStatus(ctx context.Context, o statusOptions) (statusData, error) {
