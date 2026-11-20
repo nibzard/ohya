@@ -1833,6 +1833,33 @@ How to use this file:
   the only ctx-aware call whose error returns to runIngest as a command
   error. TestStatusChildCleanShutdownPublishesFinalSnapshot now requires
   exit 0 exactly.
+  Extended 2026-11-20 (T150): serve and join carry the same contract. The
+  ctx-aware startup error returns are node.Listen and store.Open in
+  runServe, and pair plus rejoin/verifyCredential in runJoin; each treats
+  a canceled context — errors.Is(ctx.Err(), context.Canceled), the signal
+  class — as a clean stop (exit 0). DeadlineExceeded is deliberately NOT
+  a clean stop: setup embeds runJoin under a 90 s pairing deadline, and a
+  bare ctx.Err() gate would report a timed-out or interrupted pair as a
+  successful remote binding; setup additionally re-checks pairCtx.Err()
+  after a nil runJoin so an interrupted pair is never bound. ingest's
+  T132 gate keeps the bare form because runIngest has no deadline caller.
+  reportJoinTransport skips its report on a canceled context — pre-fix it
+  printed "hub path unknown (… context canceled)" on a SIGTERM during the
+  resume window even though join then exited 0. Deterministic tests use a
+  pre-canceled context plus a pre-expired deadline (pinning the signal
+  class); the join ones dial a synthesized tailcat address with RegionID
+  -1 (fresh keys, no embedded region), which fails fast inside the
+  DERP-map fetch before any platform networking, so no local relay is
+  needed. Fact kept for future transport tests: tailcat's process-wide
+  in-memory defaultDERPMapCache (1 h max age) can satisfy the map without
+  touching ctx, so a canceled-context test stays outcome-deterministic
+  only because the next ctx-aware step (PickBestRegion netcheck, Ping, or
+  store.Open's verifyWriter) also fails immediately — assert the clean
+  stop, never which gate fired. stopChild in serve_e2e_test.go already
+  required exit 0 for a serve child stopped after observable work, so no
+  e2e assertion needed tightening; a SIGTERM-during-startup e2e would be
+  racy (the pre-NotifyContext window kills with signal status, and the
+  local-relay startup window is milliseconds wide).
 
 - Logs and diagnostics delivered (2026-11-17, T096, plans/001 milestone 4):
   internal/observe gained the LogWriter (`events.jsonl`, 8 MiB plus two

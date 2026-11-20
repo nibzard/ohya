@@ -2,11 +2,18 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/tailscale/tailcat"
+	"tailscale.com/types/key"
+
+	"github.com/nibzard/ohya/internal/device"
 	"github.com/nibzard/ohya/internal/watch"
 )
 
@@ -32,6 +39,21 @@ func TestJoinCodeEnvValidation(t *testing.T) {
 				t.Fatalf("args %v -> code %d stderr %q, want 2 with %q", tc.args, code, stderr, tc.want)
 			}
 		})
+	}
+}
+
+func TestJoinContextDeadlineDuringStartupFails(t *testing.T) {
+	stateDir := t.TempDir()
+	code := formatJoinCode("0123456789abcdef0123456789abcdef", unpairedHubAddress(t))
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	var stderr bytes.Buffer
+	err := runJoin(ctx, joinOptions{pairOnly: true, stateDir: stateDir, code: code, stderr: &stderr})
+	if err == nil {
+		t.Fatal("an expired pairing deadline is a failure, not a clean stop; only SIGINT or SIGTERM stops join cleanly")
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, device.CredentialFileName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a credential was paired despite the expired deadline: %v", err)
 	}
 }
 
@@ -91,5 +113,68 @@ func TestReportJoinBacklogSkipsExcludedFiles(t *testing.T) {
 	reportJoinBacklog(stateDir, []agentRoot{{agent: "claude-code", dirs: []agentDir{{dir: srcDir}}}}, excludeGlobs{excluded}, &stderr)
 	if !strings.Contains(stderr.String(), "upload backlog: 100 bytes") {
 		t.Fatalf("reportJoinBacklog = %q, want only the kept file's 100 bytes", stderr.String())
+	}
+}
+
+func unpairedHubAddress(t *testing.T) string {
+	t.Helper()
+	ci := tailcat.ConnInfo{
+		ServerPublic:      tailcat.NodePublic{NodePublic: key.NewNode().Public()},
+		ServerDiscoPublic: tailcat.DiscoPublic{DiscoPublic: key.NewDisco().Public()},
+		RegionID:          -1,
+	}
+	return string(ci.Addr())
+}
+
+func TestJoinContextCancelDuringStartupStopsCleanly(t *testing.T) {
+	cases := []struct {
+		name       string
+		paired     bool
+		passCode   bool
+		wantCredOK bool
+	}{
+		{name: "pair window", passCode: true},
+		{name: "rejoin window", paired: true, passCode: true, wantCredOK: true},
+		{name: "resume window", paired: true, wantCredOK: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stateDir := t.TempDir()
+			code := ""
+			if tc.passCode {
+				code = formatJoinCode("0123456789abcdef0123456789abcdef", unpairedHubAddress(t))
+			}
+			if tc.paired {
+				deviceID, err := device.LoadOrCreate(stateDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				cred := device.Credential{DeviceID: deviceID, Secret: "0123456789abcdef0123456789abcdef"}
+				if err := device.SaveCredential(stateDir, cred); err != nil {
+					t.Fatal(err)
+				}
+				if err := device.SaveHubAddress(stateDir, unpairedHubAddress(t)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			var stderr bytes.Buffer
+			err := runJoin(ctx, joinOptions{pairOnly: true, stateDir: stateDir, code: code, stderr: &stderr})
+			if err != nil {
+				t.Fatalf("a context canceled during join startup is a clean stop, got error: %v", err)
+			}
+			if out := stderr.String(); strings.Contains(out, "context canceled") {
+				t.Fatalf("cancellation surfaced as a join diagnostic: %s", out)
+			}
+			_, credErr := os.Stat(filepath.Join(stateDir, device.CredentialFileName))
+			if tc.wantCredOK {
+				if credErr != nil {
+					t.Fatalf("the saved credential survived the canceled stop, want it kept: %v", credErr)
+				}
+			} else if !errors.Is(credErr, os.ErrNotExist) {
+				t.Fatalf("a credential was paired despite the canceled stop: %v", credErr)
+			}
+		})
 	}
 }

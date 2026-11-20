@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -25,6 +26,7 @@ var serveSpec = commandSpec{
 	synopsis:  "run the hub for devices: transport, sync, remote tools",
 	usageLine: "ohya serve [flags]",
 	description: "Runs the hub side of device sync until the process receives SIGINT or SIGTERM. " +
+		"SIGINT or SIGTERM exits 0 whenever it arrives — during startup, while the relay listener or the database opens, or while serving. " +
 		"The hub identity — node key, pre-shared key, relay region — is created on the first start and saved owner-only under tailcat-hub/ in the state directory, so its address never changes across restarts. " +
 		"The sync endpoint listens on port 9027 inside the Tailcat network stack and opens no port on the host; devices reach it through a DERP relay and a direct path when one exists. " +
 		"Devices join with ohya join and one code from ohya devices invite.",
@@ -107,6 +109,9 @@ func runServe(ctx context.Context, o serveOptions) error {
 	}
 	ln, err := node.Listen(ctx)
 	if err != nil {
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return nil
+		}
 		return err
 	}
 
@@ -114,6 +119,9 @@ func runServe(ctx context.Context, o serveOptions) error {
 	defer telem.close()
 	hub, err := store.Open(ctx, o.dbPath, store.WithObserver(telem.observer()))
 	if err != nil {
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return nil
+		}
 		return err
 	}
 	defer hub.Close()

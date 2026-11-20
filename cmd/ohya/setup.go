@@ -213,6 +213,9 @@ func runSetupCommand(args []string, stdout, stderr io.Writer) error {
 			if err := runJoin(pairCtx, joinOptions{pairOnly: true, stateDir: dataState, code: code, stderr: stderr}); err != nil {
 				return err
 			}
+			if err := pairCtx.Err(); err != nil {
+				return fmt.Errorf("pair with the hub: %w", err)
+			}
 			if err := setup.BindRemote(dataState, connection); err != nil {
 				return err
 			}
