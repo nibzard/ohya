@@ -1,0 +1,43 @@
+# Design: Device-side --exclude globs for discovery (T147)
+
+## Problem
+Atuin's failure classes (guardian-internal sessions polluting a store
+with no way out, no per-machine opt-out) must not recur here. Operators
+need a device-side, per-agent capture control in front of registration.
+
+## Approach
+Operator decision 2026-11-19: one mechanism (a single repeatable
+--exclude flag on ingest, join, and setup), one enforcement point
+(discoverSessionFiles in cmd/ohya/ingest.go, shared by ingest, join, the
+uploader, and the backlog report), visible accounting (per-agent skip
+counts in the pass summary, ingest --once JSON, and ohya status via the
+discovery_excluded{agent} gauge).
+
+## Key Trade-offs
+- One shared flag, not per-agent flag names: globs are absolute paths,
+  so a glob is naturally scoped by the root it names; accounting stays
+  per agent because each agent's walk filters its own roots.
+- Stdlib path.Match only (no **, no regex): a deep tree needs a glob per
+  directory level; the operator chose simplicity over expressive power.
+- Missing-source reports recognize excluded paths by set membership
+  against the pass's excluded paths (both path forms stored, since watch
+  state keys resolve parent symlinks), not by re-matching globs — exact
+  and avoids a second matcher call site.
+- watch_sources{state=missing} still counts an excluded source; the
+  excluded gauge reconciles. Accepted cosmetic limit.
+- An exclusion is going-forward only: stored sessions stay; removal is
+  ohya purge's job (ADR 0013).
+
+## Gotchas
+- Set("") must clear the list: setup saves Flags["exclude"] = "" when no
+  glob is configured, and every setup rerun replays saved flags through
+  fs.Set — an error on empty broke both setup e2e suites. Empty-means-
+  none matches the --<agent>-root '' convention and doubles as the way
+  to clear saved excludes.
+- Flag-time validation via filepath.Match(glob, "") misses malformed
+  post-star chunks; discovery surfaces those loudly at runtime.
+
+## References
+- docs/reference.md "Commands" (exclude semantics and the not-built list)
+- docs/adr/0008-integrated-setup.md "Saved choices and failed attempts"
+- docs/adr/0005-json-output.md (ingest data fields)
