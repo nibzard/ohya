@@ -284,7 +284,7 @@ func TestLocalIngestDoesNotSpamPurgedSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stderr bytes.Buffer
-	ing := newIngestor(hub, w, "claude-code", "0123456789abcdef0123456789abcdef", 0, &stderr, nil, nil)
+	ing := newIngestor(hub, w, "claude-code", "0123456789abcdef0123456789abcdef", 0, nil, &stderr, nil, nil)
 	dirs := []agentDir{{dir: srcDir}}
 	if _, err := ing.poll(ctx, dirs, false); err != nil {
 		t.Fatal(err)

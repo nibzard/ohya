@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -37,6 +38,7 @@ type ingestOptions struct {
 	dbPath         string
 	stateDir       string
 	roots          []agentRoot
+	excludes       excludeGlobs
 	interval       time.Duration
 	allowEmpty     bool
 	once           bool
@@ -93,6 +95,9 @@ func runIngest(ctx context.Context, o ingestOptions) error {
 	if err := os.MkdirAll(o.stateDir, 0o700); err != nil {
 		return fmt.Errorf("create state directory: %w", err)
 	}
+	if len(o.excludes) > 0 {
+		fmt.Fprintf(o.stderr, "ohya: excluding session files matching: %s\n", strings.Join(o.excludes, ", "))
+	}
 	hub, err := store.Open(ctx, o.dbPath, store.WithObserver(o.observer))
 	if err != nil {
 		if ctx.Err() != nil {
@@ -112,7 +117,14 @@ func runIngest(ctx context.Context, o ingestOptions) error {
 		if err != nil {
 			return err
 		}
-		runners[i] = newIngestor(hub, w, root.agent, deviceID, o.maxRecordBytes, o.stderr, o.observer, o.events)
+		runners[i] = newIngestor(hub, w, root.agent, deviceID, o.maxRecordBytes, o.excludes, o.stderr, o.observer, o.events)
+	}
+	var excludedByAgent map[string]int
+	if len(o.excludes) > 0 {
+		excludedByAgent = make(map[string]int, len(o.roots))
+		for _, root := range o.roots {
+			excludedByAgent[root.agent] = 0
+		}
 	}
 
 	for pass := 1; ; pass++ {
@@ -130,7 +142,11 @@ func runIngest(ctx context.Context, o ingestOptions) error {
 			stats.inserted += s.inserted
 			stats.failed += s.failed
 			stats.stopped += s.stopped
+			stats.excluded += s.excluded
 			stats.stops = append(stats.stops, s.stops...)
+			if len(o.excludes) > 0 {
+				excludedByAgent[o.roots[i].agent] = s.excluded
+			}
 		}
 		o.observer.Add("ingest_passes", 1)
 		o.observer.Observe("ingest_pass_duration", time.Since(passStart))
@@ -140,12 +156,17 @@ func runIngest(ctx context.Context, o ingestOptions) error {
 			if stops == nil {
 				stops = []stopReport{}
 			}
+			excluded := excludedByAgent
+			if excluded == nil {
+				excluded = map[string]int{}
+			}
 			if err := printJSON(o.stdout, ingestSpec.name, ingestJSONData{
-				Events:  stats.inserted,
-				Sources: stats.sources,
-				Failed:  stats.failed,
-				Stopped: stats.stopped,
-				Stops:   stops,
+				Events:   stats.inserted,
+				Sources:  stats.sources,
+				Excluded: excluded,
+				Failed:   stats.failed,
+				Stopped:  stats.stopped,
+				Stops:    stops,
 			}); err != nil {
 				return err
 			}
@@ -153,6 +174,9 @@ func runIngest(ctx context.Context, o ingestOptions) error {
 			summary := fmt.Sprintf("ohya: imported %d events from %d sources", stats.inserted, stats.sources)
 			if stats.failed > 0 || stats.stopped > 0 {
 				summary += fmt.Sprintf("; %d failed, %d stopped", stats.failed, stats.stopped)
+			}
+			if len(o.excludes) > 0 {
+				summary += fmt.Sprintf("; %d files excluded by --exclude (%s)", stats.excluded, excludedSummary(excludedByAgent))
 			}
 			fmt.Fprintln(o.stdout, summary)
 		}
@@ -176,11 +200,13 @@ type ingestor struct {
 	agent           string
 	deviceID        string
 	maxRecordBytes  int64
+	excludes        excludeGlobs
 	stderr          io.Writer
 	observer        observe.Observer
 	events          observe.EventSink
 	reported        map[string]int64
 	missingReported map[string]bool
+	excludedPaths   map[string]bool
 	noProgress      map[string]noProgressMark
 	tails           map[string]int64
 	registered      map[string]string
@@ -197,13 +223,13 @@ type noProgressMark struct {
 	recordTooLarge bool
 }
 
-func newIngestor(hub *store.DB, w *watch.Watcher, agent, deviceID string, maxRecordBytes int64, stderr io.Writer, observer observe.Observer, events observe.EventSink) *ingestor {
+func newIngestor(hub *store.DB, w *watch.Watcher, agent, deviceID string, maxRecordBytes int64, excludes excludeGlobs, stderr io.Writer, observer observe.Observer, events observe.EventSink) *ingestor {
 	if observer == nil {
 		observer = observe.Disabled
 	}
 	return &ingestor{
 		hub: hub, watcher: w, agent: agent, deviceID: deviceID,
-		maxRecordBytes: maxRecordBytes, stderr: stderr, observer: observer, events: events, reported: map[string]int64{},
+		maxRecordBytes: maxRecordBytes, excludes: excludes, stderr: stderr, observer: observer, events: events, reported: map[string]int64{},
 		missingReported: map[string]bool{}, noProgress: map[string]noProgressMark{}, tails: map[string]int64{},
 		registered: map[string]string{}, purged: map[string]bool{}, workspacesDue: true,
 	}
@@ -221,6 +247,7 @@ type passStats struct {
 	inserted int
 	failed   int
 	stopped  int
+	excluded int
 	stops    []stopReport
 }
 
@@ -232,28 +259,50 @@ type stopReport struct {
 }
 
 type ingestJSONData struct {
-	Events  int          `json:"events"`
-	Sources int          `json:"sources"`
-	Failed  int          `json:"failed"`
-	Stopped int          `json:"stopped"`
-	Stops   []stopReport `json:"stops"`
+	Events   int            `json:"events"`
+	Sources  int            `json:"sources"`
+	Excluded map[string]int `json:"excluded"`
+	Failed   int            `json:"failed"`
+	Stopped  int            `json:"stopped"`
+	Stops    []stopReport   `json:"stops"`
+}
+
+func excludedSummary(byAgent map[string]int) string {
+	if len(byAgent) == 0 {
+		return "no matches"
+	}
+	agents := make([]string, 0, len(byAgent))
+	for agent := range byAgent {
+		agents = append(agents, agent)
+	}
+	slices.Sort(agents)
+	parts := make([]string, 0, len(agents))
+	for _, agent := range agents {
+		parts = append(parts, fmt.Sprintf("%s: %d", agent, byAgent[agent]))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (r *ingestor) poll(ctx context.Context, dirs []agentDir, allowEmpty bool) (passStats, error) {
 	discoveryStart := time.Now()
-	candidates, err := discoverSessionFiles(dirs, allowEmpty)
+	candidates, excluded, err := discoverSessionFiles(dirs, r.excludes, allowEmpty)
 	if err != nil {
 		r.observer.Add("discovery_errors", 1, "read")
 		return passStats{}, err
 	}
+	r.excludedPaths = excludedPathSet(excluded)
 	r.observer.Add("discovery_scans", 1)
 	r.observer.Add("discovery_candidates", uint64(len(candidates)))
+	if len(r.excludes) > 0 {
+		r.observer.Set("discovery_excluded", float64(len(excluded)), r.agent)
+	}
 	r.observer.Observe("discovery_duration", time.Since(discoveryStart))
 	outcomes, err := r.watcher.Poll(candidates)
 	if err != nil {
 		return passStats{}, err
 	}
 	var stats passStats
+	stats.excluded = len(excluded)
 	pendingComplete := int64(0)
 	for _, o := range outcomes {
 		if ctx.Err() != nil {
@@ -513,6 +562,12 @@ func (r *ingestor) reportMissing(o watch.Outcome) {
 		return
 	}
 	r.missingReported[o.SourceID] = true
+	if r.excludedPaths[o.Path] {
+		fmt.Fprintf(r.stderr,
+			"ohya: %s: source %s now matches --exclude and stops being captured going forward; the acknowledged checkpoint is kept and stored sessions stay on the hub (ohya purge removes them)\n",
+			o.Path, o.SourceID)
+		return
+	}
 	r.event(observe.LevelWarn, observe.EventSourceMissing, "", nil)
 	fmt.Fprintf(r.stderr,
 		"ohya: %s: source %s disappeared; the acknowledged checkpoint is kept and ingestion resumes if the file returns\n",
@@ -538,37 +593,58 @@ func stopRemedy(recordTooLarge bool) string {
 	return "repair_source_file"
 }
 
-func discoverSessionFiles(dirs []agentDir, allowEmpty bool) ([]string, error) {
+func discoverSessionFiles(dirs []agentDir, excludes excludeGlobs, allowEmpty bool) ([]string, []string, error) {
 	var files []string
+	var excluded []string
 	for _, d := range dirs {
-		found, err := walkSessionFiles(d.dir)
+		found, skipped, err := walkSessionFiles(d.dir, excludes)
 		if errors.Is(err, os.ErrNotExist) && (d.optional || allowEmpty) {
 			continue
 		}
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		files = append(files, found...)
+		excluded = append(excluded, skipped...)
 	}
-	return files, nil
+	return files, excluded, nil
 }
 
-func walkSessionFiles(root string) ([]string, error) {
+func walkSessionFiles(root string, excludes excludeGlobs) ([]string, []string, error) {
 	var files []string
+	var excluded []string
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return fmt.Errorf("discover %s: %w", p, err)
 		}
 		if d.Type().IsRegular() && strings.HasSuffix(d.Name(), ".jsonl") {
+			match, err := excludes.Match(p)
+			if err != nil {
+				return err
+			}
+			if match {
+				excluded = append(excluded, p)
+				return nil
+			}
 			files = append(files, p)
 		}
 		return nil
 	})
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("session directory %s does not exist: %w", root, fs.ErrNotExist)
+		return nil, nil, fmt.Errorf("session directory %s does not exist: %w", root, fs.ErrNotExist)
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return files, nil
+	return files, excluded, nil
+}
+
+func excludedPathSet(paths []string) map[string]bool {
+	set := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		for _, form := range excludePathForms(p) {
+			set[form] = true
+		}
+	}
+	return set
 }

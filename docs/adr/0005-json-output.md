@@ -66,7 +66,10 @@ Timestamps are RFC 3339 UTC strings.
 - `ingest --once`: `events`, `sources`, `failed`, `stopped`, and `stops`, one
   entry per stopped source: `source_id`, `path`, `offset`, and `remedy`.
   `remedy` is a stable code, not prose: `increase_max_record_bytes` (a size
-  stop, ADR 0004) or `repair_source_file` (every other stop).
+  stop, ADR 0004) or `repair_source_file` (every other stop). `excluded`
+  (added 2026-11-20) is a per-agent map of session files skipped by
+  `--exclude` globs at discovery; it is `{}` when no exclusion is
+  configured.
 - `devices list`: `devices` and `invitations`. A device carries `id`,
   `state`, `paired_at`, and `revoked_at` (present only on a revoked device).
   An invitation carries `id`, `state`, `used_by` (present only when used),

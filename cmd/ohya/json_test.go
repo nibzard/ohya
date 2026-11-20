@@ -346,7 +346,7 @@ func TestIngestOnceJSONGolden(t *testing.T) {
 			t.Fatalf("code %d, stderr %q", code, stderr)
 		}
 		goldenCompare(t, out,
-			`{"schema_version":1,"command":"ohya ingest","data":{"events":16,"sources":1,"failed":0,"stopped":0,"stops":[]},"error":null}`+"\n")
+			`{"schema_version":1,"command":"ohya ingest","data":{"events":16,"sources":1,"excluded":{},"failed":0,"stopped":0,"stops":[]},"error":null}`+"\n")
 	})
 
 	t.Run("degraded pass reports through data and exits 3", func(t *testing.T) {
@@ -362,7 +362,7 @@ func TestIngestOnceJSONGolden(t *testing.T) {
 			t.Fatalf("stderr %q misses the stop diagnostic", stderr)
 		}
 		got := scrubJSONKeys(t, out, "source_id", "path")
-		goldenCompare(t, got, `{"schema_version":1,"command":"ohya ingest","data":{"events":1,"sources":1,"failed":0,"stopped":1,"stops":[{"source_id":"<source_id>","path":"<path>","offset":`+strconv.Itoa(len(before))+`,"remedy":"increase_max_record_bytes"}]},"error":null}`+"\n")
+		goldenCompare(t, got, `{"schema_version":1,"command":"ohya ingest","data":{"events":1,"sources":1,"excluded":{},"failed":0,"stopped":1,"stops":[{"source_id":"<source_id>","path":"<path>","offset":`+strconv.Itoa(len(before))+`,"remedy":"increase_max_record_bytes"}]},"error":null}`+"\n")
 	})
 
 	t.Run("failure missing root", func(t *testing.T) {

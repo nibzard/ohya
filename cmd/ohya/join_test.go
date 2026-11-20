@@ -65,8 +65,31 @@ func TestReportJoinBacklogClampsTruncatedFile(t *testing.T) {
 	}
 
 	var stderr bytes.Buffer
-	reportJoinBacklog(stateDir, []agentRoot{{agent: "claude-code", dirs: []agentDir{{dir: srcDir}}}}, &stderr)
+	reportJoinBacklog(stateDir, []agentRoot{{agent: "claude-code", dirs: []agentDir{{dir: srcDir}}}}, nil, &stderr)
 	if !strings.Contains(stderr.String(), "upload backlog: 0 bytes") {
 		t.Fatalf("reportJoinBacklog = %q, want 0 bytes", stderr.String())
+	}
+}
+
+func TestReportJoinBacklogSkipsExcludedFiles(t *testing.T) {
+	tmp := t.TempDir()
+	stateDir := filepath.Join(tmp, "state")
+	srcDir := filepath.Join(tmp, "claude")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	kept := filepath.Join(srcDir, "kept.jsonl")
+	excluded := filepath.Join(srcDir, "guardian.jsonl")
+	if err := os.WriteFile(kept, bytes.Repeat([]byte("a"), 100), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(excluded, bytes.Repeat([]byte("b"), 200), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stderr bytes.Buffer
+	reportJoinBacklog(stateDir, []agentRoot{{agent: "claude-code", dirs: []agentDir{{dir: srcDir}}}}, excludeGlobs{excluded}, &stderr)
+	if !strings.Contains(stderr.String(), "upload backlog: 100 bytes") {
+		t.Fatalf("reportJoinBacklog = %q, want only the kept file's 100 bytes", stderr.String())
 	}
 }

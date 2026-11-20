@@ -254,6 +254,17 @@ func (f *fixture) mustSync() Stats {
 	return stats
 }
 
+func (f *fixture) mustSyncCandidates(candidates []string) Stats {
+	f.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	stats, err := f.up.Sync(ctx, candidates)
+	if err != nil {
+		f.t.Fatalf("Sync: %v\nlog:\n%s", err, f.log)
+	}
+	return stats
+}
+
 func (f *fixture) wantDisconnected() {
 	f.t.Helper()
 	if _, err := f.sync(); !errors.Is(err, ErrDisconnected) {
@@ -1308,5 +1319,59 @@ func TestOldHubFallsBackToPlainFrames(t *testing.T) {
 	}
 	if got := old.plain.Load(); got != 2 {
 		t.Fatalf("plain data batches after reconnect = %d, want 2", got)
+	}
+}
+
+func TestExcludedSourceReportedAsExclusion(t *testing.T) {
+	f := newFixture(t, Options{})
+	h := serve(t, openHubDB(t, filepath.Join(t.TempDir(), "hub.db")), f.reg, hubsync.Options{})
+	f.dialer.point(h.addr)
+	a := filepath.Join(f.dir, "a.jsonl")
+	b := filepath.Join(f.dir, "b.jsonl")
+	writeFile(t, a, line(sessA, "one"))
+	writeFile(t, b, line(sessB, "one"))
+	f.mustSync()
+	f.mustSync()
+	if got := count(t, h.db, `SELECT count(*) FROM sources`); got != 2 {
+		t.Fatalf("hub sources = %d, want 2", got)
+	}
+
+	excluded := func(path string) bool { return filepath.Base(path) == "a.jsonl" }
+	f.up = f.newUploader(Options{Excluded: excluded})
+	f.mustSyncCandidates([]string{b})
+	f.mustSyncCandidates([]string{b})
+	log := f.log.String()
+	for _, phrase := range []string{"now matches --exclude and stops uploading going forward", "the checkpoint is kept and upload resumes only if the exclusion is removed"} {
+		if n := strings.Count(log, phrase); n != 1 {
+			t.Fatalf("log reports %q %d times, want once:\n%s", phrase, n, log)
+		}
+	}
+	if strings.Contains(log, "disappeared") {
+		t.Fatalf("an excluded source was reported as disappeared:\n%s", log)
+	}
+	if got := count(t, h.db, `SELECT count(*) FROM events`); got != 2 {
+		t.Fatalf("hub events = %d, want the 2 stored events preserved", got)
+	}
+}
+
+func TestExcludedSourceWithPendingBytesNamesThem(t *testing.T) {
+	f := newFixture(t, Options{})
+	h := serve(t, openHubDB(t, filepath.Join(t.TempDir(), "hub.db")), f.reg, hubsync.Options{})
+	f.dialer.point(h.addr)
+	a := filepath.Join(f.dir, "a.jsonl")
+	writeFile(t, a, line(sessA, "one"))
+	excluded := func(path string) bool { return filepath.Base(path) == "a.jsonl" }
+	f.up = f.newUploader(Options{Excluded: excluded})
+	f.dialer.fault.Store(int32(closedHub))
+	f.wantDisconnected()
+	f.dialer.fault.Store(int32(noFault))
+	f.mustSyncCandidates([]string{})
+	f.mustSyncCandidates([]string{})
+	want := fmt.Sprintf("bytes [0, %d) were never uploaded and never will be", len(line(sessA, "one")))
+	if n := strings.Count(f.log.String(), want); n != 1 {
+		t.Fatalf("log reports %q %d times, want once:\n%s", want, n, f.log.String())
+	}
+	if got := count(t, h.db, `SELECT count(*) FROM events`); got != 0 {
+		t.Fatalf("hub events = %d, want nothing from the excluded source", got)
 	}
 }
