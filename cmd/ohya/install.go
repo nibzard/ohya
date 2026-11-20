@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"github.com/nibzard/ohya/internal/buildinfo"
 	"github.com/nibzard/ohya/internal/install"
 )
 
@@ -44,7 +45,7 @@ func runInstallCommand(args []string, stdout, stderr io.Writer) error {
 		}
 	}
 	if version != "" {
-		current, _, _, _ := buildIdentity()
+		current, _, _, _ := buildinfo.Identity()
 		if current != version {
 			return fmt.Errorf("installer release identity %s differs from requested %s", current, version)
 		}

@@ -1201,7 +1201,10 @@ up. A clean process stop checkpoints and removes the WAL.
 Measured 2026-11-16 (T123) on the reference machine, linux/amd64, Go
 1.27.3, with the `scripts/package.sh` build flags
 (`CGO_ENABLED=1 go build -tags sqlite_fts5 -trimpath -buildvcs=true
--ldflags "-X main.releaseVersion=…"`), stripping nothing:
+-ldflags "-X github.com/nibzard/ohya/internal/buildinfo.ReleaseVersion=…"`
+— the injected symbol moved from `main.releaseVersion` to
+`internal/buildinfo` on 2026-11-20, which changes no bytes of the binary),
+stripping nothing:
 
 | Build | Bytes | MiB |
 |---|---|---|

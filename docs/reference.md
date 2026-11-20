@@ -376,12 +376,16 @@ index. Event IDs and annotations survive; an up-to-date hub is a no-op, so
 the command is safe to run any time.
 
 `ohya mcp` serves the read-only `sql` tool to any MCP client over stdio
-(same `--db` and `--state` flags). The tool runs exactly one statement per
-call — `SELECT` and read-only `PRAGMA` only — on a restricted read-only
-connection guarded by a SQLite authorizer. Writes, schema changes,
-`ATTACH`, extension loading, and state-changing pragmas are denied; queries
-run under a 5 second deadline, return at most 500 rows and 256 KiB of row
-JSON, and report truncation explicitly instead of silently. String values
+(same `--db` and `--state` flags). The initialize result identifies the
+server as `ohya` with the same build version `ohya version` prints (the
+release tag, or the source pseudo-version in a development build), so a
+client can tell which build serves it. The tool runs exactly one statement
+per call — `SELECT` and read-only `PRAGMA` only — on a restricted
+read-only connection guarded by a SQLite authorizer. Writes, schema
+changes, `ATTACH`, extension loading, and state-changing pragmas are
+denied; queries run under a 5 second deadline, return at most 500 rows
+and 256 KiB of row JSON, and report truncation explicitly instead of
+silently. String values
 in every result also pass a fixed secret pattern table at egress
 ([ADR 0015](adr/0015-egress-secret-redaction.md)): AWS access key ids,
 GitHub, Anthropic, OpenAI, Slack, and Google token shapes, PEM and
@@ -873,7 +877,9 @@ See [CONTRIBUTING.md](../CONTRIBUTING.md) for build requirements and checks,
 [dependency decisions](adr/0001-dependencies.md) for tradeoffs, and
 [docs/performance.md](performance.md) for the measured performance
 limits (ingestion rate, query latency, database size, memory) and the
-benchmarks behind them. The Tailcat address transport lives in
+benchmarks behind them. The build identity behind `ohya version`, the
+runtime telemetry, and the MCP initialize result lives in
+`internal/buildinfo`. The Tailcat address transport lives in
 `internal/transport/address`; the hub sync endpoint
 lives in `internal/hubsync`; the secret pattern table behind the sql
 tool's egress redaction and `ohya secrets scan` lives in

@@ -18,6 +18,7 @@ import (
 	"tailscale.com/syncs"
 	"tailscale.com/tailcfg"
 
+	"github.com/nibzard/ohya/internal/buildinfo"
 	"github.com/nibzard/ohya/internal/device"
 	"github.com/nibzard/ohya/internal/store"
 )
@@ -138,6 +139,15 @@ func callAnnotate(t *testing.T, session *mcp.ClientSession, operations string) *
 func TestMCPStdioEndToEnd(t *testing.T) {
 	dbPath, stateDir := seedMcpDatabase(t)
 	session := startMcpProcess(t, dbPath, stateDir)
+
+	serverInfo := session.InitializeResult().ServerInfo
+	if serverInfo == nil || serverInfo.Name != "ohya" {
+		t.Fatalf("serverInfo = %+v, want the ohya server identity", serverInfo)
+	}
+	version, _, _, _ := buildinfo.Identity()
+	if serverInfo.Version != version {
+		t.Fatalf("serverInfo version = %q over stdio, want this binary's build version %q", serverInfo.Version, version)
+	}
 
 	tools, err := session.ListTools(context.Background(), nil)
 	if err != nil {

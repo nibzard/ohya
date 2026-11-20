@@ -7,11 +7,10 @@ import (
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/nibzard/ohya/internal/buildinfo"
 	"github.com/nibzard/ohya/internal/observe"
 	"github.com/nibzard/ohya/internal/store"
 )
-
-const ServerVersion = "0.1.0-dev"
 
 const ToolName = "sql"
 
@@ -31,7 +30,8 @@ var _ Backend = (*Engine)(nil)
 
 func New(backend Backend, o EngineOptions) *mcp.Server {
 	o = o.withDefaults()
-	server := mcp.NewServer(&mcp.Implementation{Name: "ohya", Version: ServerVersion}, &mcp.ServerOptions{Instructions: MemoryInstructions})
+	version, _, _, _ := buildinfo.Identity()
+	server := mcp.NewServer(&mcp.Implementation{Name: "ohya", Version: version}, &mcp.ServerOptions{Instructions: MemoryInstructions})
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        ToolName,
 		Title:       "Query the ohya transcript database",

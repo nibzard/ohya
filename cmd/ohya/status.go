@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nibzard/ohya/internal/buildinfo"
 	"github.com/nibzard/ohya/internal/claudecode"
 	"github.com/nibzard/ohya/internal/codex"
 	"github.com/nibzard/ohya/internal/observe"
@@ -360,7 +361,7 @@ func buildStatus(ctx context.Context, o statusOptions) (statusData, error) {
 }
 
 func statusCLIIdentity() statusIdentity {
-	version, revision, dirty, goVer := buildIdentity()
+	version, revision, dirty, goVer := buildinfo.Identity()
 	schema, err := store.SchemaVersion()
 	if err != nil {
 		schema = -1

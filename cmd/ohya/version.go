@@ -3,17 +3,14 @@ package main
 import (
 	"fmt"
 	"io"
-	"runtime"
-	"runtime/debug"
 	"strings"
 
+	"github.com/nibzard/ohya/internal/buildinfo"
 	"github.com/nibzard/ohya/internal/claudecode"
 	"github.com/nibzard/ohya/internal/codex"
 	"github.com/nibzard/ohya/internal/pi"
 	"github.com/nibzard/ohya/internal/store"
 )
-
-var releaseVersion string
 
 var versionSpec = commandSpec{
 	name:      "ohya version",
@@ -68,7 +65,7 @@ func versionJSON(stdout io.Writer) error {
 	if err != nil {
 		return printJSONError(stdout, versionSpec.name, err)
 	}
-	version, revision, dirty, goVer := buildIdentity()
+	version, revision, dirty, goVer := buildinfo.Identity()
 	return printJSON(stdout, versionSpec.name, versionJSONData{
 		Version:      version,
 		Revision:     revision,
@@ -82,7 +79,7 @@ func versionJSON(stdout io.Writer) error {
 }
 
 func versionLine() (string, error) {
-	version, revision, dirty, goVer := buildIdentity()
+	version, revision, dirty, goVer := buildinfo.Identity()
 	schema, err := store.SchemaVersion()
 	if err != nil {
 		return "", err
@@ -90,37 +87,4 @@ func versionLine() (string, error) {
 	return fmt.Sprintf("ohya version=%s revision=%s dirty=%s go=%s schema=%d parser.claude=%d parser.codex=%d parser.pi=%d\n",
 		version, revision, dirty, goVer, schema,
 		claudecode.OutputVersion, codex.OutputVersion, pi.OutputVersion), nil
-}
-
-func buildIdentity() (version, revision, dirty, goVer string) {
-	version, revision, dirty, goVer = "devel", "unknown", "unknown", runtime.Version()
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		return
-	}
-	goVer = info.GoVersion
-	if v := info.Main.Version; v != "" && v != "(devel)" {
-		version = v
-	}
-	if releaseVersion != "" {
-		version = releaseVersion
-	}
-	for _, s := range info.Settings {
-		switch s.Key {
-		case "vcs.revision":
-			if s.Value != "" {
-				revision = shortRevision(s.Value)
-			}
-		case "vcs.modified":
-			dirty = s.Value
-		}
-	}
-	return
-}
-
-func shortRevision(rev string) string {
-	if len(rev) > 7 {
-		return rev[:7]
-	}
-	return rev
 }

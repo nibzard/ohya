@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/nibzard/ohya/internal/buildinfo"
 )
 
 func connect(t *testing.T, o EngineOptions) *mcp.ClientSession {
@@ -181,5 +182,20 @@ func TestMemoryGuidanceDeliveredAtInitialization(t *testing.T) {
 	session := connect(t, EngineOptions{})
 	if got := session.InitializeResult().Instructions; got != MemoryInstructions {
 		t.Fatalf("server instructions = %q", got)
+	}
+}
+
+func TestInitializeReportsBuildVersion(t *testing.T) {
+	session := connect(t, EngineOptions{WriterID: "dev1"})
+	info := session.InitializeResult().ServerInfo
+	if info == nil {
+		t.Fatal("initialize result carries no serverInfo")
+	}
+	if info.Name != "ohya" {
+		t.Fatalf("serverInfo name = %q, want ohya", info.Name)
+	}
+	version, _, _, _ := buildinfo.Identity()
+	if info.Version != version {
+		t.Fatalf("serverInfo version = %q, want the build version %q that ohya version prints", info.Version, version)
 	}
 }

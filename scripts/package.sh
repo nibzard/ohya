@@ -38,7 +38,7 @@ asset="ohya_${version}_${platform}_${arch}.tar.gz"
 [ ! -e "$out/$asset" ] && [ ! -L "$out/$asset" ] || { printf 'archive already exists; use a new output directory\n' >&2; exit 1; }
 work=$(mktemp -d "${TMPDIR:-/tmp}/ohya-package.XXXXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
-CGO_ENABLED=1 go build -tags sqlite_fts5 -trimpath -buildvcs=true -ldflags "-X main.releaseVersion=$version" -o "$work/ohya" ./cmd/ohya
+CGO_ENABLED=1 go build -tags sqlite_fts5 -trimpath -buildvcs=true -ldflags "-X github.com/nibzard/ohya/internal/buildinfo.ReleaseVersion=$version" -o "$work/ohya" ./cmd/ohya
 identity=$("$work/ohya" version)
 case " $identity " in *" version=$version "*) ;; *) printf 'binary release identity mismatch\n' >&2; exit 1 ;; esac
 short_revision=$(printf '%s' "$revision" | cut -c 1-7)
