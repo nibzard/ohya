@@ -123,12 +123,45 @@ FROM events e WHERE e.id IN (
   ORDER BY ev.time_ms DESC LIMIT 5)
 ORDER BY e.time_ms DESC;
 
+Example — date-bounded recall. time_ms holds Unix milliseconds, and the cutoff spans the last 7 days without knowing the clock. The sessions bound drives the covering index; the events bound keeps older events of those sessions out of the result:
+SELECT e.id, e.session_id, e.time_ms, e.kind, e.role, substr(e.text, 1, 300) AS excerpt
+FROM events e WHERE e.id IN (
+  SELECT ev.id FROM sessions s JOIN events_settled ev ON ev.session_id = s.id
+  WHERE s.last_event_at_ms >= (CAST(strftime('%%s','now') AS INTEGER) - 7*86400) * 1000
+    AND ev.time_ms >= (CAST(strftime('%%s','now') AS INTEGER) - 7*86400) * 1000
+  ORDER BY ev.time_ms DESC LIMIT 20)
+ORDER BY e.time_ms DESC;
+
+Example — resume, step 1: this repository's last settled session. Settled means idle for at least 10 minutes, so the pick is never a session still running (find the repo as in the project example above):
+SELECT s.id, s.agent, s.device_id, s.first_prompt, s.last_event_at_ms
+FROM sessions s WHERE s.repo = 'github.com/owner/name'
+  AND EXISTS (SELECT 1 FROM events_settled e WHERE e.session_id = s.id)
+ORDER BY s.last_event_at_ms DESC LIMIT 1;
+
+Example — resume, step 2: read that session's newest 50 records oldest-first. Substitute the session id from step 1; duplicate_of IS NULL hides byte-identical replays, and the per-session index serves the order without a sort:
+SELECT e.id, e.time_ms, e.kind, e.role, e.tool_name, substr(e.text, 1, 400) AS excerpt
+FROM events e WHERE e.id IN (
+  SELECT ev.id FROM events ev WHERE ev.session_id = 'claude:dev1:s1'
+    AND ev.duplicate_of IS NULL
+  ORDER BY ev.time_ms DESC, ev.id DESC LIMIT 50)
+ORDER BY e.time_ms, e.id;
+
 Example — full-text search (BM25 rank):
 SELECT e.id, s.cwd, e.time_ms, substr(e.text, 1, 300) AS excerpt
 FROM events_fts JOIN events e ON e.id = events_fts.rowid
 JOIN sessions s ON s.id = e.session_id
 WHERE events_fts MATCH 'authentication AND refresh'
 ORDER BY events_fts.rank LIMIT 10;
+
+Example — one model's sessions. List the values first with SELECT DISTINCT model FROM sessions (NULL means the records carried no model), then scope recall to one model:
+SELECT s.id, s.agent, s.device_id, s.first_prompt, s.last_event_at_ms
+FROM sessions s WHERE s.model = 'claude-sonnet-4-5'
+ORDER BY s.last_event_at_ms DESC LIMIT 10;
+
+Example — one device's sessions. List the values first with SELECT DISTINCT device_id FROM sessions; memory holds every paired device, so name the device of each session you cite:
+SELECT s.id, s.agent, s.repo, s.first_prompt, s.last_event_at_ms
+FROM sessions s WHERE s.device_id = 'laptop'
+ORDER BY s.last_event_at_ms DESC LIMIT 10;
 
 Example — inspect one record by id:
 SELECT id, kind, role, tool_name, time_ms, raw_json FROM events WHERE id = 42;

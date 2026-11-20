@@ -101,6 +101,35 @@ single-goroutine `DecodeAll` calls. Reports MB/s and microseconds per
 block. The library version is the one linked into this module, the
 same code the ohya binary carries through `tailscale.com`.
 
+## Compressed upload drain and dictionary evaluation
+
+```sh
+go run ./cmd/genfixture -agent mix -fixture import -root /tmp/ohya-import
+go run -tags sqlite_fts5 ./perf/uploadbench -mode relay \
+  -root /tmp/ohya-import -mbits 3.1 -rtt-ms 130 -out perf/t146/relay-import.txt
+go run -tags sqlite_fts5 ./perf/uploadbench -mode dict \
+  -root /tmp/ohya-import -out perf/t146/dict-fixture.txt
+go run -tags sqlite_fts5 ./perf/uploadbench -mode dict \
+  -db ~/.ohya/hub.db -out perf/t146/dict-realhub.txt
+```
+
+`relay` drains the fixture through the real uploader and hubsync endpoint
+in process, with the three agent connections sharing one shaped uplink
+(token bucket plus per-write delay), compressed first and then plain via
+`OHYA_UPLOAD_COMPRESSION=off`, each side against a fresh hub database. It
+reports wall, payload and wire bytes (the uploader's own counters), the
+process CPU total, the per-agent backlog lines from the upload gauges, and
+the extrapolation to the measured 4.46 GB first join. `dict` measures the
+wire-section compression ratio per encoder speed class with encode and
+decode speed, on the fixture or on a systematic sample of a hub database's
+sessions (read-only; `-db`), and evaluates a `zstd --train` dictionary
+trained on the disjoint half of the files — the T146 level and dictionary
+decision data (docs/performance.md, "Compressed backfill"). The dictionary
+never leaves the machine it was trained on. The real-device counterpart is
+`OHYA_BENCH_UPLOAD=1 go test ./cmd/ohya -run TestUploadBackfillBench`
+(child serve and join over the local tailnet path; `OHYA_UPLOAD_COMPRESSION`
+selects plain frames, `OHYA_BENCH_UPLOAD_SCALE` grows the corpus).
+
 ## Recall query deadline reproduction
 
 ```sh

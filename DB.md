@@ -447,6 +447,94 @@ Agents persist their interpretations in `event_annotations`; there is no built-i
 classifier or dedicated classification table. Add secondary indexes or normalized file references only after real
 query patterns justify them.
 
+## Recall recipes
+
+The `sql` tool description publishes the same recipes to agents at connect
+time, one paragraph per recipe. They are single statements an agent runs
+unmodified after substituting one discovered literal (a repo, a model, a
+device, or a session id). Each recipe keeps the subquery shape of the
+project recall example, because a plain `ORDER BY e.time_ms` over a wide
+filter reads one `events` row per match and can exceed the 5 s deadline on
+a large hub.
+
+**Date-bounded recall.** `time_ms` holds Unix milliseconds. The cutoff uses
+`strftime` — the same expression the `events_settled` view itself uses — so
+the query needs no clock knowledge. The `sessions` bound drives the
+covering `events_session_time` index through sessions active in the window;
+the `events` bound keeps older events of those sessions out of the result.
+Both bounds are required: the events filter alone has no index to drive
+and degrades into a full scan.
+
+```sql
+SELECT e.id, e.session_id, e.time_ms, e.kind, e.role, substr(e.text, 1, 300) AS excerpt
+FROM events e WHERE e.id IN (
+  SELECT ev.id FROM sessions s JOIN events_settled ev ON ev.session_id = s.id
+  WHERE s.last_event_at_ms >= (CAST(strftime('%s','now') AS INTEGER) - 7*86400) * 1000
+    AND ev.time_ms >= (CAST(strftime('%s','now') AS INTEGER) - 7*86400) * 1000
+  ORDER BY ev.time_ms DESC LIMIT 20)
+ORDER BY e.time_ms DESC;
+```
+
+**Resume: rebuild context from this repository's last settled session.**
+This is ohya's answer to "resume where the last agent stopped". Step 1
+picks the newest session of the repository that is settled — idle for at
+least 10 minutes, so the pick is never a session still running, including
+the querying agent's own. `EXISTS` over `events_settled` inherits the
+view's exact settled semantics, including the NULL-timestamp case.
+
+```sql
+SELECT s.id, s.agent, s.device_id, s.first_prompt, s.last_event_at_ms
+FROM sessions s WHERE s.repo = 'github.com/owner/name'
+  AND EXISTS (SELECT 1 FROM events_settled e WHERE e.session_id = s.id)
+ORDER BY s.last_event_at_ms DESC LIMIT 1;
+```
+
+Step 2 reads that session's newest records oldest-first. The inner query
+walks the per-session `events_session_time` index backwards and stops at
+the limit; the outer query reverses those few rows into reading order.
+`duplicate_of IS NULL` hides byte-identical replay copies, which carry no
+search text of their own.
+
+```sql
+SELECT e.id, e.time_ms, e.kind, e.role, e.tool_name, substr(e.text, 1, 400) AS excerpt
+FROM events e WHERE e.id IN (
+  SELECT ev.id FROM events ev WHERE ev.session_id = 'claude:dev1:s1'
+    AND ev.duplicate_of IS NULL
+  ORDER BY ev.time_ms DESC, ev.id DESC LIMIT 50)
+ORDER BY e.time_ms, e.id;
+```
+
+**Filter by model.** `sessions.model` keeps the first non-empty model the
+session's own records carried, so it is NULL for sessions whose records
+named none. Discover the values present on the hub first, then filter (one
+statement per call):
+
+```sql
+SELECT DISTINCT model FROM sessions;
+```
+
+```sql
+SELECT s.id, s.agent, s.device_id, s.first_prompt, s.last_event_at_ms
+FROM sessions s WHERE s.model = 'claude-sonnet-4-5'
+ORDER BY s.last_event_at_ms DESC LIMIT 10;
+```
+
+**Per-device scoping.** One hub holds every paired device's sessions.
+Scoping by `device_id` answers "what happened on the laptop" and keeps a
+citation attributed to the machine that produced it. List the devices
+first, then scope; combine the filter with the repo or model recipe in one
+`WHERE` clause when a question needs both:
+
+```sql
+SELECT DISTINCT device_id FROM sessions;
+```
+
+```sql
+SELECT s.id, s.agent, s.repo, s.first_prompt, s.last_event_at_ms
+FROM sessions s WHERE s.device_id = 'laptop'
+ORDER BY s.last_event_at_ms DESC LIMIT 10;
+```
+
 ## Token totals example
 
 Session token totals are sums over `session_token_usage`; each API response

@@ -95,6 +95,9 @@ func runIngest(ctx context.Context, o ingestOptions) error {
 	}
 	hub, err := store.Open(ctx, o.dbPath, store.WithObserver(o.observer))
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
 		return classify(err, "database_open_failed", "check the --db path and its permissions; another ohya process may hold the database")
 	}
 	defer hub.Close()
@@ -118,6 +121,9 @@ func runIngest(ctx context.Context, o ingestOptions) error {
 		for i, r := range runners {
 			s, err := r.poll(ctx, o.roots[i].dirs, o.allowEmpty)
 			if err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
 				return err
 			}
 			stats.sources += s.sources
@@ -250,6 +256,9 @@ func (r *ingestor) poll(ctx context.Context, dirs []agentDir, allowEmpty bool) (
 	var stats passStats
 	pendingComplete := int64(0)
 	for _, o := range outcomes {
+		if ctx.Err() != nil {
+			break
+		}
 		if o.Missing {
 			r.reportMissing(o)
 			delete(r.tails, o.SourceID)
@@ -278,6 +287,9 @@ func (r *ingestor) poll(ctx context.Context, dirs []agentDir, allowEmpty bool) (
 		}
 		if r.registered[o.SourceID] != o.Path {
 			if err := r.hub.RegisterSource(ctx, o.SourceID, r.deviceID, r.agent, o.Path); err != nil {
+				if ctx.Err() != nil {
+					break
+				}
 				r.reportSource(o.Path, err)
 				if errors.Is(err, store.ErrSourcePurged) {
 					r.purged[o.SourceID] = true
@@ -310,6 +322,9 @@ func (r *ingestor) poll(ctx context.Context, dirs []agentDir, allowEmpty bool) (
 		}
 		inserted, committed, stop, err := r.ingestSource(ctx, o)
 		if err != nil {
+			if ctx.Err() != nil {
+				break
+			}
 			r.reportSource(o.Path, err)
 			if errors.Is(err, store.ErrSourcePurged) {
 				r.purged[o.SourceID] = true
@@ -374,7 +389,7 @@ func (r *ingestor) poll(ctx context.Context, dirs []agentDir, allowEmpty bool) (
 		return stats, err
 	}
 	r.observer.Observe("ingest_checkpoint_duration", time.Since(checkpointStart))
-	if r.workspacesDue || stats.inserted > 0 {
+	if ctx.Err() == nil && (r.workspacesDue || stats.inserted > 0) {
 		r.observeWorkspaces(ctx)
 	}
 	return stats, nil
@@ -391,7 +406,9 @@ func (r *ingestor) observeWorkspaces(ctx context.Context) {
 		fmt.Fprintf(r.stderr, "ohya: %d %s session directories could not be read and stay pending: %v\n", n, r.agent, res.Failures[0])
 	}
 	if err != nil {
-		fmt.Fprintf(r.stderr, "ohya: observe %s workspaces, retrying next pass: %v\n", r.agent, err)
+		if ctx.Err() == nil {
+			fmt.Fprintf(r.stderr, "ohya: observe %s workspaces, retrying next pass: %v\n", r.agent, err)
+		}
 		return
 	}
 	r.workspacesDue = false
@@ -412,7 +429,7 @@ func (r *ingestor) ingestSource(ctx context.Context, o watch.Outcome) (int, int6
 		if chunk.Cursor > 0 {
 			st, err := r.hub.SourceState(ctx, o.SourceID)
 			if err != nil {
-				if !errors.Is(err, store.ErrSourcePurged) {
+				if ctx.Err() == nil && !errors.Is(err, store.ErrSourcePurged) {
 					r.observer.Add("ingest_failures", 1, "read")
 				}
 				return inserted, o.Cursor, nil, err
@@ -453,6 +470,7 @@ func (r *ingestor) ingestSource(ctx context.Context, o watch.Outcome) (int, int6
 			})
 			if err != nil {
 				switch {
+				case ctx.Err() != nil:
 				case errors.Is(err, store.ErrBatchRejected), errors.Is(err, store.ErrSourcePurged):
 					r.observer.Add("ingest_batches", 1, "rejected")
 				default:

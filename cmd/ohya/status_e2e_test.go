@@ -197,8 +197,8 @@ func TestStatusChildCleanShutdownPublishesFinalSnapshot(t *testing.T) {
 	waitErr := child.Wait()
 	if waitErr != nil {
 		var exitErr *exec.ExitError
-		if !errors.As(waitErr, &exitErr) || exitErr.ExitCode() > 1 {
-			t.Fatalf("SIGTERM must not crash the ingest child: %v", waitErr)
+		if !errors.As(waitErr, &exitErr) || exitErr.ExitCode() != 0 {
+			t.Fatalf("SIGTERM must stop the ingest child cleanly with exit 0: %v", waitErr)
 		}
 	}
 	raw, err := os.ReadFile(filepath.Join(instanceDir, "snapshot.json"))

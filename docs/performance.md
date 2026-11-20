@@ -1287,9 +1287,9 @@ benchstat table to the job summary. The job reports; it does not fail on
 a regression. Only same-hardware comparisons are meaningful — GitHub's
 runners differ from the reference machine, and even between CI runs the
 fsync-bound rows (`BenchmarkIngestCorpus`, `BenchmarkIngestAppend`) swing
-with the shared runners' disk contention, while the parse and query rows
-are stable. Treat a CI delta as a signal to reproduce locally with
-`make bench-save` on both commits, not as a verdict.
+with the shared runners' disk contention, while the parse, query, and
+batch-codec rows are stable. Treat a CI delta as a signal to reproduce
+locally with `make bench-save` on both commits, not as a verdict.
 
 ## Live-hub trend
 
@@ -1579,7 +1579,210 @@ at 8 MiB plus two files (`TestLogWriterRotatesAtBoundAndKeepsBoundedFiles`).
   basic overhead passed, which is the precondition the plan set for
   starting them.
 
-## Limits and open items
+## Compressed backfill (T146)
+
+ADR 0014 shipped negotiated zstd batch compression for the device-to-hub
+upload path, starting at encoder level 3, and deferred three questions to
+measurement: what the compression actually buys on the wire, which encoder
+level to keep, and whether a shared dictionary is worth its logistics. This
+section answers them, measured 2026-11-20 on the reference machine above,
+Go 1.27.3, `github.com/klauspost/compress` v1.20.0. Raw outputs live under
+`perf/t146/` (gitignored). The baseline to beat is the measured first join
+of the MacBook: 4.46 GB of raw records over a relay-only path at
+3.1–3.3 Mbit/s, about three hours (NOTES.md, Tailcat spike, 2026-11-16).
+
+### Method
+
+Four vehicles, all on deterministic corpora or read-only real data:
+
+1. **Codec benchmarks** (`make bench`, new rows in `internal/hubsync`):
+   `BenchmarkBatchWritePlain`, `BenchmarkBatchEncode/speed=*`, and
+   `BenchmarkBatchDecode` run the real frame writer and the real production
+   encoder options (CRC on, cap-limited decode) over every file of the
+   import mix fixture as one batch per file — exactly the batch shape the
+   uploader sends, because a batch is one source's pending bytes capped at
+   64 MiB and fixture files are file-sized. They are part of
+   `make bench-save`, so benchstat tracks them across commits like the
+   other rows.
+2. **Real-record ratios** (`go run -tags sqlite_fts5 ./perf/uploadbench
+   -mode dict -db ~/.ohya/hub.db`): reads a systematic sample of sessions
+   (every Nth by id, 1.08 GB of raw records across the three agents) from
+   the deployed hub read-only, rebuilds the wire record section of each
+   session (the 12-byte offset/length framing plus JSON the `zbatch`
+   payload carries), and measures ratios, encode and decode speed per
+   encoder level, and a dictionary trained with `zstd --train` on the
+   disjoint half of the files. The dictionary never leaves the machine.
+3. **Local tailnet drain** (`OHYA_BENCH_UPLOAD=1 go test ./cmd/ohya -run
+   TestUploadBackfillBench`): the real child-process stack — `ohya serve`
+   with a local DERP relay and a joined `ohya join`, direct transport path
+   — drains the import mix fixture (137.0 MiB, 191 files, 40,020 events)
+   twice, once compressed and once with `OHYA_UPLOAD_COMPRESSION=off`
+   forcing plain frames against the same capable hub. Each side gets a
+   fresh hub database and device state; the same corpus feeds both. Wall
+   time runs from join start to the last event landing; device and hub CPU
+   come from `/proc/<pid>/stat` of the two children; wire and payload bytes
+   come from the `upload_wire_bytes` and `upload_payload_bytes` counters in
+   the join process's final observe snapshot. `OHYA_BENCH_UPLOAD_SCALE`
+   (a float fraction of the observed corpus, default the 1/32 import
+   fixture) grows the corpus.
+4. **Relay-shaped drain** (`go run -tags sqlite_fts5 ./perf/uploadbench
+   -mode relay -root <import fixture>`): the same uploader and hubsync
+   endpoint in process, with the three agent connections sharing one
+   shaped uplink — a token bucket at 3.1 Mbit/s plus 65 ms one-way delay
+   per write (130 ms RTT, the middle of the measured relay range). This
+   models the relay bottleneck without a second host: over the real relay
+   the sync protocol sees exactly such a rate-limited connection, while
+   the hub commit path (4–20 MiB/s even under contention) keeps up with
+   the shaped link the same way the real hub did.
+
+### Ratios on real record distributions
+
+| Source | claude-code | codex | pi | Byte-weighted |
+|---|---|---|---|---|
+| Import mix fixture, drain (`upload_wire_bytes`/`upload_payload_bytes`) | — | — | — | 5.96x |
+| Import mix fixture, per-file sections at level 3 | 4.38x | 7.51x | 3.76x | 5.98x |
+| Real hub records, systematic session sample at level 3 | 5.83x | 4.25x | 4.08x | 4.91x |
+
+The fixture overstates the real ratio: its skewed synthetic word
+distribution and repeated JSON envelopes (Codex especially) compress better
+than real transcripts. The real-record number is the one to plan with:
+**about 4.9x** on the deployed hub's record mix. It sits consistently
+between the plan 004 S3 offline anchors (1 MiB blocks 3.3–3.8x, whole
+sessions 5.8x): a wire batch is a whole file, so it lands between the two,
+weighted by file size. One caveat cuts both ways: the real sample compresses
+per SESSION, and a Codex thread spans several rollout files, so the sample
+sees a little cross-file redundancy that per-file wire batches cannot.
+
+### Drain throughput
+
+Local tailnet path (direct, child processes; import fixture, 137.0 MiB
+payload; `OHYA_UPLOAD_COMPRESSION=off` for the plain side):
+
+| Side | Wall | Payload rate | Wire bytes | Device CPU s/GiB | Hub CPU s/GiB |
+|---|---|---|---|---|---|
+| Compressed | 27.6 s | 4.96 MiB/s | 24.1 MB (5.96x) | 10.3 | 65.9 |
+| Plain | 75.8 s | 1.81 MiB/s | 144.1 MB (1.003x) | 14.6 | 75.1 |
+
+Two facts fall out. First, on this host the plain drain is bounded by the
+transport itself (about 1.9 MB/s through the tailcat stack), not by the
+hub, so compression lifts the local first join 2.7x as well — the
+compressed drain runs at the hub's fsync-bound commit rate instead, which
+is the same 4–20 MiB/s band the ingestion measurements report. Second,
+compression makes **both ends cheaper in CPU**: the device spends 10.3
+versus 14.6 s/GiB and the hub 65.9 versus 75.1, because zstd encode and
+decode cost less than pushing six times the bytes through transport
+encryption, SQLite parsing, and the write path.
+
+The same A/B at 8x volume (`OHYA_BENCH_UPLOAD_SCALE=0.25`: 1,049 MiB of
+records, 1,475 files, 312,945 events) reproduces every figure —
+compressed 4m02s at 4.44 MiB/s (5.93x wire, 10.5 and 67.4 s CPU per GiB),
+plain 11m01s at 1.62 MiB/s (19.4 and 77.1) — so the fixture numbers above
+are not small-corpus artifacts, and the compressed advantage holds at
+2.7x with the startup costs amortized.
+
+Relay-shaped path (shared 3.1 Mbit/s uplink, 130 ms RTT, in-process
+endpoint, import fixture):
+
+| Side | Wall | Effective uplink | Extrapolated 4.46 GB first join |
+|---|---|---|---|
+| Compressed | 1m28s | 2.19 Mbit/s of wire | 48 min at the 5.96x fixture ratio |
+| Plain | 6m46s | 2.84 Mbit/s | 3.7 h |
+
+The effective uplink sits below the nominal 3.1 Mbit/s because each
+per-source exchange also pays the RTT (registration, probe, then one batch
+per file; one batch in flight per source) — the same overhead class a real
+relay join pays, where it amortizes to a few percent because the same
+shaping carries hours of traffic. The model is therefore slightly
+conservative: its plain extrapolation (3.7 h) sits above the measured
+baseline (about 3 h), which validates the model against reality.
+
+**Verdict against the baseline:** at the same link speed, the 4.46 GB first
+join over the relay drops from the measured ~3 hours to roughly
+**45–60 minutes** — 48 minutes at the fixture ratio, about 55 minutes at
+the real-record 4.9x ratio, against the model's conservative 3.7-hour plain
+figure and the measured 3-hour one. That is a **3.5–4.6x** improvement,
+with device and hub CPU both lower than plain transfer, not higher.
+
+### Encoder level: keep 3
+
+klauspost/compress exposes four speed classes; `EncoderLevelFromZstd` maps
+levels 1–2 to fastest, 3–5 to default (the shipped level 3), 6–9 to
+better, and 10+ to best. Byte-weighted over the real-record sample:
+
+| Level | Real-sample ratio | Wire bytes vs level 3 | Encode speed (claude/codex) |
+|---|---|---|---|
+| fastest (1) | 4.39x | +12.0% | 328/410 MB/s |
+| default (3, shipped) | 4.91x | — | 300/284 MB/s |
+| better (7) | 5.27x | −6.8% | 173/170 MB/s |
+| best (11) | 5.56x | −11.6% | 44/41 MB/s |
+
+The decision rule: leave the library's default speed class only for a
+material, real-basis gain, because the level applies to every upload on
+every device, including the steady-state freshness path where compression
+buys nothing. The `better` class buys 6.8% for 1.7x the encode cost — not
+material. The `best` class buys 11.6%, but that figure rests on
+per-SESSION sections whose cross-file matching a per-file wire batch
+cannot see (the caveat above), so it is an upper bound; the honest wire
+expectation is near or below 10%, the absolute saving is minutes on a
+once-per-device join, and it costs 7x the encode work on every device.
+Level 3 stays. Decode runs at 0.5–1.0 GB/s per goroutine regardless of
+level, so the hub side was never the constraint. Reopen trigger: a real
+drain on a file-shaped corpus showing more than 10% sustained wire savings
+on a link-bound path where those bytes matter (for example a metered
+relay).
+
+### Shared dictionary: rejected
+
+The evaluation trained a 110 KiB dictionary per agent with `zstd --train`
+on the disjoint half of the files and measured level-3 wire bytes on the
+other half:
+
+| Source | claude-code | codex | pi |
+|---|---|---|---|
+| Real hub records (systematic sample) | 5.3% additional reduction | 2.3% | 5.0% |
+| Import mix fixture | 1.3% | 3.3% | — |
+| Real records, files under 128 KiB only | 54.9% (n=7) | 26.6% (n=63) | 5.9% (n=66) |
+
+The adoption threshold was more than 25% additional reduction. On the
+byte-weighted backfill the dictionary buys 2.3–5.3% — an order below the
+bar — because a wire batch is a whole file (mean 1.2 MiB) whose window
+already captures the intra-file redundancy a dictionary would supply.
+Small files do gain 26–55%, confirming the theory, but they hold a sliver
+of backfill bytes, and a dictionary costs exactly the hub-side versioning
+and pairing logistics ADR 0014 named (per-agent dictionaries shipped to
+every device before its first compressed batch, versioned with the
+protocol). Decision: **do not implement**; revisit only if a future
+workload makes small-batch wire bytes dominant (for example metered
+steady-state links), with the small-file numbers above as the ceiling.
+
+### CI regression guard: codec rows only
+
+The codec benchmarks joined `make bench` and `make bench-save`, so the
+existing darwin bench job tracks encode/decode throughput and ratio in its
+report-only artifact — the precedent the bench job already follows
+(reports, never fails). The drain numbers stay out of CI: they are
+fsync-bound (local) and link-model-bound (relay-shaped), swinging several
+fold on shared runners, which is why every earlier workload measurement
+lives here instead of a gate.
+
+### Gaps
+
+- No real second host or real DERP relay was available; the relay shape is
+  a modeled constrained link validated by the plain extrapolation matching
+  the measured three-hour baseline. The relay-shaped drain ran on the
+  import fixture (137 MiB); the 8x large corpus ran on the local path,
+  whose bottleneck is not the link.
+- The deployed hub and the MacBook device both predate the compression
+  change, so `upload_wire_bytes` on a real production drain is still to
+  collect once the operator upgrades both ends (the counter exists for
+  exactly that); until then the real-record ratios above are the best
+  available wire estimate.
+- The real-record sample is the hub VM's own corpus (systematic sample,
+  1.08 GB); the MacBook's 4.46 GB corpus compresses in the same class per
+  the plan 004 S3 per-device analysis, but a joined-sample measurement
+  from that device would tighten the extrapolation.
+
+
 
 - All fsync-sensitive numbers (import rate, append latency) vary several-fold
   with disk contention; treat the ranges, not the midpoints, as the limit.

@@ -127,6 +127,40 @@ No Docker. No PostgreSQL. No cloud account. No vector infrastructure. No backgro
 
 **Minimal surface area.** One binary. One database. Two MCP tools. Deterministic ingestion and agent-side reasoning.
 
+## Competitive position (2026-11-19)
+
+The nearest shipped neighbor is Atuin "threads"
+([v18.24.0](https://github.com/atuinsh/atuin/releases/tag/v18.24.0),
+2026-10-15): file-tailing capture of the same Claude Code, Codex, and Pi
+session logs, SQLite FTS5/BM25 search, and MCP tools for agent
+self-recall. That convergence validates the demand and the architecture.
+This position is dated and issue-linked; re-verify against the competitor
+before quoting it later.
+
+ohya commits to four differences:
+
+1. **Operator-owned shared hub, no third-party server.** Devices pair with
+   one-time invitations and sync to a hub the operator runs; nothing
+   outside that hub ever holds the transcripts. Atuin threads are
+   single-user, and its live teams beta is hosted-hub-only, uploading
+   shared threads in plaintext to the hosted hub.
+2. **Lossless raw records.** Every original JSONL record is stored byte
+   for byte. Memory survives agent-side transcript rotation, and parser
+   upgrades re-derive normalized rows from the stored records instead of
+   asking devices to resend. Capture pipelines that clip and redact at
+   capture cannot answer what was lost.
+3. **Bounded arbitrary SQL instead of fixed keyword tools.** Agents already
+   speak SQL; ohya spends its surface budget on one bounded read-only
+   query tool rather than a growing list of retrieval endpoints. Fixed
+   keyword tools hit a ceiling their own users report —
+   [atuinsh/atuin#4589](https://github.com/atuinsh/atuin/issues/4589) asks
+   for boolean, date, regular-expression, and model filters that one
+   `WHERE` clause already expresses.
+4. **Checked sync and authorization.** Acknowledgment, ordering, and
+   revocation invariants are model-checked with TLA+/TLC before they ship.
+   Silent loss and a surviving revoked device are the failures a memory
+   product cannot walk back.
+
 ---
 
 ### The vision

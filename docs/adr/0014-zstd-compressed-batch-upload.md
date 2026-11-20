@@ -192,3 +192,12 @@ The protocol gains its first negotiated capability with a pattern later
 features can reuse (offer in `V`, intersection in `v`, plain fallback), and
 the dependency surface grows by zero modules. T146 measures the achieved
 ratio and CPU cost on real corpora and decides the dictionary question.
+
+T146 outcome (2026-11-20, numbers in
+[docs/performance.md](../performance.md) "Compressed backfill"): level 3
+stays — the higher speed classes buy 6.8% (`better`) and 11.6% (`best`,
+an upper bound from per-session sections) byte-weighted wire reduction on
+real records for 1.7–7x the encode cost, not material for a once-per-device
+join — and the shared dictionary is rejected: 0.1–5.3% additional reduction
+on real record distributions against the over-25% adoption threshold, not
+worth the hub-side versioning and pairing logistics named below.

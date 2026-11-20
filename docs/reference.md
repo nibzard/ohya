@@ -45,7 +45,11 @@ stderr keeps the per-source diagnostics. `ohya status` and `ohya metrics`
 also exit 3 when the result is valid but partial, stale, or degraded —
 a missing publisher, a stale snapshot, a broken sample, or a window the
 history does not fully cover — while the JSON stays parseable with data
-present and no top-level command error. Flags
+present and no top-level command error. A SIGINT or SIGTERM stops
+`ohya ingest` cleanly whenever it arrives — during a poll, between
+polls, or while the database opens — and the process exits 0: committed
+work stays acknowledged, the final observe snapshot still publishes, and
+the next start resumes from the last checkpoint. Flags
 are spelled with two dashes (`--db`); the parser also accepts one dash.
 Flags may appear before or after positional arguments:
 `ohya join --state DIR CODE` and `ohya join CODE --state DIR` both parse.
@@ -148,7 +152,13 @@ rollouts into `archived_sessions`, so both directories are default roots;
 `~/.ohya/hub.db` (override with `--db`; the state directory defaults to the
 database directory and can be set with `--state`). A default directory that
 does not exist holds no sessions, so an agent you do not use costs nothing.
-A directory you pass must exist, and an empty value disables that agent.
+A directory you pass must exist. An empty value (`--claude-root ''`,
+`--codex-root ''`, `--pi-root ''`) is the per-machine opt-out: this machine
+watches and uploads none of that agent's sessions, while every other paired
+machine keeps its own. The choice is per machine and per agent, not per
+account, and it applies equally to `ohya ingest` and `ohya join` — a
+laptop that opts out of Codex still receives the Codex sessions other
+machines upload, because memory on the hub stays shared.
 Every regular `*.jsonl` file under a root is a session file; spilled tool
 output and memory files use other extensions. A replaced or truncated file
 starts a new source that re-imports from byte zero, and ingest prints one

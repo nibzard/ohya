@@ -45,6 +45,25 @@ How to use this file:
   ohya's wedge stays: operator-owned shared hub with no third-party server,
   lossless raw records, bounded arbitrary SQL + annotate, TLA+-verified
   sync/auth. Full study: /notes/2026-11-19-atuin-threads-vs-ohya.md.
+  Published 2026-11-19 (T143): dated comparison sections in README.md and
+  PRODUCT.md; recall recipes (date-bounded on time_ms, resume from the
+  repo's last settled session, sessions.model, per-device) in the sql tool
+  description and DB.md "Recall recipes" (every published SQL block runs
+  verbatim through the engine; strftime '%s' must be written '%%s' in the
+  ToolDescription source because the whole description is one Fprintf
+  format string); empty-root flags framed as per-machine opt-out in
+  docs/reference.md.
+  Since 2026-11-20 (T151) that verification is permanent:
+  TestPublishedRecipesRunVerbatim in internal/mcpserver extracts every SQL
+  block from the rendered ToolDescription (a paragraph line opening with
+  SELECT/WITH/PRAGMA/EXPLAIN/VALUES through the paragraph end) and runs each
+  verbatim through the engine over a hub seeded with the published literals
+  (repo github.com/owner/name, model claude-sonnet-4-5, device laptop,
+  session claude:dev1:s1, event ids 42/100/101/102). The block count is
+  pinned (12), so adding or removing an example is a conscious test update.
+  A syntax error or a denied statement inside a block fails at execution;
+  an opener that stops matching (for example a block rewritten to start
+  with DELETE) trips the count pin instead.
 
 - Competitive clock (observed 2026-11-15, openai/codex main): Codex is landing first-party memory (`memories/write`; `memories_1.sqlite` now present in `~/.codex`), a SQLite-backed `message-board` + message-board-mcp crate, and `external-agent-migration` importing Claude Code sessions. Cross-agent, local-first, shared remain ohya's wedge; factor into launch sequencing. Their session search still greps raw JSONL (ripgrep with JSON-escaped terms, search.rs) plus a bolted-on SQLite listing index — converging on ohya's design from both sides.
 
@@ -1765,15 +1784,19 @@ How to use this file:
   and mcp also write usage records, ingest and join do not (they never
   serve sql). `--remote` on status reports the capability gap as finding
   remote_status_unsupported; hub-side aggregates are milestone 5 (T098).
-  Open question: a SIGTERM that lands while an ingest poll is in flight
-  can exit 1 instead of 0 — cmd/ohya/ingest.go runIngest returns the
-  ctx-canceled error from poll's RPCs (RegisterSource, Ingest) as a pass
-  failure; a signal between passes exits 0 through the select. The final
-  snapshot still publishes in both cases (deferred telemetry close).
-  Observed once in TestStatusChildCleanShutdownPublishesFinalSnapshot,
-  which therefore accepts exit 0 or 1; three consecutive manual runs
-  exited 0. Fix candidate: treat context.Canceled from poll as a clean
-  stop.
+  Resolved 2026-11-19 (T132): a SIGTERM during an ingest poll or during
+  store.Open is a clean stop — exit 0, no per-source "context canceled"
+  diagnostics, no ingest_failures counts. cmd/ohya/ingest.go treats
+  ctx.Err() as a clean stop at every cancellation point (store.Open, poll
+  error returns, the poll source loop, RegisterSource/Ingest/SourceState
+  error paths, workspace observation), mirroring uploader.Run's
+  ctx-first check. Verified fact from the fix work: with the pre-fix
+  code, poll's RPC errors were already swallowed as per-source failures
+  (continuous mode exited 0 but noisy; --once exited 3); the one observed
+  exit 1 was the store.Open window after the startup snapshot publishes —
+  the only ctx-aware call whose error returns to runIngest as a command
+  error. TestStatusChildCleanShutdownPublishesFinalSnapshot now requires
+  exit 0 exactly.
 
 - Logs and diagnostics delivered (2026-11-17, T096, plans/001 milestone 4):
   internal/observe gained the LogWriter (`events.jsonl`, 8 MiB plus two
@@ -2119,3 +2142,54 @@ How to use this file:
   nearly full volume. If it recurs, check `df -h /` before suspecting
   the transport; a bigger `hubProbeWait` is a product decision, not a
   test fix.
+
+- Compressed backfill measured (2026-11-20, T146, docs/performance.md
+  "Compressed backfill"): ADR 0014's deferred tuning questions closed with
+  data. Numbers and facts worth keeping:
+  - Real-record wire ratio at level 3 is about 4.9x (systematic 1.08 GB
+    session sample of the live hub, read-only), while the fixgen mix
+    fixture drains at 5.96x — synthetic text over-compresses, so plan with
+    the real number. The 4.46 GB relay first join extrapolates from the
+    measured ~3 h plain to ~45–60 min compressed; the shaped-link model is
+    validated by its plain extrapolation (3.7 h) landing just above the
+    measured baseline.
+  - On the LOCAL tailnet path compression also wins 2.7x (27.6 s vs 75.8 s
+    for a 137 MiB drain, real child serve+join; the 1,049 MiB 8x corpus
+    reproduces it at 4m02s vs 11m01s): the plain drain is bounded by the
+    transport (~1.6-1.9 MB/s through the tailcat stack on this host), the
+    compressed one by hub commit (~4.4-5 MB/s, the known fsync band).
+    Device AND hub CPU are both LOWER compressed (10.3-10.5/66-67 vs
+    14.6-19.4/75-77 s/GiB) — zstd costs less than encrypting, parsing, and
+    committing six times the bytes.
+  - Level stays 3: better(7) buys 6.8% wire, best(11) 11.6% — and the 11.6%
+    is an upper bound, because per-SESSION sections see the cross-file
+    matches a per-FILE wire batch cannot — for 1.7–7x encode cost.
+    Dictionary rejected: 2.3–5.3% additional reduction on real records vs
+    the >25% bar (fixture agrees at 1.3–3.3%). Small files (<128 KiB) gain
+    26–55% from a dictionary — the steady-state shape — but hold a sliver
+    of backfill bytes; that is the reopen condition, recorded with the
+    decision.
+  - Harnesses: `perf/uploadbench` (-mode relay: shaped-link A/B drain
+    through the real in-process endpoint, compressed then plain, fresh hub
+    per side; -mode dict: speed-class ratios plus `zstd --train` dictionary
+    on a fixture or on a hub DB sample — hubdata gained
+    AgentSessions/CountAgentSessions/SampleAgentSessions);
+    `OHYA_BENCH_UPLOAD=1 go test ./cmd/ohya -run TestUploadBackfillBench`
+    (child serve+join over the real transport; OHYA_BENCH_UPLOAD_SCALE
+    grows the corpus; per-side CPU from /proc, wire/payload from the join
+    child's final observe snapshot — SIGTERM stop publishes it); codec
+    benches joined make bench/bench-save (BenchmarkBatchWritePlain, ...Encode,
+    ...Decode in internal/hubsync; x-ratio rides a ReportMetric, so
+    benchstat tracks ratios too). Drain rows stay out of CI (fsync- and
+    model-bound; the bench job reports, never fails).
+  - `OHYA_UPLOAD_COMPRESSION=off` in the joining process suppresses the
+    capability offer for its lifetime (uploader reads it per connection) —
+    the A/B knob and the operational escape hatch, documented in
+    docs/sync-protocol.md; pinned by TestCompressionDisabledUploadsPlainFrames.
+  - klauspost/compress exposes four speed classes, not the zstd level
+    range (EncoderLevelFromZstd: 1–2 fastest, 3–5 default, 6–9 better,
+    10+ best) — a "level 5" bench is identical to level 3, so label by
+    speed class. And batchDecoder's WithDecodeAllCapLimit caps decode at
+    the destination slice CAPACITY: reusing a 1 MiB buffer fails on 1.2 MiB
+    sections with "decompressed size exceeds configured limit" — decode
+    into a per-stream buffer sized like the production rawLen allocation.

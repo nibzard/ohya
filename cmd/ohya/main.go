@@ -114,6 +114,7 @@ var ingestSpec = commandSpec{
 	synopsis:  "import agent session history, then poll for new records",
 	usageLine: "ohya ingest [flags]",
 	description: "Imports the existing session history of every watched agent once, then polls incrementally until stopped. " +
+		"SIGINT or SIGTERM stops ingest cleanly at any point — during a pass or between passes — and the process exits 0; a restart resumes from the last acknowledged checkpoint. " +
 		"Later polls read only the bytes past each acknowledged checkpoint, so a restart resumes where the last commit ended. " +
 		"All writes commit through one transactional write path; a malformed record stops its source with a diagnostic and never skips bytes. " +
 		"With --once, a pass in which a source failed or stopped exits 3 (degraded); the poll loop keeps running and keeps its stderr diagnostics.\n" +

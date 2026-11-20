@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/nibzard/ohya/internal/device"
@@ -36,6 +38,10 @@ var ErrDisconnected = errors.New("uploader: hub connection failed; unacknowledge
 var ErrUnauthorized = errors.New("uploader: the hub refused this device's credential")
 
 var ErrIncompatible = errors.New("uploader: the hub refused the wire protocol")
+
+func compressionDisabled() bool {
+	return strings.EqualFold(os.Getenv("OHYA_UPLOAD_COMPRESSION"), "off")
+}
 
 type Dialer func(ctx context.Context) (net.Conn, error)
 
@@ -602,7 +608,7 @@ func (u *Uploader) connect(ctx context.Context) error {
 		if err := u.dialHello(ctx); err != nil {
 			return err
 		}
-		if u.capsOff {
+		if u.capsOff || compressionDisabled() {
 			return nil
 		}
 		caps, perr, err := u.negotiate(ctx)

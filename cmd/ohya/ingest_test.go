@@ -18,6 +18,7 @@ import (
 
 	"github.com/nibzard/ohya/internal/claudecode"
 	"github.com/nibzard/ohya/internal/device"
+	"github.com/nibzard/ohya/internal/observe/observertest"
 	"github.com/nibzard/ohya/internal/store"
 	"github.com/nibzard/ohya/internal/watch"
 )
@@ -897,6 +898,86 @@ type firstWriteCanceler struct {
 func (f firstWriteCanceler) Write(p []byte) (int, error) {
 	f.cancel()
 	return f.w.Write(p)
+}
+
+type cancelOnCounter struct {
+	inner  *observertest.Recorder
+	cancel context.CancelFunc
+	metric string
+	once   bool
+}
+
+func (c *cancelOnCounter) Add(name string, delta uint64, labelValues ...string) {
+	if name == c.metric && !c.once {
+		c.once = true
+		c.cancel()
+	}
+	c.inner.Add(name, delta, labelValues...)
+}
+
+func (c *cancelOnCounter) Set(name string, value float64, labelValues ...string) {
+	c.inner.Set(name, value, labelValues...)
+}
+
+func (c *cancelOnCounter) Observe(name string, d time.Duration, labelValues ...string) {
+	c.inner.Observe(name, d, labelValues...)
+}
+
+func TestIngestContextCancelDuringPollStopsCleanly(t *testing.T) {
+	cases := []struct {
+		name   string
+		metric string
+	}{
+		{name: "before the source loop", metric: "discovery_candidates"},
+		{name: "mid-source before the commit", metric: "parse_bytes"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, once := range []bool{false, true} {
+				e := newSliceEnv(t)
+				copyFixture(t, e.session("main-session.jsonl"), "main-session.jsonl")
+				ctx, cancel := context.WithCancel(context.Background())
+				obs := &cancelOnCounter{inner: observertest.New(), cancel: cancel, metric: tc.metric}
+				var stderr bytes.Buffer
+				err := runIngest(ctx, ingestOptions{
+					dbPath: e.dbPath, stateDir: e.stateDir, roots: e.claudeRoots(),
+					interval: 10 * time.Millisecond, once: once,
+					stdout: io.Discard, stderr: &stderr, observer: obs,
+				})
+				cancel()
+				if err != nil {
+					t.Fatalf("once=%v: a canceled context is a clean stop, got error: %v", once, err)
+				}
+				if strings.Contains(stderr.String(), "context canceled") {
+					t.Errorf("once=%v: cancellation must not surface as a source diagnostic: %s", once, stderr.String())
+				}
+				if got := obs.inner.Counter("ingest_failures"); got != 0 {
+					t.Errorf("once=%v: cancellation must not count ingest failures, got %d", once, got)
+				}
+				if got := obs.inner.UnknownAddCalls(); got != 0 {
+					t.Errorf("once=%v: observer got %d unknown metric calls", once, got)
+				}
+			}
+		})
+	}
+}
+
+func TestIngestContextCancelDuringOpenStopsCleanly(t *testing.T) {
+	e := newSliceEnv(t)
+	copyFixture(t, e.session("main-session.jsonl"), "main-session.jsonl")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := runIngest(ctx, ingestOptions{
+		dbPath: e.dbPath, stateDir: e.stateDir, roots: e.claudeRoots(),
+		interval: 10 * time.Millisecond,
+		stdout:   io.Discard, stderr: io.Discard,
+	})
+	if err != nil {
+		t.Fatalf("a context canceled before the database opens is a clean stop, got error: %v", err)
+	}
+	if _, err := os.Stat(e.dbPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("database %s exists after the clean stop: %v", e.dbPath, err)
+	}
 }
 
 func TestIngestMissingClaudeRootFails(t *testing.T) {

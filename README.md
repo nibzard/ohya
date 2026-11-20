@@ -56,6 +56,40 @@ day. That context stays in one tool on one machine, until it is lost.
   (`cleanupPeriodDays`). ohya keeps every record that it has ingested until
   you decide otherwise.
 
+### Atuin threads, compared (2026-11-19)
+
+[Atuin](https://atuin.sh) shipped "threads" in
+[v18.24.0](https://github.com/atuinsh/atuin/releases/tag/v18.24.0) on
+2026-10-15: capture and search of the same Claude Code, Codex, and Pi
+session files ohya watches, served to agents over MCP. That convergence
+validates the demand and the architecture. The differences below were
+verified against Atuin's releases, repository, and issue tracker on
+2026-11-19:
+
+- **Sharing and trust.** Atuin threads are single-user; the live "Threads
+  for teams" beta is hosted-hub-only and uploads shared threads in
+  plaintext to the hosted hub. ohya shares through an operator-owned hub
+  with no third-party server: one-time invitations, encrypted device sync,
+  and final revocation.
+- **Fidelity.** Atuin captures lossily — tool input and output are clipped
+  at 64 KiB and secrets are replaced at capture. ohya keeps every original
+  record byte for byte and reduces secret risk at egress
+  ([ADR 0015](docs/adr/0015-egress-secret-redaction.md)).
+- **Recall surface.** Atuin's agent tools are fixed keyword search; its
+  users ask for boolean, date, regular-expression, and model filters those
+  tools cannot express
+  ([#4589](https://github.com/atuinsh/atuin/issues/4589)). ohya agents
+  write bounded read-only SQL: a date, model, or device filter is one
+  `WHERE` clause, and the recipes ship in the tool description and
+  [DB.md](DB.md#recall-recipes).
+- **Retention.** Atuin has no user-facing delete or retention
+  ([#4434](https://github.com/atuinsh/atuin/issues/4434)). ohya ships
+  owner-decided purge
+  ([ADR 0013](docs/adr/0013-owner-scoped-session-purge.md)).
+- **Verification.** ohya's sync and authorization state machines are
+  model-checked with TLA+/TLC ([tla/](tla/README.md)), so the durability
+  and revocation claims rest on checked invariants.
+
 ## How it works
 
 <picture>

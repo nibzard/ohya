@@ -1154,6 +1154,32 @@ func TestCompressedUploadNegotiated(t *testing.T) {
 	}
 }
 
+func TestCompressionDisabledUploadsPlainFrames(t *testing.T) {
+	t.Setenv("OHYA_UPLOAD_COMPRESSION", "off")
+	f := newFixture(t, Options{})
+	h := serve(t, openHubDB(t, filepath.Join(t.TempDir(), "hub.db")), f.reg, hubsync.Options{})
+	f.dialer.point(h.addr)
+	a := filepath.Join(f.dir, "a.jsonl")
+	one := line(sessA, "one")
+	writeFile(t, a, strings.Repeat(one, 200))
+
+	stats := f.mustSync()
+	if stats.Inserted != 200 {
+		t.Fatalf("stats = %+v; want 200 events", stats)
+	}
+	wire := f.obs.Counter("upload_wire_bytes")
+	payload := f.obs.Counter("upload_payload_bytes")
+	if wire < payload {
+		t.Fatalf("wire bytes = %d, payload bytes = %d; want plain frames (wire at or above payload)", wire, payload)
+	}
+	if got := count(t, h.db, `SELECT count(*) FROM events`); got != 200 {
+		t.Fatalf("hub events = %d, want 200", got)
+	}
+	if got, want := f.checkpoint(a), size(t, a); got != want {
+		t.Fatalf("checkpoint = %d, want %d", got, want)
+	}
+}
+
 type oldHub struct {
 	t          *testing.T
 	ln         net.Listener

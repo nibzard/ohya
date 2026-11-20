@@ -11,7 +11,7 @@ check:
 
 bench:
 	go test -tags sqlite_fts5 -run '^$$' -bench . -benchmem \
-		./internal/events ./internal/mcpserver
+		./internal/events ./internal/hubsync ./internal/mcpserver
 
 COUNT ?= 10
 OUT = perf/bench-$(shell git rev-parse --short HEAD).txt
@@ -19,7 +19,7 @@ OUT = perf/bench-$(shell git rev-parse --short HEAD).txt
 bench-save:
 	mkdir -p $(dir $(OUT))
 	go test -tags sqlite_fts5 -run '^$$' -bench . -benchmem -count $(COUNT) \
-		./internal/events ./internal/mcpserver > $(OUT)
+		./internal/events ./internal/hubsync ./internal/mcpserver > $(OUT)
 	@echo wrote $(OUT)
 
 bench-diff:

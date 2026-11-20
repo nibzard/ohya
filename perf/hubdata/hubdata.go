@@ -90,6 +90,64 @@ func AllSessions(db *sql.DB) ([]Session, error) {
 	return out, rows.Err()
 }
 
+func AgentSessions(db *sql.DB, agent string, limit int) ([]Session, error) {
+	rows, err := db.Query(`
+		SELECT id, device_id, agent, event_count
+		FROM sessions
+		WHERE agent = ? AND event_count > 0
+		ORDER BY event_count DESC, id
+		LIMIT ?`, agent, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Session
+	for rows.Next() {
+		var s Session
+		if err := rows.Scan(&s.ID, &s.DeviceID, &s.Agent, &s.EventCount); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+func CountAgentSessions(db *sql.DB, agent string) (int, error) {
+	var n int
+	if err := db.QueryRow(`SELECT count(*) FROM sessions WHERE agent = ? AND event_count > 0`, agent).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+func SampleAgentSessions(db *sql.DB, agent string, stride int) ([]Session, error) {
+	if stride < 1 {
+		stride = 1
+	}
+	rows, err := db.Query(`
+		SELECT id, device_id, agent, event_count
+		FROM sessions
+		WHERE agent = ? AND event_count > 0
+		ORDER BY id`, agent)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Session
+	i := 0
+	for rows.Next() {
+		var s Session
+		if err := rows.Scan(&s.ID, &s.DeviceID, &s.Agent, &s.EventCount); err != nil {
+			return nil, err
+		}
+		if i%stride == 0 {
+			out = append(out, s)
+		}
+		i++
+	}
+	return out, rows.Err()
+}
+
 func ReadSessionRaw(db *sql.DB, sessionID string, maxBytes int64) ([][]byte, int64, error) {
 	rows, err := db.Query(`
 		SELECT raw_json FROM events

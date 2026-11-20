@@ -246,7 +246,11 @@ The uploader (`internal/uploader`) implements the `SendBatch` and
   is hub first: devices then pick up compression as they are upgraded, and
   no mixed pair ever exchanges a compressed frame. `ohya mcp --remote` and
   pairing send the plain hello and no `caps` frame; remote queries and
-  annotate stay plain in protocol version 1.
+  annotate stay plain in protocol version 1. Setting the environment
+  variable `OHYA_UPLOAD_COMPRESSION=off` in the joining process suppresses
+  the `caps` offer for its lifetime, so the device sends plain frames even
+  against a compression-capable hub — the escape hatch for diagnosis and
+  A/B measurement, the same behavior an old device shows.
 - Each exchange has a 60 s timeout. Failed passes reconnect with backoff from
   1 s doubling up to 1 min. `Run` stops only on `ErrUnauthorized` (the
   credential was refused, for example after revocation), `ErrIncompatible`

@@ -71,6 +71,9 @@ func TestServerServesSQLTool(t *testing.T) {
 		"session_token_usage", "sqlite_master", "one statement per call",
 		"truncated", "MATCH", "Secret redaction", "[redacted:", "redactions",
 		"best-effort risk reduction, never a guarantee", "ohya purge",
+		"date-bounded recall", "strftime('%s','now')",
+		"resume, step 1", "resume, step 2", "duplicate_of IS NULL",
+		"SELECT DISTINCT model FROM sessions", "SELECT DISTINCT device_id FROM sessions",
 	} {
 		if !strings.Contains(description, want) {
 			t.Fatalf("tool description misses %q:\n%s", want, description)
