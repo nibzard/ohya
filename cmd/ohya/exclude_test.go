@@ -80,7 +80,10 @@ func TestDiscoverSessionFilesExcludeMatchesRelativeRoot(t *testing.T) {
 }
 
 func TestDiscoverSessionFilesExcludeMatchesSymlinkedPathForm(t *testing.T) {
-	base := t.TempDir()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	real := filepath.Join(base, "real")
 	sessions := filepath.Join(real, "sessions")
 	if err := os.MkdirAll(sessions, 0o700); err != nil {
