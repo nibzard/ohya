@@ -304,3 +304,14 @@ func TestMCPStdioAnnotateEndToEnd(t *testing.T) {
 		t.Fatalf("annotations after rejections: %s", raw)
 	}
 }
+
+func TestMcpRemoteUnpairedLeavesNoDeviceFile(t *testing.T) {
+	stateDir := t.TempDir()
+	err := runMcpRemote(context.Background(), stateDir, false)
+	if err == nil || !strings.Contains(err.Error(), "no pairing credential") {
+		t.Fatalf("runMcpRemote err = %v, want no pairing credential", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(stateDir, "device.json")); !os.IsNotExist(statErr) {
+		t.Fatalf("unpaired runMcpRemote created device.json (stat err=%v)", statErr)
+	}
+}

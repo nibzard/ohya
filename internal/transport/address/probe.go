@@ -31,11 +31,11 @@ func LoadHubInfo(stateDir string) (HubInfo, error) {
 }
 
 func ProbeHub(ctx context.Context, stateDir string) (HubInfo, error) {
-	info, relay, hubAddr, err := loadHubForProbe(stateDir)
+	info, relays, hubAddr, err := loadHubForProbe(stateDir)
 	if err != nil {
 		return info, err
 	}
-	if err := dialRelay(ctx, relay); err != nil {
+	if err := dialAnyRelay(ctx, relays); err != nil {
 		return info, err
 	}
 	node := NewDevice(DeviceOptions{})
@@ -44,7 +44,11 @@ func ProbeHub(ctx context.Context, stateDir string) (HubInfo, error) {
 	if err != nil {
 		return info, fmt.Errorf("%w: %w", ErrHubUnreachable, err)
 	}
-	return info, conn.Close()
+	err = conn.Close()
+	drainCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	_ = node.Drain(drainCtx)
+	cancel()
+	return info, err
 }
 
 type hostPort struct {
@@ -52,17 +56,17 @@ type hostPort struct {
 	port int
 }
 
-func loadHubForProbe(stateDir string) (HubInfo, hostPort, string, error) {
+func loadHubForProbe(stateDir string) (HubInfo, []hostPort, string, error) {
 	ident, err := loadIdentity(filepath.Join(stateDir, hubStateDir, identityFileName))
 	if err != nil {
-		return HubInfo{}, hostPort{}, "", err
+		return HubInfo{}, nil, "", err
 	}
 	if ident == nil {
-		return HubInfo{}, hostPort{}, "", fmt.Errorf("%w at %s; run ohya serve once to create it", ErrNoIdentity, filepath.Join(stateDir, hubStateDir, identityFileName))
+		return HubInfo{}, nil, "", fmt.Errorf("%w at %s; run ohya serve once to create it", ErrNoIdentity, filepath.Join(stateDir, hubStateDir, identityFileName))
 	}
-	relay, err := relayEndpoint(ident.Region)
+	relays, err := relayEndpoints(ident.Region)
 	if err != nil {
-		return HubInfo{}, hostPort{}, "", err
+		return HubInfo{}, nil, "", err
 	}
 	ci := tailcat.ConnInfo{
 		ServerPublic:      tailcat.NodePublic{NodePublic: ident.Node.Public()},
@@ -75,10 +79,22 @@ func loadHubForProbe(stateDir string) (HubInfo, hostPort, string, error) {
 		RegionID:   int64(ident.Region.RegionID),
 		RegionCode: ident.Region.RegionCode,
 		RegionName: ident.Region.RegionName,
-	}, relay, string(ci.Addr()), nil
+	}, relays, string(ci.Addr()), nil
 }
 
 func relayEndpoint(region *tailcfg.DERPRegion) (hostPort, error) {
+	relays, err := relayEndpoints(region)
+	if err != nil {
+		return hostPort{}, err
+	}
+	return relays[0], nil
+}
+
+func relayEndpoints(region *tailcfg.DERPRegion) ([]hostPort, error) {
+	if region == nil {
+		return nil, errors.New("address: the hub identity names no relay region")
+	}
+	var out []hostPort
 	for _, n := range region.Nodes {
 		if n == nil || n.STUNOnly {
 			continue
@@ -87,9 +103,27 @@ func relayEndpoint(region *tailcfg.DERPRegion) (hostPort, error) {
 		if port == 0 {
 			port = 443
 		}
-		return hostPort{host: n.HostName, port: port}, nil
+		out = append(out, hostPort{host: n.HostName, port: port})
 	}
-	return hostPort{}, errors.New("address: the hub identity names no relay node")
+	if len(out) == 0 {
+		return nil, errors.New("address: the hub identity names no relay node")
+	}
+	return out, nil
+}
+
+func dialAnyRelay(ctx context.Context, relays []hostPort) error {
+	var lastErr error
+	for _, relay := range relays {
+		if err := dialRelay(ctx, relay); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return lastErr
 }
 
 func dialRelay(ctx context.Context, relay hostPort) error {

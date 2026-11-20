@@ -574,3 +574,41 @@ func TestHubAndDeviceLifecycleGuards(t *testing.T) {
 		t.Fatalf("Device.Drain after Close: %v", err)
 	}
 }
+
+func TestProbeRelayEndpointsFallsBackPastDownNode(t *testing.T) {
+	closedLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closedPort := closedLn.Addr().(*net.TCPAddr).Port
+	closedLn.Close()
+
+	liveLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer liveLn.Close()
+	go func() {
+		for {
+			c, err := liveLn.Accept()
+			if err != nil {
+				return
+			}
+			_ = c.Close()
+		}
+	}()
+	livePort := liveLn.Addr().(*net.TCPAddr).Port
+
+	relays, err := relayEndpoints(&tailcfg.DERPRegion{
+		Nodes: []*tailcfg.DERPNode{
+			{HostName: "127.0.0.1", DERPPort: closedPort},
+			{HostName: "127.0.0.1", DERPPort: livePort},
+		},
+	})
+	if err != nil {
+		t.Fatalf("relayEndpoints: %v", err)
+	}
+	if err := dialAnyRelay(context.Background(), relays); err != nil {
+		t.Fatalf("dialAnyRelay failed when second node was reachable: %v", err)
+	}
+}

@@ -102,10 +102,6 @@ func runMcp(ctx context.Context, dbPath, stateDir string, observeOn bool) error 
 }
 
 func runMcpRemote(ctx context.Context, stateDir string, observeOn bool) error {
-	deviceID, err := device.LoadOrCreate(stateDir)
-	if err != nil {
-		return err
-	}
 	cred, err := device.LoadCredential(stateDir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("this state directory holds no pairing credential; run ohya join first")
@@ -117,6 +113,10 @@ func runMcpRemote(ctx context.Context, stateDir string, observeOn bool) error {
 	if errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("this state directory holds no hub address; run ohya join with an ohya1 code once to save it")
 	}
+	if err != nil {
+		return err
+	}
+	deviceID, err := device.LoadOrCreate(stateDir)
 	if err != nil {
 		return err
 	}
