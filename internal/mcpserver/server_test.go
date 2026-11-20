@@ -74,6 +74,9 @@ func TestServerServesSQLTool(t *testing.T) {
 		"date-bounded recall", "strftime('%s','now')",
 		"resume, step 1", "resume, step 2", "duplicate_of IS NULL",
 		"SELECT DISTINCT model FROM sessions", "SELECT DISTINCT device_id FROM sessions",
+		"Garbage audit", "ohya purge --marked tags.garbage", "length(e.raw_json) > 65536",
+		"AS replay_copies", "GROUP BY s.model", "a.key = 'garbage'",
+		"never run them yourself",
 	} {
 		if !strings.Contains(description, want) {
 			t.Fatalf("tool description misses %q:\n%s", want, description)

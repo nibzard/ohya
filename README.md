@@ -48,10 +48,12 @@ day. That context stays in one tool on one machine, until it is lost.
   byte. Parser upgrades re-derive rows from the stored records.
 - **Owner-decided retention:** nothing is deleted automatically, and nothing
   is kept forever against your will. `ohya purge` plans (dry-run by default)
-  and deletes whole sessions by session, repository, agent, or age; purged
+  and deletes whole sessions by session, repository, agent, age, or the
+  garbage marks an agent placed with `annotate`; purged
   sources are tombstoned so their devices are refused until you re-admit
   them, and purged bytes never return on their own
-  ([ADR 0013](docs/adr/0013-owner-scoped-session-purge.md)).
+  ([ADR 0013](docs/adr/0013-owner-scoped-session-purge.md),
+  [ADR 0016](docs/adr/0016-agent-marked-purge-scope.md)).
 - **Durable:** Claude Code deletes transcripts after 30 days by default
   (`cleanupPeriodDays`). ohya keeps every record that it has ingested until
   you decide otherwise.

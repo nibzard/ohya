@@ -60,7 +60,8 @@ How to use this file:
   verbatim through the engine over a hub seeded with the published literals
   (repo github.com/owner/name, model claude-sonnet-4-5, device laptop,
   session claude:dev1:s1, event ids 42/100/101/102). The block count is
-  pinned (12), so adding or removing an example is a conscious test update.
+  pinned (20 since T148's garbage audit below), so adding or removing an
+  example is a conscious test update.
   A syntax error or a denied statement inside a block fails at execution;
   an opener that stops matching (for example a block rewritten to start
   with DELETE) trips the count pin instead.
@@ -1956,6 +1957,38 @@ How to use this file:
   server records after the ack bytes are already on the wire, so a preempted
   server goroutine loses the assertion; that one counter now uses
   observertest.Recorder.AwaitDurationCount.
+
+- Agent cleanup loop closed (2026-11-20, T148, ADR 0016): FIND (read-only
+  sql recipes) → MARK (annotate namespace tags, key garbage) → EXECUTE
+  (`ohya purge --marked <namespace.key>`, owner only). Facts worth keeping:
+  - The garbage-audit recipes in the sql tool description and DB.md are
+    deadline-safe by shape, verified read-only against the live 16 GB hub
+    (2026-11-20): `duplicate_of` and record length carry no index, so a
+    hub-wide "find duplicates/oversized" scan would read every stored
+    record; the oversized recipe drills per source (`cursor_bytes` ranks
+    sources first; the largest live source answers in the drill shape
+    instantly) and the replay count per session. The first draft of the
+    empty-sessions recipe counted events per session with a correlated
+    subquery and exceeded 120 s on the live hub (one covering-index range
+    per session, cold and disk-contended) — it now filters on the
+    maintained `sessions.event_count` (sessions-table-only, instant; the
+    published-recipes seed sets event_count explicitly because direct SQL
+    seeding bypasses the aggregate).
+  - `--marked` splits its value at the FIRST dot, so a namespace used with
+    the selector gets no dot (tags.garbage, never a.b.c); both halves must
+    pass the annotation name charset (store.ParseMarkSelector, one rule
+    with annotate). The mark subquery in sessionFilter matches any writer,
+    and marks die with their events on purge — the tombstone scope
+    (`marked=tags.garbage`) is the durable record of what selected it.
+  - TestPublishedRecipesRunVerbatim's seed grew (stale/40-day source, a
+    no-repo workspace + session, a 70 KiB event, a replay duplicate, a
+    stale model, a seeded tags/garbage mark), and the date-bounded find
+    marker moved from "strftime('%s','now')" (now also in the
+    stale-sources recipe) to "7*86400". Markers must stay unique across
+    all 20 blocks.
+  - No TLA+ change: --marked selects sessions, it does not touch the
+    source lifecycle, write path, or tombstone contract (ADR 0016 states
+    the scope).
 
 - Owner-scoped purge shipped (2026-11-19, T144, ADR 0013): `ohya purge`
   (dry-run default, --apply) selects real sessions by --session/--repo/

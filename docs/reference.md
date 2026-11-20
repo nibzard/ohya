@@ -327,10 +327,20 @@ usage, so session token totals sum straight over responses.
 `ohya purge` (same `--db` flag, run on the hub) deletes stored sessions the
 owner selects — retention is owner-decided and never automatic
 ([ADR 0013](adr/0013-owner-scoped-session-purge.md)). Selectors combine
-with AND: `--session <native-id>`, `--repo <host/path>`, `--agent`, and
+with AND: `--session <native-id>`, `--repo <host/path>`, `--agent`,
 `--before <RFC3339 date>` (a session matches when its observed activity
-ended before the date; sessions without timestamps never match `--before`).
-At least one selector is required. Without `--apply` the command is a dry
+ended before the date; sessions without timestamps never match `--before`),
+and `--marked <namespace.key>` — the sessions whose events carry that
+agent-written annotation mark from any writer, for example
+`--marked tags.garbage` after a
+[garbage audit](../DB.md#garbage-audit)
+([ADR 0016](adr/0016-agent-marked-purge-scope.md)). Agents hold no
+destructive tool: they find garbage with the read-only `sql` tool, mark it
+with `annotate` (namespace `tags`, key `garbage`), and hand the owner the
+exact purge commands; the marks are persistent and writer-attributed, they
+die with their events on purge, and the value splits at the first dot, so
+a namespace used with `--marked` gets no dot. At least one selector is
+required. Without `--apply` the command is a dry
 run that prints the affected sessions, sources, event counts, and bytes and
 changes nothing; `--apply` deletes, one transaction per source, so an
 interrupted run resumes when rerun with the same selectors. Every evicted

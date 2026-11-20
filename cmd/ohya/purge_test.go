@@ -3,13 +3,16 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/nibzard/ohya/internal/events"
+	"github.com/nibzard/ohya/internal/mcpserver"
 	"github.com/nibzard/ohya/internal/store"
 	"github.com/nibzard/ohya/internal/watch"
 )
@@ -170,6 +173,10 @@ func TestPurgeCommandUsageErrors(t *testing.T) {
 		{[]string{"purge", "--db", dbPath}, "purge needs at least one selector"},
 		{[]string{"purge", "--db", dbPath, "--before", "2026-13-01"}, "--before must be an RFC3339 date"},
 		{[]string{"purge", "--db", dbPath, "--session", "x", "extra"}, "unexpected argument"},
+		{[]string{"purge", "--db", dbPath, "--marked", "garbage"}, "must be namespace.key, for example tags.garbage"},
+		{[]string{"purge", "--db", dbPath, "--marked", "tags."}, "must be namespace.key, for example tags.garbage"},
+		{[]string{"purge", "--db", dbPath, "--marked", ".garbage"}, "must be namespace.key, for example tags.garbage"},
+		{[]string{"purge", "--db", dbPath, "--marked", "ta gs.garbage"}, "holds an invalid namespace or key"},
 	}
 	for _, tc := range cases {
 		code, _, stderr := runCLI(tc.args...)
@@ -179,6 +186,131 @@ func TestPurgeCommandUsageErrors(t *testing.T) {
 		if !strings.Contains(stderr, tc.want) {
 			t.Fatalf("%v stderr = %q, want %q", tc.args, stderr, tc.want)
 		}
+	}
+}
+
+func markedPurgeHub(t *testing.T) (string, []string) {
+	t.Helper()
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "hub.db")
+	hub, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { hub.Close() })
+	deviceID := "0123456789abcdef0123456789abcdef"
+	natives := []string{"mark-a", "mark-b", "keep-c"}
+	for _, native := range natives {
+		raw := fmt.Sprintf(`{"type":"user","sessionId":%q,"message":{"role":"user","content":"session %s"}}`, native, native)
+		sourceID := "src-" + native
+		if err := hub.RegisterSource(ctx, sourceID, deviceID, "claude-code", "/"+native+".jsonl"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := hub.Ingest(ctx, store.Batch{
+			SourceID: sourceID, DeviceID: deviceID,
+			Events: []store.Event{{
+				Offset: 0, End: int64(len(raw)) + 1, NativeID: native,
+				Kind: "user", Role: "user", Text: "session " + native, RawJSON: raw, ParserVersion: 1,
+			}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dbPath, natives
+}
+
+func TestPurgeMarkedEndToEnd(t *testing.T) {
+	ctx := context.Background()
+	dbPath, natives := markedPurgeHub(t)
+	deviceID := "0123456789abcdef0123456789abcdef"
+	hub, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hub.Close()
+	readers, err := hub.Reader()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readers.Close()
+	engine := mcpserver.NewEngine(readers, hub.Writer(), mcpserver.EngineOptions{WriterID: deviceID})
+
+	marked := natives[:2]
+	for _, native := range marked {
+		var eventID int64
+		if err := hub.Writer().QueryRow(
+			`SELECT e.id FROM events e JOIN sessions s ON s.id = e.session_id WHERE s.native_id = ?`,
+			native).Scan(&eventID); err != nil {
+			t.Fatal(err)
+		}
+		args := fmt.Sprintf(`{"operations":[{"op":"upsert","event_id":%d,"namespace":"tags","key":"garbage","value":{"reason":"e2e audit","evidence":%d}}]}`,
+			eventID, eventID)
+		res, err := engine.Annotate(ctx, json.RawMessage(args))
+		if err != nil {
+			t.Fatalf("annotate %s: %v", native, err)
+		}
+		if res.Applied != 1 {
+			t.Fatalf("annotate %s applied %d operations, want 1", native, res.Applied)
+		}
+	}
+
+	markedA := store.SessionID(deviceID, "claude-code", natives[0])
+	markedB := store.SessionID(deviceID, "claude-code", natives[1])
+	keeper := store.SessionID(deviceID, "claude-code", natives[2])
+
+	code, out, stderr := runCLI("purge", "--db", dbPath, "--marked", "tags.garbage")
+	if code != 0 {
+		t.Fatalf("marked dry run exited %d: %s %s", code, out, stderr)
+	}
+	for _, want := range []string{
+		"would purge 2 sessions", "dry run only; nothing was deleted", markedA, markedB,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("marked dry-run output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, keeper) {
+		t.Fatalf("marked dry-run output names the unmarked session %s:\n%s", keeper, out)
+	}
+
+	code, out, stderr = runCLI("purge", "--db", dbPath, "--marked", "tags.garbage", "--apply")
+	if code != 0 {
+		t.Fatalf("marked apply exited %d: %s %s", code, out, stderr)
+	}
+	if !strings.Contains(out, "purged 2 sessions") {
+		t.Fatalf("marked apply output = %q", out)
+	}
+
+	if got := countRows(t, hub.Writer(), `SELECT count(*) FROM events WHERE session_id = ?`, keeper); got != 1 {
+		t.Fatalf("unmarked session lost events: %d", got)
+	}
+	if got := countRows(t, hub.Writer(), `SELECT count(*) FROM sessions WHERE id = ?`, keeper); got != 1 {
+		t.Fatalf("unmarked session row lost: %d", got)
+	}
+	if err := hub.RegisterSource(ctx, "src-"+natives[2], deviceID, "claude-code", "/"+natives[2]+".jsonl"); err != nil {
+		t.Fatalf("unmarked source was evicted: %v", err)
+	}
+	for _, sid := range []string{markedA, markedB} {
+		if got := countRows(t, hub.Writer(), `SELECT count(*) FROM events WHERE session_id = ?`, sid); got != 0 {
+			t.Fatalf("marked session %s kept events: %d", sid, got)
+		}
+		if got := countRows(t, hub.Writer(), `SELECT count(*) FROM sessions WHERE id = ?`, sid); got != 0 {
+			t.Fatalf("marked session %s kept its row: %d", sid, got)
+		}
+	}
+	if got := countRows(t, hub.Writer(), `SELECT count(*) FROM purged_sources WHERE scope = 'marked=tags.garbage'`); got != 2 {
+		t.Fatalf("purged_sources tombstones with marked scope = %d, want 2", got)
+	}
+	if got := countRows(t, hub.Writer(), `SELECT count(*) FROM event_annotations WHERE namespace = 'tags' AND key = 'garbage'`); got != 0 {
+		t.Fatalf("garbage marks survived the purge: %d", got)
+	}
+
+	code, out, _ = runCLI("purge", "--db", dbPath, "--marked", "tags.garbage", "--json")
+	if code != 0 {
+		t.Fatalf("rerun dry run exited %d: %s", code, out)
+	}
+	if !strings.Contains(out, `"scope":"marked=tags.garbage"`) || !strings.Contains(out, `"sessions":[]`) {
+		t.Fatalf("rerun reports a marked scope with nothing left:\n%s", out)
 	}
 }
 

@@ -12,7 +12,7 @@ import (
 	"github.com/nibzard/ohya/internal/store"
 )
 
-const publishedSQLBlockCount = 12
+const publishedSQLBlockCount = 20
 
 var sqlBlockOpeners = []string{"SELECT ", "WITH ", "PRAGMA ", "EXPLAIN ", "VALUES "}
 
@@ -53,19 +53,23 @@ func openPublishedRecipesHub(t *testing.T) *Engine {
 	now := time.Now().UnixMilli()
 	const hour, day = int64(3600_000), int64(86400_000)
 	settled1, settled2, live, old := now-hour, now-2*hour, now, now-30*day
+	fresh, stale := now-60_000, now-40*day
+	oversizedRaw := `{"type":"user","sessionId":"s-old","message":{"role":"user","content":"` + strings.Repeat("x", 70000) + `"}}`
 	seed := []string{
-		fmt.Sprintf(`INSERT INTO sessions(id,agent,device_id,native_id,repo,cwd,model,first_prompt,last_event_at_ms) VALUES
-		 ('claude:dev1:s1','claude','dev1','s1','github.com/owner/name','/repo','claude-sonnet-4-5','settled s1',%d),
-		 ('claude:dev1:s2','claude','dev1','s2','github.com/owner/name','/repo',NULL,'settled s2',%d),
-		 ('claude:dev1:s-old','claude','dev1','s-old','github.com/owner/name','/repo',NULL,'old session',%d),
-		 ('claude:dev1:s-live','claude','dev1','s-live','github.com/owner/name','/repo',NULL,'live session',%d),
-		 ('claude:laptop:s-lap','claude','laptop','s-lap','github.com/owner/demo','/demo','claude-sonnet-4-5','laptop session',%d)`,
-			settled1, settled2, old, live, now-3*hour),
-		`INSERT INTO sources(id,device_id,agent,path) VALUES
-		 ('src-1','dev1','claude','/repo/1.jsonl'),
-		 ('src-2','dev1','claude','/repo/2.jsonl'),
-		 ('src-3','dev1','claude','/repo/3.jsonl'),
-		 ('src-live','dev1','claude','/repo/live.jsonl')`,
+		fmt.Sprintf(`INSERT INTO sessions(id,agent,device_id,native_id,repo,cwd,model,first_prompt,last_event_at_ms,event_count) VALUES
+		 ('claude:dev1:s1','claude','dev1','s1','github.com/owner/name','/repo','claude-sonnet-4-5','settled s1',%d,3),
+		 ('claude:dev1:s2','claude','dev1','s2','github.com/owner/name','/repo',NULL,'settled s2',%d,2),
+		 ('claude:dev1:s-old','claude','dev1','s-old','github.com/owner/name','/repo',NULL,'old session',%d,6),
+		 ('claude:dev1:s-live','claude','dev1','s-live','github.com/owner/name','/repo',NULL,'live session',%d,1),
+		 ('claude:laptop:s-lap','claude','laptop','s-lap','github.com/owner/demo','/demo','claude-sonnet-4-5','laptop session',%d,0),
+		 ('claude:dev1:s-gone','claude','dev1','s-gone',NULL,'/gone','claude-3-opus-20240229','gone session',%d,0)`,
+			settled1, settled2, old, live, now-3*hour, old),
+		fmt.Sprintf(`INSERT INTO sources(id,device_id,agent,path,cursor_bytes,updated_at_ms) VALUES
+		 ('src-1','dev1','claude','/repo/1.jsonl',1000,%d),
+		 ('src-2','dev1','claude','/repo/2.jsonl',500,%d),
+		 ('src-3','dev1','claude','/repo/3.jsonl',9000,%d),
+		 ('src-live','dev1','claude','/repo/live.jsonl',100,%d)`,
+			fresh, fresh, stale, fresh),
 		fmt.Sprintf(`INSERT INTO events(id,session_id,source_id,source_offset,time_ms,kind,role,text,raw_json) VALUES
 		 (1,'claude:dev1:s1','src-1',100,%d,'message','user','first s1 record','{}'),
 		 (2,'claude:dev1:s1','src-1',200,%d,'message','assistant','hello authentication world, refresh the token','{}'),
@@ -75,13 +79,18 @@ func openPublishedRecipesHub(t *testing.T) *Engine {
 		 (6,'claude:dev1:s-live','src-live',100,%d,'message','user','live session record','{}'),
 		 (7,'claude:dev1:s-old','src-3',100,%d,'message','user','thirty day old record','{}'),
 		 (42,'claude:dev1:s-old','src-3',200,%d,'message','assistant','inspect me by id','{}'),
+		 (50,'claude:dev1:s-old','src-3',600,%d,'message','user',NULL,'%s'),
 		 (100,'claude:dev1:s-old','src-3',300,%d,'message','assistant','reviewed already','{}'),
 		 (101,'claude:dev1:s-old','src-3',400,%d,'message','assistant','needs review','{}'),
 		 (102,'claude:dev1:s-old','src-3',500,%d,'message','assistant','also needs review','{}')`,
 			settled1+1000, settled1+2000, settled1+3000, settled2, settled2+1000, live,
-			old, old+1000, old+2000, old+3000, old+4000),
+			old, old+1000, old+5000, oversizedRaw, old+2000, old+3000, old+4000),
+		fmt.Sprintf(`INSERT INTO events(id,session_id,source_id,source_offset,time_ms,kind,role,text,raw_json,duplicate_of) VALUES
+		 (51,'claude:dev1:s2','src-2',300,%d,'message','user',NULL,'{"type":"user","sessionId":"s2"}',4)`, old),
+		fmt.Sprintf(`INSERT INTO workspaces(device_id,path,repo,observed_at_ms) VALUES('dev1','/gone',NULL,%d)`, old),
 		`INSERT INTO session_token_usage VALUES('claude:dev1:s1','msg-1',110,20,30,40)`,
 		`INSERT INTO event_annotations VALUES(100,'security','review','{"status":"reviewed"}','dev1',1,1)`,
+		`INSERT INTO event_annotations VALUES(7,'tags','garbage','{"reason":"stale model session","evidence":7}','dev1',1,1)`,
 	}
 	for i, q := range seed {
 		if _, err := hub.Writer().Exec(q); err != nil {
@@ -134,7 +143,7 @@ func TestPublishedRecipesRunVerbatim(t *testing.T) {
 		return ids
 	}
 
-	dateBounded := eventIDs(find("strftime('%s','now')"))
+	dateBounded := eventIDs(find("7*86400"))
 	slices.Sort(dateBounded)
 	if !slices.Equal(dateBounded, []int64{1, 2, 3, 4, 5}) {
 		t.Fatalf("date-bounded recipe = %v, want the five events inside the window and none of the 30-day-old ones", dateBounded)
@@ -177,5 +186,49 @@ func TestPublishedRecipesRunVerbatim(t *testing.T) {
 	review := eventIDs(find("json_extract(a.value"))
 	if !slices.Equal(review, []int64{101, 102}) {
 		t.Fatalf("security-review recipe = %v, want the two unreviewed events 101 and 102", review)
+	}
+
+	staleSources := find("src.updated_at_ms <")
+	if len(staleSources.Rows) != 1 || staleSources.Rows[0][0] != "src-3" {
+		t.Fatalf("stale-sources recipe = %v, want only the 40-day-idle src-3", staleSources.Rows)
+	}
+
+	biggestSources := find("ORDER BY src.cursor_bytes DESC")
+	if len(biggestSources.Rows) < 1 || biggestSources.Rows[0][0] != "src-3" || biggestSources.Rows[0][4] != int64(9000) {
+		t.Fatalf("largest-sources recipe = %v, want src-3 with cursor 9000 first", biggestSources.Rows)
+	}
+
+	oversized := eventIDs(find("length(e.raw_json) > 65536"))
+	if !slices.Equal(oversized, []int64{50}) {
+		t.Fatalf("oversized recipe = %v, want only the seeded 70 KiB event 50", oversized)
+	}
+
+	noRepo := find("w.repo IS NULL")
+	if len(noRepo.Rows) != 1 || noRepo.Rows[0][0] != "claude:dev1:s-gone" {
+		t.Fatalf("no-repository recipe = %v, want only the seeded gone session", noRepo.Rows)
+	}
+
+	emptyIDs := []string{}
+	for _, row := range find("ohya-synthetic:").Rows {
+		emptyIDs = append(emptyIDs, row[0].(string))
+	}
+	slices.Sort(emptyIDs)
+	if !slices.Equal(emptyIDs, []string{"claude:dev1:s-gone", "claude:dev1:s-live", "claude:laptop:s-lap"}) {
+		t.Fatalf("empty-sessions recipe = %v, want the three sessions holding at most one event", emptyIDs)
+	}
+
+	replays := find("AS replay_copies")
+	if len(replays.Rows) != 1 || replays.Rows[0][0] != int64(1) {
+		t.Fatalf("replay-copies recipe = %v, want exactly the one seeded replay copy of s2", replays.Rows)
+	}
+
+	models := find("GROUP BY s.model")
+	if len(models.Rows) != 2 || models.Rows[0][0] != "claude-3-opus-20240229" || models.Rows[1][0] != "claude-sonnet-4-5" {
+		t.Fatalf("model-distribution recipe = %v, want the stale model (oldest activity) first and the current model second", models.Rows)
+	}
+
+	marked := find("a.key = 'garbage'")
+	if len(marked.Rows) != 1 || marked.Rows[0][0] != "claude:dev1:s-old" || marked.Rows[0][3] != "dev1" {
+		t.Fatalf("marked-sessions recipe = %v, want s-old marked by dev1", marked.Rows)
 	}
 }

@@ -122,7 +122,13 @@ which follow their source) and evicts every source holding the selected
 sessions' events — each source holds at most one real session plus its own
 source-scoped synthetic session (verified on the whole deployed hub, guarded
 in both `PlanPurge` and `purgeOneSource`, and pinned by tests; see ADR 0013).
-One transaction per source (detaching cross-source `duplicate_of` references
+Selectors are `--session`, `--repo`, `--agent`, `--before`, and `--marked
+<namespace.key>`: the marked selector takes the sessions whose events carry
+an agent-written annotation mark under that namespace and key, every writer
+included (see "Garbage audit" and
+[ADR 0016](docs/adr/0016-agent-marked-purge-scope.md); the value splits at
+the first dot, so give the namespace no dot). One transaction per source
+(detaching cross-source `duplicate_of` references
 before deleting the source's events) keeps the WAL bounded and reruns
 resumable. Freed pages stay in the database file; there is no VACUUM.
 
@@ -535,6 +541,137 @@ FROM sessions s WHERE s.device_id = 'laptop'
 ORDER BY s.last_event_at_ms DESC LIMIT 10;
 ```
 
+## Garbage audit
+
+When a user asks an agent to "clean up the data" or "find the garbage",
+the agent answers end to end without ever holding a destructive
+capability ([ADR 0016](docs/adr/0016-agent-marked-purge-scope.md)). The
+flow has three steps, and the `sql` tool description publishes the same
+queries to agents at connect time:
+
+1. **FIND** — read-only SQL (the recipes below) locates stale weight.
+2. **MARK** — the agent annotates the deciding event of each garbage
+   session through the bounded `annotate` tool under the reserved
+   namespace `tags`, key `garbage`, with a value stating the reason and
+   the evidence event id. Marks are persistent and writer-attributed, so
+   the owner has an audit trail of who called what garbage and why.
+3. **EXECUTE** — the agent presents the exact `ohya purge --marked
+   tags.garbage` dry-run and `--apply` commands, and the owner runs them.
+   The `sql` tool is read-only and `annotate` writes only annotations, so
+   a prompt-injected agent can never destroy stored records — including
+   evidence of itself.
+
+Each recipe is a single statement an agent runs unmodified after
+substituting one discovered literal.
+
+**Sources that stopped syncing.** `sources.updated_at_ms` moves whenever
+a batch advances the source cursor; NULL means registration never
+committed one. A source idle for a month is a device that stopped
+appending to that file — deleted locally, excluded, or gone:
+
+```sql
+SELECT src.id, src.agent, src.device_id, src.path, src.updated_at_ms
+FROM sources src
+WHERE src.updated_at_ms IS NULL
+   OR src.updated_at_ms < (CAST(strftime('%s','now') AS INTEGER) - 30*86400) * 1000
+ORDER BY src.updated_at_ms, src.id;
+```
+
+**Sessions whose working directory resolved to no repository.** A
+`workspaces` row with a NULL `repo` records that the device looked at
+that `cwd` and found no usable repository — the directory was deleted or
+never was a checkout. Observations are write-once, so re-check the path
+before calling the session garbage:
+
+```sql
+SELECT s.id, s.agent, s.device_id, s.cwd, s.last_event_at_ms
+FROM sessions s JOIN workspaces w ON w.device_id = s.device_id AND w.path = s.cwd
+WHERE w.repo IS NULL
+ORDER BY s.last_event_at_ms DESC LIMIT 50;
+```
+
+**Oversized records.** The largest sessions first (a source's
+`cursor_bytes` is the mirrored size of its file), then the records over
+64 KiB inside one of them — on the deployed hub 0.5% of rows hold 27% of
+the bytes, and they are tool results and Codex compaction snapshots. The
+drill-down reads only that source's rows, because no index carries
+record length:
+
+```sql
+SELECT src.id, src.agent, src.device_id, src.path, src.cursor_bytes
+FROM sources src ORDER BY src.cursor_bytes DESC LIMIT 20;
+```
+
+```sql
+SELECT e.id, e.session_id, e.kind, e.role, e.tool_name, length(e.raw_json) AS bytes
+FROM events e WHERE e.source_id = 'src-3' AND length(e.raw_json) > 65536
+ORDER BY bytes DESC;
+```
+
+**Empty or single-record sessions.** Aborted starts and failed first
+calls. `sessions.event_count` is the maintained total (replay copies add
+nothing to it), so the recipe reads only the sessions table — a per-event
+count over a large hub walks every session's index range and can exceed
+the `sql` deadline. Synthetic `ohya-synthetic:` companions follow their
+source and are never selectable:
+
+```sql
+SELECT s.id, s.agent, s.device_id, s.last_event_at_ms, s.event_count
+FROM sessions s
+WHERE s.native_id NOT LIKE 'ohya-synthetic:%' AND s.event_count <= 1
+ORDER BY s.event_count, s.last_event_at_ms DESC, s.id LIMIT 50;
+```
+
+**Replay copies inside one session.** Byte-identical re-pages (Codex
+resumed pages) hold no text of their own and add nothing to totals; 0
+means none. The count is per session on purpose: `duplicate_of` carries
+no index, so a hub-wide scan would read every stored record and can
+exceed the `sql` deadline on a large hub:
+
+```sql
+SELECT count(*) AS replay_copies FROM events e
+WHERE e.session_id = 'claude:dev1:s2' AND e.duplicate_of IS NOT NULL;
+```
+
+**Model distribution.** A stale model shows as its own row with old
+activity. List the values, then confirm a model is really dead before
+marking its sessions:
+
+```sql
+SELECT s.model, count(*) AS sessions, min(s.last_event_at_ms) AS oldest, max(s.last_event_at_ms) AS newest
+FROM sessions s WHERE s.model IS NOT NULL GROUP BY s.model
+ORDER BY oldest, s.model;
+```
+
+**Marking.** The agent annotates the deciding event of each session it
+calls garbage; the value states the reason and the evidence, and the hub
+attributes the mark to the writer:
+
+```json
+{"operations":[{"op":"upsert","event_id":42,"namespace":"tags","key":"garbage","value":{"reason":"aborted start, single record","evidence":42}}]}
+```
+
+Review every mark — with its writer — before the owner runs anything:
+
+```sql
+SELECT DISTINCT s.id, s.agent, s.device_id, a.writer_id, s.last_event_at_ms
+FROM event_annotations a
+JOIN events e ON e.id = a.event_id
+JOIN sessions s ON s.id = e.session_id
+WHERE a.namespace = 'tags' AND a.key = 'garbage'
+ORDER BY s.last_event_at_ms DESC;
+```
+
+**Execute.** The owner purges the marked sessions; the selector takes
+every writer's marks and combines with the other purge selectors (see
+"Source lifecycle"). Marks die with their events, so a rerun finds
+nothing left:
+
+```sh
+ohya purge --marked tags.garbage
+ohya purge --marked tags.garbage --apply
+```
+
 ## Token totals example
 
 Session token totals are sums over `session_token_usage`; each API response
@@ -559,7 +696,10 @@ An agent can submit this MCP argument to record a completed security review:
 
 The writer is assigned by the hub. A tag can use namespace `tags`, key `needs-review`
 and JSON value `true`; a classification can use namespace `classification`, key
-`work-type` and a value containing its label and analysis version.
+`work-type` and a value containing its label and analysis version. The
+namespace `tags` with key `garbage` is reserved for the owner's purge audit
+(see "Garbage audit"): those marks feed `ohya purge --marked tags.garbage`,
+which only the owner runs.
 
 Select the next page needing review (bind the current writer and last seen ID):
 

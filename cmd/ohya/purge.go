@@ -21,6 +21,8 @@ var purgeSpec = commandSpec{
 		"Retention is owner-decided: nothing is purged automatically, and purged bytes never return on their own. " +
 		"The command is a dry run by default and prints the affected sessions, sources, event counts, and bytes; pass --apply to delete. " +
 		"Each source is purged in its own transaction, so an interrupted run resumes when rerun with the same selectors. " +
+		"Agents hold no destructive tool: they audit with the read-only sql tool and mark garbage with annotate (namespace tags, key garbage), and the owner executes the purge here. " +
+		"--marked namespace.key selects the sessions whose events carry that annotation mark; see the garbage audit in DB.md. " +
 		"Freed pages stay in the database file (no VACUUM), and a recovery copy taken before a purge still holds the purged data.",
 	argsTitle: "Arguments",
 	args:      "(none)",
@@ -28,6 +30,8 @@ var purgeSpec = commandSpec{
 		"ohya purge --repo github.com/owner/name --before 2026-11-01T00:00:00Z",
 		"ohya purge --repo github.com/owner/name --before 2026-11-01T00:00:00Z --apply",
 		"ohya purge --session 06055d1b-75a0-42a9-88fc-d3cbcb222b52 --apply",
+		"ohya purge --marked tags.garbage",
+		"ohya purge --marked tags.garbage --apply",
 	},
 }
 
@@ -47,6 +51,8 @@ func runPurgeCommand(args []string, stdout, stderr io.Writer) error {
 		"purge sessions of this `agent` (for example claude-code)")
 	before := c.fs.String("before", "",
 		"purge sessions that ended before this RFC3339 `date`")
+	marked := c.fs.String("marked", "",
+		"purge sessions whose events carry this annotation `namespace.key` (for example tags.garbage)")
 	apply := c.fs.Bool("apply", false,
 		"delete the planned rows; without it the command only prints the plan")
 	asJSON := c.fs.Bool("json", false, "print one JSON object instead of text (docs/adr/0005)")
@@ -64,15 +70,25 @@ func runPurgeCommand(args []string, stdout, stderr io.Writer) error {
 		}
 		beforeMS = t.UnixMilli()
 	}
+	var markedNS, markedKey string
+	if *marked != "" {
+		ns, key, err := store.ParseMarkSelector(*marked)
+		if err != nil {
+			return c.usageErrorf("--%s", err.Error())
+		}
+		markedNS, markedKey = ns, key
+	}
 	sel := store.PurgeSelector{
-		Session:   *session,
-		Repo:      *repo,
-		Agent:     *agent,
-		HasBefore: *before != "",
-		BeforeMS:  beforeMS,
+		Session:         *session,
+		Repo:            *repo,
+		Agent:           *agent,
+		HasBefore:       *before != "",
+		BeforeMS:        beforeMS,
+		MarkedNamespace: markedNS,
+		MarkedKey:       markedKey,
 	}
 	if sel.Empty() {
-		return c.usageErrorf("purge needs at least one selector: --session, --repo, --agent, or --before")
+		return c.usageErrorf("purge needs at least one selector: --session, --repo, --agent, --before, or --marked")
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
