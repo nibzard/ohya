@@ -42,6 +42,7 @@ var joinSpec = commandSpec{
 	synopsis:  "pair a device with a hub and upload its agent sessions",
 	usageLine: "ohya join [code] [flags]",
 	description: "Pairs this device with a hub using one join code — printed by ohya devices invite on the hub — then uploads every watched agent source: batches of original records, acknowledged durably, retried after reconnects, catching up offline from the retained files. " +
+		"SIGINT or SIGTERM stops join cleanly at any point — while pairing, while the hub verifies a credential, or while uploading — and the process exits 0. " +
 		"A device that already holds a credential sends its hello to the hub address in the code first: when the hub accepts it, the device keeps its identity, credential, and checkpoints, and the invitation stays unused; when the hub rejects it, join fails with the reason and never pairs as a new device. " +
 		"The join state directory is deliberately its own (default ~/.ohya/join): its checkpoints hold this hub's acknowledgments and must never mix with local ingestion's.\n" +
 		"Repeatable --exclude GLOB flags skip matching session files at discovery, exactly as on ohya ingest: an excluded path is never registered, read, or sent, and ohya status reports the per-agent skip counts.",
@@ -148,6 +149,9 @@ func runJoin(ctx context.Context, o joinOptions) error {
 		hubAddr = codeAddr
 		cred, err = pair(ctx, node, hubAddr, invitation, deviceID)
 		if err != nil {
+			if errors.Is(ctx.Err(), context.Canceled) {
+				return nil
+			}
 			return err
 		}
 		if err := device.SaveCredential(o.stateDir, cred); err != nil {
@@ -162,6 +166,9 @@ func runJoin(ctx context.Context, o joinOptions) error {
 	default:
 		hubAddr, err = rejoin(ctx, node, o.stateDir, cred, o.code, codeAddr, o.stderr)
 		if err != nil {
+			if errors.Is(ctx.Err(), context.Canceled) {
+				return nil
+			}
 			return err
 		}
 	}
@@ -292,6 +299,9 @@ func drainDevice(node *address.Device) {
 }
 
 func reportJoinTransport(ctx context.Context, node *address.Device, hubAddr string, stderr io.Writer) {
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return
+	}
 	reportCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	report, err := node.PathInfo(reportCtx, hubAddr)

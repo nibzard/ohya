@@ -49,7 +49,12 @@ present and no top-level command error. A SIGINT or SIGTERM stops
 `ohya ingest` cleanly whenever it arrives — during a poll, between
 polls, or while the database opens — and the process exits 0: committed
 work stays acknowledged, the final observe snapshot still publishes, and
-the next start resumes from the last checkpoint. Flags
+the next start resumes from the last checkpoint. The same signal contract
+governs `ohya serve` and `ohya join`: a stop during startup — while serve
+creates its identity, listens on the relay, or opens the database, or
+while join pairs, has the hub verify a credential, or uploads — exits 0
+with no half-configured state, and the next start redoes the interrupted
+step. Flags
 are spelled with two dashes (`--db`); the parser also accepts one dash.
 Flags may appear before or after positional arguments:
 `ohya join --state DIR CODE` and `ohya join CODE --state DIR` both parse.
@@ -220,7 +225,9 @@ checkpoint file per agent (`sources/claude-code.json`,
 of every watched file.
 
 `ohya serve` runs the hub side of device sync until it receives SIGINT or
-SIGTERM. On its first start it creates the Tailcat hub identity — node key,
+SIGTERM; the process exits 0 whether the signal arrives during startup
+(identity creation, relay setup, database open) or while serving. On its
+first start it creates the Tailcat hub identity — node key,
 pre-shared key, relay region — and saves it owner-only under `tailcat-hub/`
 in the state directory, so the hub's address stays the same across
 restarts. The sync endpoint listens on TCP port 9027 inside the Tailcat
@@ -268,8 +275,11 @@ the watched roots; a value the library does not report is printed as
 unknown. While a backlog of at least 1 MiB exists, the uploader reports
 bytes acknowledged, bytes left, the current rate, and an estimated finish
 time on stderr every 10 seconds, and publishes the same four values as
-metrics (`upload_backlog_*`, labeled by agent) for `ohya status`. Revoke a
-device with `ohya devices revoke` on the hub; its connections close and
+metrics (`upload_backlog_*`, labeled by agent) for `ohya status`. SIGINT
+or SIGTERM stops join cleanly at any point — while pairing, while the hub
+verifies a credential, or while uploading — and the process exits 0; the
+next start resumes from the last acknowledged checkpoint. Revoke a device
+with `ohya devices revoke` on the hub; its connections close and
 its sources stay bound to the revoked identity. Hub-side commands (`serve`,
 `devices invite`, `devices list`, `devices revoke`) take `--state` and not
 `--db`: the device registry and the hub identity live in the state
