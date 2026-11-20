@@ -19,8 +19,8 @@ derivation");
 adds `purged_sources`, the tombstones of owner-purged sources (see
 "Source lifecycle" and [ADR 0013](docs/adr/0013-owner-scoped-session-purge.md)).
 Do not duplicate the DDL here.
-Databases ship with releases: v0.1.0 and v0.1.1 ship schema 6, and v0.1.2 and
-v0.2.0 ship schema 7
+Databases ship with releases: v0.1.0 and v0.1.1 ship schema 6, v0.1.2 and
+v0.2.0 ship schema 7, and v0.3.0 ships schema 8
 ([release-operations](docs/release-operations.md)), so databases at released schemas exist outside
 this repository and can arrive for upgrade at any time. Migrations 001 and 002 were the pre-release
 baseline; every schema change after a release arrives as a new migration file.
@@ -45,7 +45,7 @@ Upgrade policy:
 4. Migration file names match `NNN_name.sql` with a unique three-digit version. `store.SchemaVersion`
    reports the newest embedded version without opening a database.
 5. Databases ship with every release, so released schemas exist in the wild: v0.1.0 and v0.1.1
-   ship schema 6; v0.1.2 and v0.2.0 ship schema 7. Test every new migration by upgrading a database from
+   ship schema 6; v0.1.2 and v0.2.0 ship schema 7; v0.3.0 ships schema 8. Test every new migration by upgrading a database from
    each released schema, not only by fresh creation. `internal/store/migrate_released_test.go`
    owns that test: it builds a database at each schema listed in `releasedSchemas` from the
    embedded migration bytes, seeds rows a released write path could have written, and upgrades
