@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -55,6 +56,9 @@ func TestWriteStopFixtures(t *testing.T) {
 }
 
 func TestProcReadingsOnSelf(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("procRSSKiB reads /proc/<pid>/status")
+	}
 	if rss := procRSSKiB(os.Getpid()); rss <= 0 {
 		t.Fatalf("procRSSKiB(self) = %d, want positive", rss)
 	}

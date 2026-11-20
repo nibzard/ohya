@@ -283,6 +283,13 @@ How to use this file:
   the serve e2e tests). Lost state is reported, never silently restarted: an
   unreadable
   device.json or sources/<agent>.json is a recovery error.
+  Any code matching walked discovery paths against watch checkpoint keys must
+  compare path forms: reportJoinBacklog missed this (macOS CI red,
+  2026-11-20, T152) and counted every checkpointed source as fresh backlog
+  because byPath held parent-resolved keys while walkSessionFiles returns raw
+  paths; it now looks candidates up through excludePathForms (the T147
+  both-forms helper), and TestReportJoinBacklogResolvesSymlinkedRoots pins the
+  condition on Linux through a symlinked root.
 - Hardlinks and the watcher (2026-11-13, internal/watch, T028): two live paths
   can share one platform identity (hardlinking backup tool inside the watched
   tree; reachable through `ohya ingest`, which passes every discovered *.jsonl

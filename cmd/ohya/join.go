@@ -359,7 +359,14 @@ func reportJoinBacklog(stateDir string, roots []agentRoot, excludes excludeGlobs
 			if err != nil {
 				continue
 			}
-			if delta := info.Size() - byPath[path]; delta > 0 {
+			var acknowledged int64
+			for _, form := range excludePathForms(path) {
+				if cursor, ok := byPath[form]; ok {
+					acknowledged = cursor
+					break
+				}
+			}
+			if delta := info.Size() - acknowledged; delta > 0 {
 				pending += delta
 			}
 		}
