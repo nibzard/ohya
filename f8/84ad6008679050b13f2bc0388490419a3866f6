@@ -1,0 +1,1 @@
+TestProcReadingsOnSelf asserts procRSSKiB(self) is positive, but /proc/<pid>/status does not exist on darwin, so the macOS CI check job failed. The test now skips off Linux with the same convention as TestSelfStatsOnLinux and the doctor unit tests; the harness itself stays Linux-only. Full make check green.
