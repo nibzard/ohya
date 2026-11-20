@@ -93,6 +93,51 @@ func TestReportJoinBacklogClampsTruncatedFile(t *testing.T) {
 	}
 }
 
+func TestReportJoinBacklogResolvesSymlinkedRoots(t *testing.T) {
+	tmp := t.TempDir()
+	stateDir := filepath.Join(tmp, "state")
+	realDir := filepath.Join(tmp, "real", "claude")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linkRoot := filepath.Join(tmp, "link-root")
+	if err := os.Symlink(filepath.Join(tmp, "real"), linkRoot); err != nil {
+		t.Fatal(err)
+	}
+	srcDir := filepath.Join(linkRoot, "claude")
+	truncated := filepath.Join(srcDir, "sess.jsonl")
+	if err := os.WriteFile(truncated, bytes.Repeat([]byte("a"), 200), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w, err := watch.New(stateDir, "claude-code", watch.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcomes, err := w.Poll([]string{truncated})
+	if err != nil || len(outcomes) != 1 {
+		t.Fatalf("Poll: %v (%d)", err, len(outcomes))
+	}
+	if err := w.Acknowledge(truncated, outcomes[0].SourceID, 200); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(truncated, []byte("short"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fresh := filepath.Join(srcDir, "fresh.jsonl")
+	if err := os.WriteFile(fresh, bytes.Repeat([]byte("b"), 50), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stderr bytes.Buffer
+	reportJoinBacklog(stateDir, []agentRoot{{agent: "claude-code", dirs: []agentDir{{dir: srcDir}}}}, nil, &stderr)
+	if !strings.Contains(stderr.String(), "upload backlog: 50 bytes") {
+		t.Fatalf("reportJoinBacklog = %q, want only the fresh file's 50 bytes; an acknowledged source behind a symlinked root must not count as backlog", stderr.String())
+	}
+}
+
 func TestReportJoinBacklogSkipsExcludedFiles(t *testing.T) {
 	tmp := t.TempDir()
 	stateDir := filepath.Join(tmp, "state")
