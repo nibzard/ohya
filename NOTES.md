@@ -2312,3 +2312,11 @@ How to use this file:
     the destination slice CAPACITY: reusing a 1 MiB buffer fails on 1.2 MiB
     sections with "decompressed size exceeds configured limit" — decode
     into a per-stream buffer sized like the production rawLen allocation.
+
+- Release v0.3.0 published (2026-11-20, commit `3fe9f4e`, candidate run
+  44814572741): ships schema 8 (`008_purged_sources`), parser versions
+  `claude=2 codex=4 pi=3`, ADR 0013/0014/0016, `ohya search`/`show`,
+  secret redaction, and reliability/security hardening. Local `make check`,
+  `make tla`, all 7 hosted candidate jobs, and local `install.sh` hub
+  upgrade passed (`ohya.service` + `ohya-serve.service` active; legacy
+  `ohya-hub.service` retired).

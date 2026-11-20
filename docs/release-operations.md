@@ -1,6 +1,6 @@
 # Release and recovery operations
 
-The newest release is v0.2.0, published on 2026-11-17 from commit `3e6adba`
+The newest release is v0.3.0, published on 2026-11-20 from commit `3fe9f4e`
 after the full candidate matrix passed; its macOS archives are unsigned. Apple signing and
 notarization must pass before a signed public release. Generated candidates
 are not qualified releases merely because packaging succeeds.
@@ -184,6 +184,19 @@ more full recovery copy, so the cost above applies once per hub. Beyond that:
   one-line device join. The released installer upgraded the linux-amd64 hub
   host end to end; `ohya doctor` exited 0 with the three long-standing
   stopped sources (ADR 0004) as the only warnings.
+- v0.3.0 (commit `3fe9f4e`, dirty=false) was published on 2026-11-20 after
+  the full hosted matrix passed (run 44814572741) and local `make check` +
+  `make tla` passed with zero errors. The first candidate (run 44813684376,
+  commit `69b2112`) passed Ubuntu 22.04 and failed on macOS in
+  `TestDiscoverSessionFilesExcludeMatchesSymlinkedPathForm` due to `/var ->
+  /private/var` temp-dir symlinks; fixed at `3fe9f4e`. v0.3.0 adds schema 8
+  (ADR 0013 owner-scoped purge & `ohya sources reallow`), `--exclude`
+  discovery scope controls (ADR 0016), negotiated zstd batch upload
+  (ADR 0014), `ohya search`/`ohya show`, secret-shaped value redaction,
+  parser upgrades (`claudecode` v2, `codex` v4, `pi` v3), and end-to-end
+  reliability/security/observability hardening. The released installer
+  upgraded the linux-amd64 hub host end to end; `ohya.service` and
+  `ohya-serve.service` are active.
 - The installer refuses to replace an executable whose digest matches neither
   its receipt entry nor the previous one ("installed executable has changed;
   preserve it"). A copy installed by hand outside `install.sh` triggers this
