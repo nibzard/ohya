@@ -456,6 +456,14 @@ at its purged cursor and history resumes from that point, so purged bytes
 never return through replay. `tla/Sync.tla` and `tla/Auth.tla` carry the
 purged state, its refusal, and the re-admission rules.
 
+Agents nominate garbage but never delete
+([ADR 0016](docs/adr/0016-agent-marked-purge-scope.md)): they find it with
+the read-only `sql` tool, mark it with `annotate` (namespace `tags`, key
+`garbage`), and hand the owner the exact `ohya purge --marked
+<namespace.key>` commands. The selector plans the sessions whose events
+carry that mark from any writer; it changes selection only, not the
+lifecycle above, so the models stay valid.
+
 Model-check cursor advancement, retries, crashes and lost acknowledgments before
 network sync implementation. State source-retention and durable-storage assumptions;
 liveness assumes eventual reconnection and retries. Test implementation separately.

@@ -205,5 +205,8 @@ Example — record a completed security review:
 
 Example — remove a tag and retry another annotation identically:
 {"operations":[{"op":"delete","event_id":42,"namespace":"tags","key":"needs-review"}]}
+
+Example — mark an event as garbage for the owner's purge audit (the sql tool's garbage audit explains the flow; the owner runs ohya purge --marked tags.garbage, never you):
+{"operations":[{"op":"upsert","event_id":42,"namespace":"tags","key":"garbage","value":{"reason":"aborted start, single record","evidence":42}}]}
 `, o.WriterID, store.MaxAnnotationOperations, o.MaxAnnotateRequestBytes, store.MaxAnnotationValueBytes)
 }

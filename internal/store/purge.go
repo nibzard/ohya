@@ -21,14 +21,42 @@ type PurgeSelector struct {
 	Agent     string
 	HasBefore bool
 	BeforeMS  int64
+
+	MarkedNamespace string
+	MarkedKey       string
+}
+
+func ParseMarkSelector(mark string) (namespace, key string, err error) {
+	ns, key, ok := strings.Cut(mark, ".")
+	switch {
+	case !ok || ns == "" || key == "":
+		return "", "", fmt.Errorf("marked selector %q must be namespace.key, for example tags.garbage", mark)
+	case !annotationNameRE.MatchString(ns) || !annotationNameRE.MatchString(key):
+		return "", "", fmt.Errorf("marked selector %q holds an invalid namespace or key; each holds 1 to 128 ASCII characters from letters, digits and _ - . /", mark)
+	}
+	return ns, key, nil
 }
 
 func (s PurgeSelector) beforeActive() bool {
 	return s.HasBefore || s.BeforeMS != 0
 }
 
+func (s PurgeSelector) markedActive() bool {
+	return s.MarkedNamespace != "" || s.MarkedKey != ""
+}
+
 func (s PurgeSelector) Empty() bool {
-	return s.Session == "" && s.Repo == "" && s.Agent == "" && !s.beforeActive()
+	return s.Session == "" && s.Repo == "" && s.Agent == "" && !s.beforeActive() && !s.markedActive()
+}
+
+func (s PurgeSelector) validate() error {
+	if s.MarkedNamespace == "" && s.MarkedKey == "" {
+		return nil
+	}
+	if s.MarkedNamespace == "" || s.MarkedKey == "" {
+		return fmt.Errorf("store: purge marked selector needs both a namespace and a key, for example tags.garbage: %w", ErrBatchRejected)
+	}
+	return nil
 }
 
 func (s PurgeSelector) Scope() string {
@@ -44,6 +72,9 @@ func (s PurgeSelector) Scope() string {
 	}
 	if s.beforeActive() {
 		parts = append(parts, "before="+time.UnixMilli(s.BeforeMS).UTC().Format(time.RFC3339))
+	}
+	if s.MarkedNamespace != "" && s.MarkedKey != "" {
+		parts = append(parts, "marked="+s.MarkedNamespace+"."+s.MarkedKey)
 	}
 	return strings.Join(parts, " ")
 }
@@ -67,6 +98,13 @@ func (s PurgeSelector) sessionFilter() (string, []any) {
 		conds = append(conds, "COALESCE(s.last_event_at_ms, s.started_at_ms) IS NOT NULL")
 		conds = append(conds, "COALESCE(s.last_event_at_ms, s.started_at_ms) < ?")
 		args = append(args, s.BeforeMS)
+	}
+	if s.MarkedNamespace != "" && s.MarkedKey != "" {
+		conds = append(conds, `s.id IN (
+		   SELECT e.session_id FROM events e
+		   JOIN event_annotations a ON a.event_id = e.id
+		   WHERE a.namespace = ? AND a.key = ?)`)
+		args = append(args, s.MarkedNamespace, s.MarkedKey)
 	}
 	return strings.Join(conds, " AND "), args
 }
@@ -143,6 +181,9 @@ type purgeQuerier interface {
 func (d *DB) PlanPurge(ctx context.Context, sel PurgeSelector) (PurgePlan, error) {
 	if sel.Empty() {
 		return PurgePlan{}, fmt.Errorf("store: purge needs at least one selector: %w", ErrBatchRejected)
+	}
+	if err := sel.validate(); err != nil {
+		return PurgePlan{}, err
 	}
 	tx, err := d.writer.BeginTx(ctx, nil)
 	if err != nil {

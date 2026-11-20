@@ -234,6 +234,69 @@ func TestPurgeSelectors(t *testing.T) {
 	}
 }
 
+func TestPurgeMarkedSelector(t *testing.T) {
+	hub := purgeFixtureHub(t)
+	ctx := context.Background()
+	if _, err := Annotate(ctx, hub.Writer(), deviceHex, annotateArgs(t, hub, "src-a1")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Annotate(ctx, hub.Writer(), otherDeviceHex, annotateArgs(t, hub, "src-b1")); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := hub.PlanPurge(ctx, PurgeSelector{MarkedNamespace: "tags", MarkedKey: "purge-me"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Sessions) != 2 || plan.Sessions[0].NativeID != "sess-a" || plan.Sessions[1].NativeID != "sess-b" {
+		t.Fatalf("marked plan sessions = %+v, want sess-a and sess-b whatever device wrote the mark", plan.Sessions)
+	}
+	if len(plan.Sources) != 3 {
+		t.Fatalf("marked plan sources = %+v, want src-a1 plus both files of sess-b's thread", plan.Sources)
+	}
+
+	if _, _, err := hub.ApplyPurge(ctx, PurgeSelector{MarkedNamespace: "tags", MarkedKey: "purge-me"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := hubCount(t, hub, `SELECT count(*) FROM events`); got != 1 {
+		t.Fatalf("surviving events = %d, want only the unmarked sess-a2 record", got)
+	}
+	if got := hubCount(t, hub, `SELECT count(*) FROM sources`); got != 1 {
+		t.Fatalf("surviving sources = %d, want src-a2 only", got)
+	}
+	if got := hubCount(t, hub, `SELECT count(*) FROM purged_sources WHERE scope = 'marked=tags.purge-me'`); got != 3 {
+		t.Fatalf("tombstones with marked scope = %d, want 3", got)
+	}
+	if got := hubCount(t, hub, `SELECT count(*) FROM event_annotations`); got != 0 {
+		t.Fatalf("marks survived their events: %d", got)
+	}
+
+	_, err = hub.PlanPurge(ctx, PurgeSelector{MarkedNamespace: "tags"})
+	if !errors.Is(err, ErrBatchRejected) {
+		t.Fatalf("half marked selector error = %v", err)
+	}
+
+	for _, tc := range []struct {
+		mark string
+		ok   bool
+	}{
+		{"tags.garbage", true},
+		{"garbage", false},
+		{"tags.", false},
+		{".garbage", false},
+		{"ta gs.garbage", false},
+		{"tags.garbage extra", false},
+	} {
+		ns, key, err := ParseMarkSelector(tc.mark)
+		if tc.ok && (err != nil || ns != "tags" || key != "garbage") {
+			t.Fatalf("ParseMarkSelector(%q) = %q, %q, %v", tc.mark, ns, key, err)
+		}
+		if !tc.ok && err == nil {
+			t.Fatalf("ParseMarkSelector(%q) accepted a malformed mark", tc.mark)
+		}
+	}
+}
+
 func TestPurgeRefusesTombstonedSource(t *testing.T) {
 	hub := purgeFixtureHub(t)
 	ctx := context.Background()
