@@ -263,6 +263,16 @@ How to use this file:
   bare query — `'"phrase words"'` as a parameter is a syntax error, because the
   single quotes are SQL string delimiters, not FTS syntax; pass `"phrase words"`
   and keep the single-quote form only for inline literals.
+  Also (2026-11-20, T153): a bare hyphenated MATCH term parses as an FTS5
+  column filter (`auth-refresh` → `no such column: refresh`, because
+  `events_fts` has only the `text` column; other bare punctuation, for
+  example `/`, → `fts5: syntax error`); double quotes turn it into a phrase
+  over the split tokens. The rule is published in search --help,
+  docs/reference.md, DB.md's search example, and the sql tool description's
+  MATCH guidance, and the search error path appends the hint
+  (`ftsQuotingHint` in cmd/ohya/recall.go fires on `fts5: syntax error` or
+  on `no such column:` whose name occurs in the query text, so a genuine
+  schema-drift column error stays unhinted).
 
 - Source watcher choices (2026-11-13, internal/watch, T005): change detection
   applies three signals in order — platform identity (dev/ino on Unix), size

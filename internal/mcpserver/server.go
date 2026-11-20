@@ -146,7 +146,7 @@ FROM events e WHERE e.id IN (
   ORDER BY ev.time_ms DESC, ev.id DESC LIMIT 50)
 ORDER BY e.time_ms, e.id;
 
-Example — full-text search (BM25 rank):
+Example — full-text search (BM25 rank). In a MATCH string, wrap every punctuation-bearing term — a hyphenated branch or directory name, an apostrophe — in double quotes, as in '"auth-refresh"'; FTS5 parses a bare '-name' as a column filter and fails with no such column, and other bare punctuation is a syntax error:
 SELECT e.id, s.cwd, e.time_ms, substr(e.text, 1, 300) AS excerpt
 FROM events_fts JOIN events e ON e.id = events_fts.rowid
 JOIN sessions s ON s.id = e.session_id

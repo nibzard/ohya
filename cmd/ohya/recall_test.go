@@ -132,6 +132,50 @@ func TestSearchFtsSyntaxErrorIsAFailure(t *testing.T) {
 	}
 }
 
+func TestSearchHyphenatedTermNeedsQuotes(t *testing.T) {
+	db := seedRecallDatabase(t)
+	hub, err := store.Open(t.Context(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = hub.Writer().Exec(`INSERT INTO events(id,session_id,source_id,source_offset,time_ms,kind,role,raw_json,text)
+		 VALUES(7,'claude-code:dev1:sess-1','src-1',5,` + itoa(1763000005000) + `,'message','user','{}','rework the auth-rework branch under feature/auth-rework')`)
+	hub.Close()
+	if err != nil {
+		t.Fatalf("seed the hyphenated event: %v", err)
+	}
+
+	code, _, errOut := runRecallCLI(t, "search", "--db", db, "auth-rework")
+	if code != 1 {
+		t.Fatalf("bare hyphenated term exit = %d; want 1 (stderr %q)", code, errOut)
+	}
+	for _, want := range []string{
+		"no such column: rework",
+		"double quotes",
+		`ohya search '"auth-refresh"'`,
+	} {
+		if !strings.Contains(errOut, want) {
+			t.Fatalf("stderr = %q; want it to contain %q", errOut, want)
+		}
+	}
+
+	code, out, errOut := runRecallCLI(t, "search", "--db", db, `"auth-rework"`)
+	if code != 0 || errOut != "" {
+		t.Fatalf("quoted hyphenated term exit = %d, stderr %q", code, errOut)
+	}
+	if !strings.Contains(out, "session=claude-code:dev1:sess-1") || !strings.Contains(out, "feature/auth-rework") {
+		t.Fatalf("quoted hyphenated search missed the seeded event:\n%s", out)
+	}
+
+	code, _, errOut = runRecallCLI(t, "search", "--db", db, "feature/auth-rework")
+	if code != 1 {
+		t.Fatalf("bare slashed term exit = %d; want 1 (stderr %q)", code, errOut)
+	}
+	if !strings.Contains(errOut, "syntax error") || !strings.Contains(errOut, "double quotes") {
+		t.Fatalf("stderr = %q; want the syntax error and the quoting hint", errOut)
+	}
+}
+
 func TestSearchMissingDatabase(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "hub.db")
 	code, _, errOut := runRecallCLI(t, "search", "--db", missing, "x")
