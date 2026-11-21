@@ -589,12 +589,47 @@ func checkHubUnitProcess(ctx context.Context, u setup.UnitExecStart) (finding, b
 }
 
 func writeFindings(w io.Writer, findings []finding) {
-	for _, f := range findings {
-		line := fmt.Sprintf("%-5s %s: %s", f.Severity, f.Check, f.Detail)
-		if f.Remedy != "" {
-			line += "; remedy: " + f.Remedy
+	s := styleFor(w)
+	if !s.color {
+		for _, f := range findings {
+			line := fmt.Sprintf("%-5s %s: %s", f.Severity, f.Check, f.Detail)
+			if f.Remedy != "" {
+				line += "; remedy: " + f.Remedy
+			}
+			fmt.Fprintln(w, line)
 		}
-		fmt.Fprintln(w, line)
+		return
+	}
+	maxCheck := 0
+	okCount, warnCount, errCount := 0, 0, 0
+	for _, f := range findings {
+		if vw := visibleWidth(f.Check); vw > maxCheck {
+			maxCheck = vw
+		}
+		switch f.Severity {
+		case sevOK:
+			okCount++
+		case sevWarn:
+			warnCount++
+		case sevError:
+			errCount++
+		}
+	}
+	fmt.Fprintf(w, "%s\n\n", s.bold("ohya doctor"))
+	for _, f := range findings {
+		fmt.Fprintf(w, "  %s  %s  %s\n", s.severityTag(f.Severity), padRight(s.bold(f.Check), maxCheck), f.Detail)
+		if f.Remedy != "" {
+			fmt.Fprintf(w, "     %s  %s\n", strings.Repeat(" ", maxCheck), s.dim("→ "+f.Remedy))
+		}
+	}
+	fmt.Fprintln(w)
+	switch {
+	case errCount > 0:
+		fmt.Fprintf(w, "%s %s\n", s.boldRed("✗"), s.red(fmt.Sprintf("%d error, %d warning, %d ok", errCount, warnCount, okCount)))
+	case warnCount > 0:
+		fmt.Fprintf(w, "%s %s\n", s.boldYellow("▲"), s.yellow(fmt.Sprintf("%d warning, %d ok", warnCount, okCount)))
+	default:
+		fmt.Fprintf(w, "%s %s\n", s.boldGreen("✓"), s.green(fmt.Sprintf("all %d checks passed", okCount)))
 	}
 }
 

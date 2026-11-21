@@ -107,7 +107,7 @@ func TestServiceCLIJSONAndTextFlow(t *testing.T) {
 	if code != 0 || stderr != "" {
 		t.Fatalf("start exit=%d stderr=%q", code, stderr)
 	}
-	if !strings.Contains(out, "service start: installed=true loaded=true running=true changed=true") {
+	if !strings.Contains(out, "memory service") || !strings.Contains(out, "running") || !strings.Contains(out, "started") {
 		t.Fatalf("start text = %q", out)
 	}
 

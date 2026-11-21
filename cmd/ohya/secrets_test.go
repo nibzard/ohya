@@ -65,7 +65,7 @@ func TestSecretsScanReportsWithoutSecretMaterial(t *testing.T) {
 	for _, want := range []string{
 		"3 matches in 3 events across 2 sessions",
 		"patterns:",
-		"github-token  1",
+		"github-token       1",
 		"aws-access-key-id  1",
 		"anthropic-api-key  1",
 		"session claude-code:dev1:sess-1",

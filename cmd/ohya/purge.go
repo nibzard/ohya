@@ -109,7 +109,8 @@ func runPurgeCommand(args []string, stdout, stderr io.Writer) error {
 			return printJSON(stdout, purgeSpec.name, newPurgeJSON(plan, sel, false, nil))
 		}
 		printPurgePlan(stdout, plan)
-		fmt.Fprintln(stdout, "dry run only; nothing was deleted; rerun with --apply to purge")
+		s := styleFor(stdout)
+		fmt.Fprintf(stdout, "\n%s\n", s.yellow("dry run only; nothing was deleted; rerun with --apply to purge"))
 		return nil
 	}
 
@@ -120,33 +121,56 @@ func runPurgeCommand(args []string, stdout, stderr io.Writer) error {
 	if *asJSON {
 		return printJSON(stdout, purgeSpec.name, newPurgeJSON(plan, sel, true, &res))
 	}
+	s := styleFor(stdout)
 	for _, src := range plan.Sources {
-		fmt.Fprintf(stdout, "purged source %s (%d events, cursor %d)\n", src.ID, src.Events, src.Cursor)
+		fmt.Fprintf(stdout, "%s %s %s\n", s.green("purged source"), s.bold(src.ID), s.dim(fmt.Sprintf("(%d events, cursor %d)", src.Events, src.Cursor)))
 	}
 	printPurgeTotals(stdout, plan, "purged")
 	return nil
 }
 
 func printPurgePlan(w io.Writer, plan store.PurgePlan) {
+	s := styleFor(w)
 	if len(plan.Sessions) == 0 {
-		fmt.Fprintln(w, "0 sessions match; nothing to purge")
+		fmt.Fprintln(w, s.dim("0 sessions match; nothing to purge"))
 		return
 	}
 	printPurgeTotals(w, plan, "would purge")
-	fmt.Fprintf(w, "sessions (%d):\n", len(plan.Sessions))
-	for _, s := range plan.Sessions {
-		fmt.Fprintf(w, "  %s  agent=%s  device=%s  events=%d\n", s.ID, s.Agent, s.DeviceID, s.Events)
+	fmt.Fprintf(w, "\n%s\n", s.section(fmt.Sprintf("Sessions (%d)", len(plan.Sessions))))
+	sTbl := cliTable{
+		indent:     "  ",
+		headers:    []string{"SESSION", "AGENT", "DEVICE", "EVENTS"},
+		rightAlign: []bool{false, false, false, true},
 	}
-	fmt.Fprintf(w, "sources (%d):\n", len(plan.Sources))
+	for _, ses := range plan.Sessions {
+		sTbl.addRow(s.bold(ses.ID), s.cyan(ses.Agent), s.dim(ses.DeviceID), fmt.Sprintf("%d", ses.Events))
+	}
+	sTbl.render(w, s)
+
+	fmt.Fprintf(w, "\n%s\n", s.section(fmt.Sprintf("Sources (%d)", len(plan.Sources))))
+	srcTbl := cliTable{
+		indent:     "  ",
+		headers:    []string{"SOURCE", "AGENT", "DEVICE", "EVENTS", "CURSOR", "PATH"},
+		rightAlign: []bool{false, false, false, true, true, false},
+	}
 	for _, src := range plan.Sources {
-		fmt.Fprintf(w, "  %s  agent=%s  device=%s  events=%d  cursor=%d  path=%s\n",
-			src.ID, src.Agent, src.DeviceID, src.Events, src.Cursor, src.Path)
+		srcTbl.addRow(
+			s.bold(src.ID),
+			s.cyan(src.Agent),
+			s.dim(src.DeviceID),
+			fmt.Sprintf("%d", src.Events),
+			s.dim(fmt.Sprintf("%d", src.Cursor)),
+			s.dim(src.Path),
+		)
 	}
+	srcTbl.render(w, s)
 }
 
 func printPurgeTotals(w io.Writer, plan store.PurgePlan, verb string) {
-	fmt.Fprintf(w, "%s %d sessions, %d sources, %d events, %d bytes\n",
+	s := styleFor(w)
+	line := fmt.Sprintf("%s %d sessions, %d sources, %d events, %d bytes",
 		verb, len(plan.Sessions), len(plan.Sources), plan.Events, plan.Bytes)
+	fmt.Fprintln(w, s.bold(line))
 }
 
 type purgeJSONSession struct {

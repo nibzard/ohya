@@ -429,8 +429,9 @@ func TestServeJoinEndToEnd(t *testing.T) {
 	}
 	sessionID := ""
 	for _, field := range strings.Fields(searchOut.String()) {
-		if strings.HasPrefix(field, "session=") {
-			sessionID = strings.TrimPrefix(field, "session=")
+		if strings.HasPrefix(field, "claude-code:") {
+			sessionID = field
+			break
 		}
 	}
 	if sessionID == "" || !strings.Contains(searchOut.String(), "prime") {
@@ -440,7 +441,7 @@ func TestServeJoinEndToEnd(t *testing.T) {
 	if err := runShowCommand([]string{"--remote", "--state", devState, sessionID}, &showOut, io.Discard); err != nil {
 		t.Fatalf("remote show %s: %v; serve stderr:\n%s", sessionID, err, serveLog.String())
 	}
-	for _, want := range []string{"first prompt: Find the highest prime below 20.", "The highest prime below 20 is 19."} {
+	for _, want := range []string{"Find the highest prime below 20.", "The highest prime below 20 is 19."} {
 		if !strings.Contains(showOut.String(), want) {
 			t.Fatalf("remote show output lacks %q:\n%s", want, showOut.String())
 		}

@@ -58,6 +58,10 @@ while join pairs, has the hub verify a credential, or uploads — exits 0
 with no half-configured state, and the next start redoes the interrupted
 step. Flags
 are spelled with two dashes (`--db`); the parser also accepts one dash.
+Text output uses ANSI color and semantic symbols only on an interactive
+terminal; piped output, `TERM=dumb`, and any non-empty `NO_COLOR` emit
+plain text (`FORCE_COLOR=1` or `CLICOLOR_FORCE=1` forces color when
+`NO_COLOR` is unset).
 Flags may appear before or after positional arguments:
 `ohya join --state DIR CODE` and `ohya join CODE --state DIR` both parse.
 A bare `--` ends flag parsing; every argument after it is positional. No
@@ -652,29 +656,39 @@ it never contacts the hub, starts a service, migrates a database, or
 repairs files. It resolves the state directory the way doctor does —
 `--state` wins, otherwise the database directory, switching to
 `<state>/join` when `setup/connection.json` selects remote memory — and
-`--role` and `--instance` narrow the report when several processes
-publish. Output carries the CLI identity, topology (mode, state
-directory, agent-root counts without paths, owned service loaded/running
-facts), storage sizes with their observation time (a joined client never
-reports its old local database as the hub), one section per instance with
-freshness, liveness, source-state gauges, per-agent counts of files
-skipped by `--exclude`, pending and upload backlog in
-bytes, resource readings, and the raw counters, gauges, duration
-histograms, and resources from the snapshot. Findings carry a stable
-code, severity, evidence, and hint: `instance_terminated`,
-`instance_stale`, `instance_unreadable`, `instance_unsupported_version`,
-`no_instances`, `multiple_instances`, `pending_backlog`,
-`upload_backlog`, `sources_stopped`, `discovery_truncated`,
-`remote_status_unsupported`, `remote_status_failed`. Instances are never
-merged; a null value and a zero value stay distinct. `--remote` opens one
-short-lived authenticated connection to the hub (negotiating `CapRemoteStatus`
-via `caps`/`welcome`), fetches cached hub aggregates (hub identity, monotonic
-uptime, storage file sizes without paths, resource readings, bounds, and
-transport path), and adds a `remote_hub` section without ever substituting
-local database facts on failure; older hubs that do not advertise
-`CapRemoteStatus` report `remote_status_unsupported` cleanly. Exit 0 means
-every selected instance is fresh with no degraded component; exit 3 means the
-result is valid but partial, stale, or degraded.
+`--role`, `--instance`, and `--all` narrow or expand the report.
+By default `ohya status` reports live instances plus the newest
+unreplaced terminated daemon per role; cleanly exited or superseded
+daemon directories and exited ephemeral `mcp` stdio sessions stay on
+disk under retention (for `ohya logs`, `ohya metrics`, `ohya usage`, and
+`ohya diagnose`) and are summarized in `retained` rather than triggering
+`instance_terminated` or `multiple_instances` warnings. Pass `--all` to
+list retained instances explicitly. `multiple_instances` checks only
+live daemon roles (`ingest`, `serve`, `join`); multiple concurrent
+`mcp` stdio sessions are normal. Output carries the CLI identity,
+topology (mode, state directory, agent-root counts without paths, owned
+service loaded/running facts), storage sizes with their observation time
+(a joined client never reports its old local database as the hub),
+active instances with freshness, liveness, clean-shutdown state
+(`stopped`), source-state gauges, per-agent counts of files skipped by
+`--exclude`, pending and upload backlog in bytes, resource readings, and
+the raw counters, gauges, duration histograms, and resources from the
+snapshot. Findings carry a stable code, severity, evidence, and hint:
+`instance_terminated`, `instance_stale`, `instance_unreadable`,
+`instance_unsupported_version`, `no_instances`, `multiple_instances`,
+`pending_backlog`, `upload_backlog`, `sources_stopped`,
+`discovery_truncated`, `remote_status_unsupported`,
+`remote_status_failed`. Instances are never merged; a null value and a
+zero value stay distinct. `--remote` opens one short-lived authenticated
+connection to the hub (negotiating `CapRemoteStatus` via
+`caps`/`welcome`), fetches cached hub aggregates (hub identity,
+monotonic uptime, storage file sizes without paths, resource readings,
+bounds, and transport path), and adds a `remote_hub` section without
+ever substituting local database facts on failure; older hubs that do
+not advertise `CapRemoteStatus` report `remote_status_unsupported`
+cleanly. Exit 0 means every selected live instance is fresh with no
+degraded component; exit 3 means the result is valid but partial, stale,
+or degraded.
 
 ### `ohya metrics`
 
@@ -686,7 +700,9 @@ is the monotonic time the process actually ran, and duration histogram
 deltas with p50/p95 bucket estimates — null below twenty observations.
 Percentiles are never averaged between instances, and a window the
 history does not cover is reported as partial rather than manufactured
-from less data. Exit 3 marks a sample-less, gapped, or partial window.
+from less data. Retained terminated instances with no samples in the
+requested window are omitted by default; pass `--all` to include them.
+Exit 3 marks a sample-less, gapped, or partial window.
 
 ### `ohya logs`
 

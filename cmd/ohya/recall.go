@@ -630,85 +630,125 @@ func buildSessionsJSON(res mcpserver.Result) sessionsJSONData {
 }
 
 func printSearchResult(w io.Writer, res mcpserver.Result) {
+	s := styleFor(w)
 	if res.RowCount == 0 {
-		fmt.Fprintln(w, "no matches")
+		fmt.Fprintln(w, s.dim("no matches"))
 		return
 	}
-	for _, row := range res.Rows {
+	sep := " " + s.bullet() + " "
+	for i, row := range res.Rows {
 		if len(row) != 6 {
 			fmt.Fprintf(w, "unexpected result width %d; want 6 columns\n", len(row))
 			continue
 		}
-		fmt.Fprintf(w, "%s  session=%s  agent=%s  repo=%s  time=%s\n",
-			recallValue(row[0]), recallValue(row[1]), recallValue(row[2]),
-			recallDash(row[3]), recallTime(row[4]))
-		fmt.Fprintf(w, "    %s\n", excerptText(recallValue(row[5])))
+		if i > 0 {
+			fmt.Fprintln(w)
+		}
+		meta := []string{
+			s.bold("#" + recallValue(row[0])),
+			s.bold(recallValue(row[1])),
+			s.cyan(recallValue(row[2])),
+		}
+		if repo := recallDash(row[3]); repo != "-" {
+			meta = append(meta, repo)
+		}
+		meta = append(meta, s.dim(recallTime(row[4])))
+		fmt.Fprintln(w, strings.Join(meta, sep))
+		fmt.Fprintf(w, "  %s\n", excerptText(recallValue(row[5])))
 	}
 	if res.Truncated {
-		fmt.Fprintf(w, "; result truncated (%s)\n", res.TruncationReason)
+		fmt.Fprintf(w, "\n%s\n", s.yellow(fmt.Sprintf("; result truncated (%s)", res.TruncationReason)))
 	}
 }
 
 func printShowResult(w io.Writer, header, events mcpserver.Result) {
+	s := styleFor(w)
 	row := header.Rows[0]
 	if len(row) < 12 {
 		fmt.Fprintf(w, "unexpected session width %d; want 12 columns\n", len(row))
 		return
 	}
-	fmt.Fprintf(w, "session=%s  agent=%s  device=%s  native=%s\n",
-		recallValue(row[0]), recallValue(row[1]), recallValue(row[2]), recallValue(row[3]))
-	fmt.Fprintf(w, "repo=%s  cwd=%s  branch=%s  model=%s\n",
-		recallDash(row[4]), recallDash(row[5]), recallDash(row[6]), recallDash(row[7]))
-	fmt.Fprintf(w, "first prompt: %s\n", excerptText(recallValue(row[8])))
-	fmt.Fprintf(w, "started=%s  last=%s  events=%s\n",
-		recallTime(row[9]), recallTime(row[10]), recallValue(row[11]))
+	sep := " " + s.bullet() + " "
+	fmt.Fprintf(w, "%s  %s\n", s.bold(recallValue(row[0])), s.cyan(recallValue(row[1]))+sep+s.dim(recallValue(row[2])))
+	meta := [][2]string{
+		{"Native", recallValue(row[3])},
+		{"Repo", recallDash(row[4])},
+		{"Cwd", recallDash(row[5])},
+		{"Branch", recallDash(row[6])},
+		{"Model", recallDash(row[7])},
+		{"Time", fmt.Sprintf("%s → %s (%s events)", recallTime(row[9]), recallTime(row[10]), recallValue(row[11]))},
+		{"Prompt", excerptText(recallValue(row[8]))},
+	}
+	writeKeyValues(w, s, "", meta)
 	if events.RowCount == 0 {
-		fmt.Fprintln(w, "no events")
+		fmt.Fprintf(w, "\n%s\n", s.dim("no events"))
 		return
 	}
-	fmt.Fprintf(w, "newest %d events (oldest first):\n", events.RowCount)
+	fmt.Fprintf(w, "\n%s\n", s.section(fmt.Sprintf("newest %d events (oldest first):", events.RowCount)))
+	tbl := cliTable{
+		indent:  "  ",
+		headers: []string{"ID", "TIME", "KIND", "EXCERPT"},
+	}
 	for i := len(events.Rows) - 1; i >= 0; i-- {
 		event := events.Rows[i]
 		if len(event) != 6 {
 			fmt.Fprintf(w, "unexpected event width %d; want 6 columns\n", len(event))
 			continue
 		}
-		line := fmt.Sprintf("%s  %s  %s  %s",
-			recallValue(event[0]), recallTime(event[1]),
-			eventLabel(recallValue(event[2]), recallValue(event[3]), recallValue(event[4])),
-			excerptText(recallValue(event[5])))
-		fmt.Fprintln(w, strings.TrimRight(line, " "))
+		tbl.addRow(
+			s.dim(recallValue(event[0])),
+			s.dim(recallTime(event[1])),
+			s.cyan(eventLabel(recallValue(event[2]), recallValue(event[3]), recallValue(event[4]))),
+			excerptText(recallValue(event[5])),
+		)
 	}
+	tbl.render(w, s)
 	if events.Truncated {
-		fmt.Fprintf(w, "; result truncated (%s)\n", events.TruncationReason)
+		fmt.Fprintf(w, "\n%s\n", s.yellow(fmt.Sprintf("; result truncated (%s)", events.TruncationReason)))
 	}
 }
 
 func printSessionsResult(w io.Writer, res mcpserver.Result) {
+	s := styleFor(w)
 	if res.RowCount == 0 {
-		fmt.Fprintln(w, "no sessions")
+		fmt.Fprintln(w, s.dim("no sessions"))
 		return
 	}
-	for _, row := range res.Rows {
+	sep := " " + s.bullet() + " "
+	for i, row := range res.Rows {
 		if len(row) < 12 {
 			fmt.Fprintf(w, "unexpected session width %d; want 13 columns\n", len(row))
 			continue
 		}
-		state := "settled"
+		if i > 0 {
+			fmt.Fprintln(w)
+		}
+		styledState := s.dim("settled")
 		if len(row) > 12 {
 			if settled, ok := recallBool(row[12]); ok && !settled {
-				state = "active"
+				styledState = s.green("active")
 			}
 		}
-		fmt.Fprintf(w, "%s  agent=%s  device=%s  repo=%s  last=%s  events=%s  state=%s\n",
-			recallValue(row[0]), recallValue(row[1]), recallValue(row[2]),
-			recallDash(row[4]), recallTime(row[10]), recallValue(row[11]), state)
+		parts := []string{
+			s.bold(recallValue(row[0])),
+			s.cyan(recallValue(row[1])),
+			s.dim(recallValue(row[2])),
+		}
+		if repo := recallDash(row[4]); repo != "-" {
+			parts = append(parts, repo)
+		}
+		parts = append(parts,
+			s.dim(recallTime(row[10])),
+			s.dim(recallValue(row[11])+" events"),
+			styledState,
+		)
+		fmt.Fprintln(w, strings.Join(parts, sep))
 		if prompt := excerptText(recallValue(row[8])); prompt != "" {
-			fmt.Fprintf(w, "    %s\n", prompt)
+			fmt.Fprintf(w, "  %s\n", s.dim(prompt))
 		}
 	}
 	if res.Truncated {
-		fmt.Fprintf(w, "; result truncated (%s)\n", res.TruncationReason)
+		fmt.Fprintf(w, "\n%s\n", s.yellow(fmt.Sprintf("; result truncated (%s)", res.TruncationReason)))
 	}
 }
 

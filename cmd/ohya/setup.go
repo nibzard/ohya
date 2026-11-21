@@ -291,9 +291,21 @@ func runUninstallCommand(args []string, stdout, stderr io.Writer) error {
 }
 
 func printSetupResult(stdout io.Writer, r setup.Result) {
-	fmt.Fprintf(stdout, "ohya: %s: %s", r.Component, r.Status)
+	s := styleFor(stdout)
+	status := r.Status
+	switch r.Status {
+	case "configured", "created", "started", "restarted", "removed", "updated":
+		status = s.green(r.Status)
+	case "unchanged", "skipped", "unmanaged":
+		status = s.dim(r.Status)
+	case "failed":
+		status = s.boldRed(r.Status)
+	default:
+		status = s.yellow(r.Status)
+	}
+	fmt.Fprintf(stdout, "ohya: %s: %s", s.bold(r.Component), status)
 	if r.Detail != "" {
-		fmt.Fprintf(stdout, " — %s", strings.ReplaceAll(r.Detail, "\n", " "))
+		fmt.Fprintf(stdout, " %s %s", s.dim("—"), strings.ReplaceAll(r.Detail, "\n", " "))
 	}
 	fmt.Fprintln(stdout)
 }

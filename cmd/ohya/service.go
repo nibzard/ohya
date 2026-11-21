@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/nibzard/ohya/internal/setup"
@@ -148,15 +149,53 @@ func classifyServiceError(err error) error {
 }
 
 func writeServiceStatusText(w io.Writer, res setup.ServiceStatus) {
-	line := fmt.Sprintf("%s %s: installed=%t loaded=%t running=%t", res.Service, res.Action, res.Installed, res.Loaded, res.Running)
-	if res.Action != string(setup.ServiceActionStatus) {
-		line += fmt.Sprintf(" changed=%t", res.Changed)
+	s := styleFor(w)
+	name := serviceDisplayName(res.Service) + " service"
+	var state string
+	switch {
+	case !res.Installed:
+		state = s.dim("not installed")
+	case res.Running:
+		state = s.processState("running", true)
+	case res.Loaded:
+		state = s.yellow("loaded (not running)")
+	default:
+		state = s.processState("stopped", false)
+	}
+	var notes []string
+	switch res.Action {
+	case string(setup.ServiceActionStart):
+		if res.Changed {
+			notes = append(notes, "started")
+		} else {
+			notes = append(notes, "already running")
+		}
+	case string(setup.ServiceActionStop):
+		if res.Changed {
+			notes = append(notes, "stopped")
+		} else {
+			notes = append(notes, "already stopped")
+		}
+	case string(setup.ServiceActionRestart):
+		if res.Changed {
+			notes = append(notes, "restarted")
+		}
+	default:
+		if res.Loaded {
+			notes = append(notes, "loaded")
+		} else if res.Installed {
+			notes = append(notes, "not loaded")
+		}
 	}
 	if res.Edited {
-		line += " edited=true"
+		notes = append(notes, "edited")
 	}
 	if res.Detail != "" {
-		line += " (" + res.Detail + ")"
+		notes = append(notes, res.Detail)
+	}
+	line := fmt.Sprintf("%s  %s", s.bold(name), state)
+	if len(notes) > 0 {
+		line += "  " + s.dim("("+strings.Join(notes, ", ")+")")
 	}
 	fmt.Fprintln(w, line)
 }

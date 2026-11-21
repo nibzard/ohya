@@ -76,10 +76,10 @@ func TestSearchFindsAndFiltersSessions(t *testing.T) {
 		t.Fatalf("exit %d, stderr %q", code, errOut)
 	}
 	for _, want := range []string{
-		"session=claude-code:dev1:sess-1",
-		"agent=claude-code",
-		"repo=github.com/example/app",
-		"time=" + hitTime,
+		"claude-code:dev1:sess-1",
+		"claude-code",
+		"github.com/example/app",
+		hitTime,
 		"The refresh token expires after 30 days",
 	} {
 		if !strings.Contains(out, want) {
@@ -91,7 +91,7 @@ func TestSearchFindsAndFiltersSessions(t *testing.T) {
 	}
 
 	code, out, _ = runRecallCLI(t, "search", "--db", db, "parser")
-	if code != 0 || !strings.Contains(out, "session=codex:dev2:thread-9") {
+	if code != 0 || !strings.Contains(out, "codex:dev2:thread-9") {
 		t.Fatalf("agent-scoped search = %d, %q", code, out)
 	}
 
@@ -164,7 +164,7 @@ func TestSearchHyphenatedTermNeedsQuotes(t *testing.T) {
 	if code != 0 || errOut != "" {
 		t.Fatalf("quoted hyphenated term exit = %d, stderr %q", code, errOut)
 	}
-	if !strings.Contains(out, "session=claude-code:dev1:sess-1") || !strings.Contains(out, "feature/auth-rework") {
+	if !strings.Contains(out, "claude-code:dev1:sess-1") || !strings.Contains(out, "feature/auth-rework") {
 		t.Fatalf("quoted hyphenated search missed the seeded event:\n%s", out)
 	}
 
@@ -201,12 +201,18 @@ func TestShowPrintsNewestEvents(t *testing.T) {
 		t.Fatalf("exit %d, stderr %q", code, errOut)
 	}
 	for _, want := range []string{
-		"session=claude-code:dev1:sess-1  agent=claude-code  device=dev1  native=sess-1",
-		"repo=github.com/example/app  cwd=/home/dev/app  branch=main  model=claude-opus-4-6",
-		"first prompt: Find primes",
-		"started=" + time.UnixMilli(1763000000000).UTC().Format(time.RFC3339),
-		"last=" + time.UnixMilli(1763000009000).UTC().Format(time.RFC3339),
-		"events=5",
+		"claude-code:dev1:sess-1",
+		"claude-code",
+		"dev1",
+		"sess-1",
+		"github.com/example/app",
+		"/home/dev/app",
+		"main",
+		"claude-opus-4-6",
+		"Find primes",
+		time.UnixMilli(1763000000000).UTC().Format(time.RFC3339),
+		time.UnixMilli(1763000009000).UTC().Format(time.RFC3339),
+		"5 events",
 		"newest 3 events (oldest first):",
 	} {
 		if !strings.Contains(out, want) {
@@ -254,7 +260,8 @@ func eventLines(t *testing.T, out string) []string {
 			inEvents = true
 			continue
 		}
-		if inEvents && strings.TrimSpace(line) != "" && !strings.HasPrefix(line, ";") {
+		trimmed := strings.TrimSpace(line)
+		if inEvents && trimmed != "" && !strings.HasPrefix(trimmed, ";") && !strings.HasPrefix(trimmed, "ID  ") {
 			lines = append(lines, line)
 		}
 	}
@@ -477,7 +484,7 @@ func TestSessionsListsRecentExcludesSyntheticRedactsAndTracksSettled(t *testing.
 	if code != 0 || errOut != "" {
 		t.Fatalf("text sessions exit %d, stderr %q", code, errOut)
 	}
-	if !strings.Contains(textOut, "pi:dev1:live-1") || !strings.Contains(textOut, "state=active") || !strings.Contains(textOut, "state=settled") {
+	if !strings.Contains(textOut, "pi:dev1:live-1") || !strings.Contains(textOut, "active") || !strings.Contains(textOut, "settled") {
 		t.Fatalf("text sessions output:\n%s", textOut)
 	}
 	if strings.Contains(textOut, "codex:dev2:thread-9") || strings.Contains(textOut, "ohya-synthetic") {

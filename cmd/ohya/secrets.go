@@ -203,27 +203,35 @@ func sessionIDs(session *secretsSession) []string {
 }
 
 func printSecretsScan(w io.Writer, report *secretsReport) {
-	fmt.Fprintf(w, "%d matches in %d events across %d sessions\n",
+	s := styleFor(w)
+	summary := fmt.Sprintf("%d matches in %d events across %d sessions",
 		report.matches, report.events, len(report.sessions))
 	if report.matches == 0 {
-		fmt.Fprintln(w, "the fixed pattern table found nothing; best effort, not proof that no secret is stored")
+		fmt.Fprintln(w, s.boldGreen(summary))
+		fmt.Fprintln(w, s.dim("the fixed pattern table found nothing; best effort, not proof that no secret is stored"))
 		return
 	}
-	fmt.Fprintln(w, "patterns:")
+	fmt.Fprintln(w, s.boldYellow(summary))
+	fmt.Fprintf(w, "\n%s\n", s.section("patterns:"))
+	tbl := cliTable{indent: "  ", rightAlign: []bool{false, true}}
 	for _, id := range secrets.IDs() {
 		if report.patterns[id] > 0 {
-			fmt.Fprintf(w, "  %s  %d\n", id, report.patterns[id])
+			tbl.addRow(s.cyan(id), s.bold(fmt.Sprintf("%d", report.patterns[id])))
 		}
 	}
+	tbl.render(w, s)
+	fmt.Fprintln(w)
 	for _, session := range report.sessions {
-		fmt.Fprintf(w, "session %s  matches=%d  events=%d  patterns=%s\n",
-			session.id, sessionMatches(session), len(session.events), joinIDs(sessionIDs(session)))
+		fmt.Fprintf(w, "%s %s  %s\n",
+			s.dim("session"), s.bold(session.id),
+			s.dim(fmt.Sprintf("matches=%d  events=%d  patterns=%s",
+				sessionMatches(session), len(session.events), joinIDs(sessionIDs(session)))))
 		for _, event := range session.events {
 			fmt.Fprintf(w, "  event %d  matches=%d  patterns=%s\n",
-				event.id, event.matches, joinIDs(event.ids))
+				event.id, event.matches, s.yellow(joinIDs(event.ids)))
 		}
 	}
-	fmt.Fprintln(w, "best effort: a fixed pattern table, no classifier; matched text is never printed; removing stored secrets is a separate owner action")
+	fmt.Fprintf(w, "\n%s\n", s.dim("best effort: a fixed pattern table, no classifier; matched text is never printed; removing stored secrets is a separate owner action"))
 }
 
 func joinIDs(ids []string) string {

@@ -186,37 +186,47 @@ func runDevicesList(args []string, stdout, stderr io.Writer) error {
 		})
 	}
 
-	fmt.Fprintln(stdout, "devices:")
+	s := styleFor(stdout)
+	fmt.Fprintln(stdout, s.section("Devices"))
 	if len(devices) == 0 {
-		fmt.Fprintln(stdout, "  (none paired)")
-	}
-	for _, d := range devices {
-		line := fmt.Sprintf("  %s  %s  paired %s",
-			d.DeviceID, d.State, msTime(d.PairedAtMS))
-		if d.LastSyncAtMS != 0 {
-			line += fmt.Sprintf(", last sync %s via %s", msTime(d.LastSyncAtMS), d.LastPath)
-		} else {
-			line += ", never synced"
+		fmt.Fprintf(stdout, "  %s\n", s.dim("(none paired)"))
+	} else {
+		tbl := cliTable{indent: "  "}
+		for _, d := range devices {
+			state := s.green(d.State)
+			if d.State == "revoked" {
+				state = s.red(d.State)
+			}
+			details := fmt.Sprintf("paired %s", msTime(d.PairedAtMS))
+			if d.LastSyncAtMS != 0 {
+				details += fmt.Sprintf(", last sync %s via %s", msTime(d.LastSyncAtMS), d.LastPath)
+			} else {
+				details += ", never synced"
+			}
+			if d.RevokedAtMS != 0 {
+				details += fmt.Sprintf(", revoked %s", msTime(d.RevokedAtMS))
+			}
+			tbl.addRow(s.bold(d.DeviceID), state, details)
 		}
-		if d.RevokedAtMS != 0 {
-			line += fmt.Sprintf(", revoked %s", msTime(d.RevokedAtMS))
-		}
-		fmt.Fprintln(stdout, line)
+		tbl.render(stdout, s)
 	}
 
-	fmt.Fprintln(stdout, "invitations:")
+	fmt.Fprintf(stdout, "\n%s\n", s.section("Invitations"))
 	if len(invitations) == 0 {
-		fmt.Fprintln(stdout, "  (none issued)")
-	}
-	for _, inv := range invitations {
-		switch {
-		case inv.State == "used":
-			fmt.Fprintf(stdout, "  %s  used by %s\n", inv.ID, inv.UsedBy)
-		case inv.Expired:
-			fmt.Fprintf(stdout, "  %s  expired\n", inv.ID)
-		default:
-			fmt.Fprintf(stdout, "  %s  open until %s\n", inv.ID, msTime(inv.ExpiresAtMS))
+		fmt.Fprintf(stdout, "  %s\n", s.dim("(none issued)"))
+	} else {
+		tbl := cliTable{indent: "  "}
+		for _, inv := range invitations {
+			switch {
+			case inv.State == "used":
+				tbl.addRow(s.dim(inv.ID), s.dim("used by "+inv.UsedBy))
+			case inv.Expired:
+				tbl.addRow(s.dim(inv.ID), s.yellow("expired"))
+			default:
+				tbl.addRow(s.bold(inv.ID), s.green("open until "+msTime(inv.ExpiresAtMS)))
+			}
 		}
+		tbl.render(stdout, s)
 	}
 	return nil
 }

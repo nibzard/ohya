@@ -25,17 +25,26 @@ func cliMain(args []string, stdout, stderr io.Writer) int {
 	if err == nil {
 		return 0
 	}
+	s := styleFor(stderr)
 	var ue usageError
 	switch {
 	case errors.As(err, &ue):
-		fmt.Fprintf(stderr, "ohya: %s; run '%s --help'\n", ue.msg, ue.cmd)
+		if s.color {
+			fmt.Fprintf(stderr, "%s %s\n  %s\n", s.boldRed("error:"), ue.msg, s.dim(fmt.Sprintf("run '%s --help'", ue.cmd)))
+		} else {
+			fmt.Fprintf(stderr, "ohya: %s; run '%s --help'\n", ue.msg, ue.cmd)
+		}
 		return 2
 	case errors.Is(err, errHelp):
 		return 0
 	case errors.Is(err, errDegraded):
 		return 3
 	default:
-		fmt.Fprintln(stderr, "ohya:", err)
+		if s.color {
+			fmt.Fprintf(stderr, "%s %v\n", s.boldRed("error:"), err)
+		} else {
+			fmt.Fprintln(stderr, "ohya:", err)
+		}
 		return 1
 	}
 }
@@ -123,24 +132,25 @@ func (c *commandFlagSet) usageErrorf(format string, args ...any) error {
 }
 
 func writeUsage(w io.Writer, spec commandSpec, fs *flag.FlagSet) {
-	fmt.Fprintf(w, "%s — %s\n\n", spec.name, spec.synopsis)
-	fmt.Fprintf(w, "Usage:\n\n  %s\n\n", spec.usageLine)
+	s := styleFor(w)
+	fmt.Fprintf(w, "%s %s %s\n\n", s.bold(spec.name), s.dim("—"), spec.synopsis)
+	fmt.Fprintf(w, "%s\n\n  %s\n\n", s.bold("Usage:"), s.cyan(spec.usageLine))
 	fmt.Fprintf(w, "%s\n\n", wrap(spec.description, 80))
-	fmt.Fprintf(w, "%s:\n\n", spec.argsTitle)
+	fmt.Fprintf(w, "%s\n\n", s.bold(spec.argsTitle+":"))
 	for _, line := range strings.Split(spec.args, "\n") {
 		if line != "" {
 			fmt.Fprintf(w, "  %s\n", line)
 		}
 	}
-	fmt.Fprintf(w, "\nFlags:\n\n")
-	renderFlags(w, fs)
-	fmt.Fprintf(w, "\nExamples:\n\n")
+	fmt.Fprintf(w, "\n%s\n\n", s.bold("Flags:"))
+	renderFlags(w, s, fs)
+	fmt.Fprintf(w, "\n%s\n\n", s.bold("Examples:"))
 	for _, ex := range spec.examples {
-		fmt.Fprintf(w, "  %s\n", ex)
+		fmt.Fprintf(w, "  %s\n", s.dim(ex))
 	}
 }
 
-func renderFlags(w io.Writer, fs *flag.FlagSet) {
+func renderFlags(w io.Writer, s cliStyle, fs *flag.FlagSet) {
 	type flagRow struct{ name, doc, suffix string }
 	var rows []flagRow
 	if fs != nil {
@@ -159,15 +169,16 @@ func renderFlags(w io.Writer, fs *flag.FlagSet) {
 		col = max(col, len(r.name))
 	}
 	for _, r := range rows {
-		prefix := fmt.Sprintf("  %-*s  ", col, r.name)
-		indent := utf8.RuneCountInString(prefix)
+		styledName := padRight(s.cyan(r.name), col)
+		prefix := "  " + styledName + "  "
+		indent := 2 + col + 2
 		lines := strings.Split(wrap(r.doc, 80-indent), "\n")
 		if r.suffix != "" {
 			last := len(lines) - 1
 			if utf8.RuneCountInString(lines[last])+1+utf8.RuneCountInString(r.suffix) <= 80-indent {
-				lines[last] += " " + r.suffix
+				lines[last] += " " + s.dim(r.suffix)
 			} else {
-				lines = append(lines, r.suffix)
+				lines = append(lines, s.dim(r.suffix))
 			}
 		}
 		for _, line := range lines {

@@ -1033,34 +1033,43 @@ func sortedKeyCounts(counts map[string]int64) []usageKeyCount {
 }
 
 func renderUsageText(w io.Writer, report *usageReport, stateDir string) {
+	s := styleFor(w)
 	since := time.UnixMilli(report.SinceMS).UTC().Format(time.RFC3339)
 	until := time.UnixMilli(report.UntilMS).UTC().Format(time.RFC3339)
-	fmt.Fprintf(w, "ohya usage — %s .. %s\n\n", since, until)
-	fmt.Fprintf(w, "Transcript evidence (hub events):\n")
+	fmt.Fprintf(w, "%s  %s\n\n", s.bold("ohya usage"), s.dim(since+" .. "+until))
+	fmt.Fprintf(w, "%s %s\n", s.section("Transcript evidence"), s.dim("(hub events)"))
 	if len(report.Transcript.ByAgentTool) == 0 {
-		fmt.Fprintf(w, "  no sql or annotate calls found\n")
-	}
-	for _, row := range report.Transcript.ByAgentTool {
-		sessionWord := "sessions"
-		if row.Sessions == 1 {
-			sessionWord = "session"
+		fmt.Fprintf(w, "  %s\n", s.dim("no sql or annotate calls found"))
+	} else {
+		tbl := cliTable{
+			indent:     "  ",
+			headers:    []string{"AGENT", "TOOL", "CALLS", "SESSIONS", "DEVICES"},
+			rightAlign: []bool{false, false, true, true, true},
 		}
-		deviceWord := "devices"
-		if row.Devices == 1 {
-			deviceWord = "device"
+		for _, row := range report.Transcript.ByAgentTool {
+			tbl.addRow(
+				s.cyan(row.Agent),
+				s.bold(row.Tool),
+				fmt.Sprintf("%d", row.Calls),
+				fmt.Sprintf("%d", row.Sessions),
+				fmt.Sprintf("%d", row.Devices),
+			)
 		}
-		fmt.Fprintf(w, "  %-12s %-9s %3d calls  %d %s  %d %s\n",
-			row.Agent, row.Tool, row.Calls, row.Sessions, sessionWord, row.Devices, deviceWord)
+		tbl.render(w, s)
 	}
 	if len(report.Transcript.ByAgentDeviceWeek) > 0 {
-		fmt.Fprintf(w, "  by agent, device, week:\n")
-		for _, row := range report.Transcript.ByAgentDeviceWeek {
-			fmt.Fprintf(w, "    %-12s %s  %s  %-9s %3d\n",
-				row.Agent, row.DeviceID, row.Week, row.Tool, row.Calls)
+		fmt.Fprintf(w, "  %s\n", s.dim("by agent, device, week:"))
+		tbl := cliTable{
+			indent:     "    ",
+			rightAlign: []bool{false, false, false, false, true},
 		}
+		for _, row := range report.Transcript.ByAgentDeviceWeek {
+			tbl.addRow(s.cyan(row.Agent), row.DeviceID, s.dim(row.Week), row.Tool, fmt.Sprintf("%d", row.Calls))
+		}
+		tbl.render(w, s)
 	}
 	if len(report.Transcript.Outcomes) > 0 {
-		fmt.Fprintf(w, "  outcomes:")
+		fmt.Fprintf(w, "  %s", s.dim("outcomes:"))
 		byTool := map[string][]string{}
 		for _, row := range report.Transcript.Outcomes {
 			byTool[row.Tool] = append(byTool[row.Tool], fmt.Sprintf("%s %d", row.Key, row.Calls))
@@ -1077,10 +1086,10 @@ func renderUsageText(w io.Writer, report *usageReport, stateDir string) {
 	}
 	for _, stat := range report.Transcript.LatencyMS {
 		fmt.Fprintf(w, "  latency ms (agent-observed) %s: n %d  p50 %.0f  p95 %.0f  max %.0f\n",
-			stat.Tool, stat.N, stat.P50, stat.P95, stat.Max)
+			s.bold(stat.Tool), stat.N, stat.P50, stat.P95, stat.Max)
 	}
 	for _, stat := range report.Transcript.ResultBytes {
-		fmt.Fprintf(w, "  result bytes %s: n %d  max %d\n", stat.Tool, stat.N, stat.MaxBytes)
+		fmt.Fprintf(w, "  result bytes %s: n %d  max %d\n", s.bold(stat.Tool), stat.N, stat.MaxBytes)
 	}
 	var sqlCalls int64
 	for _, row := range report.Transcript.ByAgentTool {
@@ -1094,10 +1103,10 @@ func renderUsageText(w io.Writer, report *usageReport, stateDir string) {
 	fmt.Fprintf(w, "  tools available (%s): %d sessions, %d with no call\n",
 		availability.Agent, availability.AvailableSessions, availability.AvailableUnusedSessions)
 	if availability.Note != "" {
-		fmt.Fprintf(w, "  note: %s\n", availability.Note)
+		fmt.Fprintf(w, "  %s\n", s.dim("note: "+availability.Note))
 	}
 	if len(report.Transcript.Detail) > 0 {
-		fmt.Fprintf(w, "  calls (--local-detail):\n")
+		fmt.Fprintf(w, "  %s\n", s.dim("calls (--local-detail):"))
 		for _, detail := range report.Transcript.Detail {
 			latency := "-"
 			if detail.LatencyMS != nil {
@@ -1108,28 +1117,35 @@ func renderUsageText(w io.Writer, report *usageReport, stateDir string) {
 				size = fmt.Sprintf("%d B", *detail.ResultBytes)
 			}
 			fmt.Fprintf(w, "    %s %s %s …%s %s %s %s\n",
-				detail.Time, detail.Agent, detail.DeviceID, shortSession(detail.SessionID),
-				detail.Tool, latency, size)
+				s.dim(detail.Time), s.cyan(detail.Agent), detail.DeviceID, shortSession(detail.SessionID),
+				s.bold(detail.Tool), latency, size)
 			if detail.QueryText != "" {
-				fmt.Fprintf(w, "      %s\n", strings.ReplaceAll(detail.QueryText, "\n", " "))
+				fmt.Fprintf(w, "      %s\n", s.dim(strings.ReplaceAll(detail.QueryText, "\n", " ")))
 			}
 		}
 	}
-	fmt.Fprintf(w, "\nServer usage records (%s):\n", filepath.Join(stateDir, "observe"))
+	fmt.Fprintf(w, "\n%s %s\n", s.section("Server usage records"), s.dim("("+filepath.Join(stateDir, "observe")+")"))
 	if !report.Server.Found {
-		fmt.Fprintf(w, "  none found\n")
+		fmt.Fprintf(w, "  %s\n", s.dim("none found"))
 	} else {
 		fmt.Fprintf(w, "  records: %d from %d instances", report.Server.Records, report.Server.Instances)
 		if report.Server.MalformedRecords > 0 {
-			fmt.Fprintf(w, " (%d malformed lines skipped)", report.Server.MalformedRecords)
+			fmt.Fprintf(w, " %s", s.yellow(fmt.Sprintf("(%d malformed lines skipped)", report.Server.MalformedRecords)))
 		}
 		fmt.Fprintln(w)
-		for _, row := range report.Server.ByToolClientWeek {
-			fmt.Fprintf(w, "  %-9s %-11s %-7s %s  %3d calls\n",
-				row.Tool, row.Client, row.Path, row.Week, row.Calls)
+		if len(report.Server.ByToolClientWeek) > 0 {
+			tbl := cliTable{
+				indent:     "  ",
+				headers:    []string{"TOOL", "CLIENT", "PATH", "WEEK", "CALLS"},
+				rightAlign: []bool{false, false, false, false, true},
+			}
+			for _, row := range report.Server.ByToolClientWeek {
+				tbl.addRow(s.bold(row.Tool), s.cyan(row.Client), row.Path, s.dim(row.Week), fmt.Sprintf("%d", row.Calls))
+			}
+			tbl.render(w, s)
 		}
 		if len(report.Server.Outcomes) > 0 {
-			fmt.Fprintf(w, "  outcomes:")
+			fmt.Fprintf(w, "  %s", s.dim("outcomes:"))
 			for _, row := range report.Server.Outcomes {
 				fmt.Fprintf(w, " %s: %s %d;", row.Tool, row.Key, row.Calls)
 			}
@@ -1137,7 +1153,7 @@ func renderUsageText(w io.Writer, report *usageReport, stateDir string) {
 		}
 		for _, stat := range report.Server.LatencyMS {
 			fmt.Fprintf(w, "  latency ms (server) %s: n %d  p50 %.0f  p95 %.0f  max %.0f\n",
-				stat.Tool, stat.N, stat.P50, stat.P95, stat.Max)
+				s.bold(stat.Tool), stat.N, stat.P50, stat.P95, stat.Max)
 		}
 		fmt.Fprintf(w, "  rows %d  result max %d B  fts calls %d  raw_json calls %d\n",
 			report.Server.Rows, report.Server.ResultBytesMax, report.Server.FTSCalls, report.Server.RawJSONCalls)
@@ -1169,7 +1185,7 @@ func renderUsageText(w io.Writer, report *usageReport, stateDir string) {
 		}
 	}
 	if report.Partial {
-		fmt.Fprintf(w, "\nPartial report:\n")
+		fmt.Fprintf(w, "\n%s\n", s.yellow("Partial report:"))
 		for _, note := range report.Notes {
 			fmt.Fprintf(w, "  %s\n", note)
 		}
