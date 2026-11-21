@@ -76,10 +76,21 @@ pending      = 'D' ver(1) applied(8) unchanged(8) ignored(8) count(2)
 - `caps` offers a 16-bit capability mask as the first request frame after a
   successful `hello`; `welcome` answers with the mask the hub honors, the
   intersection of the offer and the hub's support. Bit 0 (`0x0001`) is zstd
-  batch compression; the mask must be nonzero, and a hub supporting nothing
-  offered answers with zero. An old hub answers `caps` with `CodeMalformed`
-  like any unknown marker, which is how a device detects it and falls back
-  to plain frames; an old device sends no `caps` frame and is unaffected.
+  batch compression; bit 1 (`0x0002`) is remote hub status aggregates
+  (`CapRemoteStatus`, advertised only when the hub enables its diagnostics
+  provider). The mask must be nonzero, and a hub supporting nothing offered
+  answers with zero. An old hub answers `caps` with `CodeMalformed` like any
+  unknown marker, which is how a device detects it and falls back cleanly; an
+  old device sends no `caps` frame and is unaffected.
+- `diagnostics` (`G`, 1-byte format version `1`) requests cached hub aggregate
+  status on a short-lived authenticated connection after negotiating
+  `CapRemoteStatus`. `diagnosticsRes` (`g`) replies with at most 256 KiB of
+  JSON carrying hub build identity, monotonic uptime, cached snapshot timestamp,
+  storage file sizes (without filesystem paths), resource readings, and
+  configured bounds — never logs, source details, other devices, SQL, or
+  transcripts. Per-frame authorization and revocation apply; the hub enforces
+  a 5 s deadline, 2 concurrent diagnostic requests globally, and a 10 s
+  per-device rate limit (`CodeBusy` on excess).
 - `ack` acknowledges a registration or a batch. The hub writes it only after
   the durable commit. `cursor` is the committed cursor, and `inserted`
   counts only new events, so a replayed batch reports 0. `status` 1 means

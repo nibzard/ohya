@@ -47,29 +47,36 @@ type RemoteEngine interface {
 }
 
 type Options struct {
-	MaxConns     int
-	Retry        RetryPolicy
-	AuthTimeout  time.Duration
-	IdleTimeout  time.Duration
-	WriteTimeout time.Duration
-	Remote       RemoteEngine
-	Observer     observe.Observer
+	MaxConns            int
+	Retry               RetryPolicy
+	AuthTimeout         time.Duration
+	IdleTimeout         time.Duration
+	WriteTimeout        time.Duration
+	Remote              RemoteEngine
+	Diagnostics         DiagnosticsProvider
+	DiagnosticsInterval time.Duration
+	DiagnosticsTimeout  time.Duration
+	Observer            observe.Observer
 }
 
 type Endpoint struct {
-	db       *store.DB
-	auth     Authenticator
-	authz    SessionAuthorizer
-	remote   RemoteEngine
-	opts     Options
-	observer observe.Observer
-	slots    chan struct{}
-	gates    sourceGates
-	mu       sync.Mutex
-	conns    map[*connSession]struct{}
-	byDev    map[string]map[*connSession]struct{}
-	closed   bool
-	wg       sync.WaitGroup
+	db          *store.DB
+	auth        Authenticator
+	authz       SessionAuthorizer
+	remote      RemoteEngine
+	diagnostics DiagnosticsProvider
+	opts        Options
+	observer    observe.Observer
+	slots       chan struct{}
+	diagSlots   chan struct{}
+	diagMu      sync.Mutex
+	diagLast    map[string]time.Time
+	gates       sourceGates
+	mu          sync.Mutex
+	conns       map[*connSession]struct{}
+	byDev       map[string]map[*connSession]struct{}
+	closed      bool
+	wg          sync.WaitGroup
 }
 
 type connSession struct {
@@ -111,21 +118,30 @@ func NewEndpoint(db *store.DB, auth Authenticator, opts Options) (*Endpoint, err
 	if opts.WriteTimeout <= 0 {
 		opts.WriteTimeout = DefaultWriteTimeout
 	}
+	if opts.DiagnosticsTimeout <= 0 {
+		opts.DiagnosticsTimeout = DefaultDiagnosticsTimeout
+	}
+	if opts.DiagnosticsInterval == 0 {
+		opts.DiagnosticsInterval = DefaultDiagnosticsInterval
+	}
 	authz, _ := auth.(SessionAuthorizer)
 	observer := opts.Observer
 	if observer == nil {
 		observer = observe.Disabled
 	}
 	return &Endpoint{
-		db:       db,
-		auth:     auth,
-		authz:    authz,
-		remote:   opts.Remote,
-		opts:     opts,
-		observer: observer,
-		slots:    make(chan struct{}, maxConns),
-		conns:    map[*connSession]struct{}{},
-		byDev:    map[string]map[*connSession]struct{}{},
+		db:          db,
+		auth:        auth,
+		authz:       authz,
+		remote:      opts.Remote,
+		diagnostics: opts.Diagnostics,
+		opts:        opts,
+		observer:    observer,
+		slots:       make(chan struct{}, maxConns),
+		diagSlots:   make(chan struct{}, DefaultMaxDiagnostics),
+		diagLast:    map[string]time.Time{},
+		conns:       map[*connSession]struct{}{},
+		byDev:       map[string]map[*connSession]struct{}{},
 	}, nil
 }
 
@@ -260,6 +276,8 @@ func (e *Endpoint) serveConn(ctx context.Context, session *connSession) {
 			closeConn = e.handleAnnotate(ctx, session, deviceID, *frame.Annotate)
 		case frame.Workspaces != nil:
 			closeConn = e.handleWorkspaces(ctx, session, deviceID, *frame.Workspaces)
+		case frame.Diagnostics != nil:
+			closeConn = e.handleDiagnostics(ctx, session, deviceID, *frame.Diagnostics)
 		}
 		if closeConn {
 			return
@@ -361,8 +379,76 @@ func (e *Endpoint) handleBatch(ctx context.Context, w io.Writer, deviceID string
 	return werr != nil
 }
 
+func (e *Endpoint) capabilities() Capabilities {
+	caps := CapZstdBatches
+	if e.diagnostics != nil {
+		caps |= CapRemoteStatus
+	}
+	return caps
+}
+
 func (e *Endpoint) handleCapabilities(w io.Writer, offered Capabilities) bool {
-	return WriteWelcome(w, offered&hubCapabilities) != nil
+	return WriteWelcome(w, offered&e.capabilities()) != nil
+}
+
+func (e *Endpoint) handleDiagnostics(ctx context.Context, w io.Writer, deviceID string, req DiagnosticsRequest) bool {
+	if e.diagnostics == nil {
+		_ = WriteError(w, CodeNoRemote, "remote status aggregates are not enabled on this hub")
+		return false
+	}
+	if req.FormatVersion != DiagnosticsFormatVersion {
+		_ = WriteError(w, CodeVersion, fmt.Sprintf("diagnostics format version %d is unsupported; want %d", req.FormatVersion, DiagnosticsFormatVersion))
+		return false
+	}
+	if !e.allowDiagnosticsRate(deviceID, time.Now()) {
+		_ = WriteError(w, CodeBusy, "remote status rate limit exceeded; wait before retrying")
+		return false
+	}
+	select {
+	case e.diagSlots <- struct{}{}:
+		defer func() { <-e.diagSlots }()
+	default:
+		_ = WriteError(w, CodeBusy, fmt.Sprintf("hub is serving its limit of %d concurrent remote status requests", DefaultMaxDiagnostics))
+		return false
+	}
+	dctx, cancel := context.WithTimeout(ctx, e.opts.DiagnosticsTimeout)
+	defer cancel()
+	status, err := e.diagnostics.RemoteStatus(dctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return true
+		}
+		_ = WriteError(w, CodeInternal, "remote status collection failed")
+		return false
+	}
+	if err := WriteDiagnosticsReply(w, status); err != nil {
+		if errors.Is(err, ErrTooLarge) {
+			_ = WriteError(w, CodeInternal, err.Error())
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+func (e *Endpoint) allowDiagnosticsRate(deviceID string, now time.Time) bool {
+	if e.opts.DiagnosticsInterval < 0 {
+		return true
+	}
+	e.diagMu.Lock()
+	defer e.diagMu.Unlock()
+	if prev, ok := e.diagLast[deviceID]; ok && now.Sub(prev) < e.opts.DiagnosticsInterval {
+		return false
+	}
+	if len(e.diagLast) > 256 {
+		for k, ts := range e.diagLast {
+			if now.Sub(ts) >= e.opts.DiagnosticsInterval {
+				delete(e.diagLast, k)
+			}
+		}
+	}
+	e.diagLast[deviceID] = now
+	return true
 }
 
 func (e *Endpoint) handleQuery(ctx context.Context, w io.Writer, deviceID string, q Query) bool {

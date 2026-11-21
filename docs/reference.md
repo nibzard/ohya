@@ -665,12 +665,16 @@ code, severity, evidence, and hint: `instance_terminated`,
 `instance_stale`, `instance_unreadable`, `instance_unsupported_version`,
 `no_instances`, `multiple_instances`, `pending_backlog`,
 `upload_backlog`, `sources_stopped`, `discovery_truncated`,
-`remote_status_unsupported`. Instances are never merged; a null value and
-a zero value stay distinct. `--remote` reports the capability gap
-honestly: this build cannot fetch hub-side aggregates yet (plan 001
-milestone 5). Exit 0 means every selected instance is fresh with no
-degraded component; exit 3 means the result is valid but partial, stale,
-or degraded.
+`remote_status_unsupported`, `remote_status_failed`. Instances are never
+merged; a null value and a zero value stay distinct. `--remote` opens one
+short-lived authenticated connection to the hub (negotiating `CapRemoteStatus`
+via `caps`/`welcome`), fetches cached hub aggregates (hub identity, monotonic
+uptime, storage file sizes without paths, resource readings, bounds, and
+transport path), and adds a `remote_hub` section without ever substituting
+local database facts on failure; older hubs that do not advertise
+`CapRemoteStatus` report `remote_status_unsupported` cleanly. Exit 0 means
+every selected instance is fresh with no degraded component; exit 3 means the
+result is valid but partial, stale, or degraded.
 
 ### `ohya metrics`
 

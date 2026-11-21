@@ -145,8 +145,9 @@ func runServe(ctx context.Context, o serveOptions) error {
 		fmt.Fprintf(o.stdout, "ohya: "+format+"\n", args...)
 	})
 	endpoint, err := hubsync.NewEndpoint(hub, auth, hubsync.Options{
-		Remote:   engine,
-		Observer: telem.observer(),
+		Remote:      engine,
+		Diagnostics: hubDiagnosticsProvider{dbPath: o.dbPath, telem: telem},
+		Observer:    telem.observer(),
 	})
 	if err != nil {
 		return err
@@ -169,4 +170,87 @@ func runServe(ctx context.Context, o serveOptions) error {
 		fmt.Fprintf(o.stdout, "ohya: stopped serving devices\n")
 	}
 	return err
+}
+
+type hubDiagnosticsProvider struct {
+	dbPath string
+	telem  *telemetry
+}
+
+func (p hubDiagnosticsProvider) RemoteStatus(_ context.Context) (hubsync.RemoteStatus, error) {
+	nowMS := time.Now().UnixMilli()
+	id := statusCLIIdentity()
+	out := hubsync.RemoteStatus{
+		FormatVersion: hubsync.DiagnosticsFormatVersion,
+		Hub: hubsync.RemoteIdentity{
+			Version:  id.Version,
+			Revision: id.Revision,
+			Dirty:    id.Dirty,
+			Go:       id.Go,
+			OS:       id.OS,
+			Arch:     id.Arch,
+			Schema:   id.Schema,
+			Parsers:  id.Parsers,
+		},
+		GeneratedWallMS: nowMS,
+		Roles:           []string{string(observe.RoleServe)},
+		Limits: hubsync.RemoteLimits{
+			MaxConns:       hubsync.DefaultMaxConns,
+			MaxBatchBytes:  hubsync.MaxBatchBytes,
+			MaxRecordBytes: hubsync.MaxRecordBytes,
+			QueryTimeoutMS: mcpserver.DefaultDeadline.Milliseconds(),
+			QueryMaxRows:   mcpserver.DefaultMaxRows,
+			QueryMaxBytes:  mcpserver.DefaultMaxOutputBytes,
+		},
+	}
+	if p.telem != nil && p.telem.recorder != nil {
+		snap := p.telem.recorder.Snapshot()
+		uptime := snap.UptimeMS
+		sampled := snap.SampledWallMS
+		out.UptimeMS = &uptime
+		out.SampledWallMS = &sampled
+		if len(snap.Instance.Roles) > 0 {
+			out.Roles = append([]string(nil), snap.Instance.Roles...)
+		}
+		if len(snap.Resources) > 0 {
+			out.Resources = snap.Resources
+		}
+		files := map[string]int64{}
+		for label, value := range snap.Gauges {
+			if after, ok := cutPrefix(label, "sqlite_file_bytes{file="); ok {
+				files[trimSuffix(after, "}")] = int64(value)
+			}
+		}
+		if len(files) > 0 {
+			out.StorageFiles = files
+			out.StorageObservedWallMS = sampled
+		}
+	}
+	if len(out.StorageFiles) == 0 && p.dbPath != "" {
+		files := map[string]int64{}
+		for label, suffix := range map[string]string{"db": "", "wal": "-wal", "shm": "-shm"} {
+			if info, err := os.Stat(p.dbPath + suffix); err == nil && info.Mode().IsRegular() {
+				files[label] = info.Size()
+			}
+		}
+		if len(files) > 0 {
+			out.StorageFiles = files
+			out.StorageObservedWallMS = nowMS
+		}
+	}
+	return out, nil
+}
+
+func cutPrefix(s, prefix string) (string, bool) {
+	if len(s) >= len(prefix) && s[:len(prefix)] == prefix {
+		return s[len(prefix):], true
+	}
+	return s, false
+}
+
+func trimSuffix(s, suffix string) string {
+	if len(s) >= len(suffix) && s[len(s)-len(suffix):] == suffix {
+		return s[:len(s)-len(suffix)]
+	}
+	return s
 }

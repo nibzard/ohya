@@ -164,6 +164,10 @@ ReallowSource(s) ==
   /\ UNCHANGED <<invState, invUsedBy, registry, pairedVia, revokedEver, sesDevice,
                  sesLive, srcPurges, srcOwner, srcEverOwned, annRows, annRowSes, wsObs, wsWriter>>
 
+ReadDiagnostics(c) ==
+  /\ Authorized(c)
+  /\ UNCHANGED vars
+
 Next ==
   \/ \E i \in Invitations :
        \/ IssueInvitation(i)
@@ -175,7 +179,8 @@ Next ==
   \/ \E d \in Devices, c \in Sessions :
        OpenSession(d, c)
   \/ \E c \in Sessions :
-       CloseSession(c)
+       \/ CloseSession(c)
+       \/ ReadDiagnostics(c)
   \/ \E s \in Sources :
        \/ PurgeSource(s)
        \/ ReallowSource(s)

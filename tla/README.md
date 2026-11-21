@@ -417,8 +417,14 @@ observation, and its writer, never change.
   identical-retry no-ops, limits, and foreign keys are Go tests
   (`internal/store`, T009). This model covers only ownership and
   authorization.
-- **Reads are out of model.** The same `Authorized` guard applies to
-  queries; reads carry no ownership state to check.
+- **Reads and remote diagnostics.** `ReadDiagnostics(c)` models the bounded
+  remote-status request on an authenticated session: it requires the exact
+  same `Authorized(c)` guard (live session + active registry state, so
+  revocation blocks it) and leaves every authorization, ownership, annotation,
+  and workspace variable unchanged (`UNCHANGED vars`), proving diagnostic reads
+  cannot mutate committed state or bypass revocation while keeping the
+  explored state space unchanged. SQL queries share the same read-only
+  `Authorized(c)` guard.
 
 ## Models
 

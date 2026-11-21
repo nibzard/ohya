@@ -45,29 +45,34 @@ const (
 )
 
 const (
-	markerRegistration = 'R'
-	markerBatch        = 'B'
-	markerAck          = 'A'
-	markerError        = 'E'
-	markerHello        = 'H'
-	markerPair         = 'P'
-	markerCredential   = 'C'
-	markerQuery        = 'Q'
-	markerQueryResult  = 'S'
-	markerAnnotate     = 'N'
-	markerAnnotateRes  = 'K'
-	markerWorkspaces   = 'W'
-	markerPending      = 'D'
-	markerCaps         = 'V'
-	markerWelcome      = 'v'
-	markerZBatch       = 'Z'
+	markerRegistration   = 'R'
+	markerBatch          = 'B'
+	markerAck            = 'A'
+	markerError          = 'E'
+	markerHello          = 'H'
+	markerPair           = 'P'
+	markerCredential     = 'C'
+	markerQuery          = 'Q'
+	markerQueryResult    = 'S'
+	markerAnnotate       = 'N'
+	markerAnnotateRes    = 'K'
+	markerWorkspaces     = 'W'
+	markerPending        = 'D'
+	markerCaps           = 'V'
+	markerWelcome        = 'v'
+	markerZBatch         = 'Z'
+	markerDiagnostics    = 'G'
+	markerDiagnosticsRes = 'g'
 )
 
 type Capabilities uint16
 
-const CapZstdBatches Capabilities = 1 << 0
+const (
+	CapZstdBatches  Capabilities = 1 << 0
+	CapRemoteStatus Capabilities = 1 << 1
+)
 
-var hubCapabilities = CapZstdBatches
+var hubCapabilities = CapZstdBatches | CapRemoteStatus
 
 const batchRecordFrameBytes = 12
 
@@ -205,6 +210,7 @@ type Frame struct {
 	Query        *Query
 	Annotate     *Annotate
 	Workspaces   *Workspaces
+	Diagnostics  *DiagnosticsRequest
 }
 
 type frameReader struct {
@@ -337,6 +343,12 @@ func ReadFrame(r io.Reader) (Frame, error) {
 			return Frame{}, err
 		}
 		return Frame{Workspaces: w}, nil
+	case markerDiagnostics:
+		d, err := readDiagnosticsRequest(fr)
+		if err != nil {
+			return Frame{}, err
+		}
+		return Frame{Diagnostics: d}, nil
 	default:
 		return Frame{}, fmt.Errorf("hubsync: bad frame marker %q", marker)
 	}

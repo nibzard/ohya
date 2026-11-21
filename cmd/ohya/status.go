@@ -3,9 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -15,10 +18,13 @@ import (
 	"github.com/nibzard/ohya/internal/buildinfo"
 	"github.com/nibzard/ohya/internal/claudecode"
 	"github.com/nibzard/ohya/internal/codex"
+	"github.com/nibzard/ohya/internal/device"
+	"github.com/nibzard/ohya/internal/hubsync"
 	"github.com/nibzard/ohya/internal/observe"
 	"github.com/nibzard/ohya/internal/pi"
 	"github.com/nibzard/ohya/internal/setup"
 	"github.com/nibzard/ohya/internal/store"
+	"github.com/nibzard/ohya/internal/transport/address"
 )
 
 const statusFormatVersion = 1
@@ -31,7 +37,7 @@ var statusSpec = commandSpec{
 		"It never contacts the hub, starts or restarts a service, migrates a database, or repairs files. " +
 		"A snapshot older than thirty seconds is stale: a valid recent sample is evidence of recent activity, not proof of liveness, and process liveness is probed separately. " +
 		"Multiple matching instances are listed separately and their counters are never merged. " +
-		"With --remote the command also reports which remote aggregates this build cannot fetch yet. " +
+		"With --remote the command also opens one short-lived authenticated connection to fetch cached hub aggregate status (version, uptime, storage sizes, resources, limits) without reading logs or transcripts. " +
 		"Exit codes: 0 for a complete fresh result, 3 for a valid but partial, stale, or degraded result, 1 for failure, 2 for usage.",
 	argsTitle: "Arguments",
 	args:      "(none)",
@@ -141,6 +147,23 @@ type statusCoverage struct {
 	Notes              []string `json:"notes,omitempty"`
 }
 
+type statusRemoteHub struct {
+	Reachable             bool                       `json:"reachable"`
+	Supported             bool                       `json:"supported"`
+	TransportPath         string                     `json:"transport_path,omitempty"`
+	RelayRegion           string                     `json:"relay_region,omitempty"`
+	Hub                   *hubsync.RemoteIdentity    `json:"hub,omitempty"`
+	GeneratedWallMS       int64                      `json:"generated_wall_ms,omitempty"`
+	UptimeMS              *int64                     `json:"uptime_ms,omitempty"`
+	SampledWallMS         *int64                     `json:"sampled_wall_ms,omitempty"`
+	Roles                 []string                   `json:"roles,omitempty"`
+	StorageFiles          map[string]int64           `json:"storage_files,omitempty"`
+	StorageObservedWallMS int64                      `json:"storage_observed_wall_ms,omitempty"`
+	Resources             map[string]observe.Reading `json:"resources,omitempty"`
+	Limits                *hubsync.RemoteLimits      `json:"limits,omitempty"`
+	Error                 string                     `json:"error,omitempty"`
+}
+
 type statusData struct {
 	FormatVersion   int                `json:"format_version"`
 	GeneratedWallMS int64              `json:"generated_wall_ms"`
@@ -148,24 +171,32 @@ type statusData struct {
 	CLI             statusIdentity     `json:"cli"`
 	Topology        statusTopology     `json:"topology"`
 	Storage         statusStorage      `json:"storage"`
+	RemoteHub       *statusRemoteHub   `json:"remote_hub,omitempty"`
 	Instances       []statusInstance   `json:"instances"`
 	OtherStates     []statusOtherState `json:"other_states,omitempty"`
 	Findings        []statusFinding    `json:"findings"`
 	Coverage        statusCoverage     `json:"coverage"`
 }
 
+type remoteStatusFetchResult struct {
+	Status        hubsync.RemoteStatus
+	TransportPath string
+	RelayRegion   string
+}
+
 type statusOptions struct {
-	remote     bool
-	dbPath     string
-	stateDir   string
-	setupState string
-	role       string
-	instanceID string
-	home       string
-	nowMS      func() int64
-	probePID   func(pid int) string
-	loadedRun  func(context.Context, []string) error
-	checkRun   func(context.Context, []string) error
+	remote      bool
+	dbPath      string
+	stateDir    string
+	setupState  string
+	role        string
+	instanceID  string
+	home        string
+	nowMS       func() int64
+	probePID    func(pid int) string
+	loadedRun   func(context.Context, []string) error
+	checkRun    func(context.Context, []string) error
+	remoteFetch func(context.Context, string) (remoteStatusFetchResult, error)
 }
 
 func runStatusCommand(args []string, stdout, stderr io.Writer) error {
@@ -183,7 +214,7 @@ func runStatusCommand(args []string, stdout, stderr io.Writer) error {
 	instance := c.fs.String("instance", "",
 		"restrict the report to one instance `id`")
 	remote := c.fs.Bool("remote", false,
-		"also report remote hub aggregates; this build reports its capability gap until plan 001 milestone 5 ships")
+		"also fetch cached hub aggregate status over a short-lived authenticated connection")
 	asJSON := c.fs.Bool("json", false, "print one JSON object instead of the text report (docs/adr/0005)")
 	if err := c.parse(args, stdout); err != nil {
 		return err
@@ -201,17 +232,18 @@ func runStatusCommand(args []string, stdout, stderr io.Writer) error {
 		return jsonFailurePrint(*asJSON, stdout, statusSpec.name, err)
 	}
 	o := statusOptions{
-		remote:     *remote,
-		dbPath:     *db,
-		stateDir:   stateDir,
-		setupState: setupState,
-		role:       *role,
-		instanceID: *instance,
-		home:       home,
-		nowMS:      func() int64 { return time.Now().UnixMilli() },
-		probePID:   observe.ProbePID,
-		loadedRun:  setup.RunServiceLoaded,
-		checkRun:   setup.RunServiceCommand,
+		remote:      *remote,
+		dbPath:      *db,
+		stateDir:    stateDir,
+		setupState:  setupState,
+		role:        *role,
+		instanceID:  *instance,
+		home:        home,
+		nowMS:       func() int64 { return time.Now().UnixMilli() },
+		probePID:    observe.ProbePID,
+		loadedRun:   setup.RunServiceLoaded,
+		checkRun:    setup.RunServiceCommand,
+		remoteFetch: fetchRemoteHubStatus,
 	}
 	data, err := buildStatus(context.Background(), o)
 	if err != nil {
@@ -345,12 +377,58 @@ func buildStatus(ctx context.Context, o statusOptions) (statusData, error) {
 		}
 	}
 	if o.remote {
-		data.Coverage.Unsupported = append(data.Coverage.Unsupported, "remote_hub_aggregates")
-		data.Findings = append(data.Findings, statusFinding{
-			Code: "remote_status_unsupported", Severity: sevWarn,
-			Evidence: "this build cannot fetch hub-side aggregates over the sync connection yet",
-			Hint:     "remote aggregate delivery is plan 001 milestone 5; run ohya status on the hub host until then",
-		})
+		fetch := o.remoteFetch
+		if fetch == nil {
+			fetch = fetchRemoteHubStatus
+		}
+		joinState := resolveRemoteStatusJoinState(o)
+		res, err := fetch(ctx, joinState)
+		switch {
+		case errors.Is(err, hubsync.ErrRemoteStatusUnsupported):
+			data.RemoteHub = &statusRemoteHub{
+				Reachable:     true,
+				Supported:     false,
+				TransportPath: res.TransportPath,
+				RelayRegion:   res.RelayRegion,
+			}
+			data.Coverage.Unsupported = append(data.Coverage.Unsupported, "remote_hub_aggregates")
+			data.Findings = append(data.Findings, statusFinding{
+				Code: "remote_status_unsupported", Severity: sevWarn,
+				Evidence: "the hub answered but does not advertise remote status aggregates",
+				Hint:     "upgrade ohya on the hub host to inspect hub aggregates remotely",
+			})
+		case err != nil:
+			data.RemoteHub = &statusRemoteHub{
+				Reachable: false,
+				Supported: false,
+				Error:     err.Error(),
+			}
+			data.Findings = append(data.Findings, statusFinding{
+				Code: "remote_status_failed", Severity: sevWarn,
+				Evidence: "remote hub status fetch failed: " + err.Error(),
+				Hint:     "check that ohya serve runs on the hub and this device is paired (run ohya doctor --state " + joinState + ")",
+			})
+		default:
+			hubCopy := res.Status.Hub
+			limitsCopy := res.Status.Limits
+			data.RemoteHub = &statusRemoteHub{
+				Reachable:             true,
+				Supported:             true,
+				TransportPath:         res.TransportPath,
+				RelayRegion:           res.RelayRegion,
+				Hub:                   &hubCopy,
+				GeneratedWallMS:       res.Status.GeneratedWallMS,
+				UptimeMS:              res.Status.UptimeMS,
+				SampledWallMS:         res.Status.SampledWallMS,
+				Roles:                 res.Status.Roles,
+				StorageFiles:          res.Status.StorageFiles,
+				StorageObservedWallMS: res.Status.StorageObservedWallMS,
+				Resources:             res.Status.Resources,
+				Limits:                &limitsCopy,
+			}
+			data.Coverage.Present = append(data.Coverage.Present, "remote_hub")
+			sortStrings(data.Coverage.Present)
+		}
 	}
 	if len(data.Instances) == 0 && o.instanceID == "" {
 		data.Coverage.Missing = append(data.Coverage.Missing, "instances")
@@ -744,6 +822,9 @@ func writeStatusText(w io.Writer, data statusData) {
 	default:
 		fmt.Fprintf(w, "storage: %s; %s\n", data.Storage.Location, data.Storage.Source)
 	}
+	if data.RemoteHub != nil {
+		writeRemoteHubText(w, *data.RemoteHub)
+	}
 	for _, instance := range data.Instances {
 		writeStatusInstanceText(w, instance)
 	}
@@ -903,4 +984,101 @@ func sortedKeys[V any](m map[string]V) []string {
 	}
 	sortStrings(out)
 	return out
+}
+
+func resolveRemoteStatusJoinState(o statusOptions) string {
+	if _, err := os.Stat(filepath.Join(o.stateDir, "credential.json")); err == nil {
+		return o.stateDir
+	}
+	candidate := filepath.Join(o.setupState, "join")
+	if _, err := os.Stat(filepath.Join(candidate, "credential.json")); err == nil {
+		return candidate
+	}
+	return o.stateDir
+}
+
+func fetchRemoteHubStatus(ctx context.Context, joinState string) (remoteStatusFetchResult, error) {
+	cred, err := device.LoadCredential(joinState)
+	if errors.Is(err, fs.ErrNotExist) {
+		return remoteStatusFetchResult{}, fmt.Errorf("this state directory holds no pairing credential; run ohya join first")
+	}
+	if err != nil {
+		return remoteStatusFetchResult{}, err
+	}
+	hubAddr, err := device.LoadHubAddress(joinState)
+	if errors.Is(err, fs.ErrNotExist) {
+		return remoteStatusFetchResult{}, fmt.Errorf("this state directory holds no hub address; run ohya join with an ohya1 code once to save it")
+	}
+	if err != nil {
+		return remoteStatusFetchResult{}, err
+	}
+	dctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	node := address.NewDevice(address.DeviceOptions{})
+	defer func() {
+		drainCtx, drainCancel := context.WithTimeout(context.Background(), time.Second)
+		_ = node.Drain(drainCtx)
+		drainCancel()
+		_ = node.Close()
+	}()
+	dial := func(ctx context.Context) (net.Conn, error) {
+		return node.Dial(ctx, hubAddr)
+	}
+	session := hubsync.NewRemoteSession(dial, cred.Secret, hubsync.RemoteSessionOptions{})
+	defer session.Close()
+
+	status, err := session.Diagnostics(dctx)
+	res := remoteStatusFetchResult{
+		Status:        status,
+		TransportPath: "unknown",
+	}
+	pathCtx, pathCancel := context.WithTimeout(dctx, 2*time.Second)
+	defer pathCancel()
+	if report, perr := node.PathInfo(pathCtx, hubAddr); perr == nil {
+		if report.Path != "" {
+			res.TransportPath = report.Path
+		}
+		res.RelayRegion = report.RegionCode
+	}
+	if err != nil {
+		return res, err
+	}
+	return res, nil
+}
+
+func writeRemoteHubText(w io.Writer, remote statusRemoteHub) {
+	if !remote.Reachable {
+		fmt.Fprintf(w, "remote hub: unreachable (%s)\n", remote.Error)
+		return
+	}
+	if !remote.Supported {
+		fmt.Fprintln(w, "remote hub: reachable, remote status aggregates unsupported (upgrade hub)")
+		return
+	}
+	var parts []string
+	if remote.Hub != nil {
+		parts = append(parts, fmt.Sprintf("version=%s schema=%d", remote.Hub.Version, remote.Hub.Schema))
+	}
+	if remote.UptimeMS != nil {
+		parts = append(parts, "uptime="+ageText(*remote.UptimeMS))
+	}
+	if remote.TransportPath != "" {
+		path := remote.TransportPath
+		if remote.RelayRegion != "" {
+			path += " (" + remote.RelayRegion + ")"
+		}
+		parts = append(parts, "path="+path)
+	}
+	fmt.Fprintf(w, "remote hub: %s\n", strings.Join(parts, " "))
+	if len(remote.StorageFiles) > 0 {
+		var sizes []string
+		for _, label := range []string{"db", "wal", "shm"} {
+			if size, ok := remote.StorageFiles[label]; ok {
+				sizes = append(sizes, fmt.Sprintf("%s %s", label, byteText(float64(size))))
+			}
+		}
+		if len(sizes) > 0 {
+			fmt.Fprintf(w, "  hub storage: %s\n", strings.Join(sizes, ", "))
+		}
+	}
 }

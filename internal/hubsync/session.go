@@ -80,6 +80,16 @@ func (s *RemoteSession) AnnotateAs(ctx context.Context, _ string, raw json.RawMe
 	return result, err
 }
 
+func (s *RemoteSession) Diagnostics(ctx context.Context) (RemoteStatus, error) {
+	var result RemoteStatus
+	err := s.call(ctx, func(c *RemoteClient) error {
+		var cerr error
+		result, cerr = c.Diagnostics(ctx)
+		return cerr
+	})
+	return result, err
+}
+
 func (s *RemoteSession) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -119,7 +129,7 @@ func (s *RemoteSession) finishAttemptLocked(ctx context.Context, err error) (ret
 		_ = s.dropLocked()
 		return false, err
 	}
-	if errors.Is(err, ErrTooLarge) {
+	if errors.Is(err, ErrTooLarge) || errors.Is(err, ErrRemoteStatusUnsupported) {
 		return false, err
 	}
 	var perr *Error

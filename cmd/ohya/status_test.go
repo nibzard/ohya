@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nibzard/ohya/internal/hubsync"
 	"github.com/nibzard/ohya/internal/observe"
 )
 
@@ -246,15 +247,137 @@ func TestStatusRemoteReportsCapabilityGap(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "hub.db")
 	writeStatusFixture(t, dir, strings.Repeat("8", 32), os.Getpid(), time.Second, nil)
-	envelope, raw, err := runStatusForTest(t, statusArgs(dir, dbPath, "--remote")...)
-	if err != errDegraded {
-		t.Fatalf("the remote capability gap must degrade: %v (%s)", err, raw)
+	data, err := buildStatus(context.Background(), statusOptions{
+		remote:     true,
+		dbPath:     dbPath,
+		stateDir:   dir,
+		setupState: dir,
+		home:       dir,
+		nowMS:      func() int64 { return time.Now().UnixMilli() },
+		probePID:   func(int) string { return "running" },
+		loadedRun:  func(context.Context, []string) error { return nil },
+		checkRun:   func(context.Context, []string) error { return nil },
+		remoteFetch: func(context.Context, string) (remoteStatusFetchResult, error) {
+			return remoteStatusFetchResult{TransportPath: "direct"}, hubsync.ErrRemoteStatusUnsupported
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildStatus: %v", err)
 	}
-	if !hasFindingCode(envelope.Data.Findings, "remote_status_unsupported", sevWarn) {
-		t.Errorf("remote gap must be explicit: %+v", envelope.Data.Findings)
+	if !statusDegraded(data) {
+		t.Fatalf("an unsupported remote hub must degrade: %+v", data.Findings)
 	}
-	if !containsString(envelope.Data.Coverage.Unsupported, "remote_hub_aggregates") {
-		t.Errorf("coverage must name the unsupported probe: %+v", envelope.Data.Coverage)
+	if !hasFindingCode(data.Findings, "remote_status_unsupported", sevWarn) {
+		t.Errorf("remote gap must be explicit: %+v", data.Findings)
+	}
+	if !containsString(data.Coverage.Unsupported, "remote_hub_aggregates") {
+		t.Errorf("coverage must name the unsupported probe: %+v", data.Coverage)
+	}
+	if data.RemoteHub == nil || !data.RemoteHub.Reachable || data.RemoteHub.Supported {
+		t.Errorf("remote_hub = %+v; want reachable=true supported=false", data.RemoteHub)
+	}
+}
+
+func TestStatusRemoteHubSuccessAndFailure(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "hub.db")
+	if err := os.WriteFile(dbPath, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeStatusFixture(t, dir, strings.Repeat("8", 32), os.Getpid(), time.Second, nil)
+	uptime := int64(42000)
+	sampled := time.Now().UnixMilli()
+
+	data, err := buildStatus(context.Background(), statusOptions{
+		remote:     true,
+		dbPath:     dbPath,
+		stateDir:   dir,
+		setupState: dir,
+		home:       dir,
+		nowMS:      func() int64 { return time.Now().UnixMilli() },
+		probePID:   func(int) string { return "running" },
+		loadedRun:  func(context.Context, []string) error { return nil },
+		checkRun:   func(context.Context, []string) error { return nil },
+		remoteFetch: func(context.Context, string) (remoteStatusFetchResult, error) {
+			return remoteStatusFetchResult{
+				TransportPath: "direct",
+				Status: hubsync.RemoteStatus{
+					FormatVersion: hubsync.DiagnosticsFormatVersion,
+					Hub:           hubsync.RemoteIdentity{Version: "v0.3.0", Schema: 8},
+					UptimeMS:      &uptime,
+					SampledWallMS: &sampled,
+					Roles:         []string{"serve"},
+					StorageFiles:  map[string]int64{"db": 8192, "wal": 1024},
+				},
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildStatus: %v", err)
+	}
+	if statusDegraded(data) {
+		t.Fatalf("healthy remote hub must not degrade: %+v", data.Findings)
+	}
+	if data.RemoteHub == nil || !data.RemoteHub.Reachable || !data.RemoteHub.Supported || data.RemoteHub.StorageFiles["db"] != 8192 {
+		t.Fatalf("remote_hub = %+v", data.RemoteHub)
+	}
+	if !containsString(data.Coverage.Present, "remote_hub") {
+		t.Fatalf("coverage missing remote_hub: %+v", data.Coverage)
+	}
+	var text bytes.Buffer
+	writeStatusText(&text, data)
+	if !strings.Contains(text.String(), "remote hub: version=v0.3.0 schema=8 uptime=42s path=direct") || !strings.Contains(text.String(), "hub storage: db 8.0 KiB, wal 1.0 KiB") {
+		t.Fatalf("text output lacks remote hub lines:\n%s", text.String())
+	}
+
+	failed, err := buildStatus(context.Background(), statusOptions{
+		remote:     true,
+		dbPath:     dbPath,
+		stateDir:   dir,
+		setupState: dir,
+		home:       dir,
+		nowMS:      func() int64 { return time.Now().UnixMilli() },
+		probePID:   func(int) string { return "running" },
+		loadedRun:  func(context.Context, []string) error { return nil },
+		checkRun:   func(context.Context, []string) error { return nil },
+		remoteFetch: func(context.Context, string) (remoteStatusFetchResult, error) {
+			return remoteStatusFetchResult{}, fmt.Errorf("hub offline")
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildStatus failed fetch: %v", err)
+	}
+	if !statusDegraded(failed) || !hasFindingCode(failed.Findings, "remote_status_failed", sevWarn) {
+		t.Fatalf("failed remote fetch must degrade cleanly: %+v", failed.Findings)
+	}
+	if failed.RemoteHub == nil || failed.RemoteHub.Reachable || !strings.Contains(failed.RemoteHub.Error, "hub offline") {
+		t.Fatalf("failed remote_hub = %+v", failed.RemoteHub)
+	}
+}
+
+func TestHubDiagnosticsProviderExposesAggregatesWithoutPaths(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "secret-dir-name", "hub.db")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dbPath, make([]byte, 4096), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	provider := hubDiagnosticsProvider{dbPath: dbPath}
+	got, err := provider.RemoteStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.FormatVersion != hubsync.DiagnosticsFormatVersion || got.StorageFiles["db"] != 4096 || got.Limits.MaxConns != hubsync.DefaultMaxConns {
+		t.Fatalf("diagnostics = %+v", got)
+	}
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "secret-dir-name") {
+		t.Fatalf("remote status leaked filesystem path: %s", string(raw))
 	}
 }
 

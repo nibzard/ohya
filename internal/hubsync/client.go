@@ -3,6 +3,7 @@ package hubsync
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -16,10 +17,12 @@ import (
 const DefaultRemoteTimeout = 60 * time.Second
 
 type RemoteClient struct {
-	conn    net.Conn
-	br      *bufio.Reader
-	mu      sync.Mutex
-	Timeout time.Duration
+	conn       net.Conn
+	br         *bufio.Reader
+	mu         sync.Mutex
+	Timeout    time.Duration
+	negotiated bool
+	caps       Capabilities
 }
 
 func NewRemoteClient(conn net.Conn) *RemoteClient {
@@ -72,6 +75,61 @@ func (c *RemoteClient) Annotate(ctx context.Context, request []byte) (store.Anno
 		return store.AnnotateResult{}, perr
 	}
 	return result, nil
+}
+
+func (c *RemoteClient) Diagnostics(ctx context.Context) (RemoteStatus, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.negotiated {
+		var caps Capabilities
+		var perr *Error
+		err := c.roundTrip(ctx,
+			func(w io.Writer) error { return WriteCapabilities(w, CapRemoteStatus) },
+			func(r io.Reader) error {
+				var rerr error
+				caps, perr, rerr = ReadWelcome(r)
+				return rerr
+			})
+		if err != nil {
+			return RemoteStatus{}, fmt.Errorf("hubsync: remote status negotiate: %w", err)
+		}
+		if perr != nil {
+			if perr.Code == CodeMalformed {
+				c.negotiated = true
+				c.caps = 0
+				return RemoteStatus{}, ErrRemoteStatusUnsupported
+			}
+			return RemoteStatus{}, perr
+		}
+		c.negotiated = true
+		c.caps = caps
+	}
+	if c.caps&CapRemoteStatus == 0 {
+		return RemoteStatus{}, ErrRemoteStatusUnsupported
+	}
+	var status RemoteStatus
+	var perr *Error
+	err := c.roundTrip(ctx,
+		func(w io.Writer) error { return WriteDiagnosticsRequest(w, DiagnosticsFormatVersion) },
+		func(r io.Reader) error {
+			var rerr error
+			status, perr, rerr = ReadDiagnosticsReply(r)
+			return rerr
+		})
+	if err != nil {
+		return RemoteStatus{}, fmt.Errorf("hubsync: remote status: %w", err)
+	}
+	if perr != nil {
+		if perr.Code == CodeNoRemote {
+			return RemoteStatus{}, ErrRemoteStatusUnsupported
+		}
+		return RemoteStatus{}, perr
+	}
+	return status, nil
+}
+
+func IsUnsupportedDiagnostics(err error) bool {
+	return errors.Is(err, ErrRemoteStatusUnsupported)
 }
 
 func (c *RemoteClient) roundTrip(ctx context.Context, write func(io.Writer) error, read func(io.Reader) error) error {
