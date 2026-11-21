@@ -2320,3 +2320,21 @@ How to use this file:
   `make tla`, all 7 hosted candidate jobs, and local `install.sh` hub
   upgrade passed (`ohya.service` + `ohya-serve.service` active; legacy
   `ohya-hub.service` retired).
+
+- Perf optimization ideas observed on the 16.6 GiB / 5,884-source live hub
+  (2026-11-21, `ohya metrics --window 1h --role ingest`:
+  `ingest_pass_duration` p50 78.3 ms / p95 216.8 ms, `discovery_duration`
+  p50 3.5 ms / p95 22.8 ms, `sqlite_transaction_duration` p50 22.1 ms /
+  p95 1740.6 ms):
+  - Cache `dir -> resolvedDir` per pass in `watch.Poll` (`normalizePath`,
+    `internal/watch/watch.go`) and `excludePathForms` (`cmd/ohya/exclude.go`)
+    instead of calling `filepath.EvalSymlinks` on every watched file every
+    2 s (~5,884 files/pass).
+  - Skip unchanged cold historical subtrees via directory mtimes or
+    `fsnotify`/kqueue hints with periodic fallback sweeps to cut idle
+    `discoverSessionFiles` + `Poll` CPU near zero.
+  - Storage & FTS write tail: execute `plans/004-storage-efficiency.md`
+    D1/D2 (cold `raw_json` compression) and O6 (selective FTS5 indexing)
+    once the plan 002 usage gate is met.
+  - Speed up `make check`: `cmd/ohya` takes ~466 s; mark independent CLI
+    unit tests `t.Parallel()` and consolidate redundant subprocess builds.
