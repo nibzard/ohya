@@ -76,12 +76,11 @@ final class AppModel {
     private(set) var resolvedBinaryPath: String?
     private(set) var version: VersionData?
     private(set) var status: StatusData?
-    private(set) var serviceStatus: ServiceStatusData?
     private(set) var doctor: DoctorData?
     private(set) var usage: UsageData?
     private(set) var purgePlan: PurgeData?
     private(set) var lastError: OhyaRunnerError?
-    private(set) var summary = StatusEvaluator.evaluate(status: nil, service: nil, error: nil)
+    private(set) var summary = StatusEvaluator.evaluate(status: nil, error: nil)
 
     private(set) var isRefreshing = false
     private var statusRefreshPending = false
@@ -247,14 +246,6 @@ final class AppModel {
             lastError = .processLaunchFailed(error.localizedDescription)
         }
 
-        if let serviceResp: CLIResponse<ServiceStatusData> = try? await runner.runJSON(
-            binaryPath: binary,
-            arguments: ["service", "status", "--json"],
-            timeout: 8
-        ) {
-            serviceStatus = serviceResp.data
-        }
-
         updateSummary()
     }
 
@@ -316,7 +307,6 @@ final class AppModel {
                 arguments: ["service", action, "--json"],
                 timeout: 20
             )
-            serviceStatus = resp.data
             showTransientMessage(resp.data.running ? "Capture resumed" : "Capture paused")
             await refreshStatus()
         } catch let err as OhyaRunnerError {
@@ -550,7 +540,7 @@ final class AppModel {
     }
 
     private func updateSummary() {
-        let next = StatusEvaluator.evaluate(status: status, service: serviceStatus, error: lastError)
+        let next = StatusEvaluator.evaluate(status: status, error: lastError)
         if let alert = StatusEvaluator.transitionAlert(previous: previousSummary, current: next) {
             notifier.send(alert, enabled: notificationsEnabled)
         }

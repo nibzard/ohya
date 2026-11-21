@@ -135,7 +135,7 @@ public struct StatusSummary: Sendable, Equatable {
 public enum StatusEvaluator {
     static let backlogFindingCodes: Set<String> = ["pending_backlog", "upload_backlog"]
 
-    public static func evaluate(status: StatusData?, service: ServiceStatusData?, error: OhyaRunnerError?) -> StatusSummary {
+    public static func evaluate(status: StatusData?, error: OhyaRunnerError?) -> StatusSummary {
         guard let status else {
             return .unavailable(error == nil ? "Starting" : "Not connected")
         }
@@ -175,15 +175,9 @@ public enum StatusEvaluator {
         }
 
         let warnings = status.findings.filter { $0.severity == "warn" || $0.severity == "error" }
-        let servicePaused: Bool
-        if let service, service.installed, !service.loaded, !service.running {
-            servicePaused = true
-        } else if let primary = status.topology.services?.first(where: { $0.name == "service" }),
-                  primary.loaded == false, primary.running == false {
-            servicePaused = true
-        } else {
-            servicePaused = false
-        }
+        let servicePaused = status.topology.services?.contains(where: {
+            $0.name == "service" && $0.loaded == false && $0.running == false
+        }) ?? false
 
         let iconState: MenuBarIconState
         if error != nil {

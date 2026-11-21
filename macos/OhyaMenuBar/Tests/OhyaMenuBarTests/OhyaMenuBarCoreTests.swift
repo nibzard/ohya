@@ -73,14 +73,24 @@ final class OhyaMenuBarCoreTests: XCTestCase {
         let data = try XCTUnwrap(env.data)
         XCTAssertEqual(data.topology.agentRoots.count, 3)
 
-        let summary = StatusEvaluator.evaluate(status: data, service: nil, error: nil)
+        let summary = StatusEvaluator.evaluate(status: data, error: nil)
         XCTAssertEqual(summary.iconState, .caughtUp)
         XCTAssertEqual(summary.topologyLabel, "Hub")
         XCTAssertTrue(summary.isHub)
         XCTAssertEqual(summary.activeSources, 12)
         XCTAssertEqual(summary.stoppedSources, 0)
 
-        let failed = StatusEvaluator.evaluate(status: data, service: nil, error: .timedOut(command: ["status", "--json"], seconds: 10))
+        XCTAssertFalse(summary.isPaused)
+
+        let stoppedJSON = json.replacingOccurrences(
+            of: #"{"name": "service", "loaded": true, "running": true}"#,
+            with: #"{"name": "service", "loaded": false, "running": false}"#
+        )
+        XCTAssertNotEqual(stoppedJSON, json)
+        let stoppedData = try XCTUnwrap(decoder.decode(JSONEnvelope<StatusData>.self, from: Data(stoppedJSON.utf8)).data)
+        XCTAssertTrue(StatusEvaluator.evaluate(status: stoppedData, error: nil).isPaused)
+
+        let failed = StatusEvaluator.evaluate(status: data, error: .timedOut(command: ["status", "--json"], seconds: 10))
         XCTAssertEqual(failed.iconState, .unavailable)
         XCTAssertEqual(failed.topologyLabel, "Hub")
         XCTAssertEqual(failed.activeSources, 12)
