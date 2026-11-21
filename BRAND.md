@@ -19,6 +19,7 @@ All files are in [`docs/assets/brand/`](docs/assets/brand/).
 | `logo-dark.svg` | Mark and wordmark on dark backgrounds |
 | `icon.svg` | Mark on the purple tile, 32 px and larger |
 | `icon-small.svg` | Mark on the purple tile with a heavier line, smaller than 32 px |
+| `menubar-template.svg` | Monochrome black-and-alpha template mark (18 pt, no tile) for macOS menu bar `isTemplate = true` rendering |
 | `icon-512.png` | Avatar for an ohya organization account |
 | `social-preview.svg` | Source of the social preview |
 | `social-preview.png` | Repository social preview, 1280 × 640 |

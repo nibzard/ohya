@@ -173,6 +173,11 @@ def icon(stroke=STROKE, ear_scale=1.0):
     return svg(64, 64, "0 0 64 64", body)
 
 
+def menubar_template(stroke=8.6, ear_scale=1.08):
+    body = f'<g transform="translate(3.4,-4.8) scale(1.12)">{mark("#000000", "#000000", Ids(), stroke, ear_scale)}</g>'
+    return svg(18, 18, "0 0 64 64", body)
+
+
 def social_preview():
     x, y, w, _ = LOCKUP_VIEWBOX
     scale = 780 / w
@@ -192,6 +197,7 @@ def assets():
         "logo-dark.svg": logo("dark"),
         "icon.svg": icon(),
         "icon-small.svg": icon(stroke=8.6, ear_scale=1.08),
+        "menubar-template.svg": menubar_template(),
         "social-preview.svg": social_preview(),
     }
 
