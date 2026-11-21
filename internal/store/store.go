@@ -159,8 +159,13 @@ func verifyWriter(ctx context.Context, db *sql.DB) error {
 	if err := verifyForeignKeys(ctx, db); err != nil {
 		return err
 	}
+	if _, err := db.ExecContext(ctx, fmt.Sprintf(`PRAGMA journal_size_limit = %d`, walJournalSizeLimit)); err != nil {
+		return fmt.Errorf("store: set journal_size_limit: %w", err)
+	}
 	return nil
 }
+
+const walJournalSizeLimit = 64 << 20
 
 func verifyReader(db *sql.DB) error {
 	var journal string

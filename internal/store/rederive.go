@@ -133,6 +133,7 @@ func (d *DB) ReDerive(ctx context.Context, parsers []ParserDeriver) (ReDeriveRes
 	if err := tx.Commit(); err != nil {
 		return ReDeriveResult{}, fmt.Errorf("store: re-derive: commit: %w", err)
 	}
+	_, _ = d.writer.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`)
 	return result, nil
 }
 

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -580,5 +582,39 @@ func TestReDeriveSkipsTextlessRowsInFTSAndSurvivesDeleteReuse(t *testing.T) {
 
 	if err := hub.FTSIndexConsistent(ctx); err != nil {
 		t.Fatalf("FTSIndexConsistent after rederive + delete + insert: %v", err)
+	}
+}
+
+func TestWriterJournalSizeLimitAndReDeriveTruncatesWAL(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "hub.db")
+	hub, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hub.Close()
+
+	var limit int64
+	if err := hub.Writer().QueryRowContext(ctx, `PRAGMA journal_size_limit`).Scan(&limit); err != nil {
+		t.Fatal(err)
+	}
+	if limit != walJournalSizeLimit {
+		t.Fatalf("journal_size_limit = %d, want %d", limit, walJournalSizeLimit)
+	}
+
+	mustRegister(t, hub, "s1", "/s1.jsonl")
+	records, err := parseFixture(t, "main-session.jsonl", "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustIngest(t, hub, Batch{SourceID: "s1", Events: records})
+
+	if _, err := hub.ReDerive(ctx, []ParserDeriver{claudeDeriver(claudecode.OutputVersion+1, nil)}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(dbPath + "-wal")
+	if err == nil && info.Size() != 0 {
+		t.Fatalf("WAL size after ReDerive = %d, want 0", info.Size())
 	}
 }
