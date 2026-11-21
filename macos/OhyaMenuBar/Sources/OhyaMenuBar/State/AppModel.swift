@@ -279,13 +279,7 @@ final class AppModel {
             usage = usageResp.data
         }
 
-        if let doctorResp: CLIResponse<DoctorData> = try? await runner.runJSON(
-            binaryPath: binary,
-            arguments: ["doctor", "--json"],
-            timeout: 15
-        ) {
-            doctor = doctorResp.data
-        }
+        await refreshDoctor(binary: binary)
 
         if !summary.isRemote {
             if let purgeResp: CLIResponse<PurgeData> = try? await runner.runJSON(
@@ -297,6 +291,16 @@ final class AppModel {
             }
         } else {
             purgePlan = nil
+        }
+    }
+
+    private func refreshDoctor(binary: String) async {
+        if let doctorResp: CLIResponse<DoctorData> = try? await runner.runJSON(
+            binaryPath: binary,
+            arguments: ["doctor", "--json"],
+            timeout: 15
+        ) {
+            doctor = doctorResp.data
         }
     }
 
@@ -403,7 +407,7 @@ final class AppModel {
     func refreshDevices() async {
         guard let binary = resolvedBinaryPath else { return }
         if summary.isRemote {
-            await refreshSecondary(force: true)
+            await refreshDoctor(binary: binary)
             return
         }
         isLoadingDevices = true
