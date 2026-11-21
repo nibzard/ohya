@@ -158,8 +158,11 @@ public actor OhyaRunner {
             process.standardInput = FileHandle.nullDevice
 
             let state = LockedExecutionState()
+            let output = CollectedOutput()
+            let completion = DispatchGroup()
+            let ioQueue = DispatchQueue.global(qos: .utility)
 
-            let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+            let timer = DispatchSource.makeTimerSource(queue: ioQueue)
             timer.schedule(deadline: .now() + timeout)
             timer.setEventHandler {
                 if state.markFinished() {
@@ -170,27 +173,36 @@ public actor OhyaRunner {
                 }
             }
 
-            let stdoutBuffer = PipeCollector(pipe: stdoutPipe)
-            let stderrBuffer = PipeCollector(pipe: stderrPipe)
-
+            completion.enter()
             process.terminationHandler = { finished in
-                timer.cancel()
-                let out = stdoutBuffer.finish()
-                let err = stderrBuffer.finish()
-                if state.markFinished() {
-                    continuation.resume(returning: (finished.terminationStatus, out, err))
-                }
+                output.setExitCode(finished.terminationStatus)
+                completion.leave()
             }
 
+            timer.resume()
             do {
                 try process.run()
-                timer.resume()
             } catch {
+                completion.leave()
                 timer.cancel()
-                _ = stdoutBuffer.finish()
-                _ = stderrBuffer.finish()
                 if state.markFinished() {
                     continuation.resume(throwing: OhyaRunnerError.processLaunchFailed(error.localizedDescription))
+                }
+                return
+            }
+
+            let stdoutHandle = stdoutPipe.fileHandleForReading
+            let stderrHandle = stderrPipe.fileHandleForReading
+            ioQueue.async(group: completion) {
+                output.setStdout(stdoutHandle.readDataToEndOfFile())
+            }
+            ioQueue.async(group: completion) {
+                output.setStderr(stderrHandle.readDataToEndOfFile())
+            }
+            completion.notify(queue: ioQueue) {
+                timer.cancel()
+                if state.markFinished() {
+                    continuation.resume(returning: output.result())
                 }
             }
         }
@@ -236,38 +248,33 @@ private final class LockedExecutionState: @unchecked Sendable {
     }
 }
 
-private final class PipeCollector: @unchecked Sendable {
+private final class CollectedOutput: @unchecked Sendable {
     private let lock = NSLock()
-    private let pipe: Pipe
-    private var data = Data()
+    private var exitCode: Int32 = -1
+    private var stdout = Data()
+    private var stderr = Data()
 
-    init(pipe: Pipe) {
-        self.pipe = pipe
-        pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let chunk = handle.availableData
-            guard !chunk.isEmpty else {
-                handle.readabilityHandler = nil
-                return
-            }
-            self?.append(chunk)
-        }
-    }
-
-    private func append(_ chunk: Data) {
+    func setExitCode(_ code: Int32) {
         lock.lock()
-        data.append(chunk)
+        exitCode = code
         lock.unlock()
     }
 
-    func finish() -> Data {
-        pipe.fileHandleForReading.readabilityHandler = nil
-        let trailing = pipe.fileHandleForReading.readDataToEndOfFile()
+    func setStdout(_ data: Data) {
         lock.lock()
-        if !trailing.isEmpty {
-            data.append(trailing)
-        }
-        let result = data
+        stdout = data
         lock.unlock()
-        return result
+    }
+
+    func setStderr(_ data: Data) {
+        lock.lock()
+        stderr = data
+        lock.unlock()
+    }
+
+    func result() -> (exitCode: Int32, stdout: Data, stderr: Data) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (exitCode, stdout, stderr)
     }
 }
