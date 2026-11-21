@@ -32,6 +32,7 @@ join       pair a device with a hub and upload its agent sessions
 mcp        serve the sql and annotate MCP tools on stdio
 search     find sessions by keyword in the stored events
 show       print one session's newest events
+sessions   list recent sessions
 devices    manage device pairing and revocation
 sources    manage stored sources on the hub
 purge      plan or apply an owner-decided purge of stored sessions
@@ -83,6 +84,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runSearchCommand(rest, stdout, stderr)
 	case "show":
 		return runShowCommand(rest, stdout, stderr)
+	case "sessions":
+		return runSessionsCommand(rest, stdout, stderr)
 	case "devices":
 		return runDevicesCommand(rest, stdout, stderr)
 	case "purge":

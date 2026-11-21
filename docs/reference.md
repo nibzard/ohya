@@ -8,6 +8,7 @@ overview and a quick start, see the [README](../README.md).
 ```sh
 make build
 ./bin/ohya setup --hub          # local setup plus the serve service, a relay check, and a join code
+./bin/ohya service status       # inspect, start, stop, or restart the owned background service
 ./bin/ohya serve               # run the hub: transport, sync endpoint, remote tools
 ./bin/ohya devices invite      # issue a one-time join code (run on the hub)
 ./bin/ohya join <code>         # pair this device and upload its sessions
@@ -17,6 +18,7 @@ make build
 ./bin/ohya mcp --remote        # same tools, through the joined device
 ./bin/ohya search "auth AND refresh"   # find sessions by keyword, print excerpts
 ./bin/ohya show SESSION_ID     # print one session's newest events
+./bin/ohya sessions            # list recent sessions across agents and devices
 ./bin/ohya devices list        # show paired devices and invitations
 ./bin/ohya devices revoke ID   # revoke a device, final for its identity
 ./bin/ohya purge               # plan a purge of stored sessions (dry run)
@@ -429,13 +431,15 @@ change nothing, not even timestamps. Agents query annotations through the
 
 ### Operator recall
 
-`ohya search` and `ohya show` give a human the same recall the `sql` tool
-gives an agent, without sqlite3, an agent session, or MCP wiring. Both are
-print-only and never prompt.
+`ohya search`, `ohya show`, and `ohya sessions` give a human or companion UI
+the same recall the `sql` tool gives an agent, without sqlite3, an agent
+session, or MCP wiring. All three are print-only, never prompt, and take
+`--json` for versioned structured output ([ADR 0005](adr/0005-json-output.md)).
 
 ```sh
 ohya search "auth AND refresh" --repo github.com/owner/name --agent claude-code
 ohya show claude-code:dev1:sess-1 --last 50
+ohya sessions --limit 10 --agent claude-code --json
 ```
 
 `ohya search <query>` runs one bounded read-only FTS5 query with BM25
@@ -464,19 +468,38 @@ role and tool when stored), and excerpt. Byte-identical replay duplicates
 stay hidden. The session id is the `agent:device:native` value that
 `ohya search` prints; an unknown id exits 1 and points at `ohya search`.
 
-Both commands query one path: the local hub database (opened read-only;
+`ohya sessions` lists the most recently active non-synthetic sessions
+(`native_id NOT LIKE 'ohya-synthetic:%'`), newest first, with their agent,
+device, repository, working directory, branch, model, timing, event count,
+settled state (`settled` when idle at least 10 minutes, `active` otherwise,
+matching `events_settled`), and excerpted first prompt. `--limit` defaults to
+20 (1–500); `--repo` and `--agent` filter as in `ohya search`.
+
+All three commands query one path: the local hub database (opened read-only;
 they never write or migrate it) or, with `--remote`, the joined hub through
 the saved pairing credential and the tailcat transport, following
 `ohya mcp --remote`. A setup state whose saved connection selects remote
 memory switches the default to `--remote` on its own unless `--db` names a
 database explicitly. The query itself always runs through the `sql` tool's
 engine, so its read-only enforcement, its 500-row and 256 KiB output
-bounds, and its 5 second deadline apply unchanged; excerpts are clipped to
-200 characters and control bytes are neutralized before printing. Flags:
-`--db` for the database (ignored with `--remote`), `--state` for the join
-state with `--remote` or the setup state root otherwise, and `--remote`.
-Exit codes follow the CLI contract: 0 for a printed report, 1 for a failed
-query or unknown session, 2 for a usage error.
+bounds, its 5 second deadline, and ADR 0015 egress secret redaction apply
+unchanged; excerpts are clipped to 200 characters and control bytes are
+neutralized before printing. Flags: `--db` for the database (ignored with
+`--remote`), `--state` for the join state with `--remote` or the setup state
+root otherwise, `--remote`, and `--json`. Exit codes follow the CLI contract:
+0 for a printed report, 1 for a failed query or unknown session, 2 for a
+usage error.
+
+### Owned background service control
+
+`ohya service status|start|stop|restart [--hub] [--state DIR] [--json]`
+inspects, starts, stops, or restarts the user service owned by `ohya setup`
+(`launchd` on macOS, `systemd --user` on Linux). By default it targets the
+memory service (`ingest` or `join`); `--hub` targets the `ohya serve` hub
+service. It never writes or overwrites service unit files (preserving manual
+edits), serializes mutating actions against `ohya setup` through the state
+directory lock, and treats starting an already-running service or stopping an
+already-stopped service as an idempotent no-op (`changed: false`).
 
 ### Usage records
 

@@ -266,10 +266,12 @@ directories and sends only the normalized value to the hub.
 | Command | Purpose |
 | --- | --- |
 | `ohya setup` / `uninstall` | Configure or remove the service and agent integrations; memory stays; `--hub` also sets up device serving |
+| `ohya service status\|start\|stop\|restart` | Inspect or control the owned background user service (`--hub` for `ohya serve`) |
 | `ohya ingest [--once]` | Import local session history, then poll for new records |
 | `ohya mcp [--remote]` | Serve `sql` and `annotate` on stdio, locally or through a joined device |
 | `ohya search QUERY [--repo] [--agent]` | Find sessions by keyword (BM25) and print excerpts, locally or through a joined device |
 | `ohya show SESSION_ID [--last N]` | Print one session's newest events, excerpted |
+| `ohya sessions [--limit N] [--repo] [--agent]` | List recent sessions and their settled state, locally or through a joined device |
 | `ohya serve` | Run the hub: Tailcat transport and sync endpoint, no open port |
 | `ohya join CODE` | Pair this device with a hub and upload its sessions |
 | `ohya devices invite\|list\|revoke` | Manage paired devices |

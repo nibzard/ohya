@@ -1,6 +1,8 @@
 # Native macOS menu bar app (`ohya.app`)
 
-Status: proposed. Planned against `74f5542`, 2026-11-21.
+Status: in delivery. Milestone 1 (CLI & brand prerequisites) implemented
+2026-11-21; Milestones 2–5 (native SwiftUI macOS app & distribution) open.
+Planned against `74f5542`, 2026-11-21.
 Decision record: [ADR 0017](../docs/adr/0017-macos-menubar-app.md).
 Priority: P2; effort M, delivered in small increments starting with Go CLI
 prerequisites.

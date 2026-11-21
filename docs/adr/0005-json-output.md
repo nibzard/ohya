@@ -16,7 +16,8 @@ same surface.
 The commands that report facts take a `--json` flag. Text stays the default;
 nothing about the text output changes.
 
-- Covered commands: `ingest --once`, `devices list`, `devices invite`,
+- Covered commands: `ingest --once`, `service status|start|stop|restart`,
+  `search`, `show`, `sessions`, `devices list`, `devices invite`,
   `devices revoke`, `purge`, `sources reallow`, `rederive`, `doctor`,
   `usage`, `version` (the observability reports `status`, `metrics`,
   `logs`, and `diagnose` also follow the envelope; see their own docs).
@@ -95,6 +96,23 @@ Timestamps are RFC 3339 UTC strings.
 - `version`: the T061 keys unchanged — `version`, `revision`, `dirty`, `go`,
   `schema`, `parser.claude`, `parser.codex`, `parser.pi` — so one vocabulary
   spans the text line and the JSON object.
+- `service status|start|stop|restart`: `service` (`service` or `hub-service`),
+  `action`, `installed`, `edited`, `loaded`, `running`, `changed`, plus
+  optional `path` and `detail`.
+- `search`: `query`, `matches` (`[]` when empty; each item carries `event_id`,
+  `session_id`, `agent`, optional `repo`/`time`/`time_ms`, and redacted,
+  sanitized `excerpt`), `truncated`, optional `truncation_reason`, and
+  optional `redactions`.
+- `show`: `session` (`id`, `agent`, `device_id`, `native_id`, optional
+  `repo`/`cwd`/`branch`/`model`/`first_prompt`/`started_at`/`started_at_ms`/
+  `last_event_at`/`last_event_at_ms`/`settled`, and `event_count`), `events`
+  (`[]` when empty, oldest first; each item carries `id`, optional
+  `time`/`time_ms`/`role`/`tool_name`, `kind`, and `excerpt`), `truncated`,
+  optional `truncation_reason`, and optional `redactions`.
+- `sessions`: `sessions` (`[]` when empty, newest first, excluding synthetic
+  `ohya-synthetic:` companions; same session shape as `show.session` with
+  `settled` computed against the hub's 10-minute `events_settled` threshold),
+  `truncated`, optional `truncation_reason`, and optional `redactions`.
 
 ### Error codes
 
@@ -111,6 +129,14 @@ Every failure maps to exactly one code.
 | `registry_open_failed` | The device registry could not be opened (`devices` subcommands) | check the `--state` directory |
 | `device_unknown` | `devices revoke` named a device that is not paired | run `ohya devices list` |
 | `device_already_revoked` | `devices revoke` named an already-revoked identity | revocation is final; re-admission needs a new identity |
+| `service_not_configured` | `service start|stop|restart` found no owned setup receipt | run `ohya setup` (or `ohya setup --hub` for the hub service) first |
+| `service_unit_missing` | the setup receipt exists, but its unit file is missing on disk | run `ohya setup` to recreate the service unit |
+| `service_control_failed` | the user service manager failed a `service` action | check your user service manager and run `ohya doctor` |
+| `not_paired` | a `--remote` recall command found no pairing credential or hub address | run `ohya join` first |
+| `unauthorized` | the hub refused the device credential during remote recall | device was revoked or state belongs to a different hub |
+| `fts_syntax_error` | `search` failed to parse an FTS5 query (for example unquoted punctuation) | wrap punctuation-bearing terms in double quotes |
+| `session_not_found` | `show` named an unknown session ID | find session ids with `ohya search` or `ohya sessions` |
+| `query_denied` / `query_failed` | the read-only recall query was denied or failed | — |
 
 Classification is by sentinel (`errors.Is`), never by matching message text:
 `watch.ErrStateLost` and `device.ErrUnusable` map to `state_recovery_failed`,

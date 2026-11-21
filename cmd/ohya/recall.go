@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"net"
 	"os"
 	"os/signal"
@@ -25,9 +27,12 @@ import (
 )
 
 const (
-	searchHitLimit     = 20
-	recallExcerptChars = 200
-	showDefaultLast    = 20
+	searchHitLimit      = 20
+	recallExcerptChars  = 200
+	showDefaultLast     = 20
+	sessionsDefaultLim  = 20
+	sessionsMaxLimit    = 500
+	settledWindowClause = "(s.last_event_at_ms IS NULL OR s.last_event_at_ms <= (CAST(strftime('%s', 'now') AS INTEGER) - 600) * 1000)"
 )
 
 var searchSpec = commandSpec{
@@ -47,7 +52,7 @@ var searchSpec = commandSpec{
 		`ohya search "auth AND refresh"`,
 		`ohya search '"hyphenated-name"'`,
 		`ohya search panic --repo github.com/owner/name --agent claude-code`,
-		`ohya search --remote "cursor regression"`,
+		`ohya search --remote --json "cursor regression"`,
 	},
 }
 
@@ -56,15 +61,93 @@ var showSpec = commandSpec{
 	synopsis:  "print one session's newest events",
 	usageLine: "ohya show <session-id> [flags]",
 	description: "Prints one session's header — agent, device, native id, repo, working directory, branch, model, first prompt, timing, event count — followed by its newest events, excerpted, oldest first. " +
-		"Find the session id with ohya search. Byte-identical replay duplicates stay hidden. " +
+		"Find the session id with ohya search or ohya sessions. Byte-identical replay duplicates stay hidden. " +
 		"Without --remote the command reads the local hub database and never writes or migrates it; with --remote it reads the joined hub through the saved pairing credential.",
 	argsTitle: "Arguments",
-	args:      "<session-id>  session id as printed by ohya search",
+	args:      "<session-id>  session id as printed by ohya search or ohya sessions",
 	examples: []string{
 		"ohya show claude-code:dev1:sess-1",
 		"ohya show --last 50 claude-code:dev1:sess-1",
-		"ohya show --remote claude-code:dev1:sess-1",
+		"ohya show --remote --json claude-code:dev1:sess-1",
 	},
+}
+
+var sessionsSpec = commandSpec{
+	name:      "ohya sessions",
+	synopsis:  "list recent sessions",
+	usageLine: "ohya sessions [flags]",
+	description: "Lists the most recently active non-synthetic sessions with their agent, device, repository, working directory, branch, model, timing, event count, settled state (idle at least 10 minutes), and excerpted first prompt. " +
+		"Without --remote the command reads the local hub database and never writes or migrates it; with --remote it queries the joined hub through the saved pairing credential. " +
+		"The query runs through the sql tool's read-only engine with egress secret redaction.",
+	argsTitle: "Arguments",
+	args:      "(none)",
+	examples: []string{
+		"ohya sessions",
+		"ohya sessions --limit 10 --agent claude-code",
+		"ohya sessions --repo github.com/owner/name --json",
+		"ohya sessions --remote --json",
+	},
+}
+
+type searchJSONData struct {
+	Query            string          `json:"query"`
+	Matches          []searchHitJSON `json:"matches"`
+	Truncated        bool            `json:"truncated"`
+	TruncationReason string          `json:"truncation_reason,omitempty"`
+	Redactions       int             `json:"redactions,omitempty"`
+}
+
+type searchHitJSON struct {
+	EventID   int64  `json:"event_id"`
+	SessionID string `json:"session_id"`
+	Agent     string `json:"agent"`
+	Repo      string `json:"repo,omitempty"`
+	Time      string `json:"time,omitempty"`
+	TimeMS    *int64 `json:"time_ms,omitempty"`
+	Excerpt   string `json:"excerpt"`
+}
+
+type showJSONData struct {
+	Session          sessionSummaryJSON `json:"session"`
+	Events           []showEventJSON    `json:"events"`
+	Truncated        bool               `json:"truncated"`
+	TruncationReason string             `json:"truncation_reason,omitempty"`
+	Redactions       int                `json:"redactions,omitempty"`
+}
+
+type sessionsJSONData struct {
+	Sessions         []sessionSummaryJSON `json:"sessions"`
+	Truncated        bool                 `json:"truncated"`
+	TruncationReason string               `json:"truncation_reason,omitempty"`
+	Redactions       int                  `json:"redactions,omitempty"`
+}
+
+type sessionSummaryJSON struct {
+	ID            string `json:"id"`
+	Agent         string `json:"agent"`
+	DeviceID      string `json:"device_id"`
+	NativeID      string `json:"native_id"`
+	Repo          string `json:"repo,omitempty"`
+	CWD           string `json:"cwd,omitempty"`
+	Branch        string `json:"branch,omitempty"`
+	Model         string `json:"model,omitempty"`
+	FirstPrompt   string `json:"first_prompt,omitempty"`
+	StartedAt     string `json:"started_at,omitempty"`
+	StartedAtMS   *int64 `json:"started_at_ms,omitempty"`
+	LastEventAt   string `json:"last_event_at,omitempty"`
+	LastEventAtMS *int64 `json:"last_event_at_ms,omitempty"`
+	EventCount    int64  `json:"event_count"`
+	Settled       *bool  `json:"settled,omitempty"`
+}
+
+type showEventJSON struct {
+	ID       int64  `json:"id"`
+	Time     string `json:"time,omitempty"`
+	TimeMS   *int64 `json:"time_ms,omitempty"`
+	Kind     string `json:"kind"`
+	Role     string `json:"role,omitempty"`
+	ToolName string `json:"tool_name,omitempty"`
+	Excerpt  string `json:"excerpt"`
 }
 
 func runSearchCommand(args []string, stdout, stderr io.Writer) error {
@@ -83,6 +166,7 @@ func runSearchCommand(args []string, stdout, stderr io.Writer) error {
 		"only sessions of this `repo` (host/path, as stored in sessions.repo)")
 	agent := c.fs.String("agent", "",
 		"only sessions of this `agent` (for example claude-code)")
+	asJSON := c.fs.Bool("json", false, "print one JSON object instead of text (docs/adr/0005)")
 	if err := c.parse(args, stdout); err != nil {
 		return err
 	}
@@ -91,19 +175,22 @@ func runSearchCommand(args []string, stdout, stderr io.Writer) error {
 	}
 	target, err := resolveRecallTarget(home, *state, *db, *remote, dbFlagExplicit(c))
 	if err != nil {
-		return err
+		return jsonFailurePrint(*asJSON, stdout, searchSpec.name, err)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	backend, closeBackend, err := openRecallBackend(target)
 	if err != nil {
-		return err
+		return jsonFailurePrint(*asJSON, stdout, searchSpec.name, err)
 	}
 	defer closeBackend()
 	ftsQuery := c.fs.Arg(0)
 	res, err := recallQuery(ctx, backend, searchQuery(ftsQuery, *repo, *agent))
 	if err != nil {
-		return ftsQuotingHint(err, ftsQuery)
+		return jsonFailurePrint(*asJSON, stdout, searchSpec.name, ftsQuotingHint(err, ftsQuery))
+	}
+	if *asJSON {
+		return printJSON(stdout, searchSpec.name, buildSearchJSON(ftsQuery, res))
 	}
 	printSearchResult(stdout, res)
 	return nil
@@ -123,6 +210,7 @@ func runShowCommand(args []string, stdout, stderr io.Writer) error {
 		"read the session from the joined hub through the tailcat transport instead of a local database")
 	last := c.fs.Int("last", showDefaultLast,
 		"number of newest `events` to print")
+	asJSON := c.fs.Bool("json", false, "print one JSON object instead of text (docs/adr/0005)")
 	if err := c.parse(args, stdout); err != nil {
 		return err
 	}
@@ -134,28 +222,86 @@ func runShowCommand(args []string, stdout, stderr io.Writer) error {
 	}
 	target, err := resolveRecallTarget(home, *state, *db, *remote, dbFlagExplicit(c))
 	if err != nil {
-		return err
+		return jsonFailurePrint(*asJSON, stdout, showSpec.name, err)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	backend, closeBackend, err := openRecallBackend(target)
 	if err != nil {
-		return err
+		return jsonFailurePrint(*asJSON, stdout, showSpec.name, err)
 	}
 	defer closeBackend()
 	sessionID := c.fs.Arg(0)
 	header, err := recallQuery(ctx, backend, showSessionQuery(sessionID))
 	if err != nil {
-		return err
+		return jsonFailurePrint(*asJSON, stdout, showSpec.name, err)
 	}
 	if header.RowCount != 1 {
-		return fmt.Errorf("no session with id %q; find session ids with ohya search", sessionID)
+		err := classify(
+			fmt.Errorf("no session with id %q; find session ids with ohya search", sessionID),
+			"session_not_found",
+			"find session ids with ohya search or ohya sessions",
+		)
+		return jsonFailurePrint(*asJSON, stdout, showSpec.name, err)
 	}
 	events, err := recallQuery(ctx, backend, showEventsQuery(sessionID, *last))
 	if err != nil {
-		return err
+		return jsonFailurePrint(*asJSON, stdout, showSpec.name, err)
+	}
+	if *asJSON {
+		return printJSON(stdout, showSpec.name, buildShowJSON(header, events))
 	}
 	printShowResult(stdout, header, events)
+	return nil
+}
+
+func runSessionsCommand(args []string, stdout, stderr io.Writer) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("resolve home directory: %w", err)
+	}
+	c := newCommandFlags(sessionsSpec)
+	db := c.fs.String("db", filepath.Join(home, ".ohya", "hub.db"),
+		"hub database `path` (ignored with --remote)")
+	state := c.fs.String("state", "",
+		"state `directory`: the join state with --remote, otherwise the setup state root; defaults to the database directory, or ~/.ohya/join with --remote")
+	remote := c.fs.Bool("remote", false,
+		"query the joined hub through the tailcat transport instead of a local database")
+	repo := c.fs.String("repo", "",
+		"only sessions of this `repo` (host/path, as stored in sessions.repo)")
+	agent := c.fs.String("agent", "",
+		"only sessions of this `agent` (for example claude-code)")
+	limit := c.fs.Int("limit", sessionsDefaultLim,
+		"maximum number of recent `sessions` to list (1–500)")
+	asJSON := c.fs.Bool("json", false, "print one JSON object instead of text (docs/adr/0005)")
+	if err := c.parse(args, stdout); err != nil {
+		return err
+	}
+	if c.fs.NArg() > 0 {
+		return c.usageErrorf("unexpected argument %q", c.fs.Arg(0))
+	}
+	if *limit < 1 || *limit > sessionsMaxLimit {
+		return c.usageErrorf("--limit must be between 1 and %d", sessionsMaxLimit)
+	}
+	target, err := resolveRecallTarget(home, *state, *db, *remote, dbFlagExplicit(c))
+	if err != nil {
+		return jsonFailurePrint(*asJSON, stdout, sessionsSpec.name, err)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	backend, closeBackend, err := openRecallBackend(target)
+	if err != nil {
+		return jsonFailurePrint(*asJSON, stdout, sessionsSpec.name, err)
+	}
+	defer closeBackend()
+	res, err := recallQuery(ctx, backend, sessionsQuery(*repo, *agent, *limit))
+	if err != nil {
+		return jsonFailurePrint(*asJSON, stdout, sessionsSpec.name, err)
+	}
+	if *asJSON {
+		return printJSON(stdout, sessionsSpec.name, buildSessionsJSON(res))
+	}
+	printSessionsResult(stdout, res)
 	return nil
 }
 
@@ -206,18 +352,30 @@ func openRecallBackend(target recallTarget) (recallBackend, func(), error) {
 	}
 	if _, err := os.Stat(target.dbPath); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil, fmt.Errorf("hub database %s does not exist; run ohya ingest --once to create it, or pass --remote to query the joined hub", target.dbPath)
+			return nil, nil, classify(
+				fmt.Errorf("hub database %s does not exist; run ohya ingest --once to create it, or pass --remote to query the joined hub", target.dbPath),
+				"database_open_failed",
+				"run ohya ingest --once to create the hub database, or pass --remote to query a joined hub",
+			)
 		}
-		return nil, nil, fmt.Errorf("stat %s: %w", target.dbPath, err)
+		return nil, nil, classify(
+			fmt.Errorf("stat %s: %w", target.dbPath, err),
+			"database_open_failed",
+			"check the --db path and its permissions",
+		)
 	}
 	hub, err := store.OpenReadOnly(target.dbPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("open %s read-only: %w; check the --db path and its permissions; another ohya process may hold the database", target.dbPath, err)
+		return nil, nil, classify(
+			fmt.Errorf("open %s read-only: %w; check the --db path and its permissions; another ohya process may hold the database", target.dbPath, err),
+			"database_open_failed",
+			"check the --db path and its permissions; another ohya process may hold the database",
+		)
 	}
 	reader, err := hub.Reader()
 	if err != nil {
 		hub.Close()
-		return nil, nil, err
+		return nil, nil, classify(err, "database_open_failed", "check the --db path and its permissions")
 	}
 	closeBackend := func() {
 		reader.Close()
@@ -229,14 +387,22 @@ func openRecallBackend(target recallTarget) (recallBackend, func(), error) {
 func openRemoteRecallBackend(stateDir string) (recallBackend, func(), error) {
 	cred, err := device.LoadCredential(stateDir)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil, fmt.Errorf("this state directory holds no pairing credential; run ohya join first")
+		return nil, nil, classify(
+			fmt.Errorf("this state directory holds no pairing credential; run ohya join first"),
+			"not_paired",
+			"run ohya join with a one-time code from the hub first",
+		)
 	}
 	if err != nil {
 		return nil, nil, err
 	}
 	hubAddr, err := device.LoadHubAddress(stateDir)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil, fmt.Errorf("this state directory holds no hub address; run ohya join with an ohya1 code once to save it")
+		return nil, nil, classify(
+			fmt.Errorf("this state directory holds no hub address; run ohya join with an ohya1 code once to save it"),
+			"not_paired",
+			"run ohya join with an ohya1 code once to save the hub address",
+		)
 	}
 	if err != nil {
 		return nil, nil, err
@@ -269,18 +435,30 @@ func recallQuery(ctx context.Context, backend recallBackend, query string) (mcps
 	case isVersionMismatch(err):
 		return res, versionMismatchFailure(err)
 	case errors.Is(err, hubsync.ErrRemoteUnauthorized):
-		return res, fmt.Errorf("the hub refused this device's credential: %w; the device identity was revoked, or the state directory belongs to a different hub", err)
+		return res, classify(
+			fmt.Errorf("the hub refused this device's credential: %w; the device identity was revoked, or the state directory belongs to a different hub", err),
+			"unauthorized",
+			"the device identity was revoked, or this state directory belongs to a different hub",
+		)
 	case errors.Is(err, mcpserver.ErrDenied):
-		return res, fmt.Errorf("the hub rejected the read-only query: %w", err)
+		return res, classify(
+			fmt.Errorf("the hub rejected the read-only query: %w", err),
+			"query_denied",
+			"",
+		)
 	}
-	return res, fmt.Errorf("query failed: %w", err)
+	return res, classify(fmt.Errorf("query failed: %w", err), "query_failed", "")
 }
 
 func ftsQuotingHint(err error, ftsQuery string) error {
 	if !ftsParseFailure(err, ftsQuery) {
 		return err
 	}
-	return fmt.Errorf("%w; wrap punctuation-bearing terms in double quotes, for example ohya search '\"auth-refresh\"'", err)
+	return classify(
+		fmt.Errorf("%w; wrap punctuation-bearing terms in double quotes, for example ohya search '\"auth-refresh\"'", err),
+		"fts_syntax_error",
+		`wrap punctuation-bearing terms in double quotes, for example ohya search '"auth-refresh"'`,
+	)
 }
 
 func ftsParseFailure(err error, ftsQuery string) bool {
@@ -317,8 +495,9 @@ func searchQuery(ftsQuery, repo, agent string) string {
 }
 
 func showSessionQuery(sessionID string) string {
-	return "SELECT id, agent, device_id, native_id, repo, cwd, branch, model, first_prompt, " +
-		"started_at_ms, last_event_at_ms, event_count FROM sessions WHERE id = '" + sqlString(sessionID) + "'"
+	return "SELECT s.id, s.agent, s.device_id, s.native_id, s.repo, s.cwd, s.branch, s.model, s.first_prompt, " +
+		"s.started_at_ms, s.last_event_at_ms, s.event_count, " + settledWindowClause + " AS settled " +
+		"FROM sessions s WHERE s.id = '" + sqlString(sessionID) + "'"
 }
 
 func showEventsQuery(sessionID string, last int) string {
@@ -327,6 +506,127 @@ func showEventsQuery(sessionID string, last int) string {
 		"FROM events e WHERE e.session_id = '" + sqlString(sessionID) + "' " +
 		"AND e.duplicate_of IS NULL " +
 		"ORDER BY e.time_ms DESC, e.id DESC LIMIT " + strconv.Itoa(last)
+}
+
+func sessionsQuery(repo, agent string, limit int) string {
+	query := "SELECT s.id, s.agent, s.device_id, s.native_id, s.repo, s.cwd, s.branch, s.model, " +
+		"substr(s.first_prompt, 1, " + strconv.Itoa(recallExcerptChars) + ") AS first_prompt, " +
+		"s.started_at_ms, s.last_event_at_ms, s.event_count, " + settledWindowClause + " AS settled " +
+		"FROM sessions s WHERE s.native_id NOT LIKE 'ohya-synthetic:%'"
+	if repo != "" {
+		query += " AND s.repo = '" + sqlString(repo) + "'"
+	}
+	if agent != "" {
+		query += " AND s.agent = '" + sqlString(agent) + "'"
+	}
+	return query + " ORDER BY COALESCE(s.last_event_at_ms, s.started_at_ms, 0) DESC, s.id DESC LIMIT " + strconv.Itoa(limit)
+}
+
+func buildSearchJSON(ftsQuery string, res mcpserver.Result) searchJSONData {
+	out := searchJSONData{
+		Query:            ftsQuery,
+		Matches:          make([]searchHitJSON, 0, len(res.Rows)),
+		Truncated:        res.Truncated,
+		TruncationReason: res.TruncationReason,
+		Redactions:       res.Redactions,
+	}
+	for _, row := range res.Rows {
+		if len(row) != 6 {
+			continue
+		}
+		eventID, _ := recallInt64(row[0])
+		hit := searchHitJSON{
+			EventID:   eventID,
+			SessionID: recallValue(row[1]),
+			Agent:     recallValue(row[2]),
+			Repo:      recallValue(row[3]),
+			Excerpt:   excerptText(recallValue(row[5])),
+		}
+		if ms, ok := recallInt64(row[4]); ok {
+			hit.TimeMS = &ms
+			hit.Time = time.UnixMilli(ms).UTC().Format(time.RFC3339)
+		}
+		out.Matches = append(out.Matches, hit)
+	}
+	return out
+}
+
+func buildSessionSummaryJSON(row []any) sessionSummaryJSON {
+	eventCount, _ := recallInt64(row[11])
+	summary := sessionSummaryJSON{
+		ID:          recallValue(row[0]),
+		Agent:       recallValue(row[1]),
+		DeviceID:    recallValue(row[2]),
+		NativeID:    recallValue(row[3]),
+		Repo:        recallValue(row[4]),
+		CWD:         recallValue(row[5]),
+		Branch:      recallValue(row[6]),
+		Model:       recallValue(row[7]),
+		FirstPrompt: excerptText(recallValue(row[8])),
+		EventCount:  eventCount,
+	}
+	if ms, ok := recallInt64(row[9]); ok {
+		summary.StartedAtMS = &ms
+		summary.StartedAt = time.UnixMilli(ms).UTC().Format(time.RFC3339)
+	}
+	if ms, ok := recallInt64(row[10]); ok {
+		summary.LastEventAtMS = &ms
+		summary.LastEventAt = time.UnixMilli(ms).UTC().Format(time.RFC3339)
+	}
+	if len(row) > 12 {
+		if settled, ok := recallBool(row[12]); ok {
+			summary.Settled = &settled
+		}
+	}
+	return summary
+}
+
+func buildShowJSON(header, events mcpserver.Result) showJSONData {
+	out := showJSONData{
+		Events:           make([]showEventJSON, 0, len(events.Rows)),
+		Truncated:        events.Truncated,
+		TruncationReason: events.TruncationReason,
+		Redactions:       header.Redactions + events.Redactions,
+	}
+	if len(header.Rows) > 0 && len(header.Rows[0]) >= 12 {
+		out.Session = buildSessionSummaryJSON(header.Rows[0])
+	}
+	for i := len(events.Rows) - 1; i >= 0; i-- {
+		row := events.Rows[i]
+		if len(row) != 6 {
+			continue
+		}
+		id, _ := recallInt64(row[0])
+		ev := showEventJSON{
+			ID:       id,
+			Kind:     recallValue(row[2]),
+			Role:     recallValue(row[3]),
+			ToolName: recallValue(row[4]),
+			Excerpt:  excerptText(recallValue(row[5])),
+		}
+		if ms, ok := recallInt64(row[1]); ok {
+			ev.TimeMS = &ms
+			ev.Time = time.UnixMilli(ms).UTC().Format(time.RFC3339)
+		}
+		out.Events = append(out.Events, ev)
+	}
+	return out
+}
+
+func buildSessionsJSON(res mcpserver.Result) sessionsJSONData {
+	out := sessionsJSONData{
+		Sessions:         make([]sessionSummaryJSON, 0, len(res.Rows)),
+		Truncated:        res.Truncated,
+		TruncationReason: res.TruncationReason,
+		Redactions:       res.Redactions,
+	}
+	for _, row := range res.Rows {
+		if len(row) < 12 {
+			continue
+		}
+		out.Sessions = append(out.Sessions, buildSessionSummaryJSON(row))
+	}
+	return out
 }
 
 func printSearchResult(w io.Writer, res mcpserver.Result) {
@@ -351,7 +651,7 @@ func printSearchResult(w io.Writer, res mcpserver.Result) {
 
 func printShowResult(w io.Writer, header, events mcpserver.Result) {
 	row := header.Rows[0]
-	if len(row) != 12 {
+	if len(row) < 12 {
 		fmt.Fprintf(w, "unexpected session width %d; want 12 columns\n", len(row))
 		return
 	}
@@ -384,6 +684,34 @@ func printShowResult(w io.Writer, header, events mcpserver.Result) {
 	}
 }
 
+func printSessionsResult(w io.Writer, res mcpserver.Result) {
+	if res.RowCount == 0 {
+		fmt.Fprintln(w, "no sessions")
+		return
+	}
+	for _, row := range res.Rows {
+		if len(row) < 12 {
+			fmt.Fprintf(w, "unexpected session width %d; want 13 columns\n", len(row))
+			continue
+		}
+		state := "settled"
+		if len(row) > 12 {
+			if settled, ok := recallBool(row[12]); ok && !settled {
+				state = "active"
+			}
+		}
+		fmt.Fprintf(w, "%s  agent=%s  device=%s  repo=%s  last=%s  events=%s  state=%s\n",
+			recallValue(row[0]), recallValue(row[1]), recallValue(row[2]),
+			recallDash(row[4]), recallTime(row[10]), recallValue(row[11]), state)
+		if prompt := excerptText(recallValue(row[8])); prompt != "" {
+			fmt.Fprintf(w, "    %s\n", prompt)
+		}
+	}
+	if res.Truncated {
+		fmt.Fprintf(w, "; result truncated (%s)\n", res.TruncationReason)
+	}
+}
+
 func eventLabel(kind, role, tool string) string {
 	label := kind
 	if role != "" {
@@ -401,9 +729,43 @@ func recallValue(v any) string {
 		return ""
 	case string:
 		return t
+	case float64:
+		if math.Trunc(t) == t && !math.IsInf(t, 0) && !math.IsNaN(t) {
+			return strconv.FormatInt(int64(t), 10)
+		}
+		return fmt.Sprint(t)
 	default:
 		return fmt.Sprint(t)
 	}
+}
+
+func recallInt64(v any) (int64, bool) {
+	switch t := v.(type) {
+	case int64:
+		return t, true
+	case int:
+		return int64(t), true
+	case float64:
+		if math.Trunc(t) == t && !math.IsInf(t, 0) && !math.IsNaN(t) {
+			return int64(t), true
+		}
+		return 0, false
+	case json.Number:
+		n, err := t.Int64()
+		return n, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func recallBool(v any) (bool, bool) {
+	if b, ok := v.(bool); ok {
+		return b, true
+	}
+	if n, ok := recallInt64(v); ok {
+		return n != 0, true
+	}
+	return false, false
 }
 
 func recallDash(v any) string {
@@ -415,7 +777,7 @@ func recallDash(v any) string {
 }
 
 func recallTime(v any) string {
-	ms, ok := v.(int64)
+	ms, ok := recallInt64(v)
 	if !ok {
 		return "-"
 	}

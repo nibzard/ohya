@@ -35,6 +35,7 @@ func helpCases() []struct {
 		{"mcp --help", []string{"mcp", "--help"}, mcpSpec},
 		{"search --help", []string{"search", "--help"}, searchSpec},
 		{"show --help", []string{"show", "--help"}, showSpec},
+		{"sessions --help", []string{"sessions", "--help"}, sessionsSpec},
 		{"rederive --help", []string{"rederive", "--help"}, rederiveSpec},
 		{"doctor --help", []string{"doctor", "--help"}, doctorSpec},
 		{"version --help", []string{"version", "--help"}, versionSpec},

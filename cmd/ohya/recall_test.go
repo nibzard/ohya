@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -342,5 +343,163 @@ func TestPrintSearchResultTruncationNote(t *testing.T) {
 	})
 	if !strings.Contains(out.String(), "; result truncated ("+mcpserver.TruncationReasonRows+")") {
 		t.Fatalf("output = %q; want the truncation note", out.String())
+	}
+}
+
+func TestSearchJSONSuccessEmptyAndErrors(t *testing.T) {
+	db := seedRecallDatabase(t)
+
+	code, out, errOut := runRecallCLI(t, "search", "--db", db, "--json", "refresh")
+	if code != 0 || errOut != "" {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	env := decodeEnvelope(t, out)
+	if env.Command != "ohya search" || env.Error != nil {
+		t.Fatalf("envelope = %+v", env)
+	}
+	var got searchJSONData
+	if err := json.Unmarshal(env.Data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Query != "refresh" || len(got.Matches) != 3 || got.Truncated {
+		t.Fatalf("search json = %+v", got)
+	}
+	if got.Matches[0].SessionID != "claude-code:dev1:sess-1" || got.Matches[0].Agent != "claude-code" || got.Matches[0].TimeMS == nil {
+		t.Fatalf("first match = %+v", got.Matches[0])
+	}
+
+	code, out, errOut = runRecallCLI(t, "search", "--db", db, "--json", "absentkeyword")
+	if code != 0 || errOut != "" {
+		t.Fatalf("empty search exit %d, stderr %q", code, errOut)
+	}
+	if !strings.Contains(out, `"matches":[]`) {
+		t.Fatalf("empty matches must be [], got %s", out)
+	}
+
+	code, out, _ = runRecallCLI(t, "search", "--db", db, "--json", "auth-rework")
+	if code != 1 {
+		t.Fatalf("fts error exit = %d; want 1", code)
+	}
+	env = decodeEnvelope(t, out)
+	if env.Error == nil || env.Error.Code != "fts_syntax_error" || !strings.Contains(env.Error.Hint, "double quotes") {
+		t.Fatalf("fts error envelope = %+v", env)
+	}
+}
+
+func TestShowJSONSuccessAndNotFound(t *testing.T) {
+	db := seedRecallDatabase(t)
+
+	code, out, errOut := runRecallCLI(t, "show", "--db", db, "--last", "3", "--json", "claude-code:dev1:sess-1")
+	if code != 0 || errOut != "" {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	env := decodeEnvelope(t, out)
+	if env.Command != "ohya show" || env.Error != nil {
+		t.Fatalf("envelope = %+v", env)
+	}
+	var got showJSONData
+	if err := json.Unmarshal(env.Data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Session.ID != "claude-code:dev1:sess-1" || got.Session.EventCount != 5 || got.Session.Settled == nil || !*got.Session.Settled {
+		t.Fatalf("session = %+v", got.Session)
+	}
+	if len(got.Events) != 3 {
+		t.Fatalf("events len = %d; want 3", len(got.Events))
+	}
+	if !(got.Events[0].ID < got.Events[1].ID && got.Events[1].ID < got.Events[2].ID) {
+		t.Fatalf("events not oldest-first: %+v", got.Events)
+	}
+
+	code, out, _ = runRecallCLI(t, "show", "--db", db, "--json", "nope:sess")
+	if code != 1 {
+		t.Fatalf("missing session exit = %d; want 1", code)
+	}
+	env = decodeEnvelope(t, out)
+	if env.Error == nil || env.Error.Code != "session_not_found" {
+		t.Fatalf("missing session envelope = %+v", env)
+	}
+}
+
+func TestSessionsListsRecentExcludesSyntheticRedactsAndTracksSettled(t *testing.T) {
+	db := seedRecallDatabase(t)
+	hub, err := store.Open(t.Context(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	liveMS := time.Now().UnixMilli()
+	token := "ghp_" + strings.Repeat("A", 36)
+	for _, q := range []string{
+		`INSERT INTO sessions(id,agent,device_id,native_id,repo,cwd,branch,model,first_prompt,started_at_ms,last_event_at_ms,event_count)
+		 VALUES('pi:dev1:live-1','pi','dev1','live-1','github.com/example/app','/home/dev/app','feat','claude-sonnet-4-5','Check token ` + token + `',` + itoa(liveMS-1000) + `,` + itoa(liveMS) + `,2)`,
+		`INSERT INTO sessions(id,agent,device_id,native_id,cwd,first_prompt,started_at_ms,last_event_at_ms,event_count)
+		 VALUES('claude-code:dev1:ohya-synthetic:src-1','claude-code','dev1','ohya-synthetic:src-1','/home/dev/app','synthetic',` + itoa(liveMS) + `,` + itoa(liveMS) + `,1)`,
+	} {
+		if _, err := hub.Writer().Exec(q); err != nil {
+			hub.Close()
+			t.Fatal(err)
+		}
+	}
+	hub.Close()
+
+	code, out, errOut := runRecallCLI(t, "sessions", "--db", db, "--json")
+	if code != 0 || errOut != "" {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	env := decodeEnvelope(t, out)
+	if env.Command != "ohya sessions" || env.Error != nil {
+		t.Fatalf("envelope = %+v", env)
+	}
+	var got sessionsJSONData
+	if err := json.Unmarshal(env.Data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Sessions) != 3 {
+		t.Fatalf("sessions len = %d; want 3 (synthetic excluded): %+v", len(got.Sessions), got.Sessions)
+	}
+	if got.Sessions[0].ID != "pi:dev1:live-1" {
+		t.Fatalf("newest session = %s; want pi:dev1:live-1", got.Sessions[0].ID)
+	}
+	if got.Sessions[0].Settled == nil || *got.Sessions[0].Settled {
+		t.Fatalf("live session settled = %v; want false", got.Sessions[0].Settled)
+	}
+	if strings.Contains(got.Sessions[0].FirstPrompt, token) || !strings.Contains(got.Sessions[0].FirstPrompt, "[redacted:github-token]") {
+		t.Fatalf("first_prompt was not redacted: %q", got.Sessions[0].FirstPrompt)
+	}
+	if got.Redactions < 1 {
+		t.Fatalf("redactions = %d; want >= 1", got.Redactions)
+	}
+	if got.Sessions[1].Settled == nil || !*got.Sessions[1].Settled {
+		t.Fatalf("older session settled = %v; want true", got.Sessions[1].Settled)
+	}
+
+	code, textOut, errOut := runRecallCLI(t, "sessions", "--db", db, "--limit", "2", "--repo", "github.com/example/app")
+	if code != 0 || errOut != "" {
+		t.Fatalf("text sessions exit %d, stderr %q", code, errOut)
+	}
+	if !strings.Contains(textOut, "pi:dev1:live-1") || !strings.Contains(textOut, "state=active") || !strings.Contains(textOut, "state=settled") {
+		t.Fatalf("text sessions output:\n%s", textOut)
+	}
+	if strings.Contains(textOut, "codex:dev2:thread-9") || strings.Contains(textOut, "ohya-synthetic") {
+		t.Fatalf("filtered text output leaked unrelated/synthetic sessions:\n%s", textOut)
+	}
+
+	code, _, errOut = runRecallCLI(t, "sessions", "--db", db, "--limit", "0")
+	if code != 2 || !strings.Contains(errOut, "--limit") {
+		t.Fatalf("limit 0 exit=%d stderr=%q", code, errOut)
+	}
+}
+
+func TestRecallFloat64WireNumbersDecodeCleanly(t *testing.T) {
+	ts := float64(1763000002000)
+	if got := recallTime(ts); got != time.UnixMilli(1763000002000).UTC().Format(time.RFC3339) {
+		t.Fatalf("recallTime(float64) = %q", got)
+	}
+	res := buildSearchJSON("q", mcpserver.Result{
+		Rows:     [][]any{{float64(42), "s1", "codex", "github.com/o/r", ts, "hello"}},
+		RowCount: 1,
+	})
+	if len(res.Matches) != 1 || res.Matches[0].EventID != 42 || res.Matches[0].TimeMS == nil || *res.Matches[0].TimeMS != 1763000002000 {
+		t.Fatalf("float64 search match = %+v", res.Matches)
 	}
 }
