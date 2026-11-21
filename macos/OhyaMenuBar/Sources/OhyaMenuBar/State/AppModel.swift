@@ -79,6 +79,7 @@ final class AppModel {
     private(set) var summary = StatusEvaluator.evaluate(status: nil, service: nil, error: nil)
 
     private(set) var isRefreshing = false
+    private var statusRefreshPending = false
     private(set) var isTogglingService = false
     private(set) var isExportingDiagnostics = false
     private(set) var transientMessage: String?
@@ -189,12 +190,23 @@ final class AppModel {
     }
 
     func refreshStatus() async {
+        if isRefreshing {
+            statusRefreshPending = true
+            return
+        }
+        isRefreshing = true
+        defer { isRefreshing = false }
+        repeat {
+            statusRefreshPending = false
+            await performStatusRefresh()
+        } while statusRefreshPending
+    }
+
+    private func performStatusRefresh() async {
         if resolvedBinaryPath == nil {
             resolveBinary()
         }
         guard let binary = resolvedBinaryPath else { return }
-        isRefreshing = true
-        defer { isRefreshing = false }
 
         do {
             var statusArgs = ["status", "--json"]
