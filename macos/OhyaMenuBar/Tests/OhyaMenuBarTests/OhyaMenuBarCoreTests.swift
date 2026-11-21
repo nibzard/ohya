@@ -32,6 +32,14 @@ final class OhyaMenuBarCoreTests: XCTestCase {
               "path": "/Users/dev/.ohya/hub.db",
               "files": {"db": 1048576, "wal": 2048}
             },
+            "remote_hub": {
+              "reachable": true,
+              "supported": true,
+              "transport_path": "direct",
+              "hub": {"version": "v0.3.0", "revision": "abc1234", "dirty": "false", "go": "go1.27.3", "os": "linux", "arch": "amd64", "schema": 8},
+              "uptime_ms": 60000,
+              "storage_files": {"db": 2097152, "wal": 4096}
+            },
             "instances": [
               {
                 "instance_id": "abc12345def67890",

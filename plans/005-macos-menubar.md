@@ -1,9 +1,10 @@
 # Native macOS menu bar app (`ohya.app`)
 
-Status: in delivery. Milestone 1 (CLI & brand prerequisites) implemented and
-tested 2026-11-21; Milestones 2–4 SwiftPM package scaffolded under
-`macos/OhyaMenuBar/` (pending native macOS build/test verification);
-Milestone 5 (remote aggregates + signed/notarized universal distribution) open.
+Status: in delivery. Milestone 1 (CLI & brand prerequisites) and Milestone 5.1
+(`ohya status --remote --json` + Swift remote-hub wiring) implemented and
+tested 2026-11-21; Milestones 2–4 SwiftPM package implemented under
+`macos/OhyaMenuBar/` (deferred pending native macOS build/test verification);
+signed/notarized universal `.app` & Homebrew Cask distribution open.
 Planned against `74f5542`, 2026-11-21.
 Decision record: [ADR 0017](../docs/adr/0017-macos-menubar-app.md).
 Priority: P2; effort M, delivered in small increments starting with Go CLI

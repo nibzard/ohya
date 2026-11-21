@@ -48,9 +48,32 @@ public struct StatusData: Decodable, Sendable, Equatable {
     public let generatedUTC: String
     public let topology: StatusTopology
     public let storage: StatusStorage
+    public let remoteHub: RemoteHubStatus?
     public let instances: [StatusInstance]
     public let findings: [StatusFinding]
     public let coverage: StatusCoverage
+
+    public init(
+        formatVersion: Int,
+        generatedWallMS: Int64,
+        generatedUTC: String,
+        topology: StatusTopology,
+        storage: StatusStorage,
+        remoteHub: RemoteHubStatus?,
+        instances: [StatusInstance],
+        findings: [StatusFinding],
+        coverage: StatusCoverage
+    ) {
+        self.formatVersion = formatVersion
+        self.generatedWallMS = generatedWallMS
+        self.generatedUTC = generatedUTC
+        self.topology = topology
+        self.storage = storage
+        self.remoteHub = remoteHub
+        self.instances = instances
+        self.findings = findings
+        self.coverage = coverage
+    }
 
     enum CodingKeys: String, CodingKey {
         case formatVersion = "format_version"
@@ -58,9 +81,73 @@ public struct StatusData: Decodable, Sendable, Equatable {
         case generatedUTC = "generated_utc"
         case topology
         case storage
+        case remoteHub = "remote_hub"
         case instances
         case findings
         case coverage
+    }
+}
+
+public struct RemoteHubIdentity: Decodable, Sendable, Equatable {
+    public let version: String
+    public let revision: String
+    public let dirty: String
+    public let go: String
+    public let os: String
+    public let arch: String
+    public let schema: Int
+    public let parsers: [String: Int]?
+}
+
+public struct RemoteHubLimits: Decodable, Sendable, Equatable {
+    public let maxConns: Int
+    public let maxBatchBytes: Int64
+    public let maxRecordBytes: Int64
+    public let queryTimeoutMS: Int64
+    public let queryMaxRows: Int
+    public let queryMaxBytes: Int
+
+    enum CodingKeys: String, CodingKey {
+        case maxConns = "max_conns"
+        case maxBatchBytes = "max_batch_bytes"
+        case maxRecordBytes = "max_record_bytes"
+        case queryTimeoutMS = "query_timeout_ms"
+        case queryMaxRows = "query_max_rows"
+        case queryMaxBytes = "query_max_bytes"
+    }
+}
+
+public struct RemoteHubStatus: Decodable, Sendable, Equatable {
+    public let reachable: Bool
+    public let supported: Bool
+    public let transportPath: String?
+    public let relayRegion: String?
+    public let hub: RemoteHubIdentity?
+    public let generatedWallMS: Int64?
+    public let uptimeMS: Int64?
+    public let sampledWallMS: Int64?
+    public let roles: [String]?
+    public let storageFiles: [String: Int64]?
+    public let storageObservedWallMS: Int64?
+    public let resources: [String: ResourceReading]?
+    public let limits: RemoteHubLimits?
+    public let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case reachable
+        case supported
+        case transportPath = "transport_path"
+        case relayRegion = "relay_region"
+        case hub
+        case generatedWallMS = "generated_wall_ms"
+        case uptimeMS = "uptime_ms"
+        case sampledWallMS = "sampled_wall_ms"
+        case roles
+        case storageFiles = "storage_files"
+        case storageObservedWallMS = "storage_observed_wall_ms"
+        case resources
+        case limits
+        case error
     }
 }
 

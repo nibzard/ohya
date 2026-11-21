@@ -107,6 +107,7 @@ final class AppModel {
     private var searchTask: Task<Void, Never>?
     private var messageTask: Task<Void, Never>?
     private var lastSecondaryFetch: Date = .distantPast
+    private var lastRemoteHubFetch: Date = .distantPast
     private var previousSummary: StatusSummary?
 
     init() {
@@ -196,13 +197,34 @@ final class AppModel {
         defer { isRefreshing = false }
 
         do {
+            var statusArgs = ["status", "--json"]
+            let fetchRemote = status?.topology.mode == "remote" && Date().timeIntervalSince(lastRemoteHubFetch) >= 15
+            if fetchRemote {
+                statusArgs.append("--remote")
+                lastRemoteHubFetch = Date()
+            }
             let statusResp: CLIResponse<StatusData> = try await runner.runJSON(
                 binaryPath: binary,
-                arguments: ["status", "--json"],
-                timeout: 10,
+                arguments: statusArgs,
+                timeout: fetchRemote ? 18 : 10,
                 acceptDegradedExit3: true
             )
-            status = statusResp.data
+            let previousRemote = status?.remoteHub
+            if !fetchRemote, statusResp.data.remoteHub == nil, let preserved = previousRemote {
+                status = StatusData(
+                    formatVersion: statusResp.data.formatVersion,
+                    generatedWallMS: statusResp.data.generatedWallMS,
+                    generatedUTC: statusResp.data.generatedUTC,
+                    topology: statusResp.data.topology,
+                    storage: statusResp.data.storage,
+                    remoteHub: preserved,
+                    instances: statusResp.data.instances,
+                    findings: statusResp.data.findings,
+                    coverage: statusResp.data.coverage
+                )
+            } else {
+                status = statusResp.data
+            }
             lastError = nil
 
             let observeDir = (statusResp.data.topology.stateDir as NSString).appendingPathComponent("observe")

@@ -178,6 +178,10 @@ struct StatusView: View {
 
                 infoRow("Storage", value: storageSummaryText)
 
+                if let remoteHub = model.status?.remoteHub, remoteHub.reachable, let hub = remoteHub.hub {
+                    infoRow("Hub", value: "\(hub.version) · \(remoteHub.transportPath ?? "connected")")
+                }
+
                 if let recallText = usageSummaryText {
                     infoRow("Recall (24h)", value: recallText)
                 }
@@ -227,6 +231,16 @@ struct StatusView: View {
     private var storageSummaryText: String {
         guard let storage = model.status?.storage else { return "—" }
         if storage.location == "remote-hub" {
+            if let remote = model.status?.remoteHub, remote.reachable, remote.supported, let files = remote.storageFiles {
+                let db = Double(files["db"] ?? 0)
+                let wal = Double(files["wal"] ?? 0)
+                if db > 0 || wal > 0 {
+                    if wal >= 1024 * 1024 {
+                        return "\(DisplayFormat.bytes(db)) (+\(DisplayFormat.bytes(wal)) WAL) · hub"
+                    }
+                    return "\(DisplayFormat.bytes(db)) · hub"
+                }
+            }
             return "Owned by hub"
         }
         let db = Double(storage.files?["db"] ?? 0)
