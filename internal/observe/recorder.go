@@ -44,6 +44,7 @@ type Snapshot struct {
 	Durations     map[string]HistogramData `json:"durations"`
 	Resources     map[string]Reading       `json:"resources"`
 	Truncated     bool                     `json:"truncated,omitempty"`
+	Stopped       bool                     `json:"stopped,omitempty"`
 }
 
 type Recorder struct {

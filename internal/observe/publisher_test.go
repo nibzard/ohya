@@ -55,6 +55,9 @@ func TestPublisherWritesStartupPeriodicAndFinalSnapshots(t *testing.T) {
 	if first.Counters["discovery_scans"] != 0 {
 		t.Fatalf("startup snapshot must decode: %+v", first)
 	}
+	if first.Stopped {
+		t.Fatal("startup snapshot must not be marked stopped")
+	}
 	publisher.cfg.Recorder.Add("discovery_scans", 2)
 	var second Snapshot
 	deadline := time.Now().Add(2 * time.Second)
@@ -64,6 +67,9 @@ func TestPublisherWritesStartupPeriodicAndFinalSnapshots(t *testing.T) {
 	}
 	if second.Counters["discovery_scans"] != 2 {
 		t.Fatalf("periodic snapshot must carry new counters: %+v", second.Counters)
+	}
+	if second.Stopped {
+		t.Fatal("periodic snapshot must not be marked stopped")
 	}
 	publisher.cfg.Recorder.Add("discovery_scans", 3)
 	if err := publisher.Close(); err != nil {
@@ -75,6 +81,9 @@ func TestPublisherWritesStartupPeriodicAndFinalSnapshots(t *testing.T) {
 	final := readSnapshotFile(t, instanceDir)
 	if final.Counters["discovery_scans"] != 5 {
 		t.Fatalf("final snapshot must carry counters added after the last tick: %+v", final.Counters)
+	}
+	if !final.Stopped {
+		t.Fatal("final snapshot written by Close must set stopped=true")
 	}
 }
 
@@ -422,4 +431,98 @@ func TestConcurrentPublishersAndRecordersStayConsistent(t *testing.T) {
 	if snapshot.Counters["parse_records{parse_result=normalized}"] != 800 {
 		t.Errorf("counter = %d, want 800", snapshot.Counters["parse_records{parse_result=normalized}"])
 	}
+}
+
+func TestCleanStaleInstancesTreatsStoppedSnapshotAsTerminatedEvenWithLivePID(t *testing.T) {
+	observeDir := filepath.Join(t.TempDir(), "observe")
+	if err := os.MkdirAll(observeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	paths := make([]string, RetainedInstances+2)
+	for i := range paths {
+		id := fmt.Sprintf("a%031d", i+1)
+		instanceDir := filepath.Join(observeDir, id)
+		if err := os.MkdirAll(instanceDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		snapshot := Snapshot{
+			FormatVersion: SnapshotFormatVersion,
+			Instance:      Instance{InstanceID: id, PID: os.Getpid(), Roles: []string{"mcp"}, StartWallMS: time.Now().UnixMilli()},
+			UptimeMS:      1,
+			SampledWallMS: time.Now().UnixMilli(),
+			Counters:      map[string]uint64{},
+			Stopped:       true,
+		}
+		raw, err := json.Marshal(snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(instanceDir, snapshotFileName), raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		paths[i] = instanceDir
+	}
+	if err := CleanStaleInstances(observeDir, NewSystemClock()); err != nil {
+		t.Fatalf("CleanStaleInstances: %v", err)
+	}
+	remaining := 0
+	for _, path := range paths {
+		if _, err := os.Stat(path); err == nil {
+			remaining++
+		}
+	}
+	if remaining != RetainedInstances {
+		t.Errorf("stopped instances kept = %d, want %d", remaining, RetainedInstances)
+	}
+}
+
+func TestPublisherPeriodicallyCleansStaleInstances(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testPublisherConfig(t, dir)
+	cfg.Interval = 5 * time.Millisecond
+	cfg.CleanInterval = 10 * time.Millisecond
+	publisher, err := NewPublisher(cfg)
+	if err != nil {
+		t.Fatalf("NewPublisher: %v", err)
+	}
+	defer publisher.Close()
+
+	deadPID := exitedChildPID(t)
+	created := make([]string, RetainedInstances+3)
+	for i := range created {
+		id := fmt.Sprintf("b%031d", i+1)
+		instanceDir := filepath.Join(dir, id)
+		if err := os.MkdirAll(instanceDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		snapshot := Snapshot{
+			FormatVersion: SnapshotFormatVersion,
+			Instance:      Instance{InstanceID: id, PID: deadPID, Roles: []string{"mcp"}, StartWallMS: time.Now().UnixMilli()},
+			UptimeMS:      1,
+			SampledWallMS: time.Now().UnixMilli(),
+			Counters:      map[string]uint64{},
+		}
+		raw, err := json.Marshal(snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(instanceDir, snapshotFileName), raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		created[i] = instanceDir
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		remaining := 0
+		for _, path := range created {
+			if _, err := os.Stat(path); err == nil {
+				remaining++
+			}
+		}
+		if remaining == RetainedInstances {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("publisher did not periodically clean stale terminated instances")
 }

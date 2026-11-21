@@ -17,6 +17,7 @@ import (
 const (
 	SnapshotInterval     = 10 * time.Second
 	HistoryInterval      = time.Minute
+	StaleCleanInterval   = time.Hour
 	MaxSnapshotFileBytes = 256 << 10
 	MaxHistoryFileBytes  = 16 << 20
 	MaxHistorySampleAge  = 24 * time.Hour
@@ -35,6 +36,7 @@ type PublisherConfig struct {
 	Clock            Clock
 	Interval         time.Duration
 	HistoryInterval  time.Duration
+	CleanInterval    time.Duration
 	MaxSnapshotBytes int64
 	MaxHistoryBytes  int64
 	MaxHistoryAge    time.Duration
@@ -54,6 +56,7 @@ type Publisher struct {
 	lastErr           error
 	lastHistoryWallMS int64
 	lastPruneWallMS   int64
+	lastCleanWallMS   int64
 	writeSnapshot     func(path string, data []byte) error
 	appendHistory     func(path string, data []byte) error
 }
@@ -73,6 +76,9 @@ func NewPublisher(cfg PublisherConfig) (*Publisher, error) {
 	}
 	if cfg.HistoryInterval <= 0 {
 		cfg.HistoryInterval = HistoryInterval
+	}
+	if cfg.CleanInterval <= 0 {
+		cfg.CleanInterval = StaleCleanInterval
 	}
 	if cfg.MaxSnapshotBytes <= 0 {
 		cfg.MaxSnapshotBytes = MaxSnapshotFileBytes
@@ -104,7 +110,8 @@ func NewPublisher(cfg PublisherConfig) (*Publisher, error) {
 	if err := CleanStaleInstances(cfg.Dir, cfg.Clock); err != nil {
 		p.recordWriteError("other", err)
 	}
-	p.publish()
+	p.lastCleanWallMS = cfg.Clock.WallMS()
+	p.publish(false)
 	p.recordHistory()
 	go p.run()
 	return p, nil
@@ -129,15 +136,32 @@ func (p *Publisher) run() {
 func (p *Publisher) tick() {
 	SampleRuntime(p.cfg.Recorder)
 	p.sampleFiles()
-	p.publish()
+	p.publish(false)
 	p.recordHistory()
+	p.cleanStale()
+}
+
+func (p *Publisher) cleanStale() {
+	nowMS := p.cfg.Clock.WallMS()
+	p.mu.Lock()
+	lastClean := p.lastCleanWallMS
+	p.mu.Unlock()
+	if lastClean != 0 && nowMS-lastClean < p.cfg.CleanInterval.Milliseconds() {
+		return
+	}
+	p.mu.Lock()
+	p.lastCleanWallMS = nowMS
+	p.mu.Unlock()
+	if err := CleanStaleInstances(p.cfg.Dir, p.cfg.Clock); err != nil {
+		p.recordWriteError("other", err)
+	}
 }
 
 func (p *Publisher) Close() error {
 	p.closeOnce.Do(func() {
 		close(p.stop)
 		<-p.done
-		p.publish()
+		p.publish(true)
 		p.recordHistory()
 	})
 	p.mu.Lock()
@@ -155,9 +179,10 @@ func (p *Publisher) WriteErrors() map[string]uint64 {
 	return out
 }
 
-func (p *Publisher) publish() {
+func (p *Publisher) publish(stopped bool) {
 	start := time.Now()
 	snapshot := p.cfg.Recorder.Snapshot()
+	snapshot.Stopped = stopped
 	data, err := json.Marshal(snapshot)
 	if err == nil && int64(len(data)) > p.cfg.MaxSnapshotBytes {
 		reduced := snapshot
@@ -388,11 +413,15 @@ func CleanStaleInstances(dir string, clock Clock) error {
 			var snapshot Snapshot
 			if json.Unmarshal(raw, &snapshot) == nil && snapshot.Validate() == nil {
 				candidate.role = snapshot.Instance.firstRole()
-				switch ProbePID(snapshot.Instance.PID) {
-				case "dead":
+				if snapshot.Stopped {
 					candidate.terminated = true
-				case "running":
-					candidate.live = true
+				} else {
+					switch ProbePID(snapshot.Instance.PID) {
+					case "dead":
+						candidate.terminated = true
+					case "running":
+						candidate.live = true
+					}
 				}
 			}
 		}
