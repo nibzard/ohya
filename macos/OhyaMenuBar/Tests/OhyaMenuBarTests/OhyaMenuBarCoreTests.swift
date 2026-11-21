@@ -1,5 +1,5 @@
 import Foundation
-import OhyaMenuBarCore
+@testable import OhyaMenuBarCore
 import XCTest
 
 final class OhyaMenuBarCoreTests: XCTestCase {
