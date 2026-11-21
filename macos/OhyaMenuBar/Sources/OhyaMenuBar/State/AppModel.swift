@@ -89,6 +89,7 @@ final class AppModel {
     private(set) var recentSessions: [SessionSummary] = []
     private(set) var searchHits: [SearchHit] = []
     private(set) var isLoadingRecall = false
+    private var recallGeneration = 0
     private(set) var recallError: String?
     var expandedSessionID: String?
     private(set) var expandedShowData: ShowData?
@@ -337,41 +338,40 @@ final class AppModel {
 
     func refreshRecall() async {
         guard let binary = resolvedBinaryPath else { return }
+        recallGeneration += 1
+        let generation = recallGeneration
         isLoadingRecall = true
         recallError = nil
-        defer { isLoadingRecall = false }
 
         let formatted = FTSQueryFormatter.format(searchQuery)
+        var agentArgs: [String] = []
+        if recallAgent != .all {
+            agentArgs = ["--agent", recallAgent.rawValue]
+        }
         do {
             if formatted.isEmpty {
-                var args = ["sessions", "--limit", "12", "--json"]
-                if recallAgent != .all {
-                    args.append(contentsOf: ["--agent", recallAgent.rawValue])
-                }
                 let resp: CLIResponse<SessionsData> = try await runner.runJSON(
                     binaryPath: binary,
-                    arguments: args,
+                    arguments: ["sessions", "--limit", "12", "--json"] + agentArgs,
                     timeout: 10
                 )
+                guard generation == recallGeneration else { return }
                 recentSessions = resp.data.sessions
                 searchHits = []
             } else {
-                var args = ["search", formatted, "--json"]
-                if recallAgent != .all {
-                    args.append(contentsOf: ["--agent", recallAgent.rawValue])
-                }
                 let resp: CLIResponse<SearchData> = try await runner.runJSON(
                     binaryPath: binary,
-                    arguments: args,
+                    arguments: ["search", formatted, "--json"] + agentArgs,
                     timeout: 10
                 )
+                guard generation == recallGeneration else { return }
                 searchHits = resp.data.matches
             }
-        } catch let err as OhyaRunnerError {
-            recallError = err.localizedDescription
         } catch {
+            guard generation == recallGeneration else { return }
             recallError = error.localizedDescription
         }
+        isLoadingRecall = false
     }
 
     func toggleSessionPreview(_ sessionID: String) async {
