@@ -31,6 +31,8 @@ class BrandLogoTest(unittest.TestCase):
         self.assertNotIn('#8250df', content)
         self.assertNotIn('<rect width="64"', content)
         self.assertIn('fill="#000000"', content)
+        bundled = SCRIPTS.parent / "macos" / "OhyaMenuBar" / "Sources" / "OhyaMenuBar" / "Resources" / "menubar-template.svg"
+        self.assertEqual(bundled.read_text(encoding="utf-8"), content)
 
 if __name__ == "__main__":
     unittest.main()
