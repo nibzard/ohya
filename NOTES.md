@@ -2342,8 +2342,6 @@ How to use this file:
 - macOS menu bar app (`macos/OhyaMenuBar`) cannot build on the Linux VM:
   no Swift toolchain (verified 2026-11-21). Changes made here are
   unverified until someone runs `swift test` on a Mac. The 2026-11-21
-  fixes (19774e8..d1b8e4c) await that check. Open cleanups from the
-  same review: drop unused decoded fields in `Envelope.swift`, make
-  `StatusData.remoteHub` a `var` and delete its memberwise init, share
-  the backlog-finding filter between `StatusEvaluator` and
-  `StatusView`, and remove dead `ObserveWatcher` code.
+  review fixes and cleanups (19774e8..d356297) await that check; before
+  them the test target likely did not compile (plain import of
+  internal memberwise initializers, fixed in 3643b94).
