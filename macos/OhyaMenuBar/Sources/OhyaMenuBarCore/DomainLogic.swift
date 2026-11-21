@@ -15,8 +15,7 @@ public enum FTSQueryFormatter {
                 return token
             }
             if tokenNeedsQuoting(token) {
-                let escaped = token.replacingOccurrences(of: "\"", with: "\"\"")
-                return "\"\(escaped)\""
+                return "\"\(token)\""
             }
             return token
         }.joined(separator: " ")
