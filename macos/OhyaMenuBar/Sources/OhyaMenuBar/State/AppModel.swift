@@ -55,7 +55,12 @@ final class AppModel {
     var binaryOverridePath: String {
         didSet {
             UserDefaults.standard.set(binaryOverridePath, forKey: Self.binaryOverrideKey)
-            Task { await refreshAll() }
+            binaryOverrideTask?.cancel()
+            binaryOverrideTask = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(600))
+                guard !Task.isCancelled else { return }
+                await self?.refreshAll()
+            }
         }
     }
 
@@ -107,6 +112,7 @@ final class AppModel {
 
     private var pollTask: Task<Void, Never>?
     private var searchTask: Task<Void, Never>?
+    private var binaryOverrideTask: Task<Void, Never>?
     private var messageTask: Task<Void, Never>?
     private var lastSecondaryFetch: Date = .distantPast
     private var lastRemoteHubFetch: Date = .distantPast
