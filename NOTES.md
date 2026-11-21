@@ -2338,3 +2338,12 @@ How to use this file:
     once the plan 002 usage gate is met.
   - Speed up `make check`: `cmd/ohya` takes ~466 s; mark independent CLI
     unit tests `t.Parallel()` and consolidate redundant subprocess builds.
+
+- macOS menu bar app (`macos/OhyaMenuBar`) cannot build on the Linux VM:
+  no Swift toolchain (verified 2026-11-21). Changes made here are
+  unverified until someone runs `swift test` on a Mac. The 2026-11-21
+  fixes (19774e8..d1b8e4c) await that check. Open cleanups from the
+  same review: drop unused decoded fields in `Envelope.swift`, make
+  `StatusData.remoteHub` a `var` and delete its memberwise init, share
+  the backlog-finding filter between `StatusEvaluator` and
+  `StatusView`, and remove dead `ObserveWatcher` code.
