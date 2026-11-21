@@ -210,12 +210,16 @@ func TestStatusChildCleanShutdownPublishesFinalSnapshot(t *testing.T) {
 	}
 	var snapshot struct {
 		UptimeMS int64 `json:"uptime_ms"`
+		Stopped  bool  `json:"stopped"`
 	}
 	if err := json.Unmarshal(raw, &snapshot); err != nil {
 		t.Fatalf("final snapshot must decode: %v", err)
 	}
 	if snapshot.UptimeMS <= 0 {
 		t.Errorf("final snapshot uptime = %d, want positive", snapshot.UptimeMS)
+	}
+	if !snapshot.Stopped {
+		t.Errorf("final snapshot from clean shutdown must set stopped=true: %s", raw)
 	}
 	if !strings.Contains(string(raw), `"roles":["ingest"]`) {
 		t.Errorf("final snapshot must carry the ingest role: %s", raw)

@@ -82,6 +82,7 @@ type metricsOptions struct {
 	role       string
 	instanceID string
 	window     string
+	all        bool
 	nowMS      func() int64
 }
 
@@ -100,6 +101,8 @@ func runMetricsCommand(args []string, stdout, stderr io.Writer) error {
 		"restrict the report to instances carrying this `role` (serve, join, ingest, mcp)")
 	instance := c.fs.String("instance", "",
 		"restrict the report to one instance `id`")
+	all := c.fs.Bool("all", false,
+		"include retained terminated instances with no samples in the window")
 	asJSON := c.fs.Bool("json", false, "print one JSON object instead of the text report (docs/adr/0005)")
 	if err := c.parse(args, stdout); err != nil {
 		return err
@@ -125,6 +128,7 @@ func runMetricsCommand(args []string, stdout, stderr io.Writer) error {
 		role:       *role,
 		instanceID: *instance,
 		window:     *window,
+		all:        *all,
 		nowMS:      func() int64 { return time.Now().UnixMilli() },
 	}
 	data, err := buildMetrics(o, requestedMS)
@@ -199,12 +203,23 @@ func buildMetrics(o metricsOptions, requestedMS int64) (metricsData, error) {
 	}
 	sinceMS := nowMS - requestedMS
 	seen := 0
+	omittedRetained := 0
 	for _, view := range views {
 		if o.role != "" && !view.HasRole(o.role) {
 			continue
 		}
+		m := buildInstanceMetrics(view, sinceMS, nowMS, requestedMS)
+		if o.instanceID == "" && !o.all && m.SampleCount == 0 && view.Snapshot != nil && view.DecodeErr == "" &&
+			(view.Snapshot.Stopped || observe.ProbePID(view.Snapshot.Instance.PID) == "dead") {
+			omittedRetained++
+			continue
+		}
 		seen++
-		data.Instances = append(data.Instances, buildInstanceMetrics(view, sinceMS, nowMS, requestedMS))
+		data.Instances = append(data.Instances, m)
+	}
+	if omittedRetained > 0 {
+		data.Coverage.Notes = append(data.Coverage.Notes,
+			fmt.Sprintf("%d retained terminated instances with no samples in window omitted; pass --all to include", omittedRetained))
 	}
 	if seen == 0 && o.instanceID == "" {
 		data.Coverage.Missing = append(data.Coverage.Missing, "instances")
@@ -242,8 +257,9 @@ func buildMetrics(o metricsOptions, requestedMS int64) (metricsData, error) {
 			})
 		}
 	}
-	for role, count := range liveByRole {
-		if count > 1 {
+	for _, role := range sortedKeys(liveByRole) {
+		count := liveByRole[role]
+		if count > 1 && role != string(observe.RoleMCP) {
 			data.Findings = append(data.Findings, statusFinding{
 				Code: "multiple_instances", Severity: sevWarn,
 				Evidence: fmt.Sprintf("%d instances with role %s publish in this state directory; per-instance results are never merged", count, role),
@@ -404,53 +420,64 @@ func readHistorySamples(path string) ([]observe.Snapshot, int) {
 }
 
 func writeMetricsText(w io.Writer, data metricsData) {
-	fmt.Fprintf(w, "ohya metrics: window %s (requested %s), generated %s\n", data.Window, ageText(data.RequestedMS), data.GeneratedUTC)
+	s := styleFor(w)
+	sep := " " + s.bullet() + " "
+	fmt.Fprintf(w, "%s  %s\n", s.bold("ohya metrics"), s.dim(fmt.Sprintf("window %s%srequested %s%s%s",
+		data.Window, sep, ageText(data.RequestedMS), sep, data.GeneratedUTC)))
 	for _, instance := range data.Instances {
 		if instance.DecodeError != "" {
-			fmt.Fprintf(w, "instance %s: unreadable snapshot: %s\n", shortID(instance.InstanceID), instance.DecodeError)
+			fmt.Fprintf(w, "\n%s %s: %s\n", s.red("unreadable"), s.bold(shortID(instance.InstanceID)), instance.DecodeError)
 			continue
 		}
-		fmt.Fprintf(w, "instance %s pid %d roles %s: %d samples",
-			shortID(instance.InstanceID), instance.PID, strings.Join(instance.Roles, ","), instance.SampleCount)
+		role := strings.Join(instance.Roles, ",")
+		if role == "" {
+			role = "unknown"
+		}
+		var meta []string
+		meta = append(meta, fmt.Sprintf("%d samples", instance.SampleCount))
 		if instance.ObservedMS != nil {
-			fmt.Fprintf(w, ", observed %s", ageText(*instance.ObservedMS))
+			meta = append(meta, "observed "+ageText(*instance.ObservedMS))
 		}
 		if instance.MonotonicElapsedMS != nil {
-			fmt.Fprintf(w, ", monotonic %s", ageText(*instance.MonotonicElapsedMS))
+			meta = append(meta, "monotonic "+ageText(*instance.MonotonicElapsedMS))
 		}
 		if instance.Gaps != nil && *instance.Gaps > 0 {
-			fmt.Fprintf(w, ", %d gaps", *instance.Gaps)
+			meta = append(meta, s.yellow(fmt.Sprintf("%d gaps", *instance.Gaps)))
 		}
+		header := fmt.Sprintf("%s %s %s  %s", s.cyan(role), s.bold(shortID(instance.InstanceID)), s.dim(fmt.Sprintf("pid %d", instance.PID)), strings.Join(meta, sep))
 		if !instance.Completeness.CoversWindow {
-			fmt.Fprintf(w, " (%s)", instance.Completeness.Reason)
+			header += " " + s.yellow("("+instance.Completeness.Reason+")")
 		}
-		fmt.Fprintln(w)
+		fmt.Fprintf(w, "\n%s\n", header)
+
+		tbl := cliTable{
+			indent:     "  ",
+			headers:    []string{"METRIC", "COUNT", "P50", "P95", "SUM"},
+			rightAlign: []bool{false, true, true, true, true},
+		}
 		for _, key := range sortedKeys(instance.Durations) {
 			delta := instance.Durations[key]
 			if delta.Count == 0 {
 				continue
 			}
-			p50, p95 := "-", "-"
+			p50, p95 := s.dim("-"), s.dim("-")
 			if delta.P50 != nil {
 				p50 = fmt.Sprintf("%.1fms", *delta.P50)
 			}
 			if delta.P95 != nil {
 				p95 = fmt.Sprintf("%.1fms", *delta.P95)
 			}
-			fmt.Fprintf(w, "  %s: n %d  p50 %s  p95 %s  sum %.1fms\n", key, delta.Count, p50, p95, delta.SumMS)
+			tbl.addRow(key, fmt.Sprintf("%d", delta.Count), p50, p95, fmt.Sprintf("%.1fms", delta.SumMS))
+		}
+		if len(tbl.rows) > 0 {
+			tbl.render(w, s)
 		}
 		if len(instance.UnavailableCounters) > 0 {
-			fmt.Fprintf(w, "  unavailable counters: %s\n", strings.Join(instance.UnavailableCounters, ", "))
+			fmt.Fprintf(w, "  %s\n", s.dim("unavailable counters: "+strings.Join(instance.UnavailableCounters, ", ")))
 		}
 	}
 	if data.Coverage.TruncatedDiscovery {
-		fmt.Fprintln(w, "coverage: discovery truncated at the live-instance bound")
+		fmt.Fprintf(w, "\n%s\n", s.yellow("coverage: discovery truncated at the live-instance bound"))
 	}
-	for _, finding := range data.Findings {
-		line := fmt.Sprintf("%-5s %s: %s", finding.Severity, finding.Code, finding.Evidence)
-		if finding.Hint != "" {
-			line += "; hint: " + finding.Hint
-		}
-		fmt.Fprintln(w, line)
-	}
+	writeStatusFindingsText(w, s, data.Findings)
 }

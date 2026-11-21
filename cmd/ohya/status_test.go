@@ -326,7 +326,7 @@ func TestStatusRemoteHubSuccessAndFailure(t *testing.T) {
 	}
 	var text bytes.Buffer
 	writeStatusText(&text, data)
-	if !strings.Contains(text.String(), "remote hub: version=v0.3.0 schema=8 uptime=42s path=direct") || !strings.Contains(text.String(), "hub storage: db 8.0 KiB, wal 1.0 KiB") {
+	if !strings.Contains(text.String(), "version=v0.3.0 schema=8") || !strings.Contains(text.String(), "uptime=42s") || !strings.Contains(text.String(), "path=direct") || !strings.Contains(text.String(), "db 8.0 KiB, wal 1.0 KiB") {
 		t.Fatalf("text output lacks remote hub lines:\n%s", text.String())
 	}
 
@@ -484,7 +484,7 @@ func TestStatusRoleFilterAndTextOutput(t *testing.T) {
 		t.Fatalf("role filter must not degrade a fresh report: %v", err)
 	}
 	text := stdout.String()
-	if !strings.Contains(text, "roles mcp") || strings.Contains(text, "roles ingest") {
+	if !strings.Contains(text, "mcp") || strings.Contains(text, "ingest") {
 		t.Errorf("text output must respect the role filter: %s", text)
 	}
 	if !strings.Contains(text, "observation_current") {
@@ -628,5 +628,134 @@ func TestStatusWithoutExclusionsOmitsField(t *testing.T) {
 	}
 	if strings.Contains(raw, "excluded") {
 		t.Fatalf("no exclusion configured, but output mentions excluded: %s", raw)
+	}
+}
+
+func TestStatusFoldsSupersededAndEphemeralDeadInstances(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "hub.db")
+	if err := os.WriteFile(dbPath, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sleep", "0.02")
+	if err := cmd.Start(); err != nil {
+		t.Skipf("cannot spawn child: %v", err)
+	}
+	deadPID := cmd.Process.Pid
+	if err := cmd.Wait(); err != nil {
+		t.Fatal(err)
+	}
+
+	writeStatusFixture(t, dir, strings.Repeat("1", 32), os.Getpid(), time.Second, func(s *observe.Snapshot) {
+		s.Instance.Roles = []string{"ingest"}
+	})
+	writeStatusFixture(t, dir, strings.Repeat("2", 32), os.Getpid(), time.Second, func(s *observe.Snapshot) {
+		s.Instance.Roles = []string{"serve"}
+	})
+	writeStatusFixture(t, dir, strings.Repeat("3", 32), os.Getpid(), time.Second, func(s *observe.Snapshot) {
+		s.Instance.Roles = []string{"mcp"}
+	})
+	writeStatusFixture(t, dir, strings.Repeat("4", 32), os.Getpid(), time.Second, func(s *observe.Snapshot) {
+		s.Instance.Roles = []string{"mcp"}
+	})
+	writeStatusFixture(t, dir, strings.Repeat("5", 32), deadPID, time.Hour, func(s *observe.Snapshot) {
+		s.Instance.Roles = []string{"ingest"}
+	})
+	writeStatusFixture(t, dir, strings.Repeat("6", 32), deadPID, time.Hour, func(s *observe.Snapshot) {
+		s.Instance.Roles = []string{"serve"}
+	})
+	writeStatusFixture(t, dir, strings.Repeat("7", 32), deadPID, time.Hour, func(s *observe.Snapshot) {
+		s.Instance.Roles = []string{"mcp"}
+		s.Stopped = true
+	})
+
+	envelope, raw, err := runStatusForTest(t, statusArgs(dir, dbPath)...)
+	if err != nil {
+		t.Fatalf("healthy host with retained dead dirs and two live mcps must exit zero: %v (%s)", err, raw)
+	}
+	if len(envelope.Data.Instances) != 4 {
+		t.Fatalf("live instances = %d, want 4: %+v", len(envelope.Data.Instances), envelope.Data.Instances)
+	}
+	if envelope.Data.Retained == nil || envelope.Data.Retained.Total != 3 {
+		t.Fatalf("retained = %+v, want total 3", envelope.Data.Retained)
+	}
+	if hasFindingCode(envelope.Data.Findings, "multiple_instances", sevWarn) {
+		t.Fatalf("dead instances and concurrent mcps must not trigger multiple_instances: %+v", envelope.Data.Findings)
+	}
+	if hasFindingCode(envelope.Data.Findings, "instance_terminated", sevWarn) {
+		t.Fatalf("superseded/ephemeral dead instances must not trigger instance_terminated: %+v", envelope.Data.Findings)
+	}
+
+	allEnv, allRaw, err := runStatusForTest(t, statusArgs(dir, dbPath, "--all")...)
+	if err != nil {
+		t.Fatalf("--all on healthy host must still exit zero: %v (%s)", err, allRaw)
+	}
+	if len(allEnv.Data.Instances) != 7 {
+		t.Fatalf("--all instances = %d, want 7", len(allEnv.Data.Instances))
+	}
+	retainedFlagged := 0
+	for _, inst := range allEnv.Data.Instances {
+		if inst.Retained {
+			retainedFlagged++
+		}
+	}
+	if retainedFlagged != 3 {
+		t.Fatalf("retained-flagged instances = %d, want 3", retainedFlagged)
+	}
+}
+
+func TestStatusUnreplacedDeadDaemonShowsNewestOnly(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "hub.db")
+	cmd := exec.Command("sleep", "0.02")
+	if err := cmd.Start(); err != nil {
+		t.Skipf("cannot spawn child: %v", err)
+	}
+	deadPID := cmd.Process.Pid
+	if err := cmd.Wait(); err != nil {
+		t.Fatal(err)
+	}
+
+	older := writeStatusFixture(t, dir, strings.Repeat("a", 32), deadPID, 2*time.Hour, nil)
+	oldTime := time.Now().Add(-2 * time.Hour)
+	_ = os.Chtimes(filepath.Join(older, "snapshot.json"), oldTime, oldTime)
+	writeStatusFixture(t, dir, strings.Repeat("b", 32), deadPID, time.Minute, nil)
+
+	envelope, raw, err := runStatusForTest(t, statusArgs(dir, dbPath)...)
+	if err != errDegraded {
+		t.Fatalf("unreplaced dead ingest must exit three: %v (%s)", err, raw)
+	}
+	if len(envelope.Data.Instances) != 1 || envelope.Data.Instances[0].InstanceID != strings.Repeat("b", 32) {
+		t.Fatalf("want only newest dead ingest in instances, got %+v", envelope.Data.Instances)
+	}
+	if envelope.Data.Retained == nil || envelope.Data.Retained.Total != 1 {
+		t.Fatalf("older dead ingest must fold into retained, got %+v", envelope.Data.Retained)
+	}
+	terminatedCount := 0
+	for _, f := range envelope.Data.Findings {
+		if f.Code == "instance_terminated" {
+			terminatedCount++
+		}
+	}
+	if terminatedCount != 1 {
+		t.Fatalf("terminated findings = %d, want 1: %+v", terminatedCount, envelope.Data.Findings)
+	}
+}
+
+func TestByteTextUsesStandardBinaryThresholds(t *testing.T) {
+	cases := []struct {
+		bytes float64
+		want  string
+	}{
+		{0, "0 B"},
+		{1024, "1.0 KiB"},
+		{100 * 1024, "100.0 KiB"},
+		{100 * 1024 * 1024, "100.0 MiB"},
+		{2 * 1024 * 1024 * 1024, "2.0 GiB"},
+	}
+	for _, tc := range cases {
+		if got := byteText(tc.bytes); got != tc.want {
+			t.Errorf("byteText(%.0f) = %q, want %q", tc.bytes, got, tc.want)
+		}
 	}
 }

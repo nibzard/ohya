@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -121,7 +122,14 @@ type statusInstance struct {
 	Durations     map[string]observe.HistogramData `json:"durations,omitempty"`
 	Resources     map[string]observe.Reading       `json:"resources,omitempty"`
 	Truncated     bool                             `json:"truncated,omitempty"`
+	Stopped       bool                             `json:"stopped,omitempty"`
+	Retained      bool                             `json:"retained,omitempty"`
 	DecodeError   string                           `json:"decode_error,omitempty"`
+}
+
+type statusRetained struct {
+	Total  int            `json:"total"`
+	ByRole map[string]int `json:"by_role,omitempty"`
 }
 
 type statusFinding struct {
@@ -173,6 +181,7 @@ type statusData struct {
 	Storage         statusStorage      `json:"storage"`
 	RemoteHub       *statusRemoteHub   `json:"remote_hub,omitempty"`
 	Instances       []statusInstance   `json:"instances"`
+	Retained        *statusRetained    `json:"retained,omitempty"`
 	OtherStates     []statusOtherState `json:"other_states,omitempty"`
 	Findings        []statusFinding    `json:"findings"`
 	Coverage        statusCoverage     `json:"coverage"`
@@ -186,6 +195,7 @@ type remoteStatusFetchResult struct {
 
 type statusOptions struct {
 	remote      bool
+	all         bool
 	dbPath      string
 	stateDir    string
 	setupState  string
@@ -215,6 +225,8 @@ func runStatusCommand(args []string, stdout, stderr io.Writer) error {
 		"restrict the report to one instance `id`")
 	remote := c.fs.Bool("remote", false,
 		"also fetch cached hub aggregate status over a short-lived authenticated connection")
+	all := c.fs.Bool("all", false,
+		"include retained terminated instances in the report")
 	asJSON := c.fs.Bool("json", false, "print one JSON object instead of the text report (docs/adr/0005)")
 	if err := c.parse(args, stdout); err != nil {
 		return err
@@ -233,6 +245,7 @@ func runStatusCommand(args []string, stdout, stderr io.Writer) error {
 	}
 	o := statusOptions{
 		remote:      *remote,
+		all:         *all,
 		dbPath:      *db,
 		stateDir:    stateDir,
 		setupState:  setupState,
@@ -338,23 +351,57 @@ func buildStatus(ctx context.Context, o statusOptions) (statusData, error) {
 		}
 		views = []observe.InstanceView{view}
 	}
+	allInstances := make([]statusInstance, 0, len(views))
 	liveByRole := map[string][]string{}
 	for _, view := range views {
 		if o.role != "" && !view.HasRole(o.role) {
 			continue
 		}
-		data.Instances = append(data.Instances, buildStatusInstance(view, nowMS, o.probePID))
-		if view.Snapshot != nil && view.DecodeErr == "" {
-			for _, role := range view.Snapshot.Instance.Roles {
-				liveByRole[role] = append(liveByRole[role], view.InstanceID)
+		inst := buildStatusInstance(view, nowMS, o.probePID)
+		allInstances = append(allInstances, inst)
+		if inst.DecodeError == "" && inst.SampledWallMS != nil && inst.Process == "running" {
+			for _, role := range inst.Roles {
+				liveByRole[role] = append(liveByRole[role], inst.InstanceID)
 			}
 		}
 	}
-	for role, ids := range liveByRole {
-		if len(ids) > 1 {
+	retained := &statusRetained{ByRole: map[string]int{}}
+	var retainedInstances []statusInstance
+	unreplacedDeadSeen := map[string]bool{}
+	primaryCount := 0
+	for _, inst := range allInstances {
+		if o.instanceID != "" || !isTerminatedStatus(inst) {
+			data.Instances = append(data.Instances, inst)
+			primaryCount++
+			continue
+		}
+		if isRetainedStatusInstance(inst, liveByRole, data.Topology.Services, unreplacedDeadSeen) {
+			retained.Total++
+			retained.ByRole[firstRoleName(inst.Roles)]++
+			if o.all {
+				inst.Retained = true
+				retainedInstances = append(retainedInstances, inst)
+			}
+			continue
+		}
+		for _, r := range inst.Roles {
+			unreplacedDeadSeen[r] = true
+		}
+		data.Instances = append(data.Instances, inst)
+		primaryCount++
+	}
+	if o.all && len(retainedInstances) > 0 {
+		data.Instances = append(data.Instances, retainedInstances...)
+	}
+	if retained.Total > 0 {
+		data.Retained = retained
+	}
+	for _, role := range sortedKeys(liveByRole) {
+		ids := liveByRole[role]
+		if len(ids) > 1 && role != string(observe.RoleMCP) {
 			data.Findings = append(data.Findings, statusFinding{
 				Code: "multiple_instances", Severity: sevWarn,
-				Evidence: fmt.Sprintf("%d instances with role %s publish in this state directory: %s", len(ids), role, shortIDs(ids)),
+				Evidence: fmt.Sprintf("%d live instances with role %s publish in this state directory: %s", len(ids), role, shortIDs(ids)),
 				Hint:     "each process is reported separately and their counters are never merged; pass --instance to select one",
 			})
 		}
@@ -430,7 +477,7 @@ func buildStatus(ctx context.Context, o statusOptions) (statusData, error) {
 			sortStrings(data.Coverage.Present)
 		}
 	}
-	if len(data.Instances) == 0 && o.instanceID == "" {
+	if primaryCount == 0 && o.instanceID == "" {
 		data.Coverage.Missing = append(data.Coverage.Missing, "instances")
 		data.Findings = append(data.Findings, statusFinding{
 			Code: "no_instances", Severity: sevWarn,
@@ -444,6 +491,87 @@ func buildStatus(ctx context.Context, o statusOptions) (statusData, error) {
 		})
 	}
 	return data, nil
+}
+
+func isTerminatedStatus(inst statusInstance) bool {
+	return inst.DecodeError == "" && inst.SampledWallMS != nil && (inst.Process == "dead" || inst.Process == "stopped")
+}
+
+func isEphemeralRoles(roles []string) bool {
+	if len(roles) == 0 {
+		return false
+	}
+	for _, r := range roles {
+		if r != string(observe.RoleMCP) {
+			return false
+		}
+	}
+	return true
+}
+
+func allRolesCovered(roles []string, liveByRole map[string][]string) bool {
+	if len(roles) == 0 {
+		return false
+	}
+	for _, r := range roles {
+		if len(liveByRole[r]) == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func allRolesMarked(roles []string, seen map[string]bool) bool {
+	if len(roles) == 0 {
+		return false
+	}
+	for _, r := range roles {
+		if !seen[r] {
+			return false
+		}
+	}
+	return true
+}
+
+func hasLiveDaemon(liveByRole map[string][]string) bool {
+	for role, ids := range liveByRole {
+		if role != string(observe.RoleMCP) && len(ids) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func hasConfiguredServiceForRoles(roles []string, services []statusService) bool {
+	for _, r := range roles {
+		for _, svc := range services {
+			if (r == string(observe.RoleServe) && svc.Name == "hub-service") ||
+				((r == string(observe.RoleIngest) || r == string(observe.RoleJoin)) && svc.Name == "service") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isRetainedStatusInstance(inst statusInstance, liveByRole map[string][]string, services []statusService, unreplacedDeadSeen map[string]bool) bool {
+	if isEphemeralRoles(inst.Roles) {
+		return true
+	}
+	if allRolesCovered(inst.Roles, liveByRole) {
+		return true
+	}
+	if inst.Stopped && hasLiveDaemon(liveByRole) && !hasConfiguredServiceForRoles(inst.Roles, services) {
+		return true
+	}
+	return allRolesMarked(inst.Roles, unreplacedDeadSeen)
+}
+
+func firstRoleName(roles []string) string {
+	if len(roles) == 0 {
+		return "unknown"
+	}
+	return roles[0]
 }
 
 func statusCLIIdentity() statusIdentity {
@@ -625,18 +753,24 @@ func buildStatusInstance(view observe.InstanceView, nowMS int64, probe func(int)
 	age := nowMS - snapshot.SampledWallMS
 	instance.SampleAgeMS = &age
 	instance.Fresh = age >= 0 && age <= observe.SnapshotStaleAge.Milliseconds()
-	instance.Process = probe(snapshot.Instance.PID)
+	instance.Stopped = snapshot.Stopped
 	instance.Counters = snapshot.Counters
 	instance.Gauges = snapshot.Gauges
 	instance.Durations = snapshot.Durations
 	instance.Resources = snapshot.Resources
 	instance.Truncated = snapshot.Truncated
-	if instance.Process == "running" && !instance.Fresh {
-		instance.Process = "unknown"
-		instance.ProcessDetail = "a process holds the pid but the newest snapshot is stale: stalled process or pid reuse"
-	}
-	if instance.Process == "dead" {
-		instance.ProcessDetail = "no process holds the pid of the newest snapshot"
+	if snapshot.Stopped {
+		instance.Process = "stopped"
+		instance.ProcessDetail = "process shut down cleanly"
+	} else {
+		instance.Process = probe(snapshot.Instance.PID)
+		if instance.Process == "running" && !instance.Fresh {
+			instance.Process = "unknown"
+			instance.ProcessDetail = "a process holds the pid but the newest snapshot is stale: stalled process or pid reuse"
+		}
+		if instance.Process == "dead" {
+			instance.ProcessDetail = "no process holds the pid of the newest snapshot"
+		}
 	}
 	instance.Sources = statusSourcesFromGauges(snapshot.Gauges)
 	instance.Excluded = statusExcludedFromGauges(snapshot.Gauges)
@@ -704,6 +838,9 @@ func statusBacklogFromGauges(gauges map[string]float64) *statusBacklog {
 func instanceFindings(instances []statusInstance, nowMS int64) []statusFinding {
 	var out []statusFinding
 	for _, instance := range instances {
+		if instance.Retained {
+			continue
+		}
 		switch {
 		case instance.DecodeError != "":
 			severity := sevWarn
@@ -723,15 +860,19 @@ func instanceFindings(instances []statusInstance, nowMS int64) []statusFinding {
 				Evidence: fmt.Sprintf("instance %s published no snapshot yet", shortID(instance.InstanceID)),
 				Hint:     "the first snapshot appears at startup; a directory that never gains one belongs to a crashed or foreign process",
 			})
-		case instance.Process == "dead":
+		case instance.Process == "dead" || instance.Process == "stopped":
 			age := "unknown age"
 			if instance.SampleAgeMS != nil {
 				age = fmt.Sprintf("%s old", ageText(*instance.SampleAgeMS))
 			}
+			verb := "has no running process"
+			if instance.Stopped {
+				verb = "stopped cleanly"
+			}
 			out = append(out, statusFinding{
 				Code: "instance_terminated", Severity: sevWarn,
-				Evidence: fmt.Sprintf("instance %s (pid %d, roles %s) has no running process; its %s snapshot is the last one published",
-					shortID(instance.InstanceID), instance.PID, strings.Join(instance.Roles, ","), age),
+				Evidence: fmt.Sprintf("instance %s (pid %d, roles %s) %s; its %s snapshot is the last one published",
+					shortID(instance.InstanceID), instance.PID, strings.Join(instance.Roles, ","), verb, age),
 				Hint: "start or restart the process to resume publication; a terminated instance is cleaned up after retention",
 			})
 		case !instance.Fresh:
@@ -783,29 +924,68 @@ func safeUploadBytes(instance statusInstance) map[string]float64 {
 }
 
 func writeStatusText(w io.Writer, data statusData) {
-	fmt.Fprintf(w, "ohya status: mode %s, state %s, generated %s\n", data.Topology.Mode, data.Topology.StateDir, data.GeneratedUTC)
-	fmt.Fprintf(w, "cli version=%s revision=%s schema=%d\n", data.CLI.Version, data.CLI.Revision, data.CLI.Schema)
-	roots := make([]string, 0, len(data.Topology.AgentRoots))
-	for _, root := range data.Topology.AgentRoots {
-		roots = append(roots, fmt.Sprintf("%s %d/%d present", root.Agent, root.Present, root.Roots))
+	s := styleFor(w)
+	sep := " " + s.bullet() + " "
+	rev := data.CLI.Revision
+	if data.CLI.Dirty == "true" {
+		rev += "-dirty"
 	}
-	if len(roots) > 0 {
-		fmt.Fprintf(w, "agent roots: %s\n", strings.Join(roots, ", "))
+	headerMeta := fmt.Sprintf("%s%s%s (%s)%sschema %d",
+		data.Topology.Mode, sep, data.CLI.Version, rev, sep, data.CLI.Schema)
+	fmt.Fprintf(w, "%s  %s\n", s.bold("ohya status"), s.dim(headerMeta))
+
+	var meta [][2]string
+	meta = append(meta, [2]string{"State", data.Topology.StateDir})
+	meta = append(meta, [2]string{"Storage", formatStatusStorage(s, data)})
+	if data.RemoteHub != nil {
+		meta = append(meta, formatRemoteHubRows(s, *data.RemoteHub)...)
 	}
-	for _, service := range data.Topology.Services {
-		loaded, running := "unknown", "unknown"
-		if service.Loaded != nil {
-			loaded = fmt.Sprintf("%t", *service.Loaded)
+	if len(data.Topology.Services) > 0 {
+		parts := make([]string, 0, len(data.Topology.Services))
+		for _, svc := range data.Topology.Services {
+			entry := serviceDisplayName(svc.Name) + " " + s.serviceState(svc.Loaded, svc.Running)
+			if svc.Detail != "" {
+				entry += " " + s.dim("("+svc.Detail+")")
+			}
+			parts = append(parts, entry)
 		}
-		if service.Running != nil {
-			running = fmt.Sprintf("%t", *service.Running)
-		}
-		fmt.Fprintf(w, "service %s: loaded=%s running=%s", service.Name, loaded, running)
-		if service.Detail != "" {
-			fmt.Fprintf(w, " (%s)", service.Detail)
-		}
-		fmt.Fprintln(w)
+		meta = append(meta, [2]string{"Services", strings.Join(parts, sep)})
 	}
+	if len(data.Topology.AgentRoots) > 0 {
+		roots := make([]string, 0, len(data.Topology.AgentRoots))
+		for _, root := range data.Topology.AgentRoots {
+			roots = append(roots, fmt.Sprintf("%s %d/%d", root.Agent, root.Present, root.Roots))
+		}
+		meta = append(meta, [2]string{"Agent roots", strings.Join(roots, sep)})
+	}
+	for _, other := range data.OtherStates {
+		meta = append(meta, [2]string{"Other state", fmt.Sprintf("%s (%s): %s",
+			other.StateDir, other.Mode, strings.Join(shortIDs(other.InstanceIDs), ", "))})
+	}
+	writeKeyValues(w, s, "", meta)
+
+	var active, retained []statusInstance
+	for _, inst := range data.Instances {
+		if inst.Retained {
+			retained = append(retained, inst)
+		} else {
+			active = append(active, inst)
+		}
+	}
+	writeStatusInstancesSection(w, s, active, data.Retained, len(retained) > 0)
+	if len(retained) > 0 {
+		writeRetainedInstancesSection(w, s, retained)
+	}
+	if data.Coverage.TruncatedDiscovery {
+		fmt.Fprintf(w, "\n%s\n", s.yellow("coverage: discovery truncated at the live-instance bound"))
+	}
+	if len(data.Coverage.Unsupported) > 0 {
+		fmt.Fprintf(w, "\n%s\n", s.dim("coverage: unsupported "+strings.Join(data.Coverage.Unsupported, ", ")))
+	}
+	writeStatusFindingsText(w, s, data.Findings)
+}
+
+func formatStatusStorage(s cliStyle, data statusData) string {
 	switch data.Storage.Location {
 	case "local":
 		var parts []string
@@ -814,95 +994,204 @@ func writeStatusText(w io.Writer, data statusData) {
 				parts = append(parts, fmt.Sprintf("%s %s", label, byteText(float64(size))))
 			}
 		}
-		if len(parts) > 0 {
-			fmt.Fprintf(w, "storage: local %s (%s, observed %s ago)\n", strings.Join(parts, ", "), *data.Storage.Path, ageText(data.GeneratedWallMS-data.Storage.ObservedWallMS))
-		} else {
-			fmt.Fprintf(w, "storage: local %s (no files present)\n", *data.Storage.Path)
+		if len(parts) == 0 {
+			return fmt.Sprintf("%s %s", *data.Storage.Path, s.dim("(no files present)"))
 		}
+		age := ageText(data.GeneratedWallMS - data.Storage.ObservedWallMS)
+		return fmt.Sprintf("%s  %s", strings.Join(parts, ", "), s.dim(fmt.Sprintf("(%s, %s ago)", *data.Storage.Path, age)))
 	default:
-		fmt.Fprintf(w, "storage: %s; %s\n", data.Storage.Location, data.Storage.Source)
-	}
-	if data.RemoteHub != nil {
-		writeRemoteHubText(w, *data.RemoteHub)
-	}
-	for _, instance := range data.Instances {
-		writeStatusInstanceText(w, instance)
-	}
-	for _, other := range data.OtherStates {
-		fmt.Fprintf(w, "also publishing under %s (%s): %s\n", other.StateDir, other.Mode, strings.Join(shortIDs(other.InstanceIDs), ", "))
-	}
-	if data.Coverage.TruncatedDiscovery {
-		fmt.Fprintln(w, "coverage: discovery truncated at the live-instance bound")
-	}
-	if len(data.Coverage.Unsupported) > 0 {
-		fmt.Fprintf(w, "coverage: unsupported %s\n", strings.Join(data.Coverage.Unsupported, ", "))
-	}
-	for _, finding := range data.Findings {
-		line := fmt.Sprintf("%-5s %s: %s", finding.Severity, finding.Code, finding.Evidence)
-		if finding.Hint != "" {
-			line += "; hint: " + finding.Hint
-		}
-		fmt.Fprintln(w, line)
+		return fmt.Sprintf("%s %s", data.Storage.Location, s.dim("— "+data.Storage.Source))
 	}
 }
 
-func writeStatusInstanceText(w io.Writer, instance statusInstance) {
-	if instance.DecodeError != "" {
-		fmt.Fprintf(w, "instance %s: unreadable snapshot: %s\n", shortID(instance.InstanceID), instance.DecodeError)
-		return
+func formatRemoteHubRows(s cliStyle, remote statusRemoteHub) [][2]string {
+	if !remote.Reachable {
+		return [][2]string{{"Remote hub", s.red("unreachable") + " " + s.dim("("+remote.Error+")")}}
 	}
-	age := "no sample"
-	if instance.SampleAgeMS != nil {
-		age = ageText(*instance.SampleAgeMS) + " old"
+	if !remote.Supported {
+		return [][2]string{{"Remote hub", s.yellow("reachable") + " " + s.dim("(remote status aggregates unsupported; upgrade hub)")}}
 	}
-	fmt.Fprintf(w, "instance %s pid %d roles %s uptime %s sample %s (%s) process %s\n",
-		shortID(instance.InstanceID), instance.PID, strings.Join(instance.Roles, ","),
-		agePointer(instance.UptimeMS), age, freshness(instance.Fresh), instance.Process)
-	sources := instance.Sources
-	parts := []string{}
-	for _, entry := range []struct {
-		name  string
-		value *float64
-	}{
-		{"active", sources.Active},
-		{"stopped", sources.Stopped},
-		{"blocked", sources.Blocked},
-		{"missing", sources.Missing},
-		{"unknown", sources.Unknown},
-	} {
-		if entry.value != nil {
-			parts = append(parts, fmt.Sprintf("%s=%.0f", entry.name, *entry.value))
+	sep := " " + s.bullet() + " "
+	var parts []string
+	if remote.Hub != nil {
+		parts = append(parts, fmt.Sprintf("version=%s schema=%d", remote.Hub.Version, remote.Hub.Schema))
+	}
+	if remote.UptimeMS != nil {
+		parts = append(parts, "uptime="+ageText(*remote.UptimeMS))
+	}
+	if remote.TransportPath != "" {
+		path := remote.TransportPath
+		if remote.RelayRegion != "" {
+			path += " (" + remote.RelayRegion + ")"
+		}
+		parts = append(parts, "path="+path)
+	}
+	rows := [][2]string{{"Remote hub", strings.Join(parts, sep)}}
+	if len(remote.StorageFiles) > 0 {
+		var sizes []string
+		for _, label := range []string{"db", "wal", "shm"} {
+			if size, ok := remote.StorageFiles[label]; ok {
+				sizes = append(sizes, fmt.Sprintf("%s %s", label, byteText(float64(size))))
+			}
+		}
+		if len(sizes) > 0 {
+			rows = append(rows, [2]string{"Hub storage", strings.Join(sizes, ", ")})
 		}
 	}
-	if len(parts) > 0 {
-		fmt.Fprintf(w, "  sources %s\n", strings.Join(parts, " "))
+	return rows
+}
+
+func writeStatusInstancesSection(w io.Writer, s cliStyle, active []statusInstance, retained *statusRetained, showingAll bool) {
+	running, attention := 0, 0
+	for _, inst := range active {
+		if inst.DecodeError == "" && inst.Process == "running" && inst.Fresh {
+			running++
+		} else {
+			attention++
+		}
+	}
+	title := "Instances"
+	switch {
+	case len(active) == 0:
+		title = "Instances (none)"
+	case attention == 0:
+		title = fmt.Sprintf("Instances (%d running)", running)
+	case running == 0:
+		title = fmt.Sprintf("Instances (%d attention)", attention)
+	default:
+		title = fmt.Sprintf("Instances (%d running, %d attention)", running, attention)
+	}
+	fmt.Fprintf(w, "\n%s\n", s.section(title))
+	if len(active) > 0 {
+		tbl := cliTable{
+			indent:  "  ",
+			headers: []string{"ROLE", "ID", "PID", "UPTIME", "SAMPLE", "STATE", "DETAILS"},
+		}
+		for _, inst := range active {
+			if inst.DecodeError != "" {
+				tbl.addRow(s.dim("-"), shortID(inst.InstanceID), "-", "-", "-", s.red("unreadable"), inst.DecodeError)
+				continue
+			}
+			role := strings.Join(inst.Roles, ",")
+			sample := "none"
+			if inst.SampleAgeMS != nil {
+				sample = ageText(*inst.SampleAgeMS) + " ago"
+			}
+			pid := "-"
+			if inst.PID > 0 {
+				pid = fmt.Sprintf("%d", inst.PID)
+			}
+			tbl.addRow(
+				s.cyan(role),
+				s.bold(shortID(inst.InstanceID)),
+				s.dim(pid),
+				agePointer(inst.UptimeMS),
+				s.dim(sample),
+				s.processState(inst.Process, inst.Fresh),
+				formatInstanceDetails(s, inst),
+			)
+		}
+		tbl.render(w, s)
+	}
+	if retained != nil && retained.Total > 0 && !showingAll {
+		if len(active) > 0 {
+			fmt.Fprintln(w)
+		}
+		fmt.Fprintf(w, "  %s\n", s.dim(formatRetainedSummary(retained)))
+	}
+}
+
+func writeRetainedInstancesSection(w io.Writer, s cliStyle, retained []statusInstance) {
+	fmt.Fprintf(w, "\n%s\n", s.section(fmt.Sprintf("Retained (%d)", len(retained))))
+	tbl := cliTable{
+		indent:  "  ",
+		headers: []string{"ROLE", "ID", "PID", "UPTIME", "LAST SAMPLE", "STATE"},
+	}
+	for _, inst := range retained {
+		role := strings.Join(inst.Roles, ",")
+		sample := "none"
+		if inst.SampleAgeMS != nil {
+			sample = ageText(*inst.SampleAgeMS) + " ago"
+		}
+		tbl.addRow(
+			s.dim(role),
+			s.dim(shortID(inst.InstanceID)),
+			s.dim(fmt.Sprintf("%d", inst.PID)),
+			s.dim(agePointer(inst.UptimeMS)),
+			s.dim(sample),
+			s.processState(inst.Process, inst.Fresh),
+		)
+	}
+	tbl.render(w, s)
+}
+
+func formatRetainedSummary(retained *statusRetained) string {
+	type roleCount struct {
+		role  string
+		count int
+	}
+	counts := make([]roleCount, 0, len(retained.ByRole))
+	for role, n := range retained.ByRole {
+		counts = append(counts, roleCount{role: role, count: n})
+	}
+	sort.Slice(counts, func(i, j int) bool {
+		if counts[i].count != counts[j].count {
+			return counts[i].count > counts[j].count
+		}
+		return counts[i].role < counts[j].role
+	})
+	parts := make([]string, 0, len(counts))
+	for _, rc := range counts {
+		parts = append(parts, fmt.Sprintf("%d %s", rc.count, rc.role))
+	}
+	return fmt.Sprintf("%d retained (%s) — pass --all to list", retained.Total, strings.Join(parts, ", "))
+}
+
+func formatInstanceDetails(s cliStyle, instance statusInstance) string {
+	var items []string
+	sources := instance.Sources
+	if sources.Active != nil {
+		items = append(items, fmt.Sprintf("%.0f active", *sources.Active))
+	}
+	if sources.Stopped != nil && *sources.Stopped > 0 {
+		items = append(items, s.red(fmt.Sprintf("%.0f stopped", *sources.Stopped)))
+	}
+	if sources.Blocked != nil && *sources.Blocked > 0 {
+		items = append(items, s.yellow(fmt.Sprintf("%.0f blocked", *sources.Blocked)))
+	}
+	if sources.Missing != nil && *sources.Missing > 0 {
+		items = append(items, s.dim(fmt.Sprintf("%.0f missing", *sources.Missing)))
+	}
+	if sources.Unknown != nil && *sources.Unknown > 0 {
+		items = append(items, s.dim(fmt.Sprintf("%.0f unknown", *sources.Unknown)))
 	}
 	if len(instance.Excluded) > 0 {
 		excluded := make([]string, 0, len(instance.Excluded))
 		for _, agent := range sortedKeys(instance.Excluded) {
 			excluded = append(excluded, fmt.Sprintf("%s=%.0f", agent, instance.Excluded[agent]))
 		}
-		fmt.Fprintf(w, "  excluded %s\n", strings.Join(excluded, " "))
+		items = append(items, "excluded "+strings.Join(excluded, " "))
 	}
 	if instance.Backlog != nil {
-		if instance.Backlog.PendingCompleteBytes != nil {
-			fmt.Fprintf(w, "  pending complete %s", byteText(*instance.Backlog.PendingCompleteBytes))
-			if instance.Backlog.PartialTailBytes != nil {
-				fmt.Fprintf(w, ", partial tail %s", byteText(*instance.Backlog.PartialTailBytes))
-			}
-			fmt.Fprintln(w)
+		var backlogParts []string
+		if instance.Backlog.PendingCompleteBytes != nil && *instance.Backlog.PendingCompleteBytes > 0 {
+			backlogParts = append(backlogParts, s.yellow(byteText(*instance.Backlog.PendingCompleteBytes)+" pending"))
+		}
+		if instance.Backlog.PartialTailBytes != nil && *instance.Backlog.PartialTailBytes > 0 {
+			backlogParts = append(backlogParts, s.dim(byteText(*instance.Backlog.PartialTailBytes)+" tail"))
 		}
 		for _, agent := range sortedKeys(instance.Backlog.UploadBytes) {
-			fmt.Fprintf(w, "  upload backlog %s: %s\n", agent, byteText(instance.Backlog.UploadBytes[agent]))
+			if bytes := instance.Backlog.UploadBytes[agent]; bytes > 0 {
+				backlogParts = append(backlogParts, s.yellow(fmt.Sprintf("upload %s %s", agent, byteText(bytes))))
+			}
+		}
+		if len(backlogParts) > 0 {
+			items = append(items, strings.Join(backlogParts, ", "))
+		} else if instance.Backlog.PendingCompleteBytes != nil && (sources.Stopped == nil || *sources.Stopped == 0) {
+			items = append(items, s.green("caught up"))
 		}
 	}
-}
-
-func freshness(fresh bool) string {
-	if fresh {
-		return "fresh"
-	}
-	return "stale"
+	return strings.Join(items, " "+s.bullet()+" ")
 }
 
 func agePointer(ms *int64) string {
@@ -945,12 +1234,12 @@ func ageText(ms int64) string {
 func byteText(bytes float64) string {
 	const kiB = 1024
 	switch {
-	case bytes >= 64*kiB*kiB*kiB:
-		return fmt.Sprintf("%.1f TiB", bytes/(1024*kiB*kiB*kiB))
-	case bytes >= 64*kiB*kiB:
-		return fmt.Sprintf("%.1f GiB", bytes/(1024*kiB*kiB))
-	case bytes >= 64*kiB:
-		return fmt.Sprintf("%.1f MiB", bytes/(1024*kiB))
+	case bytes >= kiB*kiB*kiB*kiB:
+		return fmt.Sprintf("%.1f TiB", bytes/(kiB*kiB*kiB*kiB))
+	case bytes >= kiB*kiB*kiB:
+		return fmt.Sprintf("%.1f GiB", bytes/(kiB*kiB*kiB))
+	case bytes >= kiB*kiB:
+		return fmt.Sprintf("%.1f MiB", bytes/(kiB*kiB))
 	case bytes >= kiB:
 		return fmt.Sprintf("%.1f KiB", bytes/kiB)
 	default:
@@ -1044,41 +1333,4 @@ func fetchRemoteHubStatus(ctx context.Context, joinState string) (remoteStatusFe
 		return res, err
 	}
 	return res, nil
-}
-
-func writeRemoteHubText(w io.Writer, remote statusRemoteHub) {
-	if !remote.Reachable {
-		fmt.Fprintf(w, "remote hub: unreachable (%s)\n", remote.Error)
-		return
-	}
-	if !remote.Supported {
-		fmt.Fprintln(w, "remote hub: reachable, remote status aggregates unsupported (upgrade hub)")
-		return
-	}
-	var parts []string
-	if remote.Hub != nil {
-		parts = append(parts, fmt.Sprintf("version=%s schema=%d", remote.Hub.Version, remote.Hub.Schema))
-	}
-	if remote.UptimeMS != nil {
-		parts = append(parts, "uptime="+ageText(*remote.UptimeMS))
-	}
-	if remote.TransportPath != "" {
-		path := remote.TransportPath
-		if remote.RelayRegion != "" {
-			path += " (" + remote.RelayRegion + ")"
-		}
-		parts = append(parts, "path="+path)
-	}
-	fmt.Fprintf(w, "remote hub: %s\n", strings.Join(parts, " "))
-	if len(remote.StorageFiles) > 0 {
-		var sizes []string
-		for _, label := range []string{"db", "wal", "shm"} {
-			if size, ok := remote.StorageFiles[label]; ok {
-				sizes = append(sizes, fmt.Sprintf("%s %s", label, byteText(float64(size))))
-			}
-		}
-		if len(sizes) > 0 {
-			fmt.Fprintf(w, "  hub storage: %s\n", strings.Join(sizes, ", "))
-		}
-	}
 }

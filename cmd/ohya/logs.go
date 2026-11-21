@@ -402,8 +402,17 @@ func readLogLine(reader *bufio.Reader) (line []byte, err error) {
 }
 
 func entryText(entry observe.LogEntry) string {
+	return entryTextStyled(cliStyle{}, entry)
+}
+
+func entryTextStyled(s cliStyle, entry observe.LogEntry) string {
 	stamp := time.UnixMilli(entry.TimeMS).UTC().Format(time.RFC3339)
-	parts := []string{stamp, string(entry.Level), entry.Component, entry.EventCode}
+	parts := []string{
+		s.dim(stamp),
+		s.logLevel(string(entry.Level)),
+		s.cyan(entry.Component),
+		s.bold(entry.EventCode),
+	}
 	if entry.Outcome != "" {
 		parts = append(parts, entry.Outcome)
 	}
@@ -412,37 +421,55 @@ func entryText(entry observe.LogEntry) string {
 		for _, name := range sortedKeys(entry.Counts) {
 			counts = append(counts, fmt.Sprintf("%s=%d", name, entry.Counts[name]))
 		}
-		parts = append(parts, strings.Join(counts, " "))
+		parts = append(parts, s.dim(strings.Join(counts, " ")))
 	}
 	return strings.Join(parts, " ")
 }
 
 func writeLogsText(w io.Writer, data logsData) {
-	fmt.Fprintf(w, "ohya logs: since %s, limit %d, generated %s\n", data.SinceText, data.Limit, data.GeneratedUTC)
+	s := styleFor(w)
+	sep := " " + s.bullet() + " "
+	fmt.Fprintf(w, "%s  %s\n", s.bold("ohya logs"), s.dim(fmt.Sprintf("since %s%slimit %d%s%s",
+		data.SinceText, sep, data.Limit, sep, data.GeneratedUTC)))
+	var activeSummaries []string
+	silent := 0
 	for _, instance := range data.Instances {
-		fmt.Fprintf(w, "instance %s roles %s: %d entries in %s",
-			shortID(instance.InstanceID), strings.Join(instance.Roles, ","), instance.Entries, strings.Join(instance.Files, ", "))
+		if instance.Entries == 0 && instance.SkippedLines == 0 && !instance.ReadTruncated {
+			silent++
+			continue
+		}
+		role := strings.Join(instance.Roles, ",")
+		if role == "" {
+			role = "unknown"
+		}
+		summary := fmt.Sprintf("%s %s (%d)", s.cyan(role), shortID(instance.InstanceID), instance.Entries)
 		if instance.SkippedLines > 0 {
-			fmt.Fprintf(w, ", %d lines skipped", instance.SkippedLines)
+			summary += s.yellow(fmt.Sprintf(" [%d skipped]", instance.SkippedLines))
 		}
 		if instance.ReadTruncated {
-			fmt.Fprint(w, ", read truncated at the per-file bound")
+			summary += s.yellow(" [truncated]")
 		}
-		fmt.Fprintln(w)
+		activeSummaries = append(activeSummaries, summary)
 	}
-	for _, entry := range data.Entries {
-		fmt.Fprintln(w, entryText(entry))
+	if len(activeSummaries) > 0 {
+		line := strings.Join(activeSummaries, sep)
+		if silent > 0 {
+			line += " " + s.dim(fmt.Sprintf("(+%d silent)", silent))
+		}
+		fmt.Fprintf(w, "%s  %s\n", s.dim("Sources"), line)
+	} else if silent > 0 {
+		fmt.Fprintf(w, "%s  %s\n", s.dim("Sources"), s.dim(fmt.Sprintf("%d checked, 0 matching entries", silent)))
+	}
+	if len(data.Entries) > 0 {
+		fmt.Fprintln(w)
+		for _, entry := range data.Entries {
+			fmt.Fprintln(w, entryTextStyled(s, entry))
+		}
 	}
 	if data.Truncated {
-		fmt.Fprintf(w, "truncated: %s\n", data.TruncationReason)
+		fmt.Fprintf(w, "\n%s\n", s.yellow("truncated: "+data.TruncationReason))
 	}
-	for _, finding := range data.Findings {
-		line := fmt.Sprintf("%-5s %s: %s", finding.Severity, finding.Code, finding.Evidence)
-		if finding.Hint != "" {
-			line += "; hint: " + finding.Hint
-		}
-		fmt.Fprintln(w, line)
-	}
+	writeStatusFindingsText(w, s, data.Findings)
 }
 
 type logsFollowData struct {
@@ -462,6 +489,7 @@ func followLogs(ctx context.Context, view observe.InstanceView, o logsOptions, s
 		return err
 	}
 	tail := &logTailer{path: path, file: file, info: info, reader: bufio.NewReader(file)}
+	s := styleFor(stdout)
 	emit := func(entry observe.LogEntry) {
 		if !o.matches(entry, 0) {
 			return
@@ -470,7 +498,7 @@ func followLogs(ctx context.Context, view observe.InstanceView, o logsOptions, s
 			_ = printJSON(stdout, logsSpec.name, logsFollowData{FormatVersion: logsFormatVersion, Entry: entry})
 			return
 		}
-		fmt.Fprintln(stdout, entryText(entry))
+		fmt.Fprintln(stdout, entryTextStyled(s, entry))
 	}
 	sinceMS := o.nowMS() - o.since.Milliseconds()
 	backlog, _, _ := readLogFile(path)

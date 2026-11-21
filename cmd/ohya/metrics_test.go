@@ -280,7 +280,7 @@ func TestMetricsTextOutputShowsNullQuantiles(t *testing.T) {
 		t.Fatalf("a partial window must exit three: %v", err)
 	}
 	text := stdout.String()
-	if !strings.Contains(text, "parse_duration{agent=pi}: n 2  p50 -  p95 -") {
+	if !strings.Contains(text, "parse_duration{agent=pi}") || !strings.Contains(text, "  2  ") || !strings.Contains(text, "  -  ") {
 		t.Errorf("text output must show null quantiles as dashes: %s", text)
 	}
 	if !strings.Contains(text, "window_partial") {
@@ -311,5 +311,44 @@ func TestMetricsFullWindowExitsZero(t *testing.T) {
 	instance := envelope.Data.Instances[0]
 	if *instance.Gaps != 0 {
 		t.Errorf("gaps = %d, want 0 at ten-second spacing", *instance.Gaps)
+	}
+}
+
+func TestMetricsOmitsDeadRetainedInstancesWithNoSamplesUnlessAll(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "hub.db")
+	now := time.Now()
+	var samples []observe.Snapshot
+	step := 0
+	for offset := -6 * time.Minute; offset <= 20*time.Second; offset += 10 * time.Second {
+		sample := historySample(now.Add(offset), int64(step)*10_000, nil)
+		sample.Counters["ingest_passes"] = uint64(step + 1)
+		samples = append(samples, sample)
+		step++
+	}
+	writeHistory(t, dir, strings.Repeat("9", 32), samples)
+	writeStatusFixture(t, dir, strings.Repeat("9", 32), os.Getpid(), time.Second, nil)
+	writeStatusFixture(t, dir, strings.Repeat("e", 32), os.Getpid(), 2*time.Hour, func(s *observe.Snapshot) {
+		s.Instance.Roles = []string{"mcp"}
+		s.Stopped = true
+	})
+
+	envelope, raw, err := runMetricsForTest(t, "--state", dir, "--db", dbPath, "--window", "5m", "--json")
+	if err != nil {
+		t.Fatalf("healthy metrics with old stopped mcp must exit zero: %v (%s)", err, raw)
+	}
+	if len(envelope.Data.Instances) != 1 {
+		t.Fatalf("instances = %d, want 1", len(envelope.Data.Instances))
+	}
+	if hasFindingCode(envelope.Data.Findings, "no_history_samples", sevWarn) {
+		t.Fatalf("omitted dead instance must not emit no_history_samples: %+v", envelope.Data.Findings)
+	}
+
+	allEnv, _, err := runMetricsForTest(t, "--state", dir, "--db", dbPath, "--window", "5m", "--all", "--json")
+	if err != errDegraded {
+		t.Fatalf("--all with empty dead instance must degrade: %v", err)
+	}
+	if len(allEnv.Data.Instances) != 2 {
+		t.Fatalf("--all instances = %d, want 2", len(allEnv.Data.Instances))
 	}
 }
