@@ -8,9 +8,10 @@ struct StatusView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                if let error = model.lastError, model.status == nil {
+                if let error = model.lastError {
                     unavailableCard(error)
-                } else {
+                }
+                if model.lastError == nil || model.status != nil {
                     if model.summary.totalBacklogBytes > 0 {
                         backlogCard
                     }

@@ -79,6 +79,11 @@ final class OhyaMenuBarCoreTests: XCTestCase {
         XCTAssertTrue(summary.isHub)
         XCTAssertEqual(summary.activeSources, 12)
         XCTAssertEqual(summary.stoppedSources, 0)
+
+        let failed = StatusEvaluator.evaluate(status: data, service: nil, error: .timedOut(command: ["status", "--json"], seconds: 10))
+        XCTAssertEqual(failed.iconState, .unavailable)
+        XCTAssertEqual(failed.topologyLabel, "Hub")
+        XCTAssertEqual(failed.activeSources, 12)
     }
 
     func testDecodeServiceSearchShowAndSessionsEnvelopes() throws {

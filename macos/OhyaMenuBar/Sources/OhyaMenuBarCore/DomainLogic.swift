@@ -193,7 +193,9 @@ public enum StatusEvaluator {
         }
 
         let iconState: MenuBarIconState
-        if servicePaused && status.instances.allSatisfy({ $0.process != "running" }) {
+        if error != nil {
+            iconState = .unavailable
+        } else if servicePaused && status.instances.allSatisfy({ $0.process != "running" }) {
             iconState = .paused
         } else if !nonBacklogWarnings.isEmpty || stopped > 0 {
             iconState = .degraded
