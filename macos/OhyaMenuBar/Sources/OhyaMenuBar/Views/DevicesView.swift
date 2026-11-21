@@ -47,7 +47,7 @@ struct DevicesView: View {
 
             if let transport = model.doctor?.transport {
                 VStack(spacing: 5) {
-                    row("Hub reachable", value: transport.hubAnswers == true ? "Yes" : "Checking")
+                    row("Hub reachable", value: transport.hubAnswers.map { $0 ? "Yes" : "No" } ?? "Checking")
                     row("Path", value: transport.path.capitalized)
                     if let region = transport.relayRegion, !region.isEmpty {
                         row("Relay", value: region)
