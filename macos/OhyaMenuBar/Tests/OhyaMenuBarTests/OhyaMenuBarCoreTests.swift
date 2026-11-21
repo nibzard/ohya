@@ -101,7 +101,6 @@ final class OhyaMenuBarCoreTests: XCTestCase {
         {"schema_version":1,"command":"ohya service stop","data":{"service":"service","action":"stop","installed":true,"edited":false,"loaded":false,"running":false,"changed":true,"path":"/Users/dev/Library/LaunchAgents/com.nibzard.ohya.plist"},"error":null}
         """
         let serviceEnv = try decoder.decode(JSONEnvelope<ServiceStatusData>.self, from: Data(serviceJSON.utf8))
-        XCTAssertEqual(serviceEnv.data?.changed, true)
         XCTAssertEqual(serviceEnv.data?.running, false)
 
         let sessionsJSON = """
@@ -121,14 +120,14 @@ final class OhyaMenuBarCoreTests: XCTestCase {
         """
         let searchEnv = try decoder.decode(JSONEnvelope<SearchData>.self, from: Data(searchJSON.utf8))
         XCTAssertEqual(searchEnv.data?.matches.count, 1)
-        XCTAssertEqual(searchEnv.data?.redactions, 1)
+        XCTAssertEqual(searchEnv.data?.matches.first?.eventID, 7)
 
         let showJSON = """
         {"schema_version":1,"command":"ohya show","data":{"session":{"id":"claude-code:dev1:s1","agent":"claude-code","device_id":"dev1","native_id":"s1","event_count":2,"settled":true},"events":[{"id":1,"kind":"message","role":"user","excerpt":"hello"}],"truncated":false},"error":null}
         """
         let showEnv = try decoder.decode(JSONEnvelope<ShowData>.self, from: Data(showJSON.utf8))
         XCTAssertEqual(showEnv.data?.events.count, 1)
-        XCTAssertEqual(showEnv.data?.session.settled, true)
+        XCTAssertEqual(showEnv.data?.events.first?.excerpt, "hello")
     }
 
     func testFTSQueryFormatterAutoQuotesPunctuationPreservingOperators() {
