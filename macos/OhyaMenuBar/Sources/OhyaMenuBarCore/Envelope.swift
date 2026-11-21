@@ -48,32 +48,10 @@ public struct StatusData: Decodable, Sendable, Equatable {
     public let generatedUTC: String
     public let topology: StatusTopology
     public let storage: StatusStorage
-    public let remoteHub: RemoteHubStatus?
+    public var remoteHub: RemoteHubStatus?
     public let instances: [StatusInstance]
     public let findings: [StatusFinding]
     public let coverage: StatusCoverage
-
-    public init(
-        formatVersion: Int,
-        generatedWallMS: Int64,
-        generatedUTC: String,
-        topology: StatusTopology,
-        storage: StatusStorage,
-        remoteHub: RemoteHubStatus?,
-        instances: [StatusInstance],
-        findings: [StatusFinding],
-        coverage: StatusCoverage
-    ) {
-        self.formatVersion = formatVersion
-        self.generatedWallMS = generatedWallMS
-        self.generatedUTC = generatedUTC
-        self.topology = topology
-        self.storage = storage
-        self.remoteHub = remoteHub
-        self.instances = instances
-        self.findings = findings
-        self.coverage = coverage
-    }
 
     enum CodingKeys: String, CodingKey {
         case formatVersion = "format_version"

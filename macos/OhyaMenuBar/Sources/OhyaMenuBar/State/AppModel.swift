@@ -228,22 +228,11 @@ final class AppModel {
                 timeout: fetchRemote ? 18 : 10,
                 acceptDegradedExit3: true
             )
-            let previousRemote = status?.remoteHub
-            if !fetchRemote, statusResp.data.remoteHub == nil, let preserved = previousRemote {
-                status = StatusData(
-                    formatVersion: statusResp.data.formatVersion,
-                    generatedWallMS: statusResp.data.generatedWallMS,
-                    generatedUTC: statusResp.data.generatedUTC,
-                    topology: statusResp.data.topology,
-                    storage: statusResp.data.storage,
-                    remoteHub: preserved,
-                    instances: statusResp.data.instances,
-                    findings: statusResp.data.findings,
-                    coverage: statusResp.data.coverage
-                )
-            } else {
-                status = statusResp.data
+            var next = statusResp.data
+            if !fetchRemote, next.remoteHub == nil {
+                next.remoteHub = status?.remoteHub
             }
+            status = next
             lastError = nil
 
             let observeDir = (statusResp.data.topology.stateDir as NSString).appendingPathComponent("observe")
