@@ -15,7 +15,7 @@ struct StatusView: View {
                     if model.summary.totalBacklogBytes > 0 {
                         backlogCard
                     }
-                    if !actionableFindings.isEmpty {
+                    if !model.summary.actionableWarnings.isEmpty {
                         findingsSection
                     }
                     if let purge = model.purgePlan, !purge.sessions.isEmpty {
@@ -26,12 +26,6 @@ struct StatusView: View {
                 }
             }
             .padding(14)
-        }
-    }
-
-    private var actionableFindings: [StatusFinding] {
-        model.summary.warnings.filter {
-            $0.code != "pending_backlog" && $0.code != "upload_backlog"
         }
     }
 
@@ -72,7 +66,7 @@ struct StatusView: View {
 
     private var findingsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(actionableFindings) { finding in
+            ForEach(model.summary.actionableWarnings) { finding in
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(alignment: .top, spacing: 6) {
                         Image(systemName: finding.severity == "error" ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")

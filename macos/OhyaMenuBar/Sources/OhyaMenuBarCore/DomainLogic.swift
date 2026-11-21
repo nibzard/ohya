@@ -112,35 +112,32 @@ public struct StatusSummary: Sendable, Equatable {
     public let activeSources: Int
     public let warnings: [StatusFinding]
     public let isPaused: Bool
+
+    public var actionableWarnings: [StatusFinding] {
+        warnings.filter { !StatusEvaluator.backlogFindingCodes.contains($0.code) }
+    }
+
+    static func unavailable(_ topologyLabel: String) -> StatusSummary {
+        StatusSummary(
+            iconState: .unavailable,
+            topologyLabel: topologyLabel,
+            isHub: false,
+            isRemote: false,
+            totalBacklogBytes: 0,
+            stoppedSources: 0,
+            activeSources: 0,
+            warnings: [],
+            isPaused: false
+        )
+    }
 }
 
 public enum StatusEvaluator {
+    static let backlogFindingCodes: Set<String> = ["pending_backlog", "upload_backlog"]
+
     public static func evaluate(status: StatusData?, service: ServiceStatusData?, error: OhyaRunnerError?) -> StatusSummary {
-        if error != nil && status == nil {
-            return StatusSummary(
-                iconState: .unavailable,
-                topologyLabel: "Not connected",
-                isHub: false,
-                isRemote: false,
-                totalBacklogBytes: 0,
-                stoppedSources: 0,
-                activeSources: 0,
-                warnings: [],
-                isPaused: false
-            )
-        }
         guard let status else {
-            return StatusSummary(
-                iconState: .unavailable,
-                topologyLabel: "Starting",
-                isHub: false,
-                isRemote: false,
-                totalBacklogBytes: 0,
-                stoppedSources: 0,
-                activeSources: 0,
-                warnings: [],
-                isPaused: false
-            )
+            return .unavailable(error == nil ? "Starting" : "Not connected")
         }
 
         let isRemote = status.topology.mode == "remote"
@@ -188,16 +185,12 @@ public enum StatusEvaluator {
             servicePaused = false
         }
 
-        let nonBacklogWarnings = warnings.filter {
-            $0.code != "pending_backlog" && $0.code != "upload_backlog"
-        }
-
         let iconState: MenuBarIconState
         if error != nil {
             iconState = .unavailable
         } else if servicePaused && status.instances.allSatisfy({ $0.process != "running" }) {
             iconState = .paused
-        } else if !nonBacklogWarnings.isEmpty || stopped > 0 {
+        } else if warnings.contains(where: { !backlogFindingCodes.contains($0.code) }) || stopped > 0 {
             iconState = .degraded
         } else if backlogBytes > 0 {
             iconState = .syncing
