@@ -44,6 +44,12 @@ func helpCases() []struct {
 		{"devices invite --help", []string{"devices", "invite", "--help"}, devicesInviteSpec},
 		{"devices list --help", []string{"devices", "list", "--help"}, devicesListSpec},
 		{"devices revoke --help", []string{"devices", "revoke", "--help"}, devicesRevokeSpec},
+		{"service", []string{"service"}, serviceSpec},
+		{"service --help", []string{"service", "--help"}, serviceSpec},
+		{"service status --help", []string{"service", "status", "--help"}, serviceStatusSpec},
+		{"service start --help", []string{"service", "start", "--help"}, serviceStartSpec},
+		{"service stop --help", []string{"service", "stop", "--help"}, serviceStopSpec},
+		{"service restart --help", []string{"service", "restart", "--help"}, serviceRestartSpec},
 	}
 }
 

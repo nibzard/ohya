@@ -24,6 +24,7 @@ var rootSpec = commandSpec{
 		"Exit codes: 0 success, 1 failure, 2 usage error, 3 degraded (ingest --once: at least one source failed or stopped; status, metrics, logs, and diagnose: partial, stale, or degraded observation).",
 	argsTitle: "Commands",
 	args: `setup      configure memory services and installed agents
+service    control the owned ohya background user service
 uninstall  remove owned integrations and services; preserve memory
 ingest     import agent session history, then poll for new records
 serve      run the hub for devices: transport, sync, remote tools
@@ -66,6 +67,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runInstallCommand(rest, stdout, stderr)
 	case "setup":
 		return runSetupCommand(rest, stdout, stderr)
+	case "service":
+		return runServiceCommand(rest, stdout, stderr)
 	case "uninstall":
 		return runUninstallCommand(rest, stdout, stderr)
 	case "ingest":
