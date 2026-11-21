@@ -226,22 +226,20 @@ struct StatusView: View {
     private var storageSummaryText: String {
         guard let storage = model.status?.storage else { return "—" }
         if storage.location == "remote-hub" {
-            if let remote = model.status?.remoteHub, remote.reachable, remote.supported, let files = remote.storageFiles {
-                let db = Double(files["db"] ?? 0)
-                let wal = Double(files["wal"] ?? 0)
-                if db > 0 || wal > 0 {
-                    if wal >= 1024 * 1024 {
-                        return "\(DisplayFormat.bytes(db)) (+\(DisplayFormat.bytes(wal)) WAL) · hub"
-                    }
-                    return "\(DisplayFormat.bytes(db)) · hub"
-                }
+            if let remote = model.status?.remoteHub, remote.reachable, remote.supported,
+               let files = remote.storageFiles, let size = storageSizeText(files) {
+                return "\(size) · hub"
             }
             return "Owned by hub"
         }
-        let db = Double(storage.files?["db"] ?? 0)
-        let wal = Double(storage.files?["wal"] ?? 0)
+        return storageSizeText(storage.files ?? [:]) ?? "Empty"
+    }
+
+    private func storageSizeText(_ files: [String: Int64]) -> String? {
+        let db = Double(files["db"] ?? 0)
+        let wal = Double(files["wal"] ?? 0)
         if db == 0 && wal == 0 {
-            return "Empty"
+            return nil
         }
         if wal >= 1024 * 1024 {
             return "\(DisplayFormat.bytes(db)) (+\(DisplayFormat.bytes(wal)) WAL)"
