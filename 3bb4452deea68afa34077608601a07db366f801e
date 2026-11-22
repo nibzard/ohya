@@ -1,0 +1,39 @@
+# Design: Reusable recall-bench exercise
+
+## Problem
+Run 1 compared raw-transcript search against the ohya MCP with a
+hand-assembled harness. To measure whether ohya improves, the exercise
+needs to be rerunnable and comparable across time, binaries, and
+question-set drift.
+
+## Approach
+Self-contained run directories plus offline comparison. Each run
+records a manifest (harness commit, ohya binary/version, hub session
+count, canary seed, question hashes) and snapshots its questions.
+compare reads only recorded state, never the hub, so month-old runs
+stay comparable. Drift in expected counts is handled by recalibrate,
+which rewrites them for a human-reviewed commit. The ohya arm defaults
+to bin/ohya so "build candidate, rerun, compare" is the A/B loop:
+same canaries, same questions, only the binary differs.
+
+## Key Trade-offs
+- compare is offline-only: it cannot re-verify evidence, it trusts
+  the finished runs' meta.json verdicts. Accepted because regrade can
+  re-score traces separately when grading rules change.
+- preflight splits failures into waitable (hub counts at or below
+  expectation, local files exact: ingest or the 10-minute settle gate
+  has not caught up) and hard (collision, missing file, over-count).
+  Only waitable gaps poll; anything else fails fast rather than
+  burning API spend on a broken corpus.
+- recalibrate refuses nonzero matches on negative markers: a collided
+  negative needs a regenerated term, not a rewritten expectation.
+  Markerless negatives are skipped with a note since there is nothing
+  machine-checkable.
+- Explanatory comments were stripped per commentcheck; the semantics
+  of waitable/hard and the recalibrate protocol live here and in
+  docs/reference.md instead.
+
+## References
+- docs/reference.md, "Recall bench" section (runbook)
+- notes/2026-11-22-recall-bench-design.md, -run1.md (outside repo)
+- Commit ca1d2ea (run 1 findings), 8a257ab (first commentcheck pass)
