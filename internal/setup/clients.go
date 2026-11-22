@@ -38,7 +38,7 @@ func DiscoverClients(o ClientOptions) ([]Client, error) {
 	if o.LookPath == nil {
 		o.LookPath = exec.LookPath
 	}
-	names := []string{"claude", "codex", "pi"}
+	names := []string{"claude", "codex", "pi", "agy"}
 	explicit := o.Agents != "" && o.Agents != "auto"
 	if explicit {
 		names = strings.Split(o.Agents, ",")
@@ -46,8 +46,8 @@ func DiscoverClients(o ClientOptions) ([]Client, error) {
 	seen := map[string]bool{}
 	var clients []Client
 	for _, name := range names {
-		if name != "claude" && name != "codex" && name != "pi" {
-			return nil, fmt.Errorf("unsupported agent %q; choose claude,codex,pi", name)
+		if name != "claude" && name != "codex" && name != "pi" && name != "agy" {
+			return nil, fmt.Errorf("unsupported agent %q; choose claude,codex,pi,agy", name)
 		}
 		if seen[name] {
 			return nil, fmt.Errorf("agent %s is selected twice", name)
@@ -87,6 +87,12 @@ func DiscoverClients(o ClientOptions) ([]Client, error) {
 				dir = filepath.Join(o.Home, ".pi", "agent")
 			}
 			c.Config = filepath.Join(dir, "mcp.json")
+		case "agy":
+			dir := o.Getenv("AGY_CONFIG_DIR")
+			if dir == "" {
+				dir = filepath.Join(o.Home, ".gemini", "config")
+			}
+			c.Config = filepath.Join(dir, "mcp_config.json")
 		}
 		if !filepath.IsAbs(c.Config) {
 			return nil, fmt.Errorf("%s configuration override must be absolute", name)
@@ -101,6 +107,16 @@ func ApplyClient(o ClientOptions, c Client) (bool, error) {
 	command := Command{Command: o.Binary, Args: o.Args}
 	if c.Name == "codex" {
 		return ApplyTOMLEntry(c.Config, receipt, command)
+	}
+	if c.Name == "agy" {
+		value, err := json.Marshal(struct {
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
+		}{Command: o.Binary, Args: o.Args})
+		if err != nil {
+			return false, err
+		}
+		return ApplyJSONEntry(JSONEntry{Path: c.Config, Parent: "mcpServers", Name: "ohya", Value: value}, receipt)
 	}
 	if c.Name != "claude" && c.Name != "pi" {
 		return false, fmt.Errorf("unsupported client %s", c.Name)
@@ -117,7 +133,7 @@ func ApplyClient(o ClientOptions, c Client) (bool, error) {
 }
 
 func RemoveClient(state, name string) (bool, error) {
-	if name != "claude" && name != "codex" && name != "pi" {
+	if name != "claude" && name != "codex" && name != "pi" && name != "agy" {
 		return false, fmt.Errorf("unsupported client %s", name)
 	}
 	receipt := filepath.Join(state, "setup", "clients", name+".json")

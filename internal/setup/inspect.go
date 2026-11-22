@@ -58,7 +58,7 @@ func Inspect(ctx context.Context, state string, run func(context.Context, []stri
 	} else if !os.IsNotExist(err) {
 		results = append(results, inspected("hub-service", err, false))
 	}
-	for _, name := range []string{"claude", "codex", "pi"} {
+	for _, name := range []string{"claude", "codex", "pi", "agy"} {
 		path := filepath.Join(state, "setup", "clients", name+".json")
 		raw, err := readRegular(path)
 		if os.IsNotExist(err) {

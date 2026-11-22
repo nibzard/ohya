@@ -117,6 +117,8 @@ func PreflightClient(o ClientOptions, c Client, cwd string) error {
 			path = filepath.Join(dir, ".codex", "config.toml")
 		case "pi":
 			path = filepath.Join(dir, ".pi", "mcp.json")
+		case "agy":
+			path = filepath.Join(dir, ".agents", "mcp_config.json")
 		}
 		if path == c.Config {
 			continue

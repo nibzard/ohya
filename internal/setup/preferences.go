@@ -24,7 +24,7 @@ func (p Preferences) Validate() error {
 			if value != "true" && value != "false" {
 				return fmt.Errorf("invalid saved flag %s", name)
 			}
-		case "claude-root", "codex-root", "pi-root":
+		case "claude-root", "codex-root", "pi-root", "antigravity-root":
 			if value != "" && !filepath.IsAbs(value) {
 				return fmt.Errorf("saved %s must be absolute", name)
 			}
@@ -43,7 +43,7 @@ func (p Preferences) Validate() error {
 	}
 	for name, path := range p.Homes {
 		switch name {
-		case "CLAUDE_CONFIG_DIR", "CODEX_HOME", "PI_CODING_AGENT_DIR":
+		case "CLAUDE_CONFIG_DIR", "CODEX_HOME", "PI_CODING_AGENT_DIR", "AGY_CONFIG_DIR":
 		default:
 			return fmt.Errorf("unknown saved client home %s", name)
 		}

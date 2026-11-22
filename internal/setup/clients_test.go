@@ -14,7 +14,7 @@ func TestClientConfigurationPathsAndOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{filepath.Join(dir, "CLAUDE_CONFIG_DIR", ".claude.json"), filepath.Join(dir, "CODEX_HOME", "config.toml"), filepath.Join(dir, "PI_CODING_AGENT_DIR", "mcp.json")}
+	want := []string{filepath.Join(dir, "CLAUDE_CONFIG_DIR", ".claude.json"), filepath.Join(dir, "CODEX_HOME", "config.toml"), filepath.Join(dir, "PI_CODING_AGENT_DIR", "mcp.json"), filepath.Join(dir, "AGY_CONFIG_DIR", "mcp_config.json")}
 	for i, c := range clients {
 		if c.Config != want[i] {
 			t.Fatalf("config = %s, want %s", c.Config, want[i])
@@ -34,7 +34,7 @@ func TestClientConfigurationPathsAndOwnership(t *testing.T) {
 func TestClientDiscoveryMissingAndInvalid(t *testing.T) {
 	o := ClientOptions{Home: t.TempDir(), State: "/state", Binary: "/bin/ohya", Getenv: func(string) string { return "" }, LookPath: func(string) (string, error) { return "", os.ErrNotExist }}
 	clients, err := DiscoverClients(o)
-	if err != nil || len(clients) != 3 {
+	if err != nil || len(clients) != 4 {
 		t.Fatalf("auto = %v, %v", clients, err)
 	}
 	for _, c := range clients {

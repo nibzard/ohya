@@ -317,7 +317,7 @@ func Remove(ctx context.Context, state string, run func(context.Context, []strin
 		return report, err
 	}
 	report.Results = append(report.Results, profiles...)
-	for _, name := range []string{"claude", "codex", "pi"} {
+	for _, name := range []string{"claude", "codex", "pi", "agy"} {
 		changed, err := RemoveClient(state, name)
 		result := Result{Component: name, Status: "removed", Changed: changed}
 		if err != nil {
