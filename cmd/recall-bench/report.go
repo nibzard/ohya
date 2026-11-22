@@ -18,7 +18,11 @@ func buildReport(records []runRecord, questions []Question, opts benchOptions) s
 	fmt.Fprintf(&b, "- date: %s\n", now)
 	fmt.Fprintf(&b, "- runs: %d (%d questions x 2 arms x %d repeats)\n", len(records), len(questions), opts.repeats)
 	fmt.Fprintf(&b, "- models seen: %s\n", strings.Join(uniqueModels(records), ", "))
-	fmt.Fprintf(&b, "- timeout per run: %s\n", opts.timeout.String())
+	timeoutNote := opts.timeout.String()
+	if opts.timeout == 0 {
+		timeoutNote = "not recorded (regrade)"
+	}
+	fmt.Fprintf(&b, "- timeout per run: %s\n", timeoutNote)
 
 	perArm := map[string]armTotals{}
 	for _, r := range records {

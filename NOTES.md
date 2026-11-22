@@ -2366,4 +2366,14 @@ How to use this file:
     `CLAUDE_CODE_*` variables change client behavior (pi exited 1 under a
     full passthrough and worked under a minimal env), and transient
     provider failures make one retry loop necessary.
+  - Run 1 results (2026-11-22, 72 runs, glm-5.3 on both arms, full study
+    in /notes/2026-11-22-recall-bench-run1.md): ohya recalled everything
+    raw files could plus the cross-device fact at ~2/3 the cost (input
+    -17%, output -39%, cache-read -49%, wall -17%, $5.45 vs $8.08). Two
+    losses: counting (grep -c beat SQL 8.4 s vs 29.4 s) and a
+    time+agent-filtered pi canary where the model's SQL spiraled to two
+    180 s timeouts out of three — recipe candidate: sessions by agent
+    and day. The crossdevice raw-arm "successes" cited the curator's own
+    transcript, proving the curation-echo caveat is real; next run
+    should build that question script-only with digit-masked curation.
 
