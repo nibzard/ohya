@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -129,6 +131,120 @@ func bench(ctx context.Context, opts benchOptions) error {
 		return err
 	}
 	fmt.Printf("report: %s\n", reportPath)
+	return nil
+}
+
+// regrade re-scores finished runs from their traces after a parser or
+// grading change, without rerunning the clients. Timeout and error
+// verdicts describe run conditions and stay untouched.
+func regrade(ctx context.Context, opts benchOptions) error {
+	ohya, err := resolveExecutable(opts.ohya)
+	if err != nil {
+		return err
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	if opts.hubDB == "" {
+		opts.hubDB = filepath.Join(home, ".ohya", "hub.db")
+	}
+	if opts.state == "" {
+		opts.state = filepath.Join(opts.out, "resolver-state")
+	}
+	var paths []string
+	paths = append(paths, opts.questions...)
+	if _, err := os.Stat(canaryQuestionsPath(opts.out)); err == nil {
+		paths = append(paths, canaryQuestionsPath(opts.out))
+	}
+	if len(paths) == 0 {
+		return errors.New("no question files to grade against")
+	}
+	questions, err := loadQuestions(paths)
+	if err != nil {
+		return err
+	}
+	byKey := map[string]Question{}
+	for _, q := range questions {
+		byKey[q.Key] = q
+	}
+	res, err := openResolver(ctx, ohya, opts.hubDB, opts.state)
+	if err != nil {
+		return err
+	}
+	defer res.close()
+
+	var records []runRecord
+	runsDir := filepath.Join(opts.out, "runs")
+	armDirs, err := os.ReadDir(runsDir)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", runsDir, err)
+	}
+	for _, armDir := range armDirs {
+		if !armDir.IsDir() {
+			continue
+		}
+		qDirs, err := os.ReadDir(filepath.Join(runsDir, armDir.Name()))
+		if err != nil {
+			return err
+		}
+		for _, qDir := range qDirs {
+			if !qDir.IsDir() {
+				continue
+			}
+			repDirs, err := os.ReadDir(filepath.Join(runsDir, armDir.Name(), qDir.Name()))
+			if err != nil {
+				return err
+			}
+			for _, repDir := range repDirs {
+				dir := filepath.Join(runsDir, armDir.Name(), qDir.Name(), repDir.Name())
+				metaPath := filepath.Join(dir, "meta.json")
+				data, err := os.ReadFile(metaPath)
+				if err != nil {
+					return err
+				}
+				var rec runRecord
+				if err := json.Unmarshal(data, &rec); err != nil {
+					return fmt.Errorf("%s: %w", metaPath, err)
+				}
+				m := parseClaudeStream(filepath.Join(dir, "stream.jsonl"))
+				rec.Model = m.Model
+				rec.InputTokens, rec.OutputTokens = m.InputTokens, m.OutputTokens
+				rec.CacheReadTokens, rec.CacheNewTokens = m.CacheReadTokens, m.CacheNewTokens
+				rec.ToolCalls = len(m.ToolCalls)
+				rec.ToolKinds = map[string]int{}
+				for _, c := range m.ToolCalls {
+					rec.ToolKinds[c]++
+				}
+				rec.EmptyResults, rec.ErrorResults = m.EmptyResults, m.ErrorResults
+				rec.ToolResultBytes = m.ToolResultBytes
+				rec.DurationMS, rec.NumTurns, rec.CostUSD = m.DurationMS, m.NumTurns, m.CostUSD
+				switch rec.Verdict {
+				case "timeout", "error":
+				default:
+					q, ok := byKey[rec.Question]
+					if !ok {
+						return fmt.Errorf("%s: no question named %q", metaPath, rec.Question)
+					}
+					previous := rec.Verdict
+					rec.Verdict = gradeRun(ctx, res, q, rec.Arm, m)
+					if previous != rec.Verdict {
+						rec.Problems = append(rec.Problems, fmt.Sprintf("regraded: %s -> %s", previous, rec.Verdict))
+					}
+				}
+				if err := writeJSON(metaPath, rec); err != nil {
+					return err
+				}
+				records = append(records, rec)
+			}
+		}
+	}
+	report := buildReport(records, questions, opts)
+	reportPath := filepath.Join(opts.out, "report.md")
+	if err := os.WriteFile(reportPath, []byte(report), 0o600); err != nil {
+		return err
+	}
+	fmt.Printf("regraded %d runs; report: %s\n", len(records), reportPath)
 	return nil
 }
 

@@ -24,6 +24,7 @@ type traceMetrics struct {
 	ToolResultBytes int64
 	EmptyResults    int
 	ErrorResults    int
+	DeniedCalls     int
 	DurationMS      int64
 	NumTurns        int
 	CostUSD         float64
@@ -44,8 +45,11 @@ type streamEvent struct {
 		CacheRead int64 `json:"cache_read_input_tokens"`
 		Output    int64 `json:"output_tokens"`
 	} `json:"usage"`
-	ModelUsage map[string]json.RawMessage `json:"modelUsage"`
-	Message    *struct {
+	ModelUsage        map[string]json.RawMessage `json:"modelUsage"`
+	PermissionDenials []struct {
+		ToolUseID string `json:"tool_use_id"`
+	} `json:"permission_denials"`
+	Message *struct {
 		ID    string `json:"id"`
 		Model string `json:"model"`
 		Usage *struct {
@@ -63,6 +67,7 @@ type streamEvent struct {
 type assistantBlock struct {
 	Type string `json:"type"`
 	Name string `json:"name"`
+	ID   string `json:"id"`
 }
 
 type contentBlock struct {
@@ -87,6 +92,7 @@ func parseClaudeStream(path string) traceMetrics {
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 1<<20), 64<<20)
 	seenUsage := map[string]bool{}
+	var callIDs []string
 	resultSeen := false
 	for sc.Scan() {
 		var ev streamEvent
@@ -113,6 +119,7 @@ func parseClaudeStream(path string) traceMetrics {
 				for _, b := range blocks {
 					if b.Type == "tool_use" {
 						m.ToolCalls = append(m.ToolCalls, b.Name)
+						callIDs = append(callIDs, b.ID)
 					}
 				}
 			}
@@ -145,6 +152,22 @@ func parseClaudeStream(path string) traceMetrics {
 				}
 				sort.Strings(models)
 				m.Model = strings.Join(models, ",")
+			}
+			// A permission-denied attempt never executed, so it is not
+			// cross-access: drop denied calls from the audit surface.
+			if len(ev.PermissionDenials) > 0 {
+				denied := map[string]bool{}
+				for _, d := range ev.PermissionDenials {
+					denied[d.ToolUseID] = true
+				}
+				var kept []string
+				for i, id := range callIDs {
+					if !denied[id] {
+						kept = append(kept, m.ToolCalls[i])
+					}
+				}
+				m.ToolCalls = kept
+				m.DeniedCalls = len(callIDs) - len(kept)
 			}
 			if !m.OK {
 				m.Problems = append(m.Problems, "claude result subtype "+ev.Subtype+": "+truncate(ev.Result, 200))

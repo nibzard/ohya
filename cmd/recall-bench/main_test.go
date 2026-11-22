@@ -57,6 +57,26 @@ func TestParseClaudeStreamCountsUsageToolsAndBytes(t *testing.T) {
 	}
 }
 
+func TestParseClaudeStreamDropsDeniedCalls(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "stream.jsonl")
+	lines := []string{
+		`{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"call_a","name":"Bash"},{"type":"tool_use","id":"call_b","name":"mcp__ohya__sql"}]}}`,
+		`{"type":"user","message":{"role":"user","content":[{"type":"tool_result","is_error":true,"content":"blocked"}]}}`,
+		`{"type":"result","subtype":"success","result":"done","duration_ms":10,"num_turns":1,"permission_denials":[{"tool_name":"Bash","tool_use_id":"call_a"}]}`,
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := parseClaudeStream(path)
+	if len(m.ToolCalls) != 1 || m.ToolCalls[0] != "mcp__ohya__sql" {
+		t.Fatalf("denied call must be dropped: %v", m.ToolCalls)
+	}
+	if m.DeniedCalls != 1 {
+		t.Fatalf("denied count: %d", m.DeniedCalls)
+	}
+}
+
 func TestParseClaudeStreamArrayToolResultContent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "stream.jsonl")

@@ -42,8 +42,10 @@ func run(args []string) error {
 		return runPlant(args[1:])
 	case "run":
 		return runBench(args[1:])
+	case "regrade":
+		return runRegrade(args[1:])
 	default:
-		return fmt.Errorf("unknown mode %q; want plant or run", args[0])
+		return fmt.Errorf("unknown mode %q; want plant, run, or regrade", args[0])
 	}
 }
 
@@ -116,6 +118,36 @@ func runBench(args []string) error {
 		repeats:   *repeats,
 		timeout:   *timeout,
 		roots:     roots.values,
+	})
+}
+
+func runRegrade(args []string) error {
+	fs := flag.NewFlagSet("regrade", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	out := fs.String("out", "recall-bench", "output `directory` of a finished or running bench")
+	questions := fs.String("questions", "", "`file` with the curated questions used by the run")
+	ohya := fs.String("ohya", "bin/ohya", "`path` to the ohya binary serving the mcp tool")
+	hubDB := fs.String("hub-db", "", "path to the hub `database` (default the production ~/.ohya/hub.db)")
+	state := fs.String("state", "", "`directory` for the mcp resolver state (default DIR/resolver-state)")
+	repeats := fs.Int("repeats", 3, "repeats recorded in the report header")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("unexpected argument %q", fs.Arg(0))
+	}
+	var qpaths []string
+	if *questions != "" {
+		qpaths = append(qpaths, *questions)
+	}
+	return regrade(context.Background(), benchOptions{
+		out:       *out,
+		questions: qpaths,
+		ohya:      *ohya,
+		hubDB:     *hubDB,
+		state:     *state,
+		repeats:   *repeats,
+		roots:     defaultRoots(),
 	})
 }
 
