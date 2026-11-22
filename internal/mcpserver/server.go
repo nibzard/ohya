@@ -109,11 +109,18 @@ Default surface: query events_settled instead of events unless the live tail is 
 Schema inspection: SELECT sql FROM sqlite_master WHERE type = 'table'; and the read-only PRAGMAs table_info, table_xinfo, table_list, index_list, index_info, index_xinfo, foreign_key_list, database_list, function_list, module_list, pragma_list, collation_list. EXPLAIN QUERY PLAN works for checking index use.
 
 Example — recent sessions:
-SELECT id, agent, first_prompt, last_event_at_ms, event_count FROM sessions ORDER BY last_event_at_ms DESC LIMIT 5;
+SELECT id, agent, substr(first_prompt, 1, 160) AS first_prompt, last_event_at_ms, event_count FROM sessions ORDER BY last_event_at_ms DESC LIMIT 5;
 
 Example — one project's sessions on every device (find your project's repo with SELECT repo FROM workspaces WHERE path = '<your cwd>', or normalize your git origin URL to host/path):
-SELECT device_id, agent, cwd, first_prompt, last_event_at_ms FROM sessions
+SELECT device_id, agent, cwd, substr(first_prompt, 1, 160) AS first_prompt, last_event_at_ms FROM sessions
 WHERE repo = 'github.com/owner/name' ORDER BY last_event_at_ms DESC LIMIT 10;
+
+Example — sessions by agent and time window (swap 'claude' for 'codex', 'pi', or 'antigravity'; bound a specific UTC day with CAST(strftime('%%s','2026-11-20') AS INTEGER) * 1000):
+SELECT s.id, s.device_id, s.repo, substr(s.first_prompt, 1, 160) AS first_prompt, s.last_event_at_ms
+FROM sessions s
+WHERE s.agent = 'claude'
+  AND s.last_event_at_ms >= (CAST(strftime('%%s','now') AS INTEGER) - 7*86400) * 1000
+ORDER BY s.last_event_at_ms DESC LIMIT 20;
 
 Example — a project's recent events. Select the newest IDs in a subquery over events_settled first: the subquery sorts on the covering events_session_time index and the outer query reads only the rows it returns. A plain events-to-sessions join with ORDER BY e.time_ms reads every matching event row before the sort and can exceed the deadline on a large hub:
 SELECT e.id, e.session_id, e.time_ms, e.kind, e.role, substr(e.text, 1, 300) AS excerpt
@@ -133,7 +140,7 @@ FROM events e WHERE e.id IN (
 ORDER BY e.time_ms DESC;
 
 Example — resume, step 1: this repository's last settled session. Settled means idle for at least 10 minutes, so the pick is never a session still running (find the repo as in the project example above):
-SELECT s.id, s.agent, s.device_id, s.first_prompt, s.last_event_at_ms
+SELECT s.id, s.agent, s.device_id, substr(s.first_prompt, 1, 160) AS first_prompt, s.last_event_at_ms
 FROM sessions s WHERE s.repo = 'github.com/owner/name'
   AND EXISTS (SELECT 1 FROM events_settled e WHERE e.session_id = s.id)
 ORDER BY s.last_event_at_ms DESC LIMIT 1;
@@ -146,20 +153,25 @@ FROM events e WHERE e.id IN (
   ORDER BY ev.time_ms DESC, ev.id DESC LIMIT 50)
 ORDER BY e.time_ms, e.id;
 
-Example — full-text search (BM25 rank). In a MATCH string, wrap every punctuation-bearing term — a hyphenated branch or directory name, an apostrophe — in double quotes, as in '"auth-refresh"'; FTS5 parses a bare '-name' as a column filter and fails with no such column, and other bare punctuation is a syntax error:
-SELECT e.id, s.cwd, e.time_ms, substr(e.text, 1, 300) AS excerpt
+Example — full-text search (BM25 rank, centered match snippet). In a MATCH string, wrap every punctuation-bearing term — a hyphenated branch or directory name, an apostrophe — in double quotes, as in '"auth-refresh"'; FTS5 parses a bare '-name' as a column filter and fails with no such column, and other bare punctuation is a syntax error:
+SELECT e.id, s.cwd, e.time_ms, snippet(events_fts, 0, '[', ']', '...', 24) AS excerpt
 FROM events_fts JOIN events_settled e ON e.id = events_fts.rowid
 JOIN sessions s ON s.id = e.session_id
 WHERE events_fts MATCH 'authentication AND refresh'
 ORDER BY events_fts.rank LIMIT 10;
 
+Example — count matching sessions and events in one pass:
+SELECT count(DISTINCT e.session_id) AS sessions, count(*) AS events
+FROM events_fts JOIN events_settled e ON e.id = events_fts.rowid
+WHERE events_fts MATCH 'authentication AND refresh';
+
 Example — one model's sessions. List the values first with SELECT DISTINCT model FROM sessions (NULL means the records carried no model), then scope recall to one model:
-SELECT s.id, s.agent, s.device_id, s.first_prompt, s.last_event_at_ms
+SELECT s.id, s.agent, s.device_id, substr(s.first_prompt, 1, 160) AS first_prompt, s.last_event_at_ms
 FROM sessions s WHERE s.model = 'claude-sonnet-4-5'
 ORDER BY s.last_event_at_ms DESC LIMIT 10;
 
 Example — one device's sessions. List the values first with SELECT DISTINCT device_id FROM sessions; memory holds every paired device, so name the device of each session you cite:
-SELECT s.id, s.agent, s.repo, s.first_prompt, s.last_event_at_ms
+SELECT s.id, s.agent, s.repo, substr(s.first_prompt, 1, 160) AS first_prompt, s.last_event_at_ms
 FROM sessions s WHERE s.device_id = 'laptop'
 ORDER BY s.last_event_at_ms DESC LIMIT 10;
 

@@ -12,7 +12,7 @@ import (
 	"github.com/nibzard/ohya/internal/store"
 )
 
-const publishedSQLBlockCount = 20
+const publishedSQLBlockCount = 22
 
 var sqlBlockOpeners = []string{"SELECT ", "WITH ", "PRAGMA ", "EXPLAIN ", "VALUES "}
 
@@ -161,7 +161,7 @@ func TestPublishedRecipesRunVerbatim(t *testing.T) {
 		return ids
 	}
 
-	dateBounded := eventIDs(find("7*86400"))
+	dateBounded := eventIDs(find("AND ev.time_ms >="))
 	slices.Sort(dateBounded)
 	if !slices.Equal(dateBounded, []int64{1, 2, 3, 4, 5}) {
 		t.Fatalf("date-bounded recipe = %v, want the five events inside the window and none of the 30-day-old ones", dateBounded)
@@ -177,9 +177,27 @@ func TestPublishedRecipesRunVerbatim(t *testing.T) {
 		t.Fatalf("resume step 2 = %v, want s1's three records oldest-first", resume2)
 	}
 
-	fts := eventIDs(find("events_fts MATCH"))
-	if !slices.Equal(fts, []int64{2}) {
-		t.Fatalf("full-text recipe = %v, want only the event seeded with both terms", fts)
+	fts := find("snippet(events_fts")
+	if ids := eventIDs(fts); !slices.Equal(ids, []int64{2}) {
+		t.Fatalf("full-text recipe = %v, want only the event seeded with both terms", ids)
+	}
+	if excerpt, ok := fts.Rows[0][3].(string); !ok || !strings.Contains(excerpt, "[authentication]") {
+		t.Fatalf("full-text snippet = %v, want highlighted match", fts.Rows[0][3])
+	}
+
+	ftsCount := find("count(DISTINCT e.session_id)")
+	if len(ftsCount.Rows) != 1 || ftsCount.Rows[0][0] != int64(1) || ftsCount.Rows[0][1] != int64(1) {
+		t.Fatalf("count recipe = %v, want 1 session and 1 event", ftsCount.Rows)
+	}
+
+	byAgentWindow := find("s.agent = 'claude'")
+	var agentWindowIDs []string
+	for _, row := range byAgentWindow.Rows {
+		agentWindowIDs = append(agentWindowIDs, row[0].(string))
+	}
+	slices.Sort(agentWindowIDs)
+	if !slices.Equal(agentWindowIDs, []string{"claude:dev1:s-live", "claude:dev1:s1", "claude:dev1:s2", "claude:laptop:s-lap"}) {
+		t.Fatalf("agent-window recipe = %v, want the four recent claude sessions", agentWindowIDs)
 	}
 
 	var modelSessions []string

@@ -480,7 +480,7 @@ func sqlString(s string) string {
 }
 
 func searchQuery(ftsQuery, repo, agent string) string {
-	query := "SELECT e.id, s.id, s.agent, s.repo, e.time_ms, substr(e.text, 1, " +
+	query := "SELECT e.id, s.id, s.agent, s.repo, e.time_ms, substr(snippet(events_fts, 0, '', '', '...', 32), 1, " +
 		strconv.Itoa(recallExcerptChars) + ") AS excerpt " +
 		"FROM events_fts JOIN events e ON e.id = events_fts.rowid " +
 		"JOIN sessions s ON s.id = e.session_id " +

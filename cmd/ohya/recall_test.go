@@ -122,6 +122,29 @@ func TestSearchSanitizesExcerpt(t *testing.T) {
 	}
 }
 
+func TestSearchSnippetCentersDeepMatch(t *testing.T) {
+	db := seedRecallDatabase(t)
+	hub, err := store.Open(t.Context(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	longPrefix := strings.Repeat("filler word ", 40)
+	_, err = hub.Writer().Exec(`INSERT INTO events(id,session_id,source_id,source_offset,time_ms,kind,role,raw_json,text)
+		 VALUES(8,'claude-code:dev1:sess-1','src-1',6,`+itoa(1763000007000)+`,'message','assistant','{}',?)`,
+		longPrefix+"decided on deepmatchneedle for recovery")
+	hub.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := runRecallCLI(t, "search", "--db", db, "deepmatchneedle")
+	if code != 0 || errOut != "" {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	if !strings.Contains(out, "deepmatchneedle") {
+		t.Fatalf("search excerpt missed the deep match:\n%s", out)
+	}
+}
+
 func TestSearchFtsSyntaxErrorIsAFailure(t *testing.T) {
 	db := seedRecallDatabase(t)
 	code, _, errOut := runRecallCLI(t, "search", "--db", db, "don't")

@@ -84,6 +84,13 @@ func TestQuerySelectsAndSchemaInspection(t *testing.T) {
 		t.Fatalf("FTS rows = %v", r.Rows)
 	}
 
+	r = mustQuery(t, e, `SELECT e.id, snippet(events_fts, 0, '[', ']', '...', 16) AS excerpt
+		FROM events_fts JOIN events_settled e ON e.id = events_fts.rowid
+		WHERE events_fts MATCH 'authentication'`)
+	if len(r.Rows) != 1 || !strings.Contains(r.Rows[0][1].(string), "[authentication]") {
+		t.Fatalf("FTS snippet rows = %v", r.Rows)
+	}
+
 	r = mustQuery(t, e, `SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`)
 	var tables []string
 	for _, row := range r.Rows {

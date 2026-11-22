@@ -456,7 +456,7 @@ ohya sessions --limit 10 --agent claude-code --json
 ranking over stored events (the `events` table, so live sessions are
 searchable too) and prints the best 20 matches, each as two lines: the
 event id, session id, agent, repo (`-` when the session stored none), and
-UTC time, then an indented excerpt. The query is SQLite FTS5 syntax, for
+UTC time, then an indented FTS5 `snippet()` excerpt centered on the match. The query is SQLite FTS5 syntax, for
 example `error AND panic`, `"exact phrase"`, or `auth OR token`; a term
 with punctuation — an apostrophe, or a hyphenated directory or branch name
 such as `auth-refresh` — must sit inside double quotes, as in
