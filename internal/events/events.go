@@ -5,20 +5,22 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/nibzard/ohya/internal/antigravity"
 	"github.com/nibzard/ohya/internal/claudecode"
 	"github.com/nibzard/ohya/internal/codex"
 	"github.com/nibzard/ohya/internal/pi"
 	"github.com/nibzard/ohya/internal/store"
 )
 
-var Agents = []string{claudecode.AgentName, codex.AgentName, pi.AgentName}
+var Agents = []string{claudecode.AgentName, codex.AgentName, pi.AgentName, antigravity.AgentName}
 
 func Supported(agent string) bool {
-	return agent == claudecode.AgentName || agent == codex.AgentName || agent == pi.AgentName
+	return agent == claudecode.AgentName || agent == codex.AgentName || agent == pi.AgentName || agent == antigravity.AgentName
 }
 
 type Options struct {
 	SourceScope    string
+	SourcePath     string
 	FirstNative    string
 	MaxRecordBytes int64
 }
@@ -62,6 +64,15 @@ func Parse(agent string, data []byte, base int64, o Options) (Parsed, error) {
 			SourceScope: o.SourceScope, Native: o.FirstNative, MaxRecordBytes: o.MaxRecordBytes})
 		out := Parsed{Events: FromPiRecords(res.Records), Cursor: res.Cursor}
 		var perr *pi.ParseError
+		if errors.As(err, &perr) {
+			return out, &StopError{Offset: perr.Offset, Err: err, RecordTooLarge: perr.RecordTooLarge}
+		}
+		return out, err
+	case antigravity.AgentName:
+		res, err := antigravity.Parse(data, base, antigravity.Options{
+			SourceScope: o.SourceScope, SourcePath: o.SourcePath, Native: o.FirstNative, MaxRecordBytes: o.MaxRecordBytes})
+		out := Parsed{Events: FromAntigravityRecords(res.Records), Cursor: res.Cursor}
+		var perr *antigravity.ParseError
 		if errors.As(err, &perr) {
 			return out, &StopError{Offset: perr.Offset, Err: err, RecordTooLarge: perr.RecordTooLarge}
 		}
@@ -224,6 +235,45 @@ func FromPiRecords(records []pi.Record) []store.Event {
 	events := make([]store.Event, len(records))
 	for i, r := range records {
 		events[i] = FromPi(r)
+	}
+	return events
+}
+
+type antigravityUsage struct {
+	InputTokens     int64 `json:"input_tokens"`
+	CacheReadTokens int64 `json:"cache_read_tokens"`
+	OutputTokens    int64 `json:"output_tokens"`
+}
+
+func FromAntigravity(r antigravity.Record) store.Event {
+	e := store.Event{
+		Offset: r.Offset, End: r.End, NativeID: r.Native,
+		Kind: r.Kind, Role: r.Role, ToolName: r.ToolName, Text: r.Text,
+		RawJSON: r.Raw, Metadata: r.Metadata,
+		HasTime: r.HasTime, TimeMS: r.TimeMS,
+		Cwd: r.Cwd, Model: r.Model,
+		MessageID: r.MessageID, Prompt: r.Prompt,
+		ParserVersion: antigravity.OutputVersion,
+	}
+	if len(r.Usage) > 0 && string(r.Usage) != "null" {
+		var u antigravityUsage
+		if err := json.Unmarshal(r.Usage, &u); err == nil &&
+			u.InputTokens >= 0 && u.CacheReadTokens >= 0 && u.OutputTokens >= 0 {
+			e.Usage = store.Usage{
+				InputTokens:          u.InputTokens,
+				CacheReadInputTokens: u.CacheReadTokens,
+				OutputTokens:         u.OutputTokens,
+			}
+			e.HasUsage = true
+		}
+	}
+	return e
+}
+
+func FromAntigravityRecords(records []antigravity.Record) []store.Event {
+	events := make([]store.Event, len(records))
+	for i, r := range records {
+		events[i] = FromAntigravity(r)
 	}
 	return events
 }

@@ -13,6 +13,7 @@ import (
 type DeriveInput struct {
 	Agent         string
 	SourceID      string
+	SourcePath    string
 	SourceOffset  int64
 	RawJSON       string
 	FirstNativeID string
@@ -155,6 +156,7 @@ func clearDerived(ctx context.Context, tx *sql.Tx, agent string) error {
 type rederiveSource struct {
 	id          string
 	device      string
+	path        string
 	firstNative string
 }
 
@@ -168,7 +170,7 @@ const rederiveChunk = 128
 
 func rederiveAgent(ctx context.Context, tx *sql.Tx, p ParserDeriver, states map[string]*rebuiltSession) (int, error) {
 	srcRows, err := tx.QueryContext(ctx,
-		`SELECT id, device_id, first_native_id FROM sources WHERE agent = ? ORDER BY id`, p.Agent)
+		`SELECT id, device_id, path, first_native_id FROM sources WHERE agent = ? ORDER BY id`, p.Agent)
 	if err != nil {
 		return 0, fmt.Errorf("store: re-derive agent %s: list sources: %w", p.Agent, err)
 	}
@@ -176,7 +178,7 @@ func rederiveAgent(ctx context.Context, tx *sql.Tx, p ParserDeriver, states map[
 	for srcRows.Next() {
 		var s rederiveSource
 		var firstNative sql.NullString
-		if err := srcRows.Scan(&s.id, &s.device, &firstNative); err != nil {
+		if err := srcRows.Scan(&s.id, &s.device, &s.path, &firstNative); err != nil {
 			srcRows.Close()
 			return 0, fmt.Errorf("store: re-derive agent %s: read source: %w", p.Agent, err)
 		}
@@ -221,7 +223,7 @@ func rederiveAgent(ctx context.Context, tx *sql.Tx, p ParserDeriver, states map[
 
 			for _, e := range chunk {
 				ev, err := p.Derive(DeriveInput{
-					Agent: p.Agent, SourceID: src.id, SourceOffset: e.offset,
+					Agent: p.Agent, SourceID: src.id, SourcePath: src.path, SourceOffset: e.offset,
 					RawJSON: e.raw, FirstNativeID: native,
 				})
 				if err != nil {

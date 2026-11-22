@@ -205,7 +205,7 @@ func TestSourceState(t *testing.T) {
 		t.Fatal(err)
 	}
 	st, err := hub.SourceState(ctx, "src")
-	if err != nil || st != (SourceState{Agent: "codex"}) {
+	if err != nil || st != (SourceState{Agent: "codex", Path: "/r.jsonl"}) {
 		t.Fatalf("fresh source = %+v, %v", st, err)
 	}
 	e0 := mkEvent(0, rawUser("meta"))
@@ -214,7 +214,7 @@ func TestSourceState(t *testing.T) {
 	e1.NativeID = "thread-1"
 	mustIngest(t, hub, Batch{SourceID: "src", Events: []Event{e0, e1}})
 	st, err = hub.SourceState(ctx, "src")
-	if err != nil || st != (SourceState{Agent: "codex", Cursor: e1.End, FirstNativeID: "thread-1"}) {
+	if err != nil || st != (SourceState{Agent: "codex", Path: "/r.jsonl", Cursor: e1.End, FirstNativeID: "thread-1"}) {
 		t.Fatalf("ingested source = %+v, %v", st, err)
 	}
 }

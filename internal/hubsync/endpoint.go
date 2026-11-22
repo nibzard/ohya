@@ -590,7 +590,7 @@ func validateBoundaries(b Batch) error {
 
 func (e *Endpoint) normalize(b Batch, st store.SourceState) (prefix []store.Event, stop *events.StopError, err error) {
 	opts := events.Options{
-		SourceScope: b.SourceID, FirstNative: st.FirstNativeID, MaxRecordBytes: MaxRecordBytes}
+		SourceScope: b.SourceID, SourcePath: st.Path, FirstNative: st.FirstNativeID, MaxRecordBytes: MaxRecordBytes}
 	normalizeStart := time.Now()
 	var parseBytes, normalized uint64
 	defer func() {

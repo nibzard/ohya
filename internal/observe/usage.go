@@ -24,11 +24,12 @@ const (
 	UsagePathLocal  = "local"
 	UsagePathRemote = "remote"
 
-	UsageClientClaudeCode = "claude-code"
-	UsageClientCodex      = "codex"
-	UsageClientPi         = "pi"
-	UsageClientOther      = "other"
-	UsageClientUnknown    = "unknown"
+	UsageClientClaudeCode  = "claude-code"
+	UsageClientCodex       = "codex"
+	UsageClientPi          = "pi"
+	UsageClientAntigravity = "antigravity"
+	UsageClientOther       = "other"
+	UsageClientUnknown     = "unknown"
 
 	UsageOutcomeOK             = "ok"
 	UsageOutcomeTimeout        = "timeout"
@@ -133,7 +134,7 @@ var NeverCollectedFields = []string{
 
 var usageTools = stringSet(UsageToolSQL, UsageToolAnnotate)
 var usagePaths = stringSet(UsagePathLocal, UsagePathRemote)
-var usageClients = stringSet(UsageClientClaudeCode, UsageClientCodex, UsageClientPi, UsageClientOther, UsageClientUnknown)
+var usageClients = stringSet(UsageClientClaudeCode, UsageClientCodex, UsageClientPi, UsageClientAntigravity, UsageClientOther, UsageClientUnknown)
 var usageOutcomes = stringSet(
 	UsageOutcomeOK, UsageOutcomeTimeout, UsageOutcomeBusy, UsageOutcomeSQLError,
 	UsageOutcomeRejected, UsageOutcomeTruncatedRows, UsageOutcomeTruncatedBytes, UsageOutcomeCancelled,

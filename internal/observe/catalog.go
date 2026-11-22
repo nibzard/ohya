@@ -23,7 +23,7 @@ type Metric struct {
 }
 
 var labelSets = map[string]LabelValues{
-	"agent":           {Values: []string{"claude-code", "codex", "pi", "unknown"}, Fallback: "unknown"},
+	"agent":           {Values: []string{"claude-code", "codex", "pi", "antigravity", "unknown"}, Fallback: "unknown"},
 	"state":           {Values: []string{"active", "stopped", "blocked", "missing", "unknown"}, Fallback: "unknown"},
 	"watch_event":     {Values: []string{"replacement", "truncation", "missing", "returned", "other"}, Fallback: "other"},
 	"parse_result":    {Values: []string{"attempted", "normalized", "stopped", "other"}, Fallback: "other"},

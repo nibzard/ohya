@@ -142,6 +142,7 @@ func (d *DB) RegisterSource(ctx context.Context, id, deviceID, agent, path strin
 
 type SourceState struct {
 	Agent         string
+	Path          string
 	Cursor        int64
 	FirstNativeID string
 }
@@ -159,14 +160,14 @@ func sourceState(ctx context.Context, db *sql.DB, id, deviceID string) (SourceSt
 	var storedDevice string
 	var native sql.NullString
 	err := db.QueryRowContext(ctx,
-		`SELECT src.device_id, src.agent, src.cursor_bytes,
+		`SELECT src.device_id, src.agent, src.path, src.cursor_bytes,
 		        COALESCE(
 		          (SELECT s.native_id FROM events e JOIN sessions s ON s.id = e.session_id
 		           WHERE e.source_id = src.id AND e.source_offset = 0),
 		          src.first_native_id
 		        )
 		 FROM sources src WHERE src.id = ?`, id).
-		Scan(&storedDevice, &st.Agent, &st.Cursor, &native)
+		Scan(&storedDevice, &st.Agent, &st.Path, &st.Cursor, &native)
 	if errors.Is(err, sql.ErrNoRows) {
 		purged, perr := readPurged(ctx, db, id)
 		if perr != nil {

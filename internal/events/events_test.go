@@ -622,3 +622,72 @@ func TestParsersIgnoreNullUsageAvoidHTMLEscapingAndOverflow(t *testing.T) {
 		t.Fatalf("claudecode compactJSON escaped HTML: %q", ccParsed.Events[1].Text)
 	}
 }
+
+func TestAntigravityParseIngestAndRederive(t *testing.T) {
+	ctx := context.Background()
+	hub, err := store.Open(ctx, filepath.Join(t.TempDir(), "hub.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hub.Close()
+
+	sourcePath := "/home/dev/.gemini/antigravity-cli/brain/11111111-2222-4333-8444-555555555555/.system_generated/logs/transcript_full.jsonl"
+	if err := hub.RegisterSource(ctx, "src-agy", device, "antigravity", sourcePath); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "antigravity", "main-session.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := Parse("antigravity", data, 0, Options{SourceScope: "src-agy", SourcePath: sourcePath})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(parsed.Events) != 6 {
+		t.Fatalf("events = %d, want 6", len(parsed.Events))
+	}
+	res, err := hub.Ingest(ctx, store.Batch{SourceID: "src-agy", DeviceID: device, Events: parsed.Events})
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if res.Inserted != 6 {
+		t.Fatalf("inserted = %d, want 6", res.Inserted)
+	}
+
+	sid := store.SessionID(device, "antigravity", "11111111-2222-4333-8444-555555555555")
+	var prompt, cwd, model string
+	if err := hub.Writer().QueryRowContext(ctx,
+		`SELECT first_prompt, cwd, model FROM sessions WHERE id = ?`, sid).Scan(&prompt, &cwd, &model); err != nil {
+		t.Fatalf("session row: %v", err)
+	}
+	if prompt != "fix the auth bug" || cwd != "/home/dev/project" || model != "gemini-4-neon-high" {
+		t.Fatalf("session = (prompt=%q cwd=%q model=%q)", prompt, cwd, model)
+	}
+
+	var inTok, cacheRead, outTok int64
+	if err := hub.Writer().QueryRowContext(ctx,
+		`SELECT sum(input_tokens), sum(cache_read_input_tokens), sum(output_tokens) FROM session_token_usage WHERE session_id = ?`, sid).
+		Scan(&inTok, &cacheRead, &outTok); err != nil {
+		t.Fatalf("usage sum: %v", err)
+	}
+	if inTok != 2300 || cacheRead != 12000 || outTok != 460 {
+		t.Fatalf("usage sum = (%d, %d, %d), want (2300, 12000, 460)", inTok, cacheRead, outTok)
+	}
+
+	bumped := []store.ParserDeriver{{
+		Agent:         "antigravity",
+		OutputVersion: 2,
+		Derive: func(in store.DeriveInput) (store.Event, error) {
+			ev, err := deriveAntigravity(in)
+			ev.ParserVersion = 2
+			return ev, err
+		},
+	}}
+	reRes, err := hub.ReDerive(ctx, bumped)
+	if err != nil {
+		t.Fatalf("ReDerive: %v", err)
+	}
+	if reRes.Events != 6 || reRes.Sessions != 1 {
+		t.Fatalf("ReDerive = %+v, want 6 events / 1 session", reRes)
+	}
+}
