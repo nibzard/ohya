@@ -22,6 +22,8 @@
 /observe/
 # memory-e2e gate output: isolated database, client state, traces
 /memory-e2e/
+# recall-bench run directories: canary ground truth, traces, reports
+/recall-runs/
 # looper backlog contract (runtime file owned by the looper tool)
 /to-do.json
 /to-do.schema.json

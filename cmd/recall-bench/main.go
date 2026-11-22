@@ -22,7 +22,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: recall-bench plant|run [flags]; see -h per mode")
+		return errors.New("usage: recall-bench plant|run|regrade|compare|recalibrate [flags]; see -h per mode")
 	}
 	switch args[0] {
 	case "plant":
@@ -31,8 +31,12 @@ func run(args []string) error {
 		return runBench(args[1:])
 	case "regrade":
 		return runRegrade(args[1:])
+	case "compare":
+		return runCompare(args[1:])
+	case "recalibrate":
+		return runRecalibrate(args[1:])
 	default:
-		return fmt.Errorf("unknown mode %q; want plant, run, or regrade", args[0])
+		return fmt.Errorf("unknown mode %q; want plant, run, regrade, compare, or recalibrate", args[0])
 	}
 }
 
@@ -80,6 +84,7 @@ func runBench(args []string) error {
 	state := fs.String("state", "", "`directory` for the mcp resolver state (default DIR/resolver-state)")
 	repeats := fs.Int("repeats", 3, "repeats per question per arm")
 	timeout := fs.Duration("timeout", 3*time.Minute, "per-run `timeout` for one agent run")
+	settleWait := fs.Duration("settle-wait", 15*time.Minute, "budget for preflight to wait out the ingest pipeline and the 10-minute settle gate")
 	var roots stringSliceFlag
 	roots.values = defaultRoots()
 	fs.Var(&roots, "roots", "transcript root `directory` named to the raw arm; give three in claude,codex,pi order (defaults to the standard home locations)")
@@ -96,14 +101,68 @@ func runBench(args []string) error {
 		return fmt.Errorf("-roots wants exactly three directories (claude, codex, pi), got %d", len(roots.values))
 	}
 	return bench(context.Background(), benchOptions{
+		out:        *out,
+		questions:  questions.values,
+		ohya:       *ohya,
+		claude:     *claude,
+		hubDB:      *hubDB,
+		state:      *state,
+		repeats:    *repeats,
+		timeout:    *timeout,
+		settleWait: *settleWait,
+		roots:      roots.values,
+	})
+}
+
+func runCompare(args []string) error {
+	fs := flag.NewFlagSet("compare", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	var questions stringSliceFlag
+	fs.Var(&questions, "questions", "`file` with curated questions, used only for run directories without a questions-used.json snapshot")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 2 {
+		return errors.New("compare wants exactly two run directories: recall-bench compare RUN_A RUN_B")
+	}
+	report, err := compareRuns(fs.Arg(0), fs.Arg(1), questions.values)
+	if err != nil {
+		return err
+	}
+	fmt.Print(report)
+	return nil
+}
+
+func runRecalibrate(args []string) error {
+	fs := flag.NewFlagSet("recalibrate", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	out := fs.String("out", "recall-bench", "run `directory` holding the resolver state")
+	var questions stringSliceFlag
+	fs.Var(&questions, "questions", "`file` with curated questions to update; repeatable, required")
+	ohya := fs.String("ohya", "bin/ohya", "`path` to the ohya binary serving the mcp tool")
+	hubDB := fs.String("hub-db", "", "path to the hub `database` (default the production ~/.ohya/hub.db)")
+	state := fs.String("state", "", "`directory` for the mcp resolver state (default DIR/resolver-state)")
+	var roots stringSliceFlag
+	roots.values = defaultRoots()
+	fs.Var(&roots, "roots", "transcript root `directory` for the local file count; three in claude,codex,pi order")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("unexpected argument %q", fs.Arg(0))
+	}
+	if len(questions.values) == 0 {
+		return errors.New("recalibrate needs -questions files to update")
+	}
+	if len(roots.values) != 3 {
+		return fmt.Errorf("-roots wants exactly three directories (claude, codex, pi), got %d", len(roots.values))
+	}
+	return recalibrate(context.Background(), benchOptions{
 		out:       *out,
 		questions: questions.values,
 		ohya:      *ohya,
-		claude:    *claude,
 		hubDB:     *hubDB,
 		state:     *state,
-		repeats:   *repeats,
-		timeout:   *timeout,
 		roots:     roots.values,
 	})
 }

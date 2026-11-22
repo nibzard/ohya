@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,15 +17,16 @@ const (
 )
 
 type benchOptions struct {
-	out       string
-	questions []string
-	ohya      string
-	claude    string
-	hubDB     string
-	state     string
-	repeats   int
-	timeout   time.Duration
-	roots     []string
+	out        string
+	questions  []string
+	ohya       string
+	claude     string
+	hubDB      string
+	state      string
+	repeats    int
+	timeout    time.Duration
+	settleWait time.Duration
+	roots      []string
 }
 
 type runRecord struct {
@@ -97,7 +97,11 @@ func bench(ctx context.Context, opts benchOptions) error {
 	}
 	defer resolver.close()
 
-	if err := preflight(ctx, resolver, questions, opts.roots); err != nil {
+	if err := writeManifestFor(ctx, opts, ohya, resolver, questions, paths); err != nil {
+		return err
+	}
+
+	if err := preflightWithSettle(ctx, resolver, questions, opts); err != nil {
 		return err
 	}
 
@@ -149,15 +153,7 @@ func regrade(ctx context.Context, opts benchOptions) error {
 	if opts.state == "" {
 		opts.state = filepath.Join(opts.out, "resolver-state")
 	}
-	var paths []string
-	paths = append(paths, opts.questions...)
-	if _, err := os.Stat(canaryQuestionsPath(opts.out)); err == nil {
-		paths = append(paths, canaryQuestionsPath(opts.out))
-	}
-	if len(paths) == 0 {
-		return errors.New("no question files to grade against")
-	}
-	questions, err := loadQuestions(paths)
+	questions, err := loadQuestionsForRun(opts.out, opts.questions)
 	if err != nil {
 		return err
 	}
@@ -171,70 +167,50 @@ func regrade(ctx context.Context, opts benchOptions) error {
 	}
 	defer res.close()
 
-	var records []runRecord
-	runsDir := filepath.Join(opts.out, "runs")
-	armDirs, err := os.ReadDir(runsDir)
+	traces, err := traceDirsOf(opts.out)
 	if err != nil {
-		return fmt.Errorf("read %s: %w", runsDir, err)
+		return err
 	}
-	for _, armDir := range armDirs {
-		if !armDir.IsDir() {
-			continue
-		}
-		qDirs, err := os.ReadDir(filepath.Join(runsDir, armDir.Name()))
+	var records []runRecord
+	for _, dir := range traces {
+		metaPath := filepath.Join(dir, "meta.json")
+		var rec runRecord
+		data, err := os.ReadFile(metaPath)
 		if err != nil {
 			return err
 		}
-		for _, qDir := range qDirs {
-			if !qDir.IsDir() {
-				continue
+		if err := json.Unmarshal(data, &rec); err != nil {
+			return fmt.Errorf("%s: %w", metaPath, err)
+		}
+		m := parseClaudeStream(filepath.Join(dir, "stream.jsonl"))
+		rec.Model = m.Model
+		rec.InputTokens, rec.OutputTokens = m.InputTokens, m.OutputTokens
+		rec.CacheReadTokens, rec.CacheNewTokens = m.CacheReadTokens, m.CacheNewTokens
+		rec.ToolCalls = len(m.ToolCalls)
+		rec.ToolKinds = map[string]int{}
+		for _, c := range m.ToolCalls {
+			rec.ToolKinds[c]++
+		}
+		rec.EmptyResults, rec.ErrorResults = m.EmptyResults, m.ErrorResults
+		rec.ToolResultBytes = m.ToolResultBytes
+		rec.DurationMS, rec.NumTurns, rec.CostUSD = m.DurationMS, m.NumTurns, m.CostUSD
+		switch rec.Verdict {
+		case "timeout", "error":
+		default:
+			q, ok := byKey[rec.Question]
+			if !ok {
+				return fmt.Errorf("%s: no question named %q", metaPath, rec.Question)
 			}
-			repDirs, err := os.ReadDir(filepath.Join(runsDir, armDir.Name(), qDir.Name()))
-			if err != nil {
-				return err
-			}
-			for _, repDir := range repDirs {
-				dir := filepath.Join(runsDir, armDir.Name(), qDir.Name(), repDir.Name())
-				metaPath := filepath.Join(dir, "meta.json")
-				data, err := os.ReadFile(metaPath)
-				if err != nil {
-					return err
-				}
-				var rec runRecord
-				if err := json.Unmarshal(data, &rec); err != nil {
-					return fmt.Errorf("%s: %w", metaPath, err)
-				}
-				m := parseClaudeStream(filepath.Join(dir, "stream.jsonl"))
-				rec.Model = m.Model
-				rec.InputTokens, rec.OutputTokens = m.InputTokens, m.OutputTokens
-				rec.CacheReadTokens, rec.CacheNewTokens = m.CacheReadTokens, m.CacheNewTokens
-				rec.ToolCalls = len(m.ToolCalls)
-				rec.ToolKinds = map[string]int{}
-				for _, c := range m.ToolCalls {
-					rec.ToolKinds[c]++
-				}
-				rec.EmptyResults, rec.ErrorResults = m.EmptyResults, m.ErrorResults
-				rec.ToolResultBytes = m.ToolResultBytes
-				rec.DurationMS, rec.NumTurns, rec.CostUSD = m.DurationMS, m.NumTurns, m.CostUSD
-				switch rec.Verdict {
-				case "timeout", "error":
-				default:
-					q, ok := byKey[rec.Question]
-					if !ok {
-						return fmt.Errorf("%s: no question named %q", metaPath, rec.Question)
-					}
-					previous := rec.Verdict
-					rec.Verdict = gradeRun(ctx, res, q, rec.Arm, m)
-					if previous != rec.Verdict {
-						rec.Problems = append(rec.Problems, fmt.Sprintf("regraded: %s -> %s", previous, rec.Verdict))
-					}
-				}
-				if err := writeJSON(metaPath, rec); err != nil {
-					return err
-				}
-				records = append(records, rec)
+			previous := rec.Verdict
+			rec.Verdict = gradeRun(ctx, res, q, rec.Arm, m)
+			if previous != rec.Verdict {
+				rec.Problems = append(rec.Problems, fmt.Sprintf("regraded: %s -> %s", previous, rec.Verdict))
 			}
 		}
+		if err := writeJSON(metaPath, rec); err != nil {
+			return err
+		}
+		records = append(records, rec)
 	}
 	report := buildReport(records, questions, opts)
 	reportPath := filepath.Join(opts.out, "report.md")
@@ -364,46 +340,97 @@ func claudeRunEnv(home, config string) []string {
 	return env
 }
 
-func preflight(ctx context.Context, res *resolver, questions []Question, roots []string) error {
-	var failures []string
+type preflightRow struct {
+	key                   string
+	total, settled, files int
+	wantSessions          int
+	wantSettled           int
+	wantFiles             int
+}
+
+func (r preflightRow) waitable() bool {
+	return !r.ok() && r.total <= r.wantSessions && r.settled <= r.wantSettled && r.files == r.wantFiles
+}
+
+func (r preflightRow) ok() bool {
+	return r.total == r.wantSessions && r.settled == r.wantSettled && r.files == r.wantFiles
+}
+
+func wantSettledOf(q Question) int {
+	if q.ExpectedSettled == 0 {
+		return q.ExpectedSessions
+	}
+	return q.ExpectedSettled
+}
+
+func (r preflightRow) describe() string {
+	return fmt.Sprintf("%s: hub=%d settled=%d files=%d (want %d/%d/%d)",
+		r.key, r.total, r.settled, r.files, r.wantSessions, r.wantSettled, r.wantFiles)
+}
+
+func checkPreflight(ctx context.Context, res *resolver, questions []Question, roots []string) ([]preflightRow, error) {
+	var rows []preflightRow
 	for _, q := range questions {
 		if q.EvidenceMarker == "" {
 			continue
 		}
-		wantSettled := q.ExpectedSettled
-		if wantSettled == 0 {
-			wantSettled = q.ExpectedSessions
-		}
 		total, err := res.countSessionsWithText(ctx, q.EvidenceMarker, false)
 		if err != nil {
-			return fmt.Errorf("preflight %s: %w", q.Key, err)
+			return nil, fmt.Errorf("preflight %s: %w", q.Key, err)
 		}
 		settled, err := res.countSessionsWithText(ctx, q.EvidenceMarker, true)
 		if err != nil {
-			return fmt.Errorf("preflight %s: %w", q.Key, err)
-		}
-		if total != q.ExpectedSessions {
-			failures = append(failures, fmt.Sprintf(
-				"%s: marker matches %d hub sessions, want %d (collision or ingestion lag)", q.Key, total, q.ExpectedSessions))
-		}
-		if settled != wantSettled {
-			failures = append(failures, fmt.Sprintf(
-				"%s: marker settled in %d sessions, want %d (settle gate or ingest not done)", q.Key, settled, wantSettled))
+			return nil, fmt.Errorf("preflight %s: %w", q.Key, err)
 		}
 		files, err := countFilesWithText(q.EvidenceMarker, roots)
 		if err != nil {
-			return fmt.Errorf("preflight %s: %w", q.Key, err)
+			return nil, fmt.Errorf("preflight %s: %w", q.Key, err)
 		}
-		if files != q.ExpectedFiles {
-			failures = append(failures, fmt.Sprintf(
-				"%s: marker found in %d local files, want %d", q.Key, files, q.ExpectedFiles))
+		rows = append(rows, preflightRow{
+			key: q.Key, total: total, settled: settled, files: files,
+			wantSessions: q.ExpectedSessions, wantSettled: wantSettledOf(q), wantFiles: q.ExpectedFiles,
+		})
+	}
+	return rows, nil
+}
+
+func preflightWithSettle(ctx context.Context, res *resolver, questions []Question, opts benchOptions) error {
+	deadline := time.Now().Add(opts.settleWait)
+	for {
+		rows, err := checkPreflight(ctx, res, questions, opts.roots)
+		if err != nil {
+			return err
 		}
-		fmt.Printf("preflight %-22s hub=%d settled=%d files=%d\n", q.Key, total, settled, files)
+		var hard, waiting []string
+		for _, r := range rows {
+			if r.ok() {
+				fmt.Printf("preflight %-22s hub=%d settled=%d files=%d\n", r.key, r.total, r.settled, r.files)
+				continue
+			}
+			if r.waitable() {
+				waiting = append(waiting, r.describe())
+			} else {
+				hard = append(hard, r.describe())
+			}
+		}
+		if len(hard) > 0 {
+			return fmt.Errorf("preflight failed:\n  %s", strings.Join(hard, "\n  "))
+		}
+		if len(waiting) == 0 {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("preflight still short after %s of settle wait:\n  %s",
+				opts.settleWait, strings.Join(waiting, "\n  "))
+		}
+		fmt.Printf("waiting for settle/ingest (%d questions short, %s left): %s\n",
+			len(waiting), time.Until(deadline).Round(time.Second), strings.Join(waiting, "; "))
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(30 * time.Second):
+		}
 	}
-	if len(failures) > 0 {
-		return fmt.Errorf("preflight failed:\n  %s", strings.Join(failures, "\n  "))
-	}
-	return nil
 }
 
 func countFilesWithText(marker string, roots []string) (int, error) {

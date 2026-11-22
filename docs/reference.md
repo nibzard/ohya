@@ -964,3 +964,29 @@ Curated real-history questions live in `questions/recall-bench-curated.json`;
 one operator-side caveat applies to them: curating a marker echoes it into
 the curator's own session, so those markers match one extra session and file
 (the curation session itself), which the expected counts must include.
+
+The full loop, one command with real API spend, never part of `make check`:
+
+    make recall-bench
+
+which plants canaries into `recall-runs/<timestamp>/`, waits out the
+ingest pipeline and the ten-minute settle gate (bounded by
+`run -settle-wait`, fifteen minutes by default), and runs both arms.
+Each run directory is self-contained for later comparison: `manifest.json`
+records the harness commit, the ohya binary and its version, the hub
+size, the canary seed, and the question files' hashes, and
+`questions-used.json` snapshots the exact question set.
+
+To measure whether a change to ohya improves recall, plant once and run
+twice over the same canaries with different binaries — the arm runs are
+scratch-isolated, so they never pollute the corpus:
+
+    recall-bench run -out RUN -ohya bin/ohya
+    recall-bench regrade -out RUN        # after parser or grading changes
+    recall-bench compare RUN_A RUN_B     # per-tier diff, offline
+
+Expected counts drift as sessions accumulate; `recall-bench recalibrate
+-questions questions/recall-bench-curated.json` rewrites them to the
+currently observable values for a human-reviewed commit, and refuses to
+touch negative questions — a nonzero match on a negative term is a
+collision that needs a new term, not a new expectation.
