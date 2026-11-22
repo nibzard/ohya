@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nibzard/ohya/internal/antigravity"
 	"github.com/nibzard/ohya/internal/claudecode"
 	"github.com/nibzard/ohya/internal/codex"
 	"github.com/nibzard/ohya/internal/pi"
@@ -62,14 +63,15 @@ func TestVersionAliasesPrintSameLine(t *testing.T) {
 	}
 	pairs := parseVersionLine(t, want)
 	for key, value := range map[string]string{
-		"version":       "",
-		"revision":      "",
-		"dirty":         "",
-		"go":            "",
-		"schema":        strconv.Itoa(schema),
-		"parser.claude": strconv.Itoa(claudecode.OutputVersion),
-		"parser.codex":  strconv.Itoa(codex.OutputVersion),
-		"parser.pi":     strconv.Itoa(pi.OutputVersion),
+		"version":            "",
+		"revision":           "",
+		"dirty":              "",
+		"go":                 "",
+		"schema":             strconv.Itoa(schema),
+		"parser.claude":      strconv.Itoa(claudecode.OutputVersion),
+		"parser.codex":       strconv.Itoa(codex.OutputVersion),
+		"parser.pi":          strconv.Itoa(pi.OutputVersion),
+		"parser.antigravity": strconv.Itoa(antigravity.OutputVersion),
 	} {
 		got, ok := pairs[key]
 		if !ok {

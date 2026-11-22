@@ -291,7 +291,7 @@ func (g *gate) seedAndVerify(ctx context.Context) error {
 	defer logFile.Close()
 	cmd := exec.CommandContext(ctx, g.ohya, "ingest", "--once",
 		"--db", g.dbPath, "--state", g.stateDir,
-		"--claude-root", g.claudeRoot, "--codex-root", g.codexRoot, "--pi-root", "")
+		"--claude-root", g.claudeRoot, "--codex-root", g.codexRoot, "--pi-root", "", "--antigravity-root", "")
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	cmd.WaitDelay = 30 * time.Second
 	if err := cmd.Run(); err != nil {

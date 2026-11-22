@@ -229,3 +229,10 @@ func defaultPiRoot(home string) string {
 	}
 	return filepath.Join(home, ".pi", "agent", "sessions")
 }
+
+func defaultAntigravityRoot(home string) string {
+	if dir := os.Getenv("AGY_DATA_DIR"); dir != "" {
+		return filepath.Join(dir, "brain")
+	}
+	return filepath.Join(home, ".gemini", "antigravity-cli", "brain")
+}

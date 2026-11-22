@@ -74,7 +74,7 @@ func runSetupCommand(args []string, stdout, stderr io.Writer) error {
 	c := newCommandFlags(setupSpec)
 	binaryPath := c.fs.String("binary", binary, "absolute executable `path` registered with services and agents")
 	state := c.fs.String("state", filepath.Join(home, ".ohya"), "memory state `directory`")
-	agents := c.fs.String("agents", "auto", "agents to configure: auto or comma-separated claude,codex,pi")
+	agents := c.fs.String("agents", "auto", "agents to configure: auto or comma-separated claude,codex,pi,agy")
 	remote := c.fs.Bool("remote", false, "configure this device to use an existing hub")
 	local := c.fs.Bool("local", false, "configure local memory instead of a saved remote connection")
 	codeEnv := c.fs.String("join-code-env", "", "environment variable holding the one-time join code")
@@ -163,7 +163,7 @@ func runSetupCommand(args []string, stdout, stderr io.Writer) error {
 	for _, root := range []struct {
 		name string
 		dir  *string
-	}{{"claude-root", roots.claude}, {"codex-root", roots.codex}, {"pi-root", roots.pi}} {
+	}{{"claude-root", roots.claude}, {"codex-root", roots.codex}, {"pi-root", roots.pi}, {"antigravity-root", roots.antigravity}} {
 		dir := *root.dir
 		if dir != "" {
 			dir, err = filepath.Abs(dir)

@@ -355,7 +355,7 @@ func stoppedAt(ctx context.Context, hub *store.DB, agent string, s watch.SourceS
 	if _, err := f.ReadAt(buf, s.CursorBytes); err != nil {
 		return finding{}, false
 	}
-	opts := events.Options{SourceScope: s.SourceID, MaxRecordBytes: limit}
+	opts := events.Options{SourceScope: s.SourceID, SourcePath: s.Path, MaxRecordBytes: limit}
 	if hub != nil && s.CursorBytes > 0 {
 		if st, err := hub.ReadOnlySourceState(ctx, s.SourceID); err == nil {
 			opts.FirstNative = st.FirstNativeID

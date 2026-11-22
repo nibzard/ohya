@@ -507,7 +507,7 @@ func startFreshnessStack(t *testing.T, opts freshnessOptions) *freshnessStack {
 
 	joinArgs := append([]string{"child-join",
 		"--state", st.devState,
-		"--claude-root", filepath.Dir(st.sessionPath), "--codex-root", "", "--pi-root", "",
+		"--claude-root", filepath.Dir(st.sessionPath), "--codex-root", "", "--pi-root", "", "--antigravity-root", "",
 		"--interval", opts.uploadEvery.String()},
 		freshnessObserveArgs(opts.observe)...)
 	joinArgs = append(joinArgs, code)
@@ -944,7 +944,7 @@ func measureFreshness(t *testing.T, st *freshnessStack, opts freshnessOptions) *
 	for i, dev := range st.extraDevices {
 		devArgs := append([]string{"child-join",
 			"--state", dev.stateDir,
-			"--claude-root", dev.claudeRoot, "--codex-root", "", "--pi-root", "",
+			"--claude-root", dev.claudeRoot, "--codex-root", "", "--pi-root", "", "--antigravity-root", "",
 			"--interval", opts.uploadEvery.String()},
 			freshnessObserveArgs(opts.observe)...)
 		dev.cmd = exec.Command(os.Args[0], append(devArgs, dev.code)...)

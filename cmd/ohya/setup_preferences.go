@@ -22,10 +22,10 @@ func setupPreferences(fs *flag.FlagSet, state string) (setup.Preferences, error)
 		}
 	}
 	result := setup.Preferences{Flags: map[string]string{}, Homes: map[string]string{}}
-	for _, name := range []string{"agents", "no-agents", "no-service", "no-modify-path", "claude-root", "codex-root", "pi-root", "exclude"} {
+	for _, name := range []string{"agents", "no-agents", "no-service", "no-modify-path", "claude-root", "codex-root", "pi-root", "antigravity-root", "exclude"} {
 		result.Flags[name] = fs.Lookup(name).Value.String()
 	}
-	for _, name := range []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME", "PI_CODING_AGENT_DIR"} {
+	for _, name := range []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME", "PI_CODING_AGENT_DIR", "AGY_CONFIG_DIR"} {
 		value := os.Getenv(name)
 		if value == "" {
 			value = saved.Homes[name]

@@ -14,7 +14,7 @@ func TestSetupPreservesChoicesAndExplicitOverrides(t *testing.T) {
 	if err := setup.SavePreferences(state, saved); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"CODEX_HOME", "CLAUDE_CONFIG_DIR", "PI_CODING_AGENT_DIR"} {
+	for _, name := range []string{"CODEX_HOME", "CLAUDE_CONFIG_DIR", "PI_CODING_AGENT_DIR", "AGY_CONFIG_DIR"} {
 		t.Setenv(name, "")
 	}
 	for _, override := range []bool{false, true} {

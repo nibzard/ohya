@@ -9,8 +9,8 @@
 
 **One memory for all your coding agents. Everywhere.**
 
-Claude Code, Codex, and Pi sessions from every machine in one searchable
-SQLite database, served back to any agent over MCP.
+Claude Code, Codex, Pi, and Antigravity (`agy`) sessions from every machine in
+one searchable SQLite database, served back to any agent over MCP.
 One Go binary. No cloud account. No embeddings.
 
 [![CI](https://github.com/nibzard/ohya/actions/workflows/ci.yml/badge.svg)](https://github.com/nibzard/ohya/actions/workflows/ci.yml)
@@ -100,7 +100,8 @@ verified against Atuin's releases, repository, and issue tracker on
 </picture>
 
 1. **Capture:** `ohya ingest` (on the hub) or `ohya join` (on a device)
-   tails `~/.claude`, `~/.codex`, and `~/.pi` session files.
+   tails `~/.claude`, `~/.codex`, `~/.pi`, and `~/.gemini/antigravity-cli/brain`
+   session files.
 2. **Sync:** batches go to the hub over an embedded Tailcat tailnet. The hub
    deduplicates records and acknowledges a cursor only after a durable
    commit. Offline devices replay when they reconnect.
@@ -311,9 +312,9 @@ exit codes, and failure behavior.
 
 ## Status and roadmap
 
-- **Works now:** Claude Code, Codex, and Pi ingestion; `sql` and `annotate`;
-  pairing, sync, and revocation; remote MCP; integrated setup;
-  owner-scoped purge with source tombstones.
+- **Works now:** Claude Code, Codex, Pi, and Antigravity (`agy`) ingestion;
+  `sql` and `annotate`; pairing, sync, and revocation; remote MCP; integrated
+  setup; owner-scoped purge with source tombstones.
 - **Open:** Developer ID signing and notarization for macOS; a Homebrew tap.
 - **Next:** an OpenCode source (OpenCode stores sessions in SQLite).
 - **Not planned:** embeddings, vector search, built-in AI classification,

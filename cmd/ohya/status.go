@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nibzard/ohya/internal/antigravity"
 	"github.com/nibzard/ohya/internal/buildinfo"
 	"github.com/nibzard/ohya/internal/claudecode"
 	"github.com/nibzard/ohya/internal/codex"
@@ -589,9 +590,10 @@ func statusCLIIdentity() statusIdentity {
 		Arch:     runtime.GOARCH,
 		Schema:   schema,
 		Parsers: map[string]int{
-			claudecode.AgentName: claudecode.OutputVersion,
-			codex.AgentName:      codex.OutputVersion,
-			pi.AgentName:         pi.OutputVersion,
+			claudecode.AgentName:  claudecode.OutputVersion,
+			codex.AgentName:       codex.OutputVersion,
+			pi.AgentName:          pi.OutputVersion,
+			antigravity.AgentName: antigravity.OutputVersion,
 		},
 	}
 }

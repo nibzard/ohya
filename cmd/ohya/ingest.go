@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nibzard/ohya/internal/antigravity"
 	"github.com/nibzard/ohya/internal/device"
 	"github.com/nibzard/ohya/internal/events"
 	"github.com/nibzard/ohya/internal/hubsync"
@@ -285,7 +286,7 @@ func excludedSummary(byAgent map[string]int) string {
 
 func (r *ingestor) poll(ctx context.Context, dirs []agentDir, allowEmpty bool) (passStats, error) {
 	discoveryStart := time.Now()
-	candidates, excluded, err := discoverSessionFiles(dirs, r.excludes, allowEmpty)
+	candidates, excluded, err := discoverAgentSessionFiles(r.agent, dirs, r.excludes, allowEmpty)
 	if err != nil {
 		r.observer.Add("discovery_errors", 1, "read")
 		return passStats{}, err
@@ -474,7 +475,7 @@ func (r *ingestor) ingestSource(ctx context.Context, o watch.Outcome) (int, int6
 			r.observer.Add("ingest_failures", 1, "read")
 			return inserted, o.Cursor, nil, err
 		}
-		opts := events.Options{SourceScope: o.SourceID, MaxRecordBytes: r.maxRecordBytes}
+		opts := events.Options{SourceScope: o.SourceID, SourcePath: o.Path, MaxRecordBytes: r.maxRecordBytes}
 		if chunk.Cursor > 0 {
 			st, err := r.hub.SourceState(ctx, o.SourceID)
 			if err != nil {
@@ -594,10 +595,14 @@ func stopRemedy(recordTooLarge bool) string {
 }
 
 func discoverSessionFiles(dirs []agentDir, excludes excludeGlobs, allowEmpty bool) ([]string, []string, error) {
+	return discoverAgentSessionFiles("", dirs, excludes, allowEmpty)
+}
+
+func discoverAgentSessionFiles(agent string, dirs []agentDir, excludes excludeGlobs, allowEmpty bool) ([]string, []string, error) {
 	var files []string
 	var excluded []string
 	for _, d := range dirs {
-		found, skipped, err := walkSessionFiles(d.dir, excludes)
+		found, skipped, err := walkSessionFiles(agent, d.dir, excludes)
 		if errors.Is(err, os.ErrNotExist) && (d.optional || allowEmpty) {
 			continue
 		}
@@ -610,24 +615,36 @@ func discoverSessionFiles(dirs []agentDir, excludes excludeGlobs, allowEmpty boo
 	return files, excluded, nil
 }
 
-func walkSessionFiles(root string, excludes excludeGlobs) ([]string, []string, error) {
+func walkSessionFiles(agent, root string, excludes excludeGlobs) ([]string, []string, error) {
 	var files []string
 	var excluded []string
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return fmt.Errorf("discover %s: %w", p, err)
 		}
-		if d.Type().IsRegular() && strings.HasSuffix(d.Name(), ".jsonl") {
-			match, err := excludes.Match(p)
-			if err != nil {
-				return err
+		if agent == antigravity.AgentName && d.IsDir() {
+			switch d.Name() {
+			case "chunks", "steps", "scratch", ".user_uploaded", "messages":
+				return filepath.SkipDir
 			}
-			if match {
-				excluded = append(excluded, p)
+		}
+		if !d.Type().IsRegular() || !strings.HasSuffix(d.Name(), ".jsonl") {
+			return nil
+		}
+		if agent == antigravity.AgentName {
+			if d.Name() != "transcript_full.jsonl" || antigravity.ConversationIDFromPath(p) == "" {
 				return nil
 			}
-			files = append(files, p)
 		}
+		match, err := excludes.Match(p)
+		if err != nil {
+			return err
+		}
+		if match {
+			excluded = append(excluded, p)
+			return nil
+		}
+		files = append(files, p)
 		return nil
 	})
 	if errors.Is(err, os.ErrNotExist) {

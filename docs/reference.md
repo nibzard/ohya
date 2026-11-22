@@ -157,22 +157,27 @@ two Codex directories, `$CODEX_HOME/sessions` and
 `~/.codex/archived_sessions` (`--codex-root` overrides the sessions
 directory; the archived root is watched in addition), and the Pi agent
 sessions root, `$PI_CODING_AGENT_SESSION_DIR`, `$PI_CODING_AGENT_DIR/sessions`
-or `~/.pi/agent/sessions` (override with `--pi-root`). Codex moves ended
-rollouts into `archived_sessions`, so both directories are default roots;
-`ohya join` watches the same roots. It stores everything in
+or `~/.pi/agent/sessions` (override with `--pi-root`), and the Antigravity
+(`agy`) brain root, `$AGY_DATA_DIR/brain` or
+`~/.gemini/antigravity-cli/brain` (override with `--antigravity-root`). Codex
+moves ended rollouts into `archived_sessions`, so both directories are default
+roots; `ohya join` watches the same roots. It stores everything in
 `~/.ohya/hub.db` (override with `--db`; the state directory defaults to the
 database directory and can be set with `--state`). A default directory that
 does not exist holds no sessions, so an agent you do not use costs nothing.
 A directory you pass must exist. An empty value (`--claude-root ''`,
-`--codex-root ''`, `--pi-root ''`) is the per-machine opt-out: this machine
-watches and uploads none of that agent's sessions, while every other paired
-machine keeps its own. The choice is per machine and per agent, not per
-account, and it applies equally to `ohya ingest` and `ohya join` — a
-laptop that opts out of Codex still receives the Codex sessions other
+`--codex-root ''`, `--pi-root ''`, `--antigravity-root ''`) is the per-machine
+opt-out: this machine watches and uploads none of that agent's sessions, while
+every other paired machine keeps its own. The choice is per machine and per
+agent, not per account, and it applies equally to `ohya ingest` and `ohya join`
+— a laptop that opts out of Codex still receives the Codex sessions other
 machines upload, because memory on the hub stays shared.
-Every regular `*.jsonl` file under a root is a session file; spilled tool
-output and memory files use other extensions. A replaced or truncated file
-starts a new source that re-imports from byte zero, and ingest prints one
+Every regular `*.jsonl` file under a Claude Code, Codex, or Pi root is a
+session file; under an Antigravity root, discovery matches only
+`<conversation-id>/.system_generated/logs/transcript_full.jsonl` and skips the
+truncated `transcript.jsonl` and byte-sliced `chunks/` mirrors. A replaced or
+truncated file starts a new source that re-imports from byte zero, and ingest
+prints one
 line about it; new files stay silent. The watcher follows moves by file
 identity, so a rollout moved between the two Codex roots keeps its
 checkpoint and continues where it left off. A watched file that stops being
@@ -265,8 +270,9 @@ the `ohya1.` format. Join dials the hub on its own (a fresh transport key
 per process; no shared node), pairs the device identity, checks the
 returned device ID, saves the hub address next to `credential.json` in the
 join state, and then watches the same agent roots as `ohya ingest` (same
-`--claude-root`, `--codex-root`, `--pi-root` flags; `--state` defaults to
-`~/.ohya/join`). A device that already holds a credential sends its hello
+`--claude-root`, `--codex-root`, `--pi-root`, `--antigravity-root` flags;
+`--state` defaults to `~/.ohya/join`). A device that already holds a credential
+sends its hello
 to the address in the new code first: when the hub accepts, the device
 keeps its identity, credential, and checkpoints, and the invitation stays
 unused; when the hub rejects the credential — revoked, or a different hub —

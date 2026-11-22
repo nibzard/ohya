@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/nibzard/ohya/internal/antigravity"
 	"github.com/nibzard/ohya/internal/buildinfo"
 	"github.com/nibzard/ohya/internal/claudecode"
 	"github.com/nibzard/ohya/internal/codex"
@@ -50,14 +51,15 @@ func runVersionCommand(args []string, stdout, stderr io.Writer) error {
 }
 
 type versionJSONData struct {
-	Version      string `json:"version"`
-	Revision     string `json:"revision"`
-	Dirty        string `json:"dirty"`
-	Go           string `json:"go"`
-	Schema       int    `json:"schema"`
-	ParserClaude int    `json:"parser.claude"`
-	ParserCodex  int    `json:"parser.codex"`
-	ParserPi     int    `json:"parser.pi"`
+	Version           string `json:"version"`
+	Revision          string `json:"revision"`
+	Dirty             string `json:"dirty"`
+	Go                string `json:"go"`
+	Schema            int    `json:"schema"`
+	ParserClaude      int    `json:"parser.claude"`
+	ParserCodex       int    `json:"parser.codex"`
+	ParserPi          int    `json:"parser.pi"`
+	ParserAntigravity int    `json:"parser.antigravity"`
 }
 
 func versionJSON(stdout io.Writer) error {
@@ -67,14 +69,15 @@ func versionJSON(stdout io.Writer) error {
 	}
 	version, revision, dirty, goVer := buildinfo.Identity()
 	return printJSON(stdout, versionSpec.name, versionJSONData{
-		Version:      version,
-		Revision:     revision,
-		Dirty:        dirty,
-		Go:           goVer,
-		Schema:       schema,
-		ParserClaude: claudecode.OutputVersion,
-		ParserCodex:  codex.OutputVersion,
-		ParserPi:     pi.OutputVersion,
+		Version:           version,
+		Revision:          revision,
+		Dirty:             dirty,
+		Go:                goVer,
+		Schema:            schema,
+		ParserClaude:      claudecode.OutputVersion,
+		ParserCodex:       codex.OutputVersion,
+		ParserPi:          pi.OutputVersion,
+		ParserAntigravity: antigravity.OutputVersion,
 	})
 }
 
@@ -84,7 +87,7 @@ func versionLine() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("ohya version=%s revision=%s dirty=%s go=%s schema=%d parser.claude=%d parser.codex=%d parser.pi=%d\n",
+	return fmt.Sprintf("ohya version=%s revision=%s dirty=%s go=%s schema=%d parser.claude=%d parser.codex=%d parser.pi=%d parser.antigravity=%d\n",
 		version, revision, dirty, goVer, schema,
-		claudecode.OutputVersion, codex.OutputVersion, pi.OutputVersion), nil
+		claudecode.OutputVersion, codex.OutputVersion, pi.OutputVersion, antigravity.OutputVersion), nil
 }

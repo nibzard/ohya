@@ -103,7 +103,7 @@ func (m *childServiceManager) startIngestLocked() error {
 	log := &bytes.Buffer{}
 	cmd := exec.Command(os.Args[0], "child-run", "ingest", "--allow-empty",
 		"--db", m.db, "--state", m.state,
-		"--claude-root", m.claudeRoot, "--codex-root", "", "--pi-root", "")
+		"--claude-root", m.claudeRoot, "--codex-root", "", "--pi-root", "", "--antigravity-root", "")
 	cmd.Env = os.Environ()
 	cmd.Stderr = log
 	cmd.Stdout = log
@@ -185,7 +185,7 @@ func TestHubSetupTwoStepFlow(t *testing.T) {
 
 	hubArgs := []string{"setup", "--hub", "--state", hubState, "--binary", wrapper,
 		"--no-agents", "--no-modify-path", "--claude-root", claudeRoot,
-		"--codex-root", "", "--pi-root", "", "--json"}
+		"--codex-root", "", "--pi-root", "", "--antigravity-root", "", "--json"}
 	var stdout, stderr bytes.Buffer
 	if code := cliMain(hubArgs, &stdout, &stderr); code != 0 {
 		t.Fatalf("hub setup = %d %s %s", code, stdout.String(), stderr.String())

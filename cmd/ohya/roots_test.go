@@ -16,7 +16,7 @@ func TestAgentRootFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 	roots := f.roots(fs)
-	if len(roots) != 2 {
+	if len(roots) != 3 {
 		t.Fatalf("roots = %+v", roots)
 	}
 	if roots[0].dirs[0].dir != "/sessions" || roots[0].dirs[0].optional {
@@ -24,6 +24,9 @@ func TestAgentRootFlags(t *testing.T) {
 	}
 	if roots[1].agent != "pi" || !roots[1].dirs[0].optional {
 		t.Fatalf("default root = %+v", roots[1])
+	}
+	if roots[2].agent != "antigravity" || !roots[2].dirs[0].optional {
+		t.Fatalf("default antigravity root = %+v", roots[2])
 	}
 }
 

@@ -536,7 +536,7 @@ func TestIngestOnceExitCodes(t *testing.T) {
 		cmd := exec.Command(os.Args[0], "child-run", "ingest", "--once",
 			"--db", filepath.Join(dir, "hub.db"),
 			"--state", filepath.Join(dir, "state"),
-			"--claude-root", root, "--codex-root", "", "--pi-root", "")
+			"--claude-root", root, "--codex-root", "", "--pi-root", "", "--antigravity-root", "")
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr
 		runErr := cmd.Run()
 		code := 0

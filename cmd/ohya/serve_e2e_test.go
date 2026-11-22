@@ -267,7 +267,7 @@ func startJoinChild(t *testing.T, devState, claudeRoot, code string) (*exec.Cmd,
 	args := []string{
 		"child-join",
 		"--state", devState,
-		"--claude-root", claudeRoot, "--codex-root", "", "--pi-root", "",
+		"--claude-root", claudeRoot, "--codex-root", "", "--pi-root", "", "--antigravity-root", "",
 		"--interval", "500ms",
 	}
 	if code != "" {

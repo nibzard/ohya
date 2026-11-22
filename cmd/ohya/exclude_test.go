@@ -223,7 +223,7 @@ func TestIngestOnceReportsExcludedFiles(t *testing.T) {
 	args := []string{"ingest", "--once",
 		"--db", filepath.Join(dir, "hub.db"),
 		"--state", filepath.Join(dir, "state"),
-		"--claude-root", e.root, "--codex-root", "", "--pi-root", "",
+		"--claude-root", e.root, "--codex-root", "", "--pi-root", "", "--antigravity-root", "",
 		"--exclude", filepath.Join(e.root, "fixture-project", "main-session.jsonl")}
 
 	var stdout, stderr bytes.Buffer

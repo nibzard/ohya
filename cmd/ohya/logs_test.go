@@ -338,6 +338,7 @@ func startIngestChildCapturingStdout(t *testing.T, stateDir string, stdout *byte
 		"--claude-root", filepath.Join(stateDir, "projects"),
 		"--codex-root", "",
 		"--pi-root", "",
+		"--antigravity-root", "",
 	}
 	cmd := exec.Command(os.Args[0], args...)
 	cmd.Env = append(os.Environ(), "HOME="+stateDir)

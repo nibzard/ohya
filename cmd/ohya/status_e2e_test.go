@@ -57,6 +57,7 @@ func startIngestChild(t *testing.T, stateDir string, extra ...string) *exec.Cmd 
 		"--claude-root", filepath.Join(stateDir, "projects"),
 		"--codex-root", "",
 		"--pi-root", "",
+		"--antigravity-root", "",
 	}, extra...)
 	cmd := exec.Command(os.Args[0], args...)
 	cmd.Env = append(os.Environ(), "HOME="+stateDir)

@@ -321,7 +321,7 @@ func joinDiscover(dirs []agentDir, agent string, excludes excludeGlobs, allowEmp
 	excludedPaths := map[string]bool{}
 	lastExcluded := -1
 	discover := func() ([]string, error) {
-		candidates, excluded, err := discoverSessionFiles(dirs, excludes, allowEmpty)
+		candidates, excluded, err := discoverAgentSessionFiles(agent, dirs, excludes, allowEmpty)
 		if err != nil {
 			return nil, err
 		}
@@ -341,7 +341,7 @@ func joinDiscover(dirs []agentDir, agent string, excludes excludeGlobs, allowEmp
 func reportJoinBacklog(stateDir string, roots []agentRoot, excludes excludeGlobs, stderr io.Writer) {
 	var pending int64
 	for _, root := range roots {
-		candidates, _, err := discoverSessionFiles(root.dirs, excludes, false)
+		candidates, _, err := discoverAgentSessionFiles(root.agent, root.dirs, excludes, false)
 		if err != nil {
 			continue
 		}

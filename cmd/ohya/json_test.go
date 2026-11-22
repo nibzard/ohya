@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nibzard/ohya/internal/antigravity"
 	"github.com/nibzard/ohya/internal/claudecode"
 	"github.com/nibzard/ohya/internal/codex"
 	"github.com/nibzard/ohya/internal/events"
@@ -106,8 +107,8 @@ func TestVersionJSONGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := fmt.Sprintf(`{"schema_version":1,"command":"ohya version","data":{"version":"<version>","revision":"<revision>","dirty":"<dirty>","go":"<go>","schema":%d,"parser.claude":%d,"parser.codex":%d,"parser.pi":%d},"error":null}`+"\n",
-		schema, claudecode.OutputVersion, codex.OutputVersion, pi.OutputVersion)
+	want := fmt.Sprintf(`{"schema_version":1,"command":"ohya version","data":{"version":"<version>","revision":"<revision>","dirty":"<dirty>","go":"<go>","schema":%d,"parser.claude":%d,"parser.codex":%d,"parser.pi":%d,"parser.antigravity":%d},"error":null}`+"\n",
+		schema, claudecode.OutputVersion, codex.OutputVersion, pi.OutputVersion, antigravity.OutputVersion)
 	for _, args := range [][]string{{"version", "--json"}, {"--version", "--json"}} {
 		code, out, stderr := runCLI(args...)
 		if code != 0 || stderr != "" {
@@ -335,7 +336,7 @@ func TestIngestOnceJSONGolden(t *testing.T) {
 		return runCLI("ingest", "--once", "--json",
 			"--db", filepath.Join(dir, "hub.db"),
 			"--state", filepath.Join(dir, "state"),
-			"--claude-root", root, "--codex-root", "", "--pi-root", "")
+			"--claude-root", root, "--codex-root", "", "--pi-root", "", "--antigravity-root", "")
 	}
 
 	t.Run("success", func(t *testing.T) {
@@ -416,13 +417,13 @@ func TestJSONSharedEnvelopeDecoder(t *testing.T) {
 		{"devices list", []string{"devices", "list", "--json", "--state", freshState}, "ohya devices list", false},
 		{"devices invite", []string{"devices", "invite", "--json", "--state", pairedState}, "ohya devices invite", false},
 		{"devices revoke", []string{"devices", "revoke", "--json", "--state", otherPaired, "0123456789abcdef0123456789abcdea"}, "ohya devices revoke", false},
-		{"ingest --once", []string{"ingest", "--once", "--json", "--db", filepath.Join(ingestDir, "hub.db"), "--state", filepath.Join(ingestDir, "state"), "--claude-root", e.root, "--codex-root", "", "--pi-root", ""}, "ohya ingest", false},
+		{"ingest --once", []string{"ingest", "--once", "--json", "--db", filepath.Join(ingestDir, "hub.db"), "--state", filepath.Join(ingestDir, "state"), "--claude-root", e.root, "--codex-root", "", "--pi-root", "", "--antigravity-root", ""}, "ohya ingest", false},
 		{"doctor", []string{"doctor", "--json", "--db", filepath.Join(ingestDir, "hub.db"), "--state", filepath.Join(ingestDir, "state")}, "ohya doctor", false},
 		{"rederive failure", []string{"rederive", "--json", "--db", filepath.Join(blocker, "hub.db")}, "ohya rederive", true},
 		{"devices list failure", []string{"devices", "list", "--json", "--state", blocker}, "ohya devices list", true},
 		{"devices invite failure", []string{"devices", "invite", "--json", "--state", t.TempDir()}, "ohya devices invite", true},
 		{"devices revoke failure", []string{"devices", "revoke", "--json", "--state", freshState, "ffffffffffffffffffffffffffffffff"}, "ohya devices revoke", true},
-		{"ingest failure", []string{"ingest", "--once", "--json", "--db", filepath.Join(ingestDir, "hub2.db"), "--state", filepath.Join(ingestDir, "state2"), "--claude-root", filepath.Join(ingestDir, "absent"), "--codex-root", "", "--pi-root", ""}, "ohya ingest", true},
+		{"ingest failure", []string{"ingest", "--once", "--json", "--db", filepath.Join(ingestDir, "hub2.db"), "--state", filepath.Join(ingestDir, "state2"), "--claude-root", filepath.Join(ingestDir, "absent"), "--codex-root", "", "--pi-root", "", "--antigravity-root", ""}, "ohya ingest", true},
 	}
 	codeRe := regexp.MustCompile(`^[a-z0-9_]+$`)
 	for _, s := range samples {

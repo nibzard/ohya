@@ -76,7 +76,7 @@ func TestSetupHubDryRunPlansServeService(t *testing.T) {
 func TestManagedIngestWaitsForMissingRoots(t *testing.T) {
 	dir := t.TempDir()
 	var stdout, stderr bytes.Buffer
-	args := []string{"ingest", "--once", "--allow-empty", "--db", filepath.Join(dir, "hub.db"), "--state", filepath.Join(dir, "state"), "--claude-root", filepath.Join(dir, "not-yet-created"), "--codex-root", "", "--pi-root", ""}
+	args := []string{"ingest", "--once", "--allow-empty", "--db", filepath.Join(dir, "hub.db"), "--state", filepath.Join(dir, "state"), "--claude-root", filepath.Join(dir, "not-yet-created"), "--codex-root", "", "--pi-root", "", "--antigravity-root", ""}
 	if code := cliMain(args, &stdout, &stderr); code != 0 {
 		t.Fatalf("empty managed ingest = %d %s %s", code, stdout.String(), stderr.String())
 	}
