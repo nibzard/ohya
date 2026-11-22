@@ -56,13 +56,17 @@ How to use this file:
   docs/reference.md.
   Since 2026-11-20 (T151) that verification is permanent:
   TestPublishedRecipesRunVerbatim in internal/mcpserver extracts every SQL
-  block from the rendered ToolDescription (a paragraph line opening with
-  SELECT/WITH/PRAGMA/EXPLAIN/VALUES through the paragraph end) and runs each
-  verbatim through the engine over a hub seeded with the published literals
-  (repo github.com/owner/name, model claude-sonnet-4-5, device laptop,
-  session claude:dev1:s1, event ids 42/100/101/102). The block count is
-  pinned (20 since T148's garbage audit below), so adding or removing an
-  example is a conscious test update.
+  block from ToolDescription and the MCP guide resources
+  (`ohya://guides/garbage-audit`, `ohya://guides/analytics-and-review`) and
+  runs each verbatim through the engine over a hub seeded with the published
+  literals (repo github.com/owner/name, model claude-sonnet-4-5, device
+  laptop, session claude:dev1:s1, event ids 42/100/101/102). The block
+  counts are pinned (10 in ToolDescription, 8 in garbage-audit, 4 in
+  analytics-and-review since 2026-11-23), so adding or removing an example
+  is a conscious test update. Upfront MCP prompt size (`MemoryInstructions` +
+  `ToolDescription` + `AnnotateDescription`) is also bounded in
+  TestServerServesSQLTool (7,374 bytes / <= 8,000 byte budget, down from
+  15,431 bytes before moving rare playbooks to MCP resources).
   A syntax error or a denied statement inside a block fails at execution;
   an opener that stops matching (for example a block rewritten to start
   with DELETE) trips the count pin instead.

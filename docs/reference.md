@@ -444,16 +444,30 @@ change nothing, not even timestamps. Agents query annotations through the
 
 ### Operator recall
 
-`ohya search`, `ohya show`, and `ohya sessions` give a human or companion UI
+`ohya sql`, `ohya search`, `ohya show`, and `ohya sessions` give a human,
+script, or companion UI
 the same recall the `sql` tool gives an agent, without sqlite3, an agent
-session, or MCP wiring. All three are print-only, never prompt, and take
+session, or MCP wiring. All four are print-only, never prompt, and take
 `--json` for versioned structured output ([ADR 0005](adr/0005-json-output.md)).
 
 ```sh
+ohya sql "SELECT agent, count(*) FROM sessions GROUP BY agent"
+ohya sql --remote --json - < query.sql
 ohya search "auth AND refresh" --repo github.com/owner/name --agent claude-code
 ohya show claude-code:dev1:sess-1 --last 50
 ohya sessions --limit 10 --agent claude-code --json
 ```
+
+`ohya sql <query | ->` runs one bounded read-only SQL statement (`SELECT` or
+allow-listed read-only `PRAGMA`) through the `sql` MCP tool's engine and prints
+a formatted table, or with `--json` returns the exact `sql` tool result shape
+(`columns`, `rows`, `row_count`, `truncated`, `truncation_reason`, `redactions`)
+inside the standard JSON envelope. Pass `-` to read one SQL statement from
+stdin (capped at 64 KiB). Every `sql` tool safeguard applies unchanged —
+read-only connection, authorizer (`purged_sources` denied), single statement,
+500 rows, 256 KiB output, 5 second deadline, and ADR 0015 egress secret
+redaction — making `ohya sql --json` the sanctioned path for shell or Python
+pipelines over local or `--remote` hubs.
 
 `ohya search <query>` runs one bounded read-only FTS5 query with BM25
 ranking over stored events (the `events` table, so live sessions are
@@ -488,7 +502,7 @@ settled state (`settled` when idle at least 10 minutes, `active` otherwise,
 matching `events_settled`), and excerpted first prompt. `--limit` defaults to
 20 (1–500); `--repo` and `--agent` filter as in `ohya search`.
 
-All three commands query one path: the local hub database (opened read-only;
+All four commands query one path: the local hub database (opened read-only;
 they never write or migrate it) or, with `--remote`, the joined hub through
 the saved pairing credential and the tailcat transport, following
 `ohya mcp --remote`. A setup state whose saved connection selects remote

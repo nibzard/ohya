@@ -270,6 +270,7 @@ directories and sends only the normalized value to the hub.
 | `ohya service status\|start\|stop\|restart` | Inspect or control the owned background user service (`--hub` for `ohya serve`) |
 | `ohya ingest [--once]` | Import local session history, then poll for new records |
 | `ohya mcp [--remote]` | Serve `sql` and `annotate` on stdio, locally or through a joined device |
+| `ohya sql QUERY [--remote] [--json]` | Run one bounded read-only SQL query (or `-` for stdin) through the `sql` tool engine |
 | `ohya search QUERY [--repo] [--agent]` | Find sessions by keyword (BM25) and print excerpts, locally or through a joined device |
 | `ohya show SESSION_ID [--last N]` | Print one session's newest events, excerpted |
 | `ohya sessions [--limit N] [--repo] [--agent]` | List recent sessions and their settled state, locally or through a joined device |

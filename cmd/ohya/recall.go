@@ -35,6 +35,23 @@ const (
 	settledWindowClause = "(s.last_event_at_ms IS NULL OR s.last_event_at_ms <= (CAST(strftime('%s', 'now') AS INTEGER) - 600) * 1000)"
 )
 
+var sqlSpec = commandSpec{
+	name:      "ohya sql",
+	synopsis:  "run one bounded read-only SQL query against stored history",
+	usageLine: "ohya sql <query | -> [flags]",
+	description: "Runs one bounded read-only SQL statement (SELECT or allow-listed read-only PRAGMA) through the sql MCP tool's engine and prints the result as a table or as one JSON object with --json (docs/adr/0005). " +
+		"Pass - as the query argument to read one SQL statement from stdin (bounded to 64 KiB). " +
+		"Without --remote the command reads the local hub database and never writes or migrates it; with --remote it queries the joined hub through the saved pairing credential. " +
+		"All sql tool safeguards apply unchanged: single statement, SQLite authorizer, 500 rows, 256 KiB output, 5 second deadline, and ADR 0015 egress secret redaction.",
+	argsTitle: "Arguments",
+	args:      "<query | ->  one SQL SELECT or read-only PRAGMA statement, or - to read it from stdin",
+	examples: []string{
+		`ohya sql "SELECT agent, count(*) FROM sessions GROUP BY agent"`,
+		`ohya sql --json "SELECT id, repo, last_event_at_ms FROM sessions ORDER BY last_event_at_ms DESC LIMIT 5"`,
+		`ohya sql --remote --json - < query.sql`,
+	},
+}
+
 var searchSpec = commandSpec{
 	name:      "ohya search",
 	synopsis:  "find sessions by keyword in the stored events",
@@ -148,6 +165,62 @@ type showEventJSON struct {
 	Role     string `json:"role,omitempty"`
 	ToolName string `json:"tool_name,omitempty"`
 	Excerpt  string `json:"excerpt"`
+}
+
+func runSQLCommand(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("resolve home directory: %w", err)
+	}
+	c := newCommandFlags(sqlSpec)
+	db := c.fs.String("db", filepath.Join(home, ".ohya", "hub.db"),
+		"hub database `path` (ignored with --remote)")
+	state := c.fs.String("state", "",
+		"state `directory`: the join state with --remote, otherwise the setup state root; defaults to the database directory, or ~/.ohya/join with --remote")
+	remote := c.fs.Bool("remote", false,
+		"query the joined hub through the tailcat transport instead of a local database")
+	asJSON := c.fs.Bool("json", false, "print one JSON object instead of text (docs/adr/0005)")
+	if err := c.parse(args, stdout); err != nil {
+		return err
+	}
+	if c.fs.NArg() != 1 {
+		return c.usageErrorf("sql needs exactly one SQL query argument (or - for stdin)")
+	}
+	query := c.fs.Arg(0)
+	if query == "-" {
+		raw, err := io.ReadAll(io.LimitReader(stdin, mcpserver.DefaultMaxQueryBytes+1))
+		if err != nil {
+			return jsonFailurePrint(*asJSON, stdout, sqlSpec.name, classify(fmt.Errorf("read query from stdin: %w", err), "query_read_failed", ""))
+		}
+		if len(raw) > mcpserver.DefaultMaxQueryBytes {
+			return jsonFailurePrint(*asJSON, stdout, sqlSpec.name, classify(
+				fmt.Errorf("%w: stdin exceeds the %d byte input limit", mcpserver.ErrQueryTooLarge, mcpserver.DefaultMaxQueryBytes),
+				"query_too_large",
+				"shorten the query to at most 64 KiB",
+			))
+		}
+		query = string(raw)
+	}
+	target, err := resolveRecallTarget(home, *state, *db, *remote, dbFlagExplicit(c))
+	if err != nil {
+		return jsonFailurePrint(*asJSON, stdout, sqlSpec.name, err)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	backend, closeBackend, err := openRecallBackend(target)
+	if err != nil {
+		return jsonFailurePrint(*asJSON, stdout, sqlSpec.name, err)
+	}
+	defer closeBackend()
+	res, err := recallQuery(ctx, backend, query)
+	if err != nil {
+		return jsonFailurePrint(*asJSON, stdout, sqlSpec.name, err)
+	}
+	if *asJSON {
+		return printJSON(stdout, sqlSpec.name, res)
+	}
+	printSQLResult(stdout, res)
+	return nil
 }
 
 func runSearchCommand(args []string, stdout, stderr io.Writer) error {
@@ -446,6 +519,16 @@ func recallQuery(ctx context.Context, backend recallBackend, query string) (mcps
 			"query_denied",
 			"",
 		)
+	case errors.Is(err, mcpserver.ErrMultipleStatements):
+		return res, classify(err, "multiple_statements", "pass exactly one SQL statement per call")
+	case errors.Is(err, mcpserver.ErrEmptyQuery):
+		return res, classify(err, "empty_query", "pass a SELECT or allow-listed read-only PRAGMA statement")
+	case errors.Is(err, mcpserver.ErrQueryTooLarge):
+		return res, classify(err, "query_too_large", "shorten the query to at most 64 KiB")
+	case errors.Is(err, mcpserver.ErrDeadline):
+		return res, classify(err, "query_deadline", "narrow the query with a covering subquery or LIMIT")
+	case errors.Is(err, mcpserver.ErrBusy):
+		return res, classify(err, "server_busy", "retry once an active query finishes")
 	}
 	return res, classify(fmt.Errorf("query failed: %w", err), "query_failed", "")
 }
@@ -627,6 +710,38 @@ func buildSessionsJSON(res mcpserver.Result) sessionsJSONData {
 		out.Sessions = append(out.Sessions, buildSessionSummaryJSON(row))
 	}
 	return out
+}
+
+func printSQLResult(w io.Writer, res mcpserver.Result) {
+	s := styleFor(w)
+	if res.RowCount == 0 {
+		fmt.Fprintln(w, s.dim("no rows"))
+	} else {
+		tbl := cliTable{headers: res.Columns}
+		for _, row := range res.Rows {
+			cells := make([]string, len(res.Columns))
+			for i := range res.Columns {
+				if i < len(row) {
+					cells[i] = sqlCellText(row[i])
+				}
+			}
+			tbl.addRow(cells...)
+		}
+		tbl.render(w, s)
+	}
+	if res.Truncated {
+		fmt.Fprintf(w, "\n%s\n", s.yellow(fmt.Sprintf("; result truncated (%s)", res.TruncationReason)))
+	}
+	if res.Redactions > 0 {
+		fmt.Fprintf(w, "%s\n", s.dim(fmt.Sprintf("; %d secret-shaped value(s) redacted", res.Redactions)))
+	}
+}
+
+func sqlCellText(v any) string {
+	if v == nil {
+		return "NULL"
+	}
+	return excerptText(recallValue(v))
 }
 
 func printSearchResult(w io.Writer, res mcpserver.Result) {

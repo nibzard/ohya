@@ -533,3 +533,129 @@ func TestRecallFloat64WireNumbersDecodeCleanly(t *testing.T) {
 		t.Fatalf("float64 search match = %+v", res.Matches)
 	}
 }
+
+func TestSQLQueryTextJSONRedactionAndSafeguards(t *testing.T) {
+	db := seedRecallDatabase(t)
+	hub, err := store.Open(t.Context(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := "ghp_" + strings.Repeat("Z", 36)
+	_, err = hub.Writer().Exec(`INSERT INTO events(id,session_id,source_id,source_offset,time_ms,kind,role,raw_json,text)
+		 VALUES(9,'claude-code:dev1:sess-1','src-1',7,`+itoa(1763000008000)+`,'message','user','{}',?)`,
+		"export GITHUB_TOKEN="+token)
+	hub.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	code, out, errOut := runRecallCLI(t, "sql", "--db", db, "SELECT agent, repo, count(*) AS n FROM sessions GROUP BY agent, repo ORDER BY agent")
+	if code != 0 || errOut != "" {
+		t.Fatalf("text sql exit %d, stderr %q", code, errOut)
+	}
+	for _, want := range []string{"agent", "repo", "claude-code", "github.com/example/app", "codex", "NULL"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("text sql output lacks %q:\n%s", want, out)
+		}
+	}
+
+	code, out, errOut = runRecallCLI(t, "sql", "SELECT id, text FROM events WHERE id = 9", "--db", db, "--json")
+	if code != 0 || errOut != "" {
+		t.Fatalf("json sql exit %d, stderr %q", code, errOut)
+	}
+	env := decodeEnvelope(t, out)
+	if env.Command != "ohya sql" || env.Error != nil {
+		t.Fatalf("envelope = %+v", env)
+	}
+	var res mcpserver.Result
+	if err := json.Unmarshal(env.Data, &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.RowCount != 1 || res.Redactions != 1 || res.Truncated {
+		t.Fatalf("result = %+v", res)
+	}
+	gotText, _ := res.Rows[0][1].(string)
+	if strings.Contains(gotText, token) || !strings.Contains(gotText, "[redacted:github-token]") {
+		t.Fatalf("redacted cell = %q", gotText)
+	}
+
+	code, out, errOut = runRecallCLI(t, "sql", "--db", db, "SELECT id FROM events WHERE id = 999")
+	if code != 0 || errOut != "" || !strings.Contains(out, "no rows") {
+		t.Fatalf("empty sql = %d, %q, %q", code, out, errOut)
+	}
+
+	for _, tc := range []struct {
+		name     string
+		query    string
+		wantCode string
+	}{
+		{"write denied", "DELETE FROM events", "query_denied"},
+		{"purged_sources denied", "SELECT * FROM purged_sources", "query_denied"},
+		{"multiple statements", "SELECT 1; SELECT 2", "multiple_statements"},
+		{"empty query", "   ", "empty_query"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			code, out, _ := runRecallCLI(t, "sql", "--db", db, "--json", tc.query)
+			if code != 1 {
+				t.Fatalf("exit = %d; want 1 (stdout %q)", code, out)
+			}
+			env := decodeEnvelope(t, out)
+			if env.Error == nil || env.Error.Code != tc.wantCode {
+				t.Fatalf("error = %+v; want %q", env.Error, tc.wantCode)
+			}
+		})
+	}
+}
+
+func TestSQLReadsStdinAndBoundsSize(t *testing.T) {
+	db := seedRecallDatabase(t)
+
+	var stdout, stderr bytes.Buffer
+	err := runSQLCommand([]string{"--db", db, "--json", "-"}, strings.NewReader("SELECT count(*) AS n\nFROM sessions\n"), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("stdin sql failed: %v", err)
+	}
+	env := decodeEnvelope(t, stdout.String())
+	if env.Command != "ohya sql" || env.Error != nil {
+		t.Fatalf("envelope = %+v", env)
+	}
+	var res mcpserver.Result
+	if err := json.Unmarshal(env.Data, &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.RowCount != 1 || recallValue(res.Rows[0][0]) != "2" {
+		t.Fatalf("stdin sql result = %+v, want 2 sessions", res)
+	}
+
+	stdout.Reset()
+	oversized := "SELECT '" + strings.Repeat("a", mcpserver.DefaultMaxQueryBytes+10) + "'"
+	err = runSQLCommand([]string{"--db", db, "--json", "-"}, strings.NewReader(oversized), &stdout, &stderr)
+	if err == nil {
+		t.Fatal("oversized stdin query succeeded, want error")
+	}
+	env = decodeEnvelope(t, stdout.String())
+	if env.Error == nil || env.Error.Code != "query_too_large" {
+		t.Fatalf("oversized stdin error = %+v, want query_too_large", env.Error)
+	}
+}
+
+func TestSQLRemoteWithoutPairingAndPrintNotes(t *testing.T) {
+	code, _, errOut := runRecallCLI(t, "sql", "--remote", "--state", t.TempDir(), "SELECT 1")
+	if code != 1 || !strings.Contains(errOut, "no pairing credential") {
+		t.Fatalf("remote sql exit=%d stderr=%q", code, errOut)
+	}
+
+	var out bytes.Buffer
+	printSQLResult(&out, mcpserver.Result{
+		Columns:          []string{"text"},
+		Rows:             [][]any{{"[redacted:github-token]"}},
+		RowCount:         1,
+		Truncated:        true,
+		TruncationReason: mcpserver.TruncationReasonBytes,
+		Redactions:       1,
+	})
+	got := out.String()
+	if !strings.Contains(got, "; result truncated (byte_limit)") || !strings.Contains(got, "; 1 secret-shaped value(s) redacted") {
+		t.Fatalf("printSQLResult output = %q", got)
+	}
+}

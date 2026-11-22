@@ -419,6 +419,8 @@ func TestJSONSharedEnvelopeDecoder(t *testing.T) {
 		{"devices revoke", []string{"devices", "revoke", "--json", "--state", otherPaired, "0123456789abcdef0123456789abcdea"}, "ohya devices revoke", false},
 		{"ingest --once", []string{"ingest", "--once", "--json", "--db", filepath.Join(ingestDir, "hub.db"), "--state", filepath.Join(ingestDir, "state"), "--claude-root", e.root, "--codex-root", "", "--pi-root", "", "--antigravity-root", ""}, "ohya ingest", false},
 		{"doctor", []string{"doctor", "--json", "--db", filepath.Join(ingestDir, "hub.db"), "--state", filepath.Join(ingestDir, "state")}, "ohya doctor", false},
+		{"sql", []string{"sql", "--json", "--db", filepath.Join(ingestDir, "hub.db"), "SELECT count(*) FROM events"}, "ohya sql", false},
+		{"sql denied", []string{"sql", "--json", "--db", filepath.Join(ingestDir, "hub.db"), "DELETE FROM events"}, "ohya sql", true},
 		{"rederive failure", []string{"rederive", "--json", "--db", filepath.Join(blocker, "hub.db")}, "ohya rederive", true},
 		{"devices list failure", []string{"devices", "list", "--json", "--state", blocker}, "ohya devices list", true},
 		{"devices invite failure", []string{"devices", "invite", "--json", "--state", t.TempDir()}, "ohya devices invite", true},

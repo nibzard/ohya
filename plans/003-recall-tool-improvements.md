@@ -1,9 +1,16 @@
 # Recall tool improvements
 
 Status: in delivery. R1 (T103), R2 (T104), and R5 (T107) are implemented,
-delivered 2026-11-16 to 2026-11-17. R3 (T105) and R4 (T106) are open;
-both wait for the plan 002 baseline (T099). Priority P2. Planned against
-`d237c54`, 2026-11-16. Depends on plan 002 for measurement.
+delivered 2026-11-16 to 2026-11-17. On 2026-11-23, context-efficiency and
+progressive-disclosure improvements landed from `recall-bench` run 1 and
+Anthropic's *Code execution with MCP* analysis: FTS5 `snippet()` excerpts,
+bounded `substr(first_prompt, 1, 160)` in session recipes, agent+window and
+FTS count recipes, on-demand MCP guide resources (`ohya://guides/garbage-audit`,
+`ohya://guides/analytics-and-review`) cutting upfront MCP prompt size from
+15,431 to 7,374 bytes (-52%), and scriptable `ohya sql` CLI parity.
+R3 (T105) limit tuning and R4 (T106) call-rate measurement remain open pending
+`recall-bench compare` and the plan 002 baseline (T099). Priority P2. Planned
+against `d237c54`, 2026-11-16. Depends on plan 002 for measurement.
 
 ## Outcome
 

@@ -30,6 +30,7 @@ ingest     import agent session history, then poll for new records
 serve      run the hub for devices: transport, sync, remote tools
 join       pair a device with a hub and upload its agent sessions
 mcp        serve the sql and annotate MCP tools on stdio
+sql        run one bounded read-only SQL query against stored history
 search     find sessions by keyword in the stored events
 show       print one session's newest events
 sessions   list recent sessions
@@ -80,6 +81,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runJoinCommand(rest, stdout, stderr)
 	case "mcp":
 		return runMcpCommand(rest, stdout, stderr)
+	case "sql":
+		return runSQLCommand(rest, os.Stdin, stdout, stderr)
 	case "search":
 		return runSearchCommand(rest, stdout, stderr)
 	case "show":
