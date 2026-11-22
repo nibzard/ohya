@@ -1,6 +1,6 @@
 # Release and recovery operations
 
-The newest release is v0.3.0, published on 2026-11-20 from commit `3fe9f4e`
+The newest release is v0.4.0, published on 2026-11-22 from commit `ae217b7`
 after the full candidate matrix passed; its macOS archives are unsigned. Apple signing and
 notarization must pass before a signed public release. Generated candidates
 are not qualified releases merely because packaging succeeds.
@@ -197,6 +197,20 @@ more full recovery copy, so the cost above applies once per hub. Beyond that:
   reliability/security/observability hardening. The released installer
   upgraded the linux-amd64 hub host end to end; `ohya.service` and
   `ohya-serve.service` are active.
+- v0.4.0 (commit `ae217b7`, dirty=false) was published on 2026-11-22 after
+  the full hosted matrix passed (run 45070974033) and local `make check` +
+  `make tla` passed with zero errors. v0.4.0 stays on schema 8 and adds
+  clean-shutdown snapshot markers (`stopped: true`), periodic stale
+  instance cleanup, retained-instance folding (`--all`) and live-only
+  daemon duplicate detection in `ohya status` and `ohya metrics`, unified
+  TTY/NO_COLOR styled CLI formatting, `ohya status --remote` hub
+  aggregates (Plan 001 M5, `Auth.tla` verified), `ohya service
+  status|start|stop|restart`, `ohya sessions` plus `--json` for
+  `search`/`show`, `64 MiB` `journal_size_limit` with WAL truncation after
+  `rederive`, and the native SwiftUI `macos/OhyaMenuBar` app source (ADR
+  0017). The released installer upgraded the linux-amd64 hub host end to
+  end; after restarting `ohya-serve.service`, both `ohya doctor` and
+  `ohya status` exited 0.
 - The installer refuses to replace an executable whose digest matches neither
   its receipt entry nor the previous one ("installed executable has changed;
   preserve it"). A copy installed by hand outside `install.sh` triggers this
