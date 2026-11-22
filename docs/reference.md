@@ -943,3 +943,18 @@ to end with real Claude Code and Codex clients before release claims: it
 seeds an isolated hub with synthetic recorded decisions, and each client must
 retrieve the evidence through the `sql` MCP tool, cite event IDs that resolve,
 and answer a current-context case without querying memory.
+
+The recall bench (`cmd/recall-bench`) measures the access path itself instead
+of gate correctness: the same headless Claude Code client answers the same
+recall questions twice, once with file and shell tools over the transcript
+roots and once with only the `mcp__ohya__sql` tool over a hub database, and
+the harness compares success, wall time, token usage, tool calls, and the
+bytes of tool results pulled into context. `recall-bench plant` records
+generated canary decisions through the real Claude Code, Codex, and Pi
+clients so ground truth is exact; `recall-bench run` verifies expected match
+counts (hub sessions, settled sessions, local files) before any timed run
+and writes `report.md` with per-question, per-arm medians over repeats.
+Curated real-history questions live in `questions/recall-bench-curated.json`;
+one operator-side caveat applies to them: curating a marker echoes it into
+the curator's own session, so those markers match one extra session and file
+(the curation session itself), which the expected counts must include.

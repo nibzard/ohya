@@ -2344,4 +2344,25 @@ How to use this file:
   unverified until someone runs `swift test` on a Mac. The 2026-11-21
   review fixes and cleanups (19774e8..d356297) await that check; before
   them the test target likely did not compile (plain import of
-  internal memberwise initializers, fixed in 3643b94).
+  internal memberwise initializers, fixed 3643b94).
+
+- Recall bench (2026-11-22, `cmd/recall-bench`): comparative measurement of
+  raw transcript files versus the ohya sql MCP tool as recall access paths,
+  with real headless clients; design and protocol in
+  /notes/2026-11-22-recall-bench-design.md. Facts worth keeping:
+  - Curating a marker against the production hub echoes it into the
+    curator's own session (sql queries, tool results, even writing the
+    question file), so every curated marker matches one extra session and
+    one extra local file — expected counts must include the curation
+    session, and it sits in `events` but not `events_settled` while live,
+    hence the separate `expected_settled` field. Canaries planted by
+    `recall-bench plant` do not have this problem: codewords are generated
+    inside the planter and never pass through the operator's session.
+  - Planted sessions flow to the hub through the running `ohya ingest`
+    service in seconds; the settle gate (10 minutes idle), not ingestion,
+    is the wait before `events_settled` sees them.
+  - Headless planting runs must sanitize the environment: inherited
+    `CLAUDE_CODE_*` variables change client behavior (pi exited 1 under a
+    full passthrough and worked under a minimal env), and transient
+    provider failures make one retry loop necessary.
+
