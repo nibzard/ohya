@@ -5,8 +5,8 @@
     "prompt": "A kernel soft-lockup warning on this machine named a stuck thread called HeapHelper. Find the session that diagnosed this and report the stuck CPU number exactly in the form CPU#N.",
     "answer_contains": ["CPU#2"],
     "evidence_marker": "HeapHelper",
-    "expected_sessions": 3,
-    "expected_settled": 2,
+    "expected_sessions": 4,
+    "expected_settled": 4,
     "expected_files": 3
   },
   {
@@ -15,8 +15,8 @@
     "prompt": "In November 2026 a session investigated why this virtual machine became so unresponsive it needed a hard restart, and it cleared one common cause by reading system-activity records before blaming disk saturation. Which cause did it clear, and what memory-utilization percentage range did it observe? Report the range exactly as written, in the form N-M%.",
     "answer_contains": ["9-11%"],
     "evidence_marker": "no overcommit problem",
-    "expected_sessions": 2,
-    "expected_settled": 1,
+    "expected_sessions": 3,
+    "expected_settled": 3,
     "expected_files": 2
   },
   {
@@ -25,8 +25,8 @@
     "prompt": "On the morning of 2026-11-16 this machine was rebooted after becoming unresponsive. According to the session that diagnosed the incident, at what time (HH:MM) did the reboot happen?",
     "answer_contains": ["09:08"],
     "evidence_marker": "rebooted at 09:08",
-    "expected_sessions": 2,
-    "expected_settled": 1,
+    "expected_sessions": 3,
+    "expected_settled": 3,
     "expected_files": 2
   },
   {
@@ -36,8 +36,8 @@
     "prompt": "On a device other than this VM, a session measured the running ohya uploader and reported live measurements in a table. What resident memory in MiB did it observe for the uploader? Report the number.",
     "answer_contains": ["301"],
     "evidence_marker": "Readable upload checkpoints",
-    "expected_sessions": 2,
-    "expected_settled": 1,
+    "expected_sessions": 3,
+    "expected_settled": 3,
     "expected_files": 1
   }
 ]
