@@ -12,7 +12,11 @@ import (
 	"github.com/nibzard/ohya/internal/store"
 )
 
-const publishedSQLBlockCount = 22
+const (
+	toolDescriptionSQLBlockCount = 10
+	garbageGuideSQLBlockCount    = 8
+	analyticsGuideSQLBlockCount  = 4
+)
 
 var sqlBlockOpeners = []string{"SELECT ", "WITH ", "PRAGMA ", "EXPLAIN ", "VALUES "}
 
@@ -25,10 +29,10 @@ func startsSQLStatement(line string) bool {
 	return false
 }
 
-func publishedSQLBlocks(t *testing.T, description string) []string {
+func publishedSQLBlocks(t *testing.T, label, text string, wantCount int) []string {
 	t.Helper()
 	var blocks []string
-	for _, para := range strings.Split(description, "\n\n") {
+	for _, para := range strings.Split(text, "\n\n") {
 		lines := strings.Split(para, "\n")
 		for i, line := range lines {
 			if startsSQLStatement(line) {
@@ -37,8 +41,8 @@ func publishedSQLBlocks(t *testing.T, description string) []string {
 			}
 		}
 	}
-	if len(blocks) != publishedSQLBlockCount {
-		t.Fatalf("extracted %d SQL blocks from the sql tool description, want %d; update publishedSQLBlockCount after a deliberate example change", len(blocks), publishedSQLBlockCount)
+	if len(blocks) != wantCount {
+		t.Fatalf("extracted %d SQL blocks from %s, want %d; update the count pin after a deliberate example change", len(blocks), label, wantCount)
 	}
 	return blocks
 }
@@ -125,7 +129,11 @@ func TestToolDescriptionStatesFtsTermQuoting(t *testing.T) {
 
 func TestPublishedRecipesRunVerbatim(t *testing.T) {
 	e := openPublishedRecipesHub(t)
-	blocks := publishedSQLBlocks(t, ToolDescription(EngineOptions{WriterID: "dev1"}))
+	opts := EngineOptions{WriterID: "dev1"}
+	var blocks []string
+	blocks = append(blocks, publishedSQLBlocks(t, "sql tool description", ToolDescription(opts), toolDescriptionSQLBlockCount)...)
+	blocks = append(blocks, publishedSQLBlocks(t, GuideGarbageAuditURI, GarbageAuditGuide(), garbageGuideSQLBlockCount)...)
+	blocks = append(blocks, publishedSQLBlocks(t, GuideAnalyticsReviewURI, AnalyticsReviewGuide(opts), analyticsGuideSQLBlockCount)...)
 	ran := make(map[string]Result, len(blocks))
 	for _, block := range blocks {
 		res := mustQuery(t, e, block)

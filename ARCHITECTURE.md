@@ -546,8 +546,12 @@ SQL runs with a read-only connection, SQLite authorizer, one statement, executio
 deadline, row/byte limits and bounded concurrency. Deny attachment, extension
 loading, unsafe functions and state-changing pragmas. Verify driver support for
 FTS5, authorizer and cancellation before selecting it. Output truncation is explicit.
-Publish schema and examples in the MCP tool description; permit safe schema
-inspection through SQL. Credentials and internal authorization state are not exposed.
+Publish schema and core recall recipes in the MCP tool description; expose
+specialized playbooks (garbage audit, analytics and review pagination) on
+demand as MCP resources (`ohya://guides/garbage-audit`,
+`ohya://guides/analytics-and-review`) so ordinary sessions do not pay for
+them upfront; permit safe schema inspection through SQL. Credentials and
+internal authorization state are not exposed.
 
 Implemented in `internal/mcpserver` and served by `ohya mcp` on stdio (official
 MCP Go SDK, pinned per ADR 0001). The initialize result identifies the server

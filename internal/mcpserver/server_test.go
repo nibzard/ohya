@@ -71,17 +71,22 @@ func TestServerServesSQLTool(t *testing.T) {
 		"Current writer ID", "dev1", "events_fts", "events_settled", "event_annotations",
 		"session_token_usage", "sqlite_master", "one statement per call",
 		"truncated", "MATCH", "Secret redaction", "[redacted:", "redactions",
-		"best-effort risk reduction, never a guarantee", "ohya purge",
-		"date-bounded recall", "strftime('%s','now')",
-		"resume, step 1", "resume, step 2", "duplicate_of IS NULL",
-		"SELECT DISTINCT model FROM sessions", "SELECT DISTINCT device_id FROM sessions",
-		"Garbage audit", "ohya purge --marked tags.garbage", "length(e.raw_json) > 65536",
-		"AS replay_copies", "GROUP BY s.model", "a.key = 'garbage'",
-		"never run them yourself",
+		"Best-effort risk reduction, never a guarantee", "ohya purge",
+		"Date-bounded recall", "strftime('%s','now')",
+		"Resume, step 1", "Resume, step 2", "duplicate_of IS NULL",
+		"snippet(events_fts", "count(DISTINCT e.session_id)",
+		GuideGarbageAuditURI, GuideAnalyticsReviewURI, "ohya purge --marked tags.garbage",
 	} {
 		if !strings.Contains(description, want) {
 			t.Fatalf("tool description misses %q:\n%s", want, description)
 		}
+	}
+
+	const maxUpfrontPromptBytes = 8000
+	upfront := len(MemoryInstructions) + len(sql.Description) + len(annotate.Description)
+	if upfront > maxUpfrontPromptBytes {
+		t.Fatalf("upfront MCP prompt = %d bytes, want <= %d (instructions=%d sql=%d annotate=%d)",
+			upfront, maxUpfrontPromptBytes, len(MemoryInstructions), len(sql.Description), len(annotate.Description))
 	}
 
 	result := call(t, session, `SELECT count(*) AS events FROM events`)
@@ -182,6 +187,64 @@ func TestMemoryGuidanceDeliveredAtInitialization(t *testing.T) {
 	session := connect(t, EngineOptions{})
 	if got := session.InitializeResult().Instructions; got != MemoryInstructions {
 		t.Fatalf("server instructions = %q", got)
+	}
+}
+
+func TestServerServesGuideResources(t *testing.T) {
+	session := connect(t, EngineOptions{WriterID: "dev1"})
+	ctx := context.Background()
+
+	listed, err := session.ListResources(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uris := make([]string, 0, len(listed.Resources))
+	for _, r := range listed.Resources {
+		uris = append(uris, r.URI)
+		if r.MIMEType != "text/markdown" || r.Size <= 0 {
+			t.Fatalf("resource %q metadata = %+v, want text/markdown with positive size", r.URI, r)
+		}
+	}
+	slices.Sort(uris)
+	wantURIs := []string{GuideAnalyticsReviewURI, GuideGarbageAuditURI}
+	if !slices.Equal(uris, wantURIs) {
+		t.Fatalf("listed resources = %v, want %v", uris, wantURIs)
+	}
+
+	garbage, err := session.ReadResource(ctx, &mcp.ReadResourceParams{URI: GuideGarbageAuditURI})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(garbage.Contents) != 1 {
+		t.Fatalf("garbage resource contents = %d, want 1", len(garbage.Contents))
+	}
+	for _, want := range []string{
+		"Garbage audit", "ohya purge --marked tags.garbage", "length(e.raw_json) > 65536",
+		"AS replay_copies", "GROUP BY s.model", "a.key = 'garbage'", "never run them yourself",
+	} {
+		if !strings.Contains(garbage.Contents[0].Text, want) {
+			t.Fatalf("garbage guide misses %q", want)
+		}
+	}
+
+	analytics, err := session.ReadResource(ctx, &mcp.ReadResourceParams{URI: GuideAnalyticsReviewURI})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(analytics.Contents) != 1 {
+		t.Fatalf("analytics resource contents = %d, want 1", len(analytics.Contents))
+	}
+	for _, want := range []string{
+		"SELECT DISTINCT model FROM sessions", "SELECT DISTINCT device_id FROM sessions",
+		"session_token_usage", "a.writer_id = 'dev1'",
+	} {
+		if !strings.Contains(analytics.Contents[0].Text, want) {
+			t.Fatalf("analytics guide misses %q", want)
+		}
+	}
+
+	if _, err := session.ReadResource(ctx, &mcp.ReadResourceParams{URI: "ohya://guides/does-not-exist"}); err == nil {
+		t.Fatal("reading an unknown guide URI succeeded, want an error")
 	}
 }
 

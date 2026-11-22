@@ -406,10 +406,13 @@ assignments become kind-labeled markers such as
 `[redacted:github-token]`, and the result counts replacements in
 `redactions`. This is best-effort risk reduction, never a guarantee;
 stored records are never modified. The tool
-description publishes the schema, SQL examples, the limits, and this
+description publishes the schema, core recall recipes, the limits, and this
 device's writer ID, and steers agents to the `events_settled` view —
 `events` without sessions active in the last 10 minutes — so a querying
-agent does not read its own live session. To connect an agent, register
+agent does not read its own live session. Lower-frequency playbooks
+(`ohya://guides/garbage-audit` and `ohya://guides/analytics-and-review`) are
+served on demand as MCP resources instead of being loaded upfront on every
+session. To connect an agent, register
 the command, for example
 for Claude Code:
 

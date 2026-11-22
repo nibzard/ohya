@@ -473,8 +473,10 @@ query patterns justify them.
 
 ## Recall recipes
 
-The `sql` tool description publishes the same recipes to agents at connect
-time, one paragraph per recipe. They are single statements an agent runs
+The `sql` tool description publishes the core recall recipes at connect
+time, one paragraph per recipe, and serves lower-frequency analytics and
+review recipes on demand through the `ohya://guides/analytics-and-review`
+MCP resource. They are single statements an agent runs
 unmodified after substituting one discovered literal (a repo, a model, a
 device, or a session id). Each recipe keeps the subquery shape of the
 project recall example, because a plain `ORDER BY e.time_ms` over a wide
@@ -577,8 +579,9 @@ ORDER BY s.last_event_at_ms DESC LIMIT 10;
 When a user asks an agent to "clean up the data" or "find the garbage",
 the agent answers end to end without ever holding a destructive
 capability ([ADR 0016](docs/adr/0016-agent-marked-purge-scope.md)). The
-flow has three steps, and the `sql` tool description publishes the same
-queries to agents at connect time:
+flow has three steps, and the MCP server exposes the same queries on
+demand through the `ohya://guides/garbage-audit` resource (linked from the
+`sql` tool description):
 
 1. **FIND** — read-only SQL (the recipes below) locates stale weight.
 2. **MARK** — the agent annotates the deciding event of each garbage

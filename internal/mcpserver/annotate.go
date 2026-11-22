@@ -185,28 +185,12 @@ func decodeStrict(data []byte, v any) error {
 }
 
 func AnnotateDescription(o EngineOptions) string {
-	return fmt.Sprintf(`Apply a batch of annotation operations to existing events, atomically: every operation commits or none does. Annotations are your interpretations (tags, classifications, security-review findings) stored in event_annotations; original transcript records are never modified.
+	return fmt.Sprintf(`Atomically apply a batch of annotation operations in event_annotations without modifying original transcripts.
 
-Each operation is an object with:
-- "op": "upsert" or "delete"
-- "event_id": id of an existing event (SELECT id FROM events)
-- "namespace" and "key": each 1-128 ASCII characters from letters, digits and _ - . /
-- "value": any JSON value — required for upsert, omit it for delete
+Operation fields: "op" ("upsert"|"delete"), "event_id" (existing events.id), "namespace" and "key" (1-128 ASCII chars: letters, digits, _ - . /), "value" (any JSON for upsert; omit for delete).
+Rules: writer_id is hub-assigned as %s (never send writer_id; unknown fields are rejected). Identity is (event_id, namespace, key, writer_id). Upsert stores compact JSON, keeps created_at_ms on updates, and is a no-op on identical retries; absent delete counts as unchanged. Limits: %d ops, %d request bytes, %d bytes per value, no duplicate identities in one batch. Returns {"applied": n, "unchanged": m}. Query via sql.
 
-Rules:
-- writer_id is assigned by the hub; this device writes as %s. Never send it: unknown fields, including writer_id, are rejected.
-- The annotation identity is (event_id, namespace, key, writer_id). Upsert replaces the complete value, stored as compact JSON. An identical retry changes nothing, not even timestamps. A changed value keeps created_at_ms and refreshes updated_at_ms.
-- Delete of an absent annotation succeeds and counts as unchanged.
-- Limits: at most %d operations and %d bytes per request; at most %d bytes of UTF-8 JSON per value; no duplicate identities in one batch; every event_id must exist.
-- The result {"applied": n, "unchanged": m} reports the durable commit. Query annotations with the sql tool.
-
-Example — record a completed security review:
-{"operations":[{"op":"upsert","event_id":42,"namespace":"security","key":"review","value":{"status":"reviewed","analysis_version":"v1","findings":[]}}]}
-
-Example — remove a tag and retry another annotation identically:
-{"operations":[{"op":"delete","event_id":42,"namespace":"tags","key":"needs-review"}]}
-
-Example — mark an event as garbage for the owner's purge audit (the sql tool's garbage audit explains the flow; the owner runs ohya purge --marked tags.garbage, never you):
-{"operations":[{"op":"upsert","event_id":42,"namespace":"tags","key":"garbage","value":{"reason":"aborted start, single record","evidence":42}}]}
+Example:
+{"operations":[{"op":"upsert","event_id":42,"namespace":"tags","key":"garbage","value":{"reason":"aborted start, single record","evidence":42}},{"op":"delete","event_id":42,"namespace":"tags","key":"needs-review"}]}
 `, o.WriterID, store.MaxAnnotationOperations, o.MaxAnnotateRequestBytes, store.MaxAnnotationValueBytes)
 }
