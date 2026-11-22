@@ -13,9 +13,6 @@ import (
 	"time"
 )
 
-// canaryStems are invented words chosen so a generated codeword cannot
-// collide with real transcript content; the run preflight still verifies
-// the expected match counts before any timed run starts.
 var canaryStems = []string{
 	"Vundrabrot", "Krellingsdorf", "Quantlyx", "Morvathene", "Zephyrind",
 	"Brallokit", "Sundervik", "Trelleborn", "Harmstadt", "Ostrelling",
@@ -125,9 +122,6 @@ func agentSummary(sessions []plantedSession) string {
 	return strings.Join(kinds, ", ")
 }
 
-// plantOneWithRetry retries a failed planting run twice: headless clients
-// fail transiently (provider hiccups), and one failed run would break the
-// whole set's expected match counts.
 func plantOneWithRetry(ctx context.Context, opts plantOptions, s plantedSession, logf func(string, ...any), index int) error {
 	var err error
 	for attempt := 1; attempt <= 3; attempt++ {
@@ -219,9 +213,6 @@ func newCodeword(rng *rand.Rand) string {
 	return fmt.Sprintf("%s-%02d", canaryStems[rng.Intn(len(canaryStems))], 10+rng.Intn(90))
 }
 
-// plantingEnv keeps the planting runs independent of the harness shell:
-// inherited agent-detection variables (CLAUDE_CODE_*, CLAUDECODE) change
-// client behavior, so only a minimal environment passes through.
 func plantingEnv() []string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -241,8 +232,6 @@ func plantingEnv() []string {
 	return env
 }
 
-// sessionList returns the planting runs in order. Order matters: the c5
-// correction session must land after the original decision.
 func (p *canaryPlan) sessionList() []plantedSession {
 	return []plantedSession{
 		{Agent: "claude", Fact: fmt.Sprintf("the %s retry ceiling is %d milliseconds.", p.code1, p.v1)},

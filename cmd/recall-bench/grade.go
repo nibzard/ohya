@@ -23,12 +23,8 @@ var negativePhrases = []string{
 	"nothing found", "no mention", "could not locate", "no decision",
 }
 
-// metaTools carry no transcript data: ToolSearch resolves deferred tool
-// schemas and appears when the client has not seen the ohya tools yet.
 var metaTools = map[string]bool{"ToolSearch": true}
 
-// gradeRun scores one finished run. Verdicts: correct, wrong-answer,
-// bad-evidence, no-citation, negative-correct, negative-fabricated, invalid.
 func gradeRun(ctx context.Context, res *resolver, q Question, arm string, m traceMetrics) string {
 	for _, call := range m.ToolCalls {
 		if metaTools[call] {
@@ -99,8 +95,6 @@ func gradeRun(ctx context.Context, res *resolver, q Question, arm string, m trac
 	if strings.Contains(text, q.EvidenceMarker) {
 		return "correct"
 	}
-	// The citation may name any record of the deciding session, mirroring
-	// the file-level contract the raw arm is graded against.
 	inSession, err := res.sessionHasText(ctx, sessionID, q.EvidenceMarker)
 	if err != nil {
 		return "bad-evidence"
@@ -123,8 +117,6 @@ func citedEventID(answer string) (int64, bool) {
 	return id, true
 }
 
-// resolver is a client session against the ohya mcp server over the hub
-// database, used for preflight counts and event-id grading.
 type resolver struct {
 	session *mcp.ClientSession
 }

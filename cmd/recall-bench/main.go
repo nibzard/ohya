@@ -1,16 +1,3 @@
-// Command recall-bench measures how well a fresh coding agent recalls facts
-// from earlier sessions through two access paths: raw transcript files on
-// disk versus the ohya sql MCP tool over the hub database.
-//
-// Modes:
-//
-//	recall-bench plant -out DIR            generate canary facts and record
-//	                                       them through the real agent CLIs
-//	recall-bench run -out DIR -questions F run both arms over the question
-//	                                       set and write report.md
-//
-// The design and protocol are documented in the repository docs and in the
-// research notes; see docs/reference.md.
 package main
 
 import (
@@ -163,7 +150,6 @@ func defaultRoots() []string {
 	}
 }
 
-// stringSliceFlag collects a repeatable string flag.
 type stringSliceFlag struct {
 	values []string
 }

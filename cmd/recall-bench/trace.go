@@ -8,10 +8,6 @@ import (
 	"strings"
 )
 
-// traceMetrics is everything the bench extracts from one Claude Code
-// headless stream-json run. Usage totals are deduplicated by message.id:
-// Claude Code repeats the same per-request usage on every streaming
-// record of one API response.
 type traceMetrics struct {
 	Answer          string
 	OK              bool
@@ -58,8 +54,6 @@ type streamEvent struct {
 			CacheRead int64 `json:"cache_read_input_tokens"`
 			Output    int64 `json:"output_tokens"`
 		} `json:"usage"`
-		// Assistant records carry block arrays; user records carry tool
-		// results as blocks and typed prompts as a plain string.
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
 }
@@ -135,9 +129,6 @@ func parseClaudeStream(path string) traceMetrics {
 			if ev.Model != "" {
 				m.Model = ev.Model
 			}
-			// The result event carries the run's cumulative usage; the
-			// per-message records can be zeroed by API proxies, so the
-			// cumulative numbers win whenever they are present.
 			if ev.Usage != nil && (ev.Usage.Input > 0 || ev.Usage.Output > 0 ||
 				ev.Usage.CacheRead > 0 || ev.Usage.CacheNew > 0) {
 				m.InputTokens = ev.Usage.Input
@@ -153,8 +144,6 @@ func parseClaudeStream(path string) traceMetrics {
 				sort.Strings(models)
 				m.Model = strings.Join(models, ",")
 			}
-			// A permission-denied attempt never executed, so it is not
-			// cross-access: drop denied calls from the audit surface.
 			if len(ev.PermissionDenials) > 0 {
 				denied := map[string]bool{}
 				for _, d := range ev.PermissionDenials {

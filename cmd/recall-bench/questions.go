@@ -9,20 +9,18 @@ import (
 	"strings"
 )
 
-// Question is one recall task, arm-neutral: the harness composes the
-// access-method preamble and the answer-format instructions per arm.
 type Question struct {
 	Key              string   `json:"key"`
 	Tier             string   `json:"tier"`
-	Scope            string   `json:"scope"` // "local" or "remote-only"; empty means local
+	Scope            string   `json:"scope"`
 	Prompt           string   `json:"prompt"`
 	AnswerContains   []string `json:"answer_contains"`
 	CountValue       int      `json:"count_value,omitempty"`
 	Negative         bool     `json:"negative,omitempty"`
 	EvidenceMarker   string   `json:"evidence_marker,omitempty"`
-	ExpectedSessions int      `json:"expected_sessions,omitempty"` // hub sessions whose text carries the marker
-	ExpectedSettled  int      `json:"expected_settled,omitempty"`  // of those, sessions past the 10-minute idle gate; defaults to expected_sessions
-	ExpectedFiles    int      `json:"expected_files,omitempty"`    // local transcript files carrying the marker
+	ExpectedSessions int      `json:"expected_sessions,omitempty"`
+	ExpectedSettled  int      `json:"expected_settled,omitempty"`
+	ExpectedFiles    int      `json:"expected_files,omitempty"`
 }
 
 var knownTiers = map[string]bool{

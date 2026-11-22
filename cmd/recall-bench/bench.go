@@ -134,9 +134,6 @@ func bench(ctx context.Context, opts benchOptions) error {
 	return nil
 }
 
-// regrade re-scores finished runs from their traces after a parser or
-// grading change, without rerunning the clients. Timeout and error
-// verdicts describe run conditions and stay untouched.
 func regrade(ctx context.Context, opts benchOptions) error {
 	ohya, err := resolveExecutable(opts.ohya)
 	if err != nil {

@@ -211,7 +211,6 @@ func TestNewCanaryPlanDeterministicAndDistinct(t *testing.T) {
 		}
 		agents = append(agents, s.Agent)
 	}
-	// The c5 correction session must come after the original decision.
 	correctionAt, originalAt := -1, -1
 	for i, s := range facts {
 		if strings.Contains(s.Fact, "Correction to an earlier decision") {
@@ -242,8 +241,6 @@ func TestCanaryMarkersConfineToTheirSessions(t *testing.T) {
 			t.Errorf("%s marker %q not present in any planted fact", key, marker)
 		}
 	}
-	// Each evidence marker must appear in exactly one planted fact: the
-	// aggregate question rides the c1 codename, which appears in two.
 	c1 := a.code1
 	hits := 0
 	for _, f := range mapFacts(facts) {
