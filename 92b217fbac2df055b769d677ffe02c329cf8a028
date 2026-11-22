@@ -1,0 +1,39 @@
+# Design: recall-bench comparative harness
+
+## Problem
+ohya claims that a shared SQL/FTS memory beats grepping raw transcript
+archives, but nothing measured the claim with real clients. The existing
+memory-e2e gate checks recall correctness against a seeded isolated hub;
+it cannot compare access paths or cost.
+
+## Approach
+Two arms run the same headless Claude Code client over the same question
+body; only the access preamble and tool allowlist differ (raw: Bash,
+Grep, Read, Glob over the three transcript roots; ohya: mcp__ohya__sql
+over the production hub db, isolated through --strict-mcp-config and a
+scratch CLAUDE_CONFIG_DIR so no auto-memory or user MCP leaks in).
+Ground truth is mechanical: answerContains strings plus an evidence
+citation that the harness resolves (file path containing the marker for
+the raw arm; events.id whose session carries the marker for the ohya
+arm — session granularity, because the two formats cannot share record
+granularity fairly). A preflight verifies every marker's hub-session,
+settled-session, and local-file counts before any timed run.
+
+## Key Trade-offs
+- Canaries planted through the real CLIs keep ground truth exact and
+  test the live pipeline, but curation of real-history questions echoes
+  markers into the curator's own session (queries, tool results, even
+  writing the question file), so curated expected counts must include
+  the curation session; expected_settled exists because that session is
+  live during the bench.
+- Per-message usage records are zeroed by the API proxy in use, so the
+  parser prefers the result event's cumulative usage.
+- ToolSearch is allow-listed in the cross-access audit: it carries no
+  transcript data and fires when the client defers tool schemas.
+- Token totals measure context economy, which is the mechanism under
+  test: grep over multi-megabyte JSONL lines versus bounded SQL rows.
+
+## References
+- /notes/2026-11-22-recall-bench-design.md (protocol, confounds)
+- docs/reference.md recall bench section
+- cmd/memory-e2e (client invocation and trace parsing lineage)
