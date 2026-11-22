@@ -788,10 +788,15 @@ available from source builds:
 ./bin/ohya uninstall
 ```
 
-Setup configures a user ingestion service and native MCP entries for installed
-agents. Use `--agents claude,codex` to select clients, `--no-service` for an
+Setup configures a user ingestion service, native MCP entries, and an owned
+`ohya` agent skill (`skills/ohya/SKILL.md` under each agent's config root) for
+installed agents. The skill carries progressive-disclosure guidance — when to
+recall, core SQL recipes, the garbage-audit and analytics playbooks, and
+`ohya sql --json` scripting — so clients without automatic MCP resource reads
+still have the full playbooks on demand. Use `--agents claude,codex` to select
+clients, `--no-service` for an
 existing process manager, and `--no-agents` to skip client changes. Agent
-entries and service files use ownership receipts. On Linux the service keeps
+entries, skills, and service files use ownership receipts. On Linux the service keeps
 its stderr in the journal with rate limiting; on macOS the launchd template
 owns a private stderr startup file under `<state>/logs/` that setup creates
 and rotates at 8 MiB, so startup failures stay discoverable without an

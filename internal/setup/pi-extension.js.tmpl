@@ -44,14 +44,14 @@ export default function(pi) {
   pi.registerTool({
     name: "ohya_sql",
     label: "Query agent memory",
-    description: guidance + "\nRun one bounded read-only SQL query against ohya. Use SELECT or read-only PRAGMA. Inspect columns with PRAGMA table_info when needed. Tables include events_settled, sessions, sources, event_annotations, and events_fts.",
+    description: guidance + "\nRun one bounded read-only SQL query against ohya (SELECT or read-only PRAGMA; 500 rows, 256 KiB, 5 s). Tables: sessions (scope by repo host/path), workspaces, sources, events (filter duplicate_of IS NULL), events_settled (default recall surface; omits sessions active in last 10 min), events_fts (use snippet(events_fts, 0, '[', ']', '...', 24) and wrap hyphen/punctuation MATCH terms in double quotes), session_token_usage, event_annotations. See the installed ohya skill for recipes, garbage-audit, and ohya sql --json.",
     parameters: Type.Object({ query: Type.String() }),
     async execute(id, args, signal) { return call("sql", args, signal); }
   });
   pi.registerTool({
     name: "ohya_annotate",
     label: "Annotate memory events",
-    description: "Persist tags or interpretations on existing event IDs. Operations commit atomically. The hub assigns the writer. Original transcripts stay unchanged.",
+    description: "Atomically apply 1 to 100 upsert/delete annotations in event_annotations without modifying original transcripts. Hub assigns writer_id (never send it). Values are compact JSON up to 64 KiB; use namespace tags, key garbage to nominate sessions for owner ohya purge --marked tags.garbage.",
     parameters: Type.Object({ operations: Type.Array(Type.Object({
       op: Type.Union([Type.Literal("upsert"), Type.Literal("delete")]),
       event_id: Type.Integer(), namespace: Type.String(), key: Type.String(), value: Type.Optional(Type.Any())

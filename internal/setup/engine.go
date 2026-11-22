@@ -265,6 +265,11 @@ func Run(ctx context.Context, o Options) (Report, error) {
 					changed, err = ApplyClient(o.Clients, c)
 				}
 			}
+			if err == nil {
+				var skillChanged bool
+				skillChanged, err = ApplySkill(o.Clients, c)
+				changed = changed || skillChanged
+			}
 			result.Changed = changed
 			if err != nil {
 				result.Status = "failed"
@@ -318,11 +323,19 @@ func Remove(ctx context.Context, state string, run func(context.Context, []strin
 	}
 	report.Results = append(report.Results, profiles...)
 	for _, name := range []string{"claude", "codex", "pi", "agy"} {
-		changed, err := RemoveClient(state, name)
-		result := Result{Component: name, Status: "removed", Changed: changed}
-		if err != nil {
+		clientChanged, clientErr := RemoveClient(state, name)
+		skillChanged, skillErr := RemoveSkill(state, name)
+		result := Result{Component: name, Status: "removed", Changed: clientChanged || skillChanged}
+		if clientErr != nil || skillErr != nil {
 			result.Status = "failed"
-			result.Detail = err.Error()
+			switch {
+			case clientErr != nil && skillErr != nil:
+				result.Detail = clientErr.Error() + "; " + skillErr.Error()
+			case clientErr != nil:
+				result.Detail = clientErr.Error()
+			default:
+				result.Detail = skillErr.Error()
+			}
 		}
 		report.Results = append(report.Results, result)
 	}

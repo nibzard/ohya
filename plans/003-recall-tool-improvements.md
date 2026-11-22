@@ -7,7 +7,10 @@ Anthropic's *Code execution with MCP* analysis: FTS5 `snippet()` excerpts,
 bounded `substr(first_prompt, 1, 160)` in session recipes, agent+window and
 FTS count recipes, on-demand MCP guide resources (`ohya://guides/garbage-audit`,
 `ohya://guides/analytics-and-review`) cutting upfront MCP prompt size from
-15,431 to 7,374 bytes (-52%), and scriptable `ohya sql` CLI parity.
+15,431 to 7,374 bytes (-52%), scriptable `ohya sql` CLI parity, an owned
+cross-harness `ohya` agent skill (`SKILL.md`) managed by `ohya setup` /
+`ohya uninstall` for Claude Code, Codex, Pi, and Antigravity, and aligned
+Pi extension tool guidance.
 R3 (T105) limit tuning and R4 (T106) call-rate measurement remain open pending
 `recall-bench compare` and the plan 002 baseline (T099). Priority P2. Planned
 against `d237c54`, 2026-11-16. Depends on plan 002 for measurement.

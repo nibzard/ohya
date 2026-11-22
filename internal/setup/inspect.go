@@ -87,6 +87,18 @@ func Inspect(ctx context.Context, state string, run func(context.Context, []stri
 		}
 		results = append(results, inspected(name, err, ready))
 	}
+	for _, name := range []string{"claude", "codex", "pi", "agy"} {
+		path := filepath.Join(state, "setup", "skills", name+".json")
+		r, err := loadFileReceipt(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		var current []byte
+		if err == nil {
+			current, err = readRegular(r.Path)
+		}
+		results = append(results, inspected("skill:"+name, err, bytes.Equal(current, r.Content)))
+	}
 	for _, name := range []string{"pi-extension.json", "pi-bridge-receipt.json"} {
 		path := filepath.Join(state, "setup", name)
 		r, err := loadFileReceipt(path)

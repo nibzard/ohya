@@ -18,7 +18,7 @@ func TestInspectOwnedIntegrationsDoesNotWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	report, err := Inspect(context.Background(), o.Clients.State, func(context.Context, []string) error { t.Fatal("unexpected service command"); return nil })
-	if err != nil || len(report) != 1 || report[0].Status != "ready" {
+	if err != nil || len(report) != 2 || report[0].Component != "claude" || report[0].Status != "ready" || report[1].Component != "skill:claude" || report[1].Status != "ready" {
 		t.Fatalf("inspect %+v %v", report, err)
 	}
 	after, err := os.ReadFile(path)
@@ -29,7 +29,7 @@ func TestInspectOwnedIntegrationsDoesNotWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	report, err = Inspect(context.Background(), o.Clients.State, nil)
-	if err != nil || len(report) != 1 || report[0].Status != "changed" {
+	if err != nil || len(report) != 2 || report[0].Status != "changed" || report[1].Status != "ready" {
 		t.Fatalf("edited %+v %v", report, err)
 	}
 	missing := filepath.Join(t.TempDir(), "absent")
