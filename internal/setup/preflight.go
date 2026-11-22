@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -133,7 +134,7 @@ func PreflightClient(o ClientOptions, c Client, cwd string) error {
 		exists := false
 		if c.Name == "codex" {
 			exists, err = tomlHasOhya(raw)
-		} else {
+		} else if len(bytes.TrimSpace(raw)) > 0 {
 			var root map[string]json.RawMessage
 			root, err = jsonObject(raw)
 			if err == nil {

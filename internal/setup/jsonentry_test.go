@@ -84,6 +84,24 @@ func TestJSONEntryResumesPreparedUpdate(t *testing.T) {
 	}
 }
 
+func TestJSONEntryEmptyAndWhitespaceFiles(t *testing.T) {
+	for _, initial := range []string{"", " \n\t "} {
+		e, r := entryFixture(t)
+		if err := os.WriteFile(e.Path, []byte(initial), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if changed, err := ApplyJSONEntry(e, r); err != nil || !changed {
+			t.Fatalf("apply on %q = %v, %v", initial, changed, err)
+		}
+		if changed, err := ApplyJSONEntry(e, r); err != nil || changed {
+			t.Fatalf("repeat on %q = %v, %v", initial, changed, err)
+		}
+		if _, err := RemoveJSONEntry(r); err != nil {
+			t.Fatalf("remove on %q: %v", initial, err)
+		}
+	}
+}
+
 func TestJSONEntryRejectsMalformedAndSymlink(t *testing.T) {
 	e, r := entryFixture(t)
 	if err := os.WriteFile(e.Path, []byte("null"), 0600); err != nil {

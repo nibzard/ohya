@@ -161,3 +161,19 @@ func TestProjectOverrideCheckFollowsSymlinks(t *testing.T) {
 		t.Fatalf("symlinked project override not inspected: %v", err)
 	}
 }
+
+func TestPreflightAllowsEmptyProjectJSONConfig(t *testing.T) {
+	o := engineOptions(t)
+	cwd := t.TempDir()
+	agentsDir := filepath.Join(cwd, ".agents")
+	if err := os.MkdirAll(agentsDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsDir, "mcp_config.json"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	c := Client{Name: "agy", Config: filepath.Join(o.Clients.Home, ".gemini", "config", "mcp_config.json")}
+	if err := PreflightClient(o.Clients, c, cwd); err != nil {
+		t.Fatalf("empty project mcp_config.json failed preflight: %v", err)
+	}
+}

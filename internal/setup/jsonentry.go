@@ -98,7 +98,11 @@ func readEntry(e JSONEntry) (map[string]json.RawMessage, map[string]json.RawMess
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	root, err := jsonObject(raw)
+	parsed := raw
+	if len(bytes.TrimSpace(parsed)) == 0 {
+		parsed = []byte("{}")
+	}
+	root, err := jsonObject(parsed)
 	if err != nil {
 		return nil, nil, nil, err
 	}
