@@ -1,6 +1,6 @@
 # Release and recovery operations
 
-The newest release is v0.4.0, published on 2026-11-22 from commit `ae217b7`
+The newest release is v0.5.1, published on 2026-11-22 from commit `ac46079`
 after the full candidate matrix passed; its macOS archives are unsigned. Apple signing and
 notarization must pass before a signed public release. Generated candidates
 are not qualified releases merely because packaging succeeds.
@@ -211,6 +211,25 @@ more full recovery copy, so the cost above applies once per hub. Beyond that:
   0017). The released installer upgraded the linux-amd64 hub host end to
   end; after restarting `ohya-serve.service`, both `ohya doctor` and
   `ohya status` exited 0.
+- v0.5.0 (commit `8d9c99e`, dirty=false) was published on 2026-11-22 after
+  the full hosted matrix passed (run 45076216169) and local `make check` +
+  `make tla` passed with zero errors. v0.5.0 stays on schema 8 and adds
+  first-class Antigravity (`agy`) support (`internal/antigravity` parser v1,
+  `--antigravity-root` discovery of append-only `transcript_full.jsonl`,
+  `agy` MCP wiring in `ohya setup`/`uninstall`/`doctor`, `parser.antigravity`
+  version/status reporting) plus `cmd/recall-bench`. End-to-end upgrade on
+  the linux-amd64 host via `install.sh` caught that `agy` initializes a
+  0-byte `~/.gemini/config/mcp_config.json`, which `setup.ApplyJSONEntry`
+  rejected with `unexpected end of JSON input`.
+- v0.5.1 (commit `ac46079`, dirty=false) followed the same day after the full
+  hosted matrix passed (run 45078362626) and local `make check` passed with
+  zero errors. It treats empty or whitespace-only JSON MCP configs as `{}` in
+  `setup.ApplyJSONEntry` and project preflight while preserving original bytes
+  in backups and still rejecting malformed JSON. The released installer
+  upgraded the linux-amd64 hub host end to end with exit 0, configured all
+  four clients (`claude`, `codex`, `pi`, `agy`), ingested all 40 local
+  Antigravity conversations (`antigravity 1`), and after restarting
+  `ohya-serve.service`, both `ohya doctor` and `ohya status` exited 0.
 - The installer refuses to replace an executable whose digest matches neither
   its receipt entry nor the previous one ("installed executable has changed;
   preserve it"). A copy installed by hand outside `install.sh` triggers this
