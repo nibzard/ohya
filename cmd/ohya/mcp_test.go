@@ -164,11 +164,19 @@ func TestMCPStdioEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(descriptions["sql"], "Current writer ID (use as event_annotations.writer_id and for your own annotations): "+deviceID) {
+	if !strings.Contains(descriptions["sql"], "Current writer ID (for event_annotations.writer_id): "+deviceID) {
 		t.Fatalf("sql description misses the writer ID %q", deviceID)
 	}
-	if !strings.Contains(descriptions["annotate"], "this device writes as "+deviceID) {
+	if !strings.Contains(descriptions["annotate"], "writer_id is hub-assigned as "+deviceID) {
 		t.Fatalf("annotate description misses the writer ID %q", deviceID)
+	}
+
+	resources, err := session.ListResources(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resources.Resources) != 2 {
+		t.Fatalf("resources = %+v, want the two guide resources", resources.Resources)
 	}
 
 	result := callSql(t, session,
