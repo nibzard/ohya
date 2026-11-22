@@ -1,0 +1,17 @@
+# Context
+
+## Why This Way
+Mid-run finding: on the crossdevice question the ohya-arm model tried
+`ls` twice to check whether the ohya repo exists locally, both attempts
+were denied by the allowlist sandbox, and it then answered correctly
+through sql alone. The old audit condemned the run as invalid on the
+attempt alone. Cross-access must mean successful execution, and the
+result event's permission_denials (tool_use_id) is the authoritative
+signal. regrade exists because grading evolves independently of the
+expensive client runs.
+
+## Gotchas
+- stream-json tool_result blocks carry no id; only the result event's
+  permission_denials pairs denials back to tool_use ids.
+- Keep timeout and error verdicts untouched in regrade: they describe
+  run conditions that a re-parse cannot re-derive.
