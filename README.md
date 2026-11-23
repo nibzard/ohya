@@ -43,7 +43,7 @@ day. That context stays in one tool on one machine, until it is lost.
 - **Local-first:** your transcripts stay on hardware that you own. Devices
   sync over an encrypted tailnet to a hub that you run.
 - **Plain SQL, small context footprint:** agents query with `SELECT` and
-  FTS5/BM25 (`snippet()`), with ~7.6 KB of upfront MCP schema and rare
+  FTS5/BM25 (`snippet()`), with <8 KB of upfront MCP schema and rare
   audit/analytics playbooks loaded on demand as MCP resources. There is no
   ingestion model, no vector store, and no AI pipeline.
 - **Lossless while retained:** every original JSONL record is kept byte for
@@ -87,7 +87,7 @@ and its issue tracker on 2026-11-23:
   `OR`/`NOT`, model/device filters, or exact counts beyond its 20-thread
   search cap ([#4589](https://github.com/atuinsh/atuin/issues/4589)). ohya
   serves two tools (`sql`, `annotate`) plus on-demand MCP guide resources
-  (~7.6 KB upfront), opens SQLite directly read-only with no daemon
+  (<8 KB upfront), opens SQLite directly read-only with no daemon
   required, and expresses date, model, device, and count queries as one
   `WHERE` or `GROUP BY` ([DB.md](DB.md#recall-recipes)).
 - **Harnesses & retention.** Atuin has no Antigravity (`agy`) harness and
@@ -129,8 +129,11 @@ timeout), distinct-session counting (14.3 s / 0.3 KB vs 30.0 s / 2.3 KB),
 and verified absence (17.0 s / 2.5 KB vs 31.6 s / 13.3 KB), while Atuin's
 two-argument search tool used fewer output tokens on simple local keyword
 lookups (since writing SQL emits more assistant tokens than calling a fixed
-search wrapper; `ohya`'s SQL recipes now also format `datetime(..., 'unixepoch')`
-and include `s.agent` to eliminate epoch-ms conversion overhead).
+search wrapper; in a targeted `v0.6.0` follow-up on the 5 affected local
+questions after updating the recipes to format `datetime(..., 'unixepoch')`,
+return `e.session_id`/`s.agent`, and read context around a hit, `ohya` cut
+wall time a further **26%** and cost **18%** ($2.39 → $1.96), closing the
+local cost gap vs Atuin).
 
 ## How it works
 
