@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
@@ -68,6 +69,27 @@ func (f *registryFlags) openRegistry() (*registry.DB, error) {
 		return nil, classify(err, "registry_open_failed", "check that the --state directory exists and is writable")
 	}
 	return reg, nil
+}
+
+func (f *registryFlags) listRegistry() ([]registry.DeviceInfo, []registry.InvitationInfo, error) {
+	if _, err := os.Stat(filepath.Join(*f.state, registry.FileName)); errors.Is(err, fs.ErrNotExist) {
+		return nil, nil, nil
+	}
+	reg, err := f.openRegistry()
+	if err != nil {
+		return nil, nil, err
+	}
+	defer reg.Close()
+	ctx := context.Background()
+	devices, err := reg.List(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	invitations, err := reg.ListInvitations(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return devices, invitations, nil
 }
 
 var devicesInviteSpec = commandSpec{
@@ -161,18 +183,7 @@ func runDevicesList(args []string, stdout, stderr io.Writer) error {
 	if flags.c.fs.NArg() > 0 {
 		return flags.c.usageErrorf("unexpected argument %q", flags.c.fs.Arg(0))
 	}
-	reg, err := flags.openRegistry()
-	if err != nil {
-		return jsonFailurePrint(*flags.json, stdout, devicesListSpec.name, err)
-	}
-	defer reg.Close()
-	ctx := context.Background()
-
-	devices, err := reg.List(ctx)
-	if err != nil {
-		return jsonFailurePrint(*flags.json, stdout, devicesListSpec.name, err)
-	}
-	invitations, err := reg.ListInvitations(ctx)
+	devices, invitations, err := flags.listRegistry()
 	if err != nil {
 		return jsonFailurePrint(*flags.json, stdout, devicesListSpec.name, err)
 	}

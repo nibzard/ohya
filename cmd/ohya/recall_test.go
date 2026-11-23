@@ -206,7 +206,7 @@ func TestSearchMissingDatabase(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("exit = %d; want 1", code)
 	}
-	for _, want := range []string{"does not exist", "ohya ingest"} {
+	for _, want := range []string{"does not exist", "ohya setup"} {
 		if !strings.Contains(errOut, want) {
 			t.Fatalf("stderr = %q; want it to name %q", errOut, want)
 		}
@@ -657,5 +657,27 @@ func TestSQLRemoteWithoutPairingAndPrintNotes(t *testing.T) {
 	got := out.String()
 	if !strings.Contains(got, "; result truncated (byte_limit)") || !strings.Contains(got, "; 1 secret-shaped value(s) redacted") {
 		t.Fatalf("printSQLResult output = %q", got)
+	}
+}
+
+func TestCommandsBeforeSetupNameTheSetupStep(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), ".ohya", "hub.db")
+	for _, args := range [][]string{
+		{"search", "--db", missing, "anything"},
+		{"sessions", "--db", missing},
+		{"usage", "--db", missing, "--since", "24h"},
+	} {
+		code, _, errOut := runRecallCLI(t, args...)
+		if code == 0 {
+			t.Fatalf("%v succeeded without a hub database", args)
+		}
+		if !strings.Contains(errOut, "run ohya setup") {
+			t.Fatalf("%v stderr = %q; want it to name ohya setup", args, errOut)
+		}
+		for _, stale := range []string{"ingest --once", "unable to open database file"} {
+			if strings.Contains(errOut, stale) {
+				t.Fatalf("%v stderr = %q; must not say %q", args, errOut, stale)
+			}
+		}
 	}
 }

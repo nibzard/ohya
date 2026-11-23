@@ -200,12 +200,16 @@ func TestRederiveJSONGolden(t *testing.T) {
 
 func TestDevicesListJSONGolden(t *testing.T) {
 	t.Run("success empty", func(t *testing.T) {
-		code, out, stderr := runCLI("devices", "list", "--json", "--state", t.TempDir())
+		state := t.TempDir()
+		code, out, stderr := runCLI("devices", "list", "--json", "--state", state)
 		if code != 0 || stderr != "" {
 			t.Fatalf("code %d, stderr %q", code, stderr)
 		}
 		goldenCompare(t, out,
 			`{"schema_version":1,"command":"ohya devices list","data":{"devices":[],"invitations":[]},"error":null}`+"\n")
+		if _, err := os.Stat(filepath.Join(state, registry.FileName)); !os.IsNotExist(err) {
+			t.Fatalf("devices list created the registry in an empty state directory: %v", err)
+		}
 	})
 
 	t.Run("success populated", func(t *testing.T) {

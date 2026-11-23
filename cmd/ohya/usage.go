@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
@@ -306,6 +307,9 @@ func usageDetail(calls []usageCall) []usageCallDetail {
 }
 
 func collectUsageReport(ctx context.Context, dbPath, stateDir string, window usageWindow, limits usageLimits) (*usageReport, []usageCall, error) {
+	if _, err := os.Stat(dbPath); errors.Is(err, fs.ErrNotExist) {
+		return nil, nil, missingHubDatabase(dbPath)
+	}
 	hub, err := store.OpenReadOnly(dbPath)
 	if err != nil {
 		return nil, nil, err

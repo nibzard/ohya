@@ -414,17 +414,21 @@ type recallBackend interface {
 	Query(ctx context.Context, query string) (mcpserver.Result, error)
 }
 
+func missingHubDatabase(path string) error {
+	return classify(
+		fmt.Errorf("hub database %s does not exist; run ohya setup to start capturing sessions on this machine, or pass --remote to query a joined hub", path),
+		"database_open_failed",
+		"run ohya setup to start capturing sessions, or pass --remote to query a joined hub",
+	)
+}
+
 func openRecallBackend(target recallTarget) (recallBackend, func(), error) {
 	if target.remote {
 		return openRemoteRecallBackend(target.stateDir)
 	}
 	if _, err := os.Stat(target.dbPath); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil, classify(
-				fmt.Errorf("hub database %s does not exist; run ohya ingest --once to create it, or pass --remote to query the joined hub", target.dbPath),
-				"database_open_failed",
-				"run ohya ingest --once to create the hub database, or pass --remote to query a joined hub",
-			)
+			return nil, nil, missingHubDatabase(target.dbPath)
 		}
 		return nil, nil, classify(
 			fmt.Errorf("stat %s: %w", target.dbPath, err),

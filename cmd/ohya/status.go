@@ -478,6 +478,13 @@ func buildStatus(ctx context.Context, o statusOptions) (statusData, error) {
 	}
 	if primaryCount == 0 && o.instanceID == "" {
 		data.Coverage.Missing = append(data.Coverage.Missing, "instances")
+		if len(data.Topology.Services) == 0 {
+			data.Findings = append(data.Findings, statusFinding{
+				Code: "not_set_up", Severity: sevWarn,
+				Evidence: fmt.Sprintf("no ohya service is set up for %s and no instance runs", o.stateDir),
+				Hint:     "run ohya setup to start capturing sessions on this machine, or ohya setup --join-code-env NAME to join a hub",
+			})
+		}
 		data.Findings = append(data.Findings, statusFinding{
 			Code: "no_instances", Severity: sevWarn,
 			Evidence: fmt.Sprintf("no instance publishes snapshots under %s", filepath.Join(o.stateDir, "observe")),

@@ -759,3 +759,22 @@ func TestByteTextUsesStandardBinaryThresholds(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusBeforeSetupNamesTheSetupStep(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "hub.db")
+	envelope, raw, err := runStatusForTest(t, statusArgs(dir, dbPath)...)
+	if err != errDegraded {
+		t.Fatalf("status before setup must degrade: %v (%s)", err, raw)
+	}
+	finding := findFinding(envelope.Data.Findings, "not_set_up")
+	if finding == nil || finding.Severity != sevWarn || !strings.Contains(finding.Hint, "run ohya setup") {
+		t.Fatalf("status before setup must name ohya setup: %+v", envelope.Data.Findings)
+	}
+
+	writeStatusFixture(t, dir, strings.Repeat("9", 32), os.Getpid(), time.Second, nil)
+	envelope, raw, _ = runStatusForTest(t, statusArgs(dir, dbPath)...)
+	if findFinding(envelope.Data.Findings, "not_set_up") != nil {
+		t.Fatalf("a running instance is not a missing setup: %s", raw)
+	}
+}

@@ -2391,18 +2391,6 @@ How to use this file:
     one is unverified; a single-writer lock per state directory is the
     candidate fix and belongs in the sync TLA+ model's assumptions.
 
-- CLI output before setup has run (verified 2026-11-23, `ee6aef1`, empty
-  `HOME`); the menu bar app shows these as they are:
-  - `sessions --json` and `search --json` fail with "run ohya ingest
-    --once to create it"; for a new user the correct next step is
-    `ohya setup`.
-  - `usage --json` fails with a raw "store: open reader: unable to open
-    database file" (`internal_error`), not a named not-set-up state.
-  - `devices list --json` creates `~/.ohya/registry.db` as a side effect of
-    a read in an unconfigured home.
-  - `status --json` reports only a `no_instances` warning; only
-    `service status --json` says "not configured; run ohya setup".
-
 - Recall bench (2026-11-22, `cmd/recall-bench`): comparative measurement of
   raw transcript files versus the ohya sql MCP tool as recall access paths,
   with real headless clients; design and protocol in

@@ -700,7 +700,8 @@ active instances with freshness, liveness, clean-shutdown state
 the raw counters, gauges, duration histograms, and resources from the
 snapshot. Findings carry a stable code, severity, evidence, and hint:
 `instance_terminated`, `instance_stale`, `instance_unreadable`,
-`instance_unsupported_version`, `no_instances`, `multiple_instances`,
+`instance_unsupported_version`, `not_set_up` (no owned service and no
+running instance), `no_instances`, `multiple_instances`,
 `pending_backlog`, `upload_backlog`, `sources_stopped`,
 `discovery_truncated`, `remote_status_unsupported`,
 `remote_status_failed`. Instances are never merged; a null value and a
