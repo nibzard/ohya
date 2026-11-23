@@ -62,6 +62,14 @@ submits a ZIP payload with `notarytool`, and requires an Accepted result before
 creating the final tar archive and checksums. It does not receive raw account
 passwords. Review Apple's submission log, including warnings.
 
+The menu bar app follows the same rule. `macos/OhyaMenuBar/scripts/package-app.sh`
+takes the same `--sign-identity` and `--notary-profile`, signs the bundled
+universal `ohya` and then `Ohya.app` with hardened runtime, signs the DMG,
+submits it with `notarytool`, requires an Accepted result, and staples the
+ticket to the DMG. Run it on a Mac with the two signed native `ohya`
+executables, so the bundled copy has the same bytes as the signed archives.
+Without signing options it signs ad-hoc and records `signing=adhoc`.
+
 Standalone executables cannot have notarization tickets stapled to them;
 Gatekeeper retrieves their tickets online. Test the actual download and first
 launch on a clean Mac. Do not strip quarantine attributes or disable Gatekeeper
@@ -71,6 +79,23 @@ Unsigned candidates remain marked `signing=unverified`.
 Sources checked 2026-11-15:
 [Apple notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow)
 and [Apple signing requirements](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution).
+
+## macOS menu bar app
+
+The **Prepare release candidates** workflow runs a `macos-app` job after the
+native jobs. It takes the darwin arm64 and amd64 candidate executables,
+runs `package-app.sh`, and verifies the DMG: the code signature, universal
+app and `ohya` executables, the bundled `ohya` release identity, the
+`Info.plist` version, and a macOS 15 minimum. The assemble job adds
+`SHA256SUMS.macos-app` to `SHA256SUMS` and prepares an unpublished cask with
+`python3 scripts/prepare-cask.py --version VERSION --artifacts DIRECTORY
+--output ohya-cask.rb`.
+
+Before publication, open the DMG on a clean Mac, drag the app to
+Applications, and check first-run **Use this Mac** and **Join a hub** with a
+test hub. A join pairs a real device, so never use a production hub for this
+test. An ad-hoc signed app needs **Open Anyway** in Privacy & Security on its
+first launch; state that in the release notes until the app is notarized.
 
 ## Homebrew ownership
 

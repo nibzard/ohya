@@ -19,6 +19,7 @@ One Go binary. No cloud account. No embeddings.
 ![Status: pre-release](https://img.shields.io/badge/status-pre--release-orange.svg)
 
 [Quick start](#quick-start) ·
+[macOS app](#macos-menu-bar-app) ·
 [How it works](#how-it-works) ·
 [Compare](#how-ohya-compares) ·
 [Reference](docs/reference.md) ·
@@ -65,11 +66,48 @@ Then start a new Claude Code, Codex, Pi, or Antigravity session and ask:
 
 The first import of a large history can take some time. To share memory
 between machines, see [Share memory across machines](#share-memory-across-machines).
+On a Mac, the [menu bar app](#macos-menu-bar-app) can do this setup for you.
 
 > [!NOTE]
 > ohya is pre-release. Ingestion, MCP tools, and device sync run end to end.
-> The macOS archives are not signed or notarized yet, and there is no
-> Homebrew tap yet.
+> The macOS archives and the app are not signed with an Apple Developer ID
+> or notarized yet, and there is no Homebrew tap yet.
+
+## macOS menu bar app
+
+`Ohya.app` is an optional native menu bar app for macOS 15 or later. It shows
+whether capture runs and is caught up, searches memory, copies a handoff
+prompt for the next agent, and manages paired devices. It controls ohya only
+through the `ohya` command, and the launchd service keeps capture running
+when the app is closed.
+
+**New Mac:** the app holds its own `ohya`, so you do not need a terminal.
+
+1. Download `Ohya_VERSION_macos.dmg` from the
+   [latest release](https://github.com/nibzard/ohya/releases/latest), open it,
+   and drag `Ohya.app` to Applications. Releases v0.6.1 and earlier do not
+   include the app.
+2. Open `Ohya.app`. The ohya mark appears in the menu bar.
+3. Click the mark and choose one:
+   - **Use this Mac** keeps the memory on this Mac.
+   - **Join a hub** uploads this Mac's sessions to a hub that another
+     machine runs. On the hub, run `ohya devices invite`, then paste the code
+     into the secure field. The app passes the code to setup without a shell,
+     so it stays out of shell history and process listings.
+
+   The app installs `ohya` in `~/.local/bin`, runs setup, and shows the result
+   of each step. Then start a new agent session, as in the
+   [Quick start](#quick-start).
+
+**Mac with ohya already installed:** open the app. It uses the installed
+`ohya` (`~/.local/bin`, Homebrew, or `/usr/local/bin`) and needs no setup.
+When the app holds a newer `ohya` release than the installed one, the Status
+tab offers **Update**, which installs it and restarts capture.
+
+Until the app is signed with a Developer ID, macOS blocks its first launch.
+Open **System Settings → Privacy & Security** and click **Open Anyway** for
+ohya, once. To build the app from source, see
+[macos/OhyaMenuBar](macos/OhyaMenuBar/README.md).
 
 ## How it works
 
@@ -374,7 +412,10 @@ exit codes, and failure behavior.
   `sql`, `annotate`, on-demand MCP guide resources, and `ohya sql` CLI;
   pairing, sync, and revocation; remote MCP; integrated setup (including
   owned `ohya` agent skill); owner-scoped purge with source tombstones.
-- **Open:** Developer ID signing and notarization for macOS; a Homebrew tap.
+- **Works now on macOS:** the menu bar app with first-run setup and join,
+  packaged as a universal DMG with its own `ohya`.
+- **Open:** Developer ID signing and notarization for the macOS archives and
+  app; a Homebrew tap for the formula and the app cask.
 - **Next:** an OpenCode source (OpenCode stores sessions in SQLite).
 - **Not planned:** embeddings, vector search, built-in AI classification,
   third-party AI processing.

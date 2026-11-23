@@ -114,6 +114,13 @@ and script users):
   matching universal or architecture-matched `ohya` executable inside
   `Contents/MacOS/ohya`, signed and notarized with Apple Developer ID and
   distributed as a DMG and Homebrew Cask alongside the existing CLI archive.
+- **One binary for the app and the service (2026-11-23):** the bundled copy
+  comes last in the resolution order. An installed `ohya` always wins, so the
+  app never reads the database with a different release than the launchd
+  service that writes it. The bundled copy runs only for first-run
+  `ohya install` and for an update: when it is a newer release than the
+  installed executable, the Status surface offers **Update**, which runs the
+  bundled `ohya install`. A downgrade is never offered.
 
 ### Model checking
 

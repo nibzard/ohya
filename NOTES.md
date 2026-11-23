@@ -2363,6 +2363,16 @@ How to use this file:
     hub with a real code all worked. A throwaway `HOME` does not isolate a
     join: it pairs a real new device with the hub, which then needs
     `ohya devices revoke`. Test Join a hub only against a test hub.
+  - Packaging verified 2026-11-23 (`package-app.sh`, ad-hoc): universal
+    app and `ohya`, `minos 15.0` on every slice, DMG mount, and first-run
+    install from the DMG copied the universal `ohya` into `~/.local/bin`.
+    The x86_64 "deprecated for your deployment target (macOS 27.2)"
+    warning comes from the host SDK; the binaries still carry minos 15.0.
+  - `NSHomeDirectory()` ignores `HOME`, so a throwaway `HOME` does not
+    hide `/Users/<user>/.local/bin/ohya` from binary resolution. To test
+    the bundled path, point the app's binary override
+    (`defaults write com.nibzard.ohya.menubar ohya.binaryOverridePath …`)
+    at the bundled copy, then delete the key.
 
 - Upgrade of a pre-Tailcat joined Mac to v0.6.1 (2026-11-23, observed on
   this MacBook). Fixed on main: launchd bootout race (d8c875e), shared

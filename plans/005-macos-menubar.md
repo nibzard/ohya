@@ -320,6 +320,11 @@ Each item delivers standalone value to CLI users and unlocks the Swift app:
 2. Build universal (`arm64` + `x86_64`) `ohya.app` bundling the signed `ohya`
    binary, signed and notarized with Apple Developer ID, with a DMG and
    Homebrew Cask release step alongside `scripts/package.sh`.
+   *Status 2026-11-23:* `macos/OhyaMenuBar/scripts/package-app.sh`, the
+   `macos-app` candidate job, and `scripts/prepare-cask.py` are done and
+   produce an ad-hoc signed universal DMG and an unpublished cask. Open:
+   Developer ID signing and notarization (needs the certificate) and a
+   Homebrew tap to publish the formula and the cask.
 
 ---
 

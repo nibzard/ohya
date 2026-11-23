@@ -43,8 +43,8 @@ gh run watch <run-id> --repo nibzard/ohya --exit-status --interval 30
 gh run view <run-id> --repo nibzard/ohya --json conclusion --jq .conclusion
 ```
 
-All seven jobs must conclude `success`: resolve, three native builds,
-assemble, two Homebrew smokes.
+All eight jobs must conclude `success`: resolve, three native builds,
+macos-app, assemble, two Homebrew smokes.
 
 ## 3. Verify the evidence
 
@@ -57,8 +57,10 @@ shasum -a 256 -c SHA256SUMS
 
 Check every `candidate.*.txt` file: `version` matches, `revision` equals the
 release SHA, `dirty=false`. Check `native-libraries.*.txt` for system
-libraries only. `signing=unverified` is expected until a Developer ID
-certificate exists; state it in the release notes.
+libraries only. `signing=unverified` (archives) and `signing=adhoc`
+(`candidate.macos-app.txt`) are expected until a Developer ID certificate
+exists; state both in the release notes, including that the app needs
+**Open Anyway** on first launch.
 
 ## 4. Tag and publish
 
@@ -68,11 +70,13 @@ git push origin vX.Y.Z
 
 gh release create vX.Y.Z --repo nibzard/ohya --title "vX.Y.Z" --notes "..." \
     dist/release-vX.Y.Z/ohya_vX.Y.Z_{darwin_amd64,darwin_arm64,linux_amd64}.tar.gz \
+    dist/release-vX.Y.Z/Ohya_vX.Y.Z_macos.dmg \
     dist/release-vX.Y.Z/SHA256SUMS dist/release-vX.Y.Z/install.sh
 ```
 
-The release carries exactly five assets: three archives, `SHA256SUMS`, and
-`install.sh`. Notes state what changed, the qualification with a link to the
+The release carries exactly six assets: three archives, the app DMG,
+`SHA256SUMS`, and `install.sh`. The generated `ohya.rb` and `ohya-cask.rb`
+stay unpublished until a Homebrew tap exists. Notes state what changed, the qualification with a link to the
 run, and known limitations. Keep the release non-prerelease so `install.sh`
 resolves it as latest. Do not replace assets on a published release.
 
