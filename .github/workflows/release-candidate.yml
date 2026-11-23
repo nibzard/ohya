@@ -87,8 +87,51 @@ jobs:
           name: candidate-${{ matrix.platform }}-${{ matrix.arch }}
           path: dist/
           if-no-files-found: error
-  assemble:
+  macos-app:
     needs: [native, resolve]
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.revision }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: candidate-darwin-arm64
+          path: native/arm64
+      - uses: actions/download-artifact@v8
+        with:
+          name: candidate-darwin-amd64
+          path: native/amd64
+      - name: Build the universal app disk image
+        env:
+          CANDIDATE_VERSION: ${{ inputs.version }}
+        run: |
+          for arch in arm64 amd64; do
+            tar -xzf "native/$arch/ohya_${CANDIDATE_VERSION}_darwin_${arch}.tar.gz" -C "native/$arch" ohya
+          done
+          macos/OhyaMenuBar/scripts/package-app.sh --version "$CANDIDATE_VERSION" \
+            --ohya-arm64 native/arm64/ohya --ohya-amd64 native/amd64/ohya --out dist
+      - name: Verify the disk image contents
+        env:
+          CANDIDATE_VERSION: ${{ inputs.version }}
+        run: |
+          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/ohya-dmg" "dist/Ohya_${CANDIDATE_VERSION}_macos.dmg"
+          app="$RUNNER_TEMP/ohya-dmg/Ohya.app"
+          codesign --verify --strict --deep --verbose=2 "$app"
+          test "$(lipo -archs "$app/Contents/MacOS/OhyaMenuBar")" = "x86_64 arm64"
+          test "$(lipo -archs "$app/Contents/MacOS/ohya")" = "x86_64 arm64"
+          "$app/Contents/MacOS/ohya" version | grep -F " version=$CANDIDATE_VERSION "
+          test "$(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist")" = "$(echo "${CANDIDATE_VERSION#v}" | sed 's/[-+].*//')"
+          vtool -show-build "$app/Contents/MacOS/OhyaMenuBar" | grep -c "minos 15.0" | grep -qx 2
+          hdiutil detach "$RUNNER_TEMP/ohya-dmg"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: candidate-macos-app
+          path: dist/
+          if-no-files-found: error
+  assemble:
+    needs: [native, macos-app, resolve]
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v7
@@ -100,13 +143,15 @@ jobs:
           path: dist
           merge-multiple: true
       - run: python3 scripts/test_prepare_formula.py
-      - name: Verify checksums and prepare formula
+      - run: python3 scripts/test_prepare_cask.py
+      - name: Verify checksums and prepare formula and cask
         env:
           CANDIDATE_VERSION: ${{ inputs.version }}
         run: |
           cat dist/SHA256SUMS.* > dist/SHA256SUMS
           (cd dist && sha256sum -c SHA256SUMS)
           python3 scripts/prepare-formula.py --version "$CANDIDATE_VERSION" --artifacts dist --output dist/ohya.rb
+          python3 scripts/prepare-cask.py --version "$CANDIDATE_VERSION" --artifacts dist --output dist/ohya-cask.rb
       - uses: actions/upload-artifact@v7
         with:
           name: unpublished-release-candidates

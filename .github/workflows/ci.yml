@@ -17,6 +17,9 @@ jobs:
       - run: make check
       - run: python3 scripts/test_brand_logo.py
       - run: python3 scripts/test_prepare_formula.py
+      - run: python3 scripts/test_prepare_cask.py
+      - run: xcrun swift test
+        working-directory: macos/OhyaMenuBar
       - run: make build
       - run: make tla
 
