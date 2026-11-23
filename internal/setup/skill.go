@@ -1,9 +1,11 @@
 package setup
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/nibzard/ohya/internal/mcpserver"
@@ -117,20 +119,53 @@ WHERE events_fts MATCH 'authentication AND refresh';
 	return []byte(b.String())
 }
 
+var skillClients = []string{"claude", "codex", "pi", "agy"}
+
+func skillReceiptPath(state, name string) string {
+	return filepath.Join(state, "setup", "skills", name+".json")
+}
+
 func ApplySkill(o ClientOptions, c Client) (bool, error) {
 	path, err := SkillPath(o, c)
 	if err != nil {
 		return false, err
 	}
-	receipt := filepath.Join(o.State, "setup", "skills", c.Name+".json")
+	receipt := skillReceiptPath(o.State, c.Name)
+	if _, err := os.Lstat(receipt); errors.Is(err, os.ErrNotExist) {
+		if ownerPath, ownerReceipt, ok := sharedSkillOwner(o.State, c.Name, path); ok {
+			path, receipt = ownerPath, ownerReceipt
+		}
+	}
 	return ApplyFile(path, receipt, SkillContent())
 }
 
+func sharedSkillOwner(state, name, path string) (string, string, bool) {
+	target, err := os.Stat(path)
+	if err != nil {
+		return "", "", false
+	}
+	for _, other := range skillClients {
+		if other == name {
+			continue
+		}
+		receipt := skillReceiptPath(state, other)
+		r, err := loadFileReceipt(receipt)
+		if err != nil {
+			continue
+		}
+		owned, err := os.Stat(r.Path)
+		if err == nil && os.SameFile(owned, target) {
+			return r.Path, receipt, true
+		}
+	}
+	return "", "", false
+}
+
 func RemoveSkill(state, name string) (bool, error) {
-	if name != "claude" && name != "codex" && name != "pi" && name != "agy" {
+	if !slices.Contains(skillClients, name) {
 		return false, fmt.Errorf("unsupported client %s", name)
 	}
-	receipt := filepath.Join(state, "setup", "skills", name+".json")
+	receipt := skillReceiptPath(state, name)
 	r, err := loadFileReceipt(receipt)
 	if os.IsNotExist(err) {
 		return false, nil

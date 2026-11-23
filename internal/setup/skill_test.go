@@ -135,3 +135,43 @@ func TestSkillPathsRespectHomeOverrides(t *testing.T) {
 		}
 	}
 }
+
+func TestSkillSharedThroughSymlinkedSkillDirectories(t *testing.T) {
+	o := engineOptions(t)
+	o.Clients.Agents = "claude,codex"
+	o.Clients.LookPath = func(name string) (string, error) { return "/bin/" + name, nil }
+	shared := filepath.Join(o.Clients.Home, ".agents", "skills")
+	if err := os.MkdirAll(shared, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, root := range []string{".claude", ".codex"} {
+		if err := os.MkdirAll(filepath.Join(o.Clients.Home, root), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(shared, filepath.Join(o.Clients.Home, root, "skills")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sharedSkill := filepath.Join(shared, "ohya", "SKILL.md")
+
+	for i := 0; i < 2; i++ {
+		report, err := Run(context.Background(), o)
+		if err != nil || !report.Complete() {
+			t.Fatalf("setup run %d = %+v %v", i+1, report, err)
+		}
+	}
+	if got, err := os.ReadFile(sharedSkill); err != nil || string(got) != string(SkillContent()) {
+		t.Fatalf("shared skill = %q %v", got, err)
+	}
+
+	removed, err := Remove(context.Background(), o.Clients.State, nil)
+	if err != nil || !removed.Complete() {
+		t.Fatalf("remove = %+v %v", removed, err)
+	}
+	if _, err := os.Stat(sharedSkill); !os.IsNotExist(err) {
+		t.Fatalf("shared skill remained after uninstall: %v", err)
+	}
+	if _, err := os.Stat(shared); err != nil {
+		t.Fatalf("shared skills directory removed: %v", err)
+	}
+}
