@@ -85,8 +85,8 @@ when the app is closed.
 
 1. Download `Ohya_VERSION_macos.dmg` from the
    [latest release](https://github.com/nibzard/ohya/releases/latest), open it,
-   and drag `Ohya.app` to Applications. Releases v0.6.1 and earlier do not
-   include the app.
+   and drag `Ohya.app` to Applications. Releases from v0.7.0 on include the
+   app.
 2. Open `Ohya.app`. The ohya mark appears in the menu bar.
 3. Click the mark and choose one:
    - **Use this Mac** keeps the memory on this Mac.

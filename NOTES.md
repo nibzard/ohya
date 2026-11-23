@@ -2375,7 +2375,7 @@ How to use this file:
     at the bundled copy, then delete the key.
 
 - Upgrade of a pre-Tailcat joined Mac to v0.6.1 (2026-11-23, observed on
-  this MacBook). Fixed on main: launchd bootout race (d8c875e), shared
+  this MacBook). Shipped in v0.7.0: launchd bootout race (d8c875e), shared
   skill directories through symlinks (0a98606), the dead-end hint for a
   paired device without `hub-address.json` (302069f), one counted line
   for sources already missing at startup (aa2c5ed), and backlog progress
