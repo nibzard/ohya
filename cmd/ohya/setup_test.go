@@ -215,3 +215,27 @@ func TestSetupServicePreservesExcludeFlags(t *testing.T) {
 		t.Fatalf("saved excludes = %q", saved.Flags["exclude"])
 	}
 }
+
+func TestPrintSetupResultMarksHealthyStatusesAsSuccess(t *testing.T) {
+	t.Setenv("FORCE_COLOR", "1")
+	t.Setenv("NO_COLOR", "")
+	cases := map[string]string{
+		"running":    "✓",
+		"ready":      "✓",
+		"saved":      "✓",
+		"configured": "✓",
+		"not needed": "·",
+		"unchanged":  "·",
+		"failed":     "✗",
+		"planned":    "○",
+		"warning":    "▲",
+		"changed":    "▲",
+	}
+	for status, mark := range cases {
+		var out bytes.Buffer
+		printSetupResult(&out, setup.Result{Component: "service", Status: status})
+		if !strings.Contains(out.String(), mark) {
+			t.Errorf("status %q printed %q; want mark %q", status, out.String(), mark)
+		}
+	}
+}

@@ -290,15 +290,18 @@ func runUninstallCommand(args []string, stdout, stderr io.Writer) error {
 	return printSetupReport(stdout, uninstallSpec.name, *asJSON, report, 0, err)
 }
 
-const setupComponentWidth = 14
+const (
+	setupComponentWidth = 14
+	setupStatusWidth    = 11
+)
 
 func printSetupResult(stdout io.Writer, r setup.Result) {
 	s := styleFor(stdout)
 	mark, status := s.dim("·"), r.Status
 	switch r.Status {
-	case "configured", "created", "started", "restarted", "removed", "updated":
+	case "configured", "created", "started", "restarted", "removed", "updated", "running", "ready", "saved":
 		mark, status = s.boldGreen("✓"), s.green(r.Status)
-	case "unchanged", "skipped", "unmanaged":
+	case "unchanged", "skipped", "unmanaged", "not needed", "absent":
 		status = s.dim(r.Status)
 	case "failed":
 		mark, status = s.boldRed("✗"), s.boldRed(r.Status)
@@ -307,7 +310,7 @@ func printSetupResult(stdout io.Writer, r setup.Result) {
 	default:
 		mark, status = s.boldYellow("▲"), s.yellow(r.Status)
 	}
-	line := fmt.Sprintf("  %s %s %s", mark, padRight(s.bold(r.Component), setupComponentWidth), padRight(status, 10))
+	line := fmt.Sprintf("  %s %s %s", mark, padRight(s.bold(r.Component), setupComponentWidth), padRight(status, setupStatusWidth))
 	if r.Detail != "" {
 		line += " " + strings.ReplaceAll(r.Detail, "\n", " ")
 	}
