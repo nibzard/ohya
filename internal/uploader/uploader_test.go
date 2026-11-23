@@ -1422,3 +1422,60 @@ func TestSourcesMissingAtStartupReportedAsOneCount(t *testing.T) {
 		t.Fatalf("a source that disappeared while running was reported %d times, want once:\n%s", n, f.log)
 	}
 }
+
+func TestIdleKeepalivePreventsReconnectProbeStorm(t *testing.T) {
+	f := newFixture(t, Options{KeepaliveInterval: 40 * time.Millisecond})
+	db := openHubDB(t, filepath.Join(t.TempDir(), "hub.db"))
+	h := serve(t, db, f.reg, hubsync.Options{IdleTimeout: 140 * time.Millisecond})
+	f.dialer.point(h.addr)
+
+	a := filepath.Join(f.dir, "a.jsonl")
+	b := filepath.Join(f.dir, "b.jsonl")
+	c := filepath.Join(f.dir, "c.jsonl")
+	writeFile(t, a, line(sessA, "one"))
+	writeFile(t, b, line(sessB, "two"))
+	writeFile(t, c, line(sessA+"c", "three"))
+	f.mustSync()
+
+	rttsAfterInit := f.obs.DurationCount("upload_round_trip_duration")
+	deadline := time.Now().Add(320 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		time.Sleep(35 * time.Millisecond)
+		f.mustSync()
+	}
+	if got := f.obs.DurationCount("upload_round_trip_duration"); got != rttsAfterInit {
+		t.Fatalf("idle syncs triggered %d extra source round trips (total %d, initial %d); want 0 with keepalive",
+			got-rttsAfterInit, got, rttsAfterInit)
+	}
+
+	appendFile(t, a, line(sessA, "four"))
+	if stats := f.mustSync(); stats.Inserted != 1 {
+		t.Fatalf("stats after idle period = %+v; want 1 inserted event", stats)
+	}
+	if got := count(t, db, `SELECT count(*) FROM events`); got != 4 {
+		t.Fatalf("hub events = %d; want 4", got)
+	}
+}
+
+func TestReconnectProbesExistingSourceWithoutReRegistering(t *testing.T) {
+	f := newFixture(t, Options{})
+	dbPath := filepath.Join(t.TempDir(), "hub.db")
+	db := openHubDB(t, dbPath)
+	h := serve(t, db, f.reg, hubsync.Options{})
+	f.dialer.point(h.addr)
+
+	a := filepath.Join(f.dir, "a.jsonl")
+	writeFile(t, a, line(sessA, "one"))
+	f.mustSync()
+
+	h.stop()
+	h2 := serve(t, db, f.reg, hubsync.Options{})
+	f.dialer.point(h2.addr)
+
+	before := f.obs.DurationCount("upload_round_trip_duration")
+	f.mustSync()
+	after := f.obs.DurationCount("upload_round_trip_duration")
+	if delta := after - before; delta != 2 {
+		t.Fatalf("reconnect round trips = %d (1 probe + 1 workspace check); want 2, not 3 with redundant registration", delta)
+	}
+}
