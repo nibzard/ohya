@@ -607,3 +607,53 @@ func TestIngestWatchedSourceDisappearanceDiagnostic(t *testing.T) {
 		})
 	}
 }
+
+func TestIngestSourcesMissingAtStartupReportedAsOneCount(t *testing.T) {
+	e := newCodexEnv(t)
+	dirs := []agentDir{{dir: e.root}}
+	first, second := e.rollout("rollout-first.jsonl"), e.rollout("rollout-second.jsonl")
+	copyCodexFixture(t, first, "main-session.jsonl")
+	copyCodexFixture(t, second, "main-session.jsonl")
+
+	var stderr bytes.Buffer
+	r, done := e.newRunner(t, &stderr)
+	if _, err := r.poll(context.Background(), dirs, false); err != nil {
+		t.Fatal(err)
+	}
+	done()
+	for _, path := range []string{first, second} {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stderr.Reset()
+	r, done = e.newRunner(t, &stderr)
+	defer done()
+	for i := 0; i < 2; i++ {
+		if _, err := r.poll(context.Background(), dirs, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := strings.Count(stderr.String(), "2 sources with saved checkpoints were already missing at startup"); n != 1 {
+		t.Fatalf("startup count reported %d times, want once:\n%s", n, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "disappeared") {
+		t.Fatalf("sources missing at startup were reported one by one:\n%s", stderr.String())
+	}
+
+	third := e.rollout("rollout-third.jsonl")
+	copyCodexFixture(t, third, "main-session.jsonl")
+	if _, err := r.poll(context.Background(), dirs, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(third); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.poll(context.Background(), dirs, false); err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(stderr.String(), third+": source"); n != 1 {
+		t.Fatalf("a source that disappeared while running was reported %d times, want once:\n%s", n, stderr.String())
+	}
+}

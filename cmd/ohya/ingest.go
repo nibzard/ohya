@@ -207,6 +207,7 @@ type ingestor struct {
 	events          observe.EventSink
 	reported        map[string]int64
 	missingReported map[string]bool
+	present         map[string]bool
 	excludedPaths   map[string]bool
 	noProgress      map[string]noProgressMark
 	tails           map[string]int64
@@ -231,7 +232,7 @@ func newIngestor(hub *store.DB, w *watch.Watcher, agent, deviceID string, maxRec
 	return &ingestor{
 		hub: hub, watcher: w, agent: agent, deviceID: deviceID,
 		maxRecordBytes: maxRecordBytes, excludes: excludes, stderr: stderr, observer: observer, events: events, reported: map[string]int64{},
-		missingReported: map[string]bool{}, noProgress: map[string]noProgressMark{}, tails: map[string]int64{},
+		missingReported: map[string]bool{}, present: map[string]bool{}, noProgress: map[string]noProgressMark{}, tails: map[string]int64{},
 		registered: map[string]string{}, purged: map[string]bool{}, workspacesDue: true,
 	}
 }
@@ -305,12 +306,15 @@ func (r *ingestor) poll(ctx context.Context, dirs []agentDir, allowEmpty bool) (
 	var stats passStats
 	stats.excluded = len(excluded)
 	pendingComplete := int64(0)
+	var missingAtStartup []string
 	for _, o := range outcomes {
 		if ctx.Err() != nil {
 			break
 		}
 		if o.Missing {
-			r.reportMissing(o)
+			if r.reportMissing(o) {
+				missingAtStartup = append(missingAtStartup, o.Path)
+			}
 			delete(r.tails, o.SourceID)
 			continue
 		}
@@ -319,6 +323,7 @@ func (r *ingestor) poll(ctx context.Context, dirs []agentDir, allowEmpty bool) (
 			r.event(observe.LevelInfo, observe.EventSourceReturned, "", nil)
 		}
 		delete(r.missingReported, o.SourceID)
+		r.present[o.SourceID] = true
 		stats.sources++
 		if o.Fresh {
 			if o.ReplacedSourceID != "" {
@@ -419,6 +424,7 @@ func (r *ingestor) poll(ctx context.Context, dirs []agentDir, allowEmpty bool) (
 			delete(r.noProgress, o.SourceID)
 		}
 	}
+	r.reportMissingAtStartup(missingAtStartup)
 	var tails, stopped int64
 	for _, v := range r.tails {
 		tails += v
@@ -558,21 +564,36 @@ func (r *ingestor) reportSource(path string, err error) {
 	fmt.Fprintf(r.stderr, "ohya: %s: %v\n", path, err)
 }
 
-func (r *ingestor) reportMissing(o watch.Outcome) {
+func (r *ingestor) reportMissing(o watch.Outcome) (missingAtStartup bool) {
 	if r.missingReported[o.SourceID] {
-		return
+		return false
 	}
 	r.missingReported[o.SourceID] = true
 	if r.excludedPaths[o.Path] {
 		fmt.Fprintf(r.stderr,
 			"ohya: %s: source %s now matches --exclude and stops being captured going forward; the acknowledged checkpoint is kept and stored sessions stay on the hub (ohya purge removes them)\n",
 			o.Path, o.SourceID)
-		return
+		return false
 	}
 	r.event(observe.LevelWarn, observe.EventSourceMissing, "", nil)
+	if !r.present[o.SourceID] {
+		return true
+	}
 	fmt.Fprintf(r.stderr,
 		"ohya: %s: source %s disappeared; the acknowledged checkpoint is kept and ingestion resumes if the file returns\n",
 		o.Path, o.SourceID)
+	return false
+}
+
+func (r *ingestor) reportMissingAtStartup(paths []string) {
+	switch len(paths) {
+	case 0:
+	case 1:
+		fmt.Fprintf(r.stderr, "ohya: %s: source with a saved checkpoint was already missing at startup; the acknowledged checkpoint is kept and ingestion resumes if the file returns\n", paths[0])
+	default:
+		fmt.Fprintf(r.stderr, "ohya: %d sources with saved checkpoints were already missing at startup (first: %s); the acknowledged checkpoints are kept and ingestion resumes if a file returns\n",
+			len(paths), slices.Min(paths))
+	}
 }
 
 func (r *ingestor) reportStop(o watch.Outcome, stop *events.StopError) {

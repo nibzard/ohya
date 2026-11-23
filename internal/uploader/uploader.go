@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -221,9 +222,13 @@ func (u *Uploader) Sync(ctx context.Context, candidates []string) (stats Stats, 
 		u.observer.Add("upload_checkpoint_advances", uint64(u.advances))
 		u.advances = 0
 	}()
+	var missingAtStartup []string
 	for _, o := range outcomes {
-		u.noteLoss(o)
+		if u.noteLoss(o) {
+			missingAtStartup = append(missingAtStartup, o.Path)
+		}
 	}
+	u.reportMissingAtStartup(missingAtStartup)
 	u.updateBacklog(outcomes)
 	if err = u.connect(ctx); err != nil {
 		return stats, err
@@ -287,7 +292,7 @@ func (u *Uploader) exchangeWorkspaces(ctx context.Context, observed []workspace.
 	return reply.Pending, nil
 }
 
-func (u *Uploader) noteLoss(o watch.Outcome) {
+func (u *Uploader) noteLoss(o watch.Outcome) (missingAtStartup bool) {
 	switch {
 	case o.Fresh && o.ReplacedSourceID != "":
 		old := o.ReplacedSourceID
@@ -309,27 +314,31 @@ func (u *Uploader) noteLoss(o watch.Outcome) {
 		delete(u.gapReported, old)
 	case o.Missing:
 		if u.lossReported[o.SourceID] {
-			return
+			return false
 		}
 		u.lossReported[o.SourceID] = true
 		if u.opts.Excluded != nil && u.opts.Excluded(o.Path) {
 			if end, ok := u.seen[o.SourceID]; ok && end > o.Cursor {
 				u.logf("%s: source %s now matches --exclude and stops uploading going forward; bytes [%d, %d) were never uploaded and never will be; stored sessions stay on the hub",
 					o.Path, o.SourceID, o.Cursor, end)
-				return
+				return false
 			}
 			u.logf("%s: source %s now matches --exclude and stops uploading going forward; the checkpoint is kept and upload resumes only if the exclusion is removed",
 				o.Path, o.SourceID)
-			return
+			return false
 		}
-		if end, ok := u.seen[o.SourceID]; ok && end > o.Cursor {
+		end, ok := u.seen[o.SourceID]
+		if !ok {
+			return true
+		}
+		if end > o.Cursor {
 			u.logf("%s: source %s disappeared before upload: bytes [%d, %d) were never uploaded; they upload if the file returns, otherwise they are lost (no outgoing spool)",
 				o.Path, o.SourceID, o.Cursor, end)
-			return
+			return false
 		}
 		u.logf("%s: source %s disappeared; the checkpoint is kept and upload resumes if the file returns",
 			o.Path, o.SourceID)
-		return
+		return false
 	}
 	if u.lossReported[o.SourceID] {
 		u.observer.Add("watch_source_events", 1, "returned")
@@ -337,6 +346,18 @@ func (u *Uploader) noteLoss(o watch.Outcome) {
 	}
 	u.seen[o.SourceID] = o.End
 	delete(u.lossReported, o.SourceID)
+	return false
+}
+
+func (u *Uploader) reportMissingAtStartup(paths []string) {
+	switch len(paths) {
+	case 0:
+	case 1:
+		u.logf("%s: source with a saved checkpoint was already missing at startup; the checkpoint is kept and upload resumes if the file returns", paths[0])
+	default:
+		u.logf("%d sources with saved checkpoints were already missing at startup (first: %s); the checkpoints are kept and upload resumes if a file returns",
+			len(paths), slices.Min(paths))
+	}
 }
 
 func (u *Uploader) syncSource(ctx context.Context, o watch.Outcome, stats *Stats) error {

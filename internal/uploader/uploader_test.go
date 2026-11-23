@@ -1375,3 +1375,43 @@ func TestExcludedSourceWithPendingBytesNamesThem(t *testing.T) {
 		t.Fatalf("hub events = %d, want nothing from the excluded source", got)
 	}
 }
+
+func TestSourcesMissingAtStartupReportedAsOneCount(t *testing.T) {
+	f := newFixture(t, Options{})
+	h := serve(t, openHubDB(t, filepath.Join(t.TempDir(), "hub.db")), f.reg, hubsync.Options{})
+	f.dialer.point(h.addr)
+	a := filepath.Join(f.dir, "a.jsonl")
+	b := filepath.Join(f.dir, "b.jsonl")
+	writeFile(t, a, line(sessA, "one"))
+	writeFile(t, b, line(sessB, "two"))
+	f.mustSync()
+	f.mustSync()
+	f.up.Close()
+	for _, path := range []string{a, b} {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	f.up = f.newUploader(Options{})
+	f.mustSync()
+	f.mustSync()
+	log := f.log.String()
+	if n := strings.Count(log, "2 sources with saved checkpoints were already missing at startup"); n != 1 {
+		t.Fatalf("startup count reported %d times, want once:\n%s", n, log)
+	}
+	if strings.Contains(log, "disappeared") {
+		t.Fatalf("sources missing at startup were reported one by one:\n%s", log)
+	}
+
+	c := filepath.Join(f.dir, "c.jsonl")
+	writeFile(t, c, line(sessA, "three"))
+	f.mustSync()
+	if err := os.Remove(c); err != nil {
+		t.Fatal(err)
+	}
+	f.mustSync()
+	if n := strings.Count(f.log.String(), c+": source"); n != 1 {
+		t.Fatalf("a source that disappeared while running was reported %d times, want once:\n%s", n, f.log)
+	}
+}

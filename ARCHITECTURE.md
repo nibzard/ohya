@@ -135,6 +135,9 @@ Watcher rules (`internal/watch`):
 - A path that is not observable is reported as missing, and its checkpoint
   stays. The consumers turn that outcome into one diagnostic line per
   disappearance — never a silent stop — and clear it when the file returns.
+  Sources that are already missing when a process starts, with no
+  unsent bytes known to that process, get one counted line per pass
+  instead of one line each.
   A new path whose identity matches a source that is live at its own
   path is a hardlink and is not registered.
 - `Rewind` moves a checkpoint back to an earlier cursor. It answers a hub

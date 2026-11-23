@@ -184,7 +184,9 @@ checkpoint and continues where it left off. A watched file that stops being
 statable — deleted, or moved to a place no root watches — prints one
 diagnostic line per disappearance and keeps its checkpoint; it resumes if
 the file returns, and appends written to the new place stay uncaptured
-until that place is a root.
+until that place is a root. Files that are already missing at startup,
+for example sessions that the agent deleted while ohya was stopped, print
+one line with their count and the first path.
 
 Repeatable `--exclude GLOB` flags (on `ohya ingest`, `ohya join`, and
 `ohya setup`, which passes them into the service it writes) drop matching
