@@ -53,6 +53,13 @@ type runRecord struct {
 }
 
 func bench(ctx context.Context, opts benchOptions) error {
+	if opts.out != "" {
+		absOut, err := filepath.Abs(opts.out)
+		if err != nil {
+			return err
+		}
+		opts.out = absOut
+	}
 	ohya, err := resolveExecutable(opts.ohya)
 	if err != nil {
 		return err
@@ -68,12 +75,22 @@ func bench(ctx context.Context, opts benchOptions) error {
 	if opts.hubDB == "" {
 		opts.hubDB = filepath.Join(home, ".ohya", "hub.db")
 	}
+	absDB, err := filepath.Abs(opts.hubDB)
+	if err != nil {
+		return err
+	}
+	opts.hubDB = absDB
 	if _, err := os.Stat(opts.hubDB); err != nil {
 		return fmt.Errorf("hub database: %w", err)
 	}
 	if opts.state == "" {
 		opts.state = filepath.Join(opts.out, "resolver-state")
 	}
+	absState, err := filepath.Abs(opts.state)
+	if err != nil {
+		return err
+	}
+	opts.state = absState
 	if err := os.MkdirAll(opts.state, 0o700); err != nil {
 		return err
 	}
@@ -271,14 +288,23 @@ func runArm(ctx context.Context, opts benchOptions, claude string, res *resolver
 		"--output-format", "stream-json",
 		"--verbose",
 	}
+	var mcpPath string
+	if arm == armOhya {
+		mcpPath = filepath.Join(opts.out, "mcp-ohya.json")
+	} else {
+		mcpPath = filepath.Join(opts.out, "mcp-empty.json")
+	}
+	if absMCP, err := filepath.Abs(mcpPath); err == nil {
+		mcpPath = absMCP
+	}
 	if arm == armOhya {
 		args = append(args,
-			"--mcp-config", filepath.Join(opts.out, "mcp-ohya.json"),
+			"--mcp-config", mcpPath,
 			"--allowed-tools", "mcp__ohya__sql",
 		)
 	} else {
 		args = append(args,
-			"--mcp-config", filepath.Join(opts.out, "mcp-empty.json"),
+			"--mcp-config", mcpPath,
 			"--allowed-tools", "Bash,Grep,Read,Glob,LS",
 		)
 	}

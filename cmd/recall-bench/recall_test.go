@@ -191,6 +191,36 @@ func TestManifestHelpers(t *testing.T) {
 	}
 }
 
+func TestWriteMCPConfigsUsesAbsolutePathsForChildDir(t *testing.T) {
+	wd := t.TempDir()
+	prev, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(wd); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(prev) })
+
+	relOut := filepath.Join("recall-runs", "r1")
+	if err := os.MkdirAll(relOut, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	absOut, err := filepath.Abs(relOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := benchOptions{out: absOut, hubDB: filepath.Join(absOut, "hub.db"), state: filepath.Join(absOut, "state")}
+	if err := writeMCPConfigs(opts, "/bin/ohya"); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"mcp-empty.json", "mcp-ohya.json"} {
+		if _, err := os.Stat(filepath.Join(absOut, name)); err != nil {
+			t.Fatalf("missing %s: %v", name, err)
+		}
+	}
+}
+
 func TestWantSettledOf(t *testing.T) {
 	if got := wantSettledOf(Question{ExpectedSessions: 3}); got != 3 {
 		t.Fatalf("default: %d", got)
