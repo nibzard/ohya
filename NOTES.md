@@ -2457,3 +2457,25 @@ How to use this file:
     `sh install.sh` succeeded end to end (`ohya doctor` 20/20 `ok`, all four
     owned skills installed, `ohya-serve.service` restarted).
 
+
+- CLI output review (2026-11-23, every command run in a pseudo-TTY at
+  110–120 columns against the live hub and a fixture database). Fixed in
+  `7332972`, `485ff43`, `c7cc98a`, `e6af32d`: terminal fitting, sessions/search
+  layout, doctor remedies on passing checks, nested-style resets, setup
+  rows, metrics counters, empty help sections. Still open:
+  - `ohya status --state DIR` without `--db` reports the default hub's
+    storage (`~/.ohya/hub.db`), not a database in DIR. Decide whether an
+    explicit `--state` should imply `DIR/hub.db` (`cmd/ohya/status.go`
+    `statusStorageSection`).
+  - Long-running commands (`ingest`, `serve`, `join`) still print
+    `ohya: …` log lines; the stop diagnostic is one 250-character line
+    with an ADR path. Keep them log-shaped for journald, but consider a
+    shorter remedy.
+  - Help descriptions are still dense prose with internal references
+    (`docs/adr/0005`, `path.Match`); a rewrite to short paragraphs is
+    open.
+  - `show` lists `unknown` and `system` events with empty excerpts, and
+    `logs` prints raw metric labels such as
+    `ingest_batches{batch_result=committed}=6`.
+  - `version` prints one long `key=value` line; it is machine-shaped by
+    design, and `--json` exists.
