@@ -37,12 +37,14 @@ One Go binary. No cloud account. No embeddings.
 Your agents produce decisions, debugging sessions, and unfinished work every
 day. That context stays in one tool on one machine, until it is lost.
 
-- **Cross-agent handoffs:** start in Claude Code, continue in Codex or Pi,
-  and recover the earlier decisions, attempts, and unfinished work—even on
-  another machine.
+- **Cross-agent handoffs:** start in Claude Code, continue in Codex, Pi, or
+  Antigravity (`agy`), and recover the earlier decisions, attempts, and
+  unfinished work—even on another machine.
 - **Local-first:** your transcripts stay on hardware that you own. Devices
   sync over an encrypted tailnet to a hub that you run.
-- **Plain SQL:** agents query with `SELECT` and FTS5/BM25. There is no
+- **Plain SQL, small context footprint:** agents query with `SELECT` and
+  FTS5/BM25 (`snippet()`), with ~7.6 KB of upfront MCP schema and rare
+  audit/analytics playbooks loaded on demand as MCP resources. There is no
   ingestion model, no vector store, and no AI pipeline.
 - **Lossless while retained:** every original JSONL record is kept byte for
   byte. Parser upgrades re-derive rows from the stored records.
@@ -58,39 +60,77 @@ day. That context stays in one tool on one machine, until it is lost.
   (`cleanupPeriodDays`). ohya keeps every record that it has ingested until
   you decide otherwise.
 
-### Atuin threads, compared (2026-11-19)
+### Atuin threads, compared (2026-11-23)
 
 [Atuin](https://atuin.sh) shipped "threads" in
 [v18.24.0](https://github.com/atuinsh/atuin/releases/tag/v18.24.0) on
 2026-10-15: capture and search of the same Claude Code, Codex, and Pi
 session files ohya watches, served to agents over MCP. That convergence
 validates the demand and the architecture. The differences below were
-verified against Atuin's releases, repository, and issue tracker on
-2026-11-19:
+verified directly against Atuin `v18.25.1` (`2026-11-20`), its repository,
+and its issue tracker on 2026-11-23:
 
 - **Sharing and trust.** Atuin threads are single-user; the live "Threads
   for teams" beta is hosted-hub-only and uploads shared threads in
   plaintext to the hosted hub. ohya shares through an operator-owned hub
   with no third-party server: one-time invitations, encrypted device sync,
   and final revocation.
-- **Fidelity.** Atuin captures lossily — tool input and output are clipped
-  at 64 KiB and secrets are replaced at capture. ohya keeps every original
-  record byte for byte and reduces secret risk at egress
+- **Fidelity.** Atuin `v18.25.1` stores zstd-compressed conversation and
+  tool-result payloads in `threads.db`, clipping tool input/output at
+  64 KiB and replacing secrets at capture. ohya keeps every original JSONL
+  record byte for byte without clipping or mutating stored data and reduces
+  secret risk at egress
   ([ADR 0015](docs/adr/0015-egress-secret-redaction.md)).
-- **Recall surface.** Atuin's agent tools are fixed keyword search; its
-  users ask for boolean, date, regular-expression, and model filters those
-  tools cannot express
-  ([#4589](https://github.com/atuinsh/atuin/issues/4589)). ohya agents
-  write bounded read-only SQL: a date, model, or device filter is one
-  `WHERE` clause, and the recipes ship in the tool description and
-  [DB.md](DB.md#recall-recipes).
-- **Retention.** Atuin has no user-facing delete or retention
-  ([#4434](https://github.com/atuinsh/atuin/issues/4434)). ohya ships
-  owner-decided purge
+- **Recall surface & runtime.** `atuin mcp` exposes 6 fixed tools
+  (~16.9 KB of upfront tool schemas) and requires a running `atuin daemon`
+  even for read-only thread search; it has no upper date bound, boolean
+  `OR`/`NOT`, model/device filters, or exact counts beyond its 20-thread
+  search cap ([#4589](https://github.com/atuinsh/atuin/issues/4589)). ohya
+  serves two tools (`sql`, `annotate`) plus on-demand MCP guide resources
+  (~7.6 KB upfront), opens SQLite directly read-only with no daemon
+  required, and expresses date, model, device, and count queries as one
+  `WHERE` or `GROUP BY` ([DB.md](DB.md#recall-recipes)).
+- **Harnesses & retention.** Atuin has no Antigravity (`agy`) harness and
+  no user-facing `threads` delete or purge command
+  ([#4434](https://github.com/atuinsh/atuin/issues/4434)). ohya ingests
+  Antigravity alongside Claude Code, Codex, and Pi, and ships owner-decided
+  purge with source tombstones
   ([ADR 0013](docs/adr/0013-owner-scoped-session-purge.md)).
 - **Verification.** ohya's sync and authorization state machines are
   model-checked with TLA+/TLC ([tla/](tla/README.md)), so the durability
   and revocation claims rest on checked invariants.
+
+### Measured recall (2026-11-23)
+
+Evaluated with `cmd/recall-bench` on `glm-5.3` (12 questions × 3 repeats =
+36 runs/arm, 180 s timeout) across needle, paraphrase, timeboxed,
+correction, aggregate count, multihop, negative, and cross-device tiers on
+the same local corpus, comparing raw on-disk transcripts (`Bash`/`Grep`/`Read`),
+an isolated local Atuin `v18.25.1` (`auto_sync = false`), and `ohya`:
+
+| Scope | Arm | Correct | Timeouts | Wall (s) | Tool calls | Tool result KB | Cache read tok | Cost ($) | $/correct |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| **All 12 questions** (36 runs, incl. cross-device) | `raw` | 35/36 | 1 | 1,792 | 354 | 788 | 5.05M | $8.03\* | $0.229\* |
+| | `atuin` v18.25.1 | 35/36 | 1 | 1,235 | 205 | 544 | 3.22M | $5.25\* | $0.150\* |
+| | **`ohya`** | **36/36** | **0** | **992** | **128** | **207** | **1.96M** | **$4.53** | **$0.126** |
+| **11 shared local questions** (33 runs, no cross-device) | `raw` | 33/33 | 0 | 1,263 | 279 | 524 | 3.06M | $6.05 | $0.183 |
+| | `atuin` v18.25.1 | 33/33 | 0 | **779** | 127 | 197 | 1.89M | **$3.79** | **$0.115** |
+| | `ohya` | 33/33 | 0 | 922 | **117** | **182** | **1.79M** | $4.15 | $0.126 |
+
+\*Timed-out runs (`raw` r2, `atuin` r3 on the remote-only question) did not
+emit a final usage event, so their failed tool calls are unbilled in the
+total.
+
+Takeaways: vs raw transcript search, `ohya` cut wall time by **45%**,
+tool-result bytes by **74%**, cache-read tokens by **61%**, and cost by
+**44%** with zero timeouts. Against local Atuin `v18.25.1`, `ohya` won the
+full suite and led decisively on cross-device recall (23.4 s vs 165.5 s /
+timeout), distinct-session counting (14.3 s / 0.3 KB vs 30.0 s / 2.3 KB),
+and verified absence (17.0 s / 2.5 KB vs 31.6 s / 13.3 KB), while Atuin's
+two-argument search tool used fewer output tokens on simple local keyword
+lookups (since writing SQL emits more assistant tokens than calling a fixed
+search wrapper; `ohya`'s SQL recipes now also format `datetime(..., 'unixepoch')`
+and include `s.agent` to eliminate epoch-ms conversion overhead).
 
 ## How it works
 
@@ -124,9 +164,9 @@ curl -fsSL https://github.com/nibzard/ohya/releases/latest/download/install.sh |
 
 The release-hosted installer downloads the matching binary, verifies its
 archive checksum, installs it in `~/.local/bin`, and runs setup. Setup
-registers MCP integrations for detected agents and starts a user service
-that imports existing history and follows new records. No Go toolchain is
-needed.
+registers MCP integrations and an owned `ohya` skill (`skills/ohya/SKILL.md`)
+for detected agents, and starts a user service that imports existing history
+and follows new records. No Go toolchain is needed.
 
 Open a new terminal, then check the installation:
 
@@ -135,7 +175,7 @@ ohya version
 ohya doctor
 ```
 
-Start a new Claude Code, Codex, or Pi session and try:
+Start a new Claude Code, Codex, Pi, or Antigravity session and try:
 
 > Use ohya to find the last work on this repository. What did the previous
 > agent decide, what did it try, and what remains unfinished? Cite event IDs
@@ -236,21 +276,31 @@ Agents should scope searches to the project, inspect the matching records,
 and cite event IDs. Historical plans and reports need checking against
 current files and tests before acting on them.
 
-The `sql` tool publishes the schema and examples to the agent when it
-connects. A typical recall query:
+The `sql` tool publishes the schema and core recall recipes to the agent
+when it connects, while rare playbooks (`ohya://guides/garbage-audit` and
+`ohya://guides/analytics-and-review`) are served on demand as MCP resources
+and mirrored in the installed `ohya` skill. A typical recall query:
 
 ```sql
-SELECT e.id, s.agent, s.cwd, substr(e.text, 1, 300) AS excerpt
+SELECT e.id, s.agent, s.cwd,
+       datetime(e.time_ms/1000, 'unixepoch') AS utc_time,
+       snippet(events_fts, 0, '[', ']', '...', 24) AS excerpt
 FROM events_fts JOIN events_settled e ON e.id = events_fts.rowid
 JOIN sessions s ON s.id = e.session_id
 WHERE events_fts MATCH 'authentication AND refresh'
 ORDER BY events_fts.rank LIMIT 10;
 ```
 
-| Tool | Does | Bounds |
+For multi-step shell pipelines, agents and operators can also run
+`ohya sql --json '<query>'` (or `-` for stdin, `--remote` on a joined
+device), which routes through the exact same read-only authorizer, row/byte
+bounds, and egress secret redaction as the MCP tool.
+
+| Surface | Does | Bounds |
 | --- | --- | --- |
-| `sql(query)` | One `SELECT` or read-only `PRAGMA` on a read-only connection | 5 s, 500 rows, 256 KiB, explicit truncation |
+| `sql(query)` / `ohya sql` | One `SELECT` or read-only `PRAGMA` on a read-only connection | 5 s, 500 rows, 256 KiB, explicit truncation |
 | `annotate(operations)` | Upserts or deletes JSON annotations on events; originals stay unchanged | 100 operations, 64 KiB per value, atomic |
+| `ohya://guides/*` | On-demand MCP guide resources for garbage-audit and analytics/review | Loaded only when requested |
 
 `events_settled` omits sessions that were active in the last 10 minutes, so
 an agent does not read its own live transcript through this view. For an
@@ -266,10 +316,10 @@ directories and sends only the normalized value to the hub.
 
 | Command | Purpose |
 | --- | --- |
-| `ohya setup` / `uninstall` | Configure or remove the service and agent integrations; memory stays; `--hub` also sets up device serving |
+| `ohya setup` / `uninstall` | Configure or remove the service, agent MCP integrations, and owned `ohya` skill; memory stays; `--hub` also sets up device serving |
 | `ohya service status\|start\|stop\|restart` | Inspect or control the owned background user service (`--hub` for `ohya serve`) |
 | `ohya ingest [--once]` | Import local session history, then poll for new records |
-| `ohya mcp [--remote]` | Serve `sql` and `annotate` on stdio, locally or through a joined device |
+| `ohya mcp [--remote]` | Serve `sql`, `annotate`, and on-demand guide resources on stdio, locally or through a joined device |
 | `ohya sql QUERY [--remote] [--json]` | Run one bounded read-only SQL query (or `-` for stdin) through the `sql` tool engine |
 | `ohya search QUERY [--repo] [--agent]` | Find sessions by keyword (BM25) and print excerpts, locally or through a joined device |
 | `ohya show SESSION_ID [--last N]` | Print one session's newest events, excerpted |
@@ -314,8 +364,9 @@ exit codes, and failure behavior.
 ## Status and roadmap
 
 - **Works now:** Claude Code, Codex, Pi, and Antigravity (`agy`) ingestion;
-  `sql` and `annotate`; pairing, sync, and revocation; remote MCP; integrated
-  setup; owner-scoped purge with source tombstones.
+  `sql`, `annotate`, on-demand MCP guide resources, and `ohya sql` CLI;
+  pairing, sync, and revocation; remote MCP; integrated setup (including
+  owned `ohya` agent skill); owner-scoped purge with source tombstones.
 - **Open:** Developer ID signing and notarization for macOS; a Homebrew tap.
 - **Next:** an OpenCode source (OpenCode stores sessions in SQLite).
 - **Not planned:** embeddings, vector search, built-in AI classification,
