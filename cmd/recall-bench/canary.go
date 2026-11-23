@@ -26,6 +26,24 @@ var canaryStems = []string{
 	"Ulvemann", "Vindrynne", "Ymerton",
 }
 
+var (
+	paraphraseZones = []string{
+		"north", "south", "east", "west", "upper", "lower", "inner", "outer", "aft", "fore",
+	}
+	paraphraseSystems = []string{
+		"sensor", "battery", "cooling", "radar", "thermal", "optic", "beacon", "valve", "telemetry", "pressure",
+	}
+	paraphraseMounts = []string{
+		"deck", "bay", "rack", "manifold", "bus", "array", "vault", "panel",
+	}
+	timeboxedColors = []string{
+		"amber", "cobalt", "crimson", "emerald", "indigo", "ochre", "saffron", "silver", "violet", "copper",
+	}
+	timeboxedParts = []string{
+		"relay", "solenoid", "damper", "breaker", "contactor", "actuator", "shutter", "clutch", "baffle", "latch",
+	}
+)
+
 type plantedSession struct {
 	Agent  string `json:"agent"`
 	Fact   string `json:"fact"`
@@ -37,6 +55,8 @@ type canaryPlan struct {
 	Planted []plantedSession `json:"planted"`
 
 	code1, code3, code5, code6, code8 string
+	paraphraseSubject                 string
+	timeboxedSubject                  string
 	v1, v2, v3, v4, v5Old, v5New, v7  int
 	plantDay                          string
 }
@@ -190,11 +210,28 @@ func plantOne(ctx context.Context, opts plantOptions, s plantedSession, logf fun
 func newCanaryPlan(seed int64) *canaryPlan {
 	rng := rand.New(rand.NewSource(seed))
 	p := &canaryPlan{Seed: seed, plantDay: time.Now().UTC().Format("2006-01-02")}
-	p.code1 = newCodeword(rng)
-	p.code3 = newCodeword(rng)
-	p.code5 = newCodeword(rng)
-	p.code6 = newCodeword(rng)
-	p.code8 = newCodeword(rng)
+	used := map[string]bool{}
+	nextCode := func() string {
+		for {
+			c := newCodeword(rng)
+			if !used[c] {
+				used[c] = true
+				return c
+			}
+		}
+	}
+	p.code1 = nextCode()
+	p.code3 = nextCode()
+	p.code5 = nextCode()
+	p.code6 = nextCode()
+	p.code8 = nextCode()
+	p.paraphraseSubject = fmt.Sprintf("%s %s %s",
+		paraphraseZones[rng.Intn(len(paraphraseZones))],
+		paraphraseSystems[rng.Intn(len(paraphraseSystems))],
+		paraphraseMounts[rng.Intn(len(paraphraseMounts))])
+	p.timeboxedSubject = fmt.Sprintf("%s %s",
+		timeboxedColors[rng.Intn(len(timeboxedColors))],
+		timeboxedParts[rng.Intn(len(timeboxedParts))])
 	p.v1 = 20 + rng.Intn(80)
 	p.v2 = 30 + 10*rng.Intn(16)
 	p.v3 = 8 + rng.Intn(57)
@@ -235,9 +272,9 @@ func plantingEnv() []string {
 func (p *canaryPlan) sessionList() []plantedSession {
 	return []plantedSession{
 		{Agent: "claude", Fact: fmt.Sprintf("the %s retry ceiling is %d milliseconds.", p.code1, p.v1)},
-		{Agent: "claude", Fact: fmt.Sprintf("the telemetry flush interval for the north sensor deck is %d seconds.", p.v2)},
+		{Agent: "claude", Fact: fmt.Sprintf("the telemetry flush interval for the %s is %d seconds.", p.paraphraseSubject, p.v2)},
 		{Agent: "codex", Fact: fmt.Sprintf("the %s buffer holds %d entries before spill.", p.code3, p.v3)},
-		{Agent: "pi", Fact: fmt.Sprintf("the amber relay engages at %d degrees.", p.v4)},
+		{Agent: "pi", Fact: fmt.Sprintf("the %s engages at %d degrees.", p.timeboxedSubject, p.v4)},
 		{Agent: "claude", Fact: fmt.Sprintf("the %s token TTL is %d minutes.", p.code5, p.v5Old)},
 		{Agent: "claude", Fact: fmt.Sprintf("Correction to an earlier decision: the %s token TTL is %d minutes; the %d-minute figure was wrong.", p.code5, p.v5New, p.v5Old)},
 		{Agent: "claude", Fact: fmt.Sprintf("the %s workstream, unlike the %s latch, has no dedicated runbook.", p.code1, p.code6)},
@@ -256,9 +293,9 @@ func (p *canaryPlan) questions() []Question {
 		},
 		{
 			Key: "c2-paraphrase-claude", Tier: "paraphrase",
-			Prompt:           "In an earlier session we recorded how often the north sensor deck flushes telemetry. Report that interval.",
+			Prompt:           fmt.Sprintf("In an earlier session we recorded how often the %s flushes telemetry. Report that interval.", p.paraphraseSubject),
 			AnswerContains:   []string{fmt.Sprintf("%d seconds", p.v2)},
-			EvidenceMarker:   fmt.Sprintf("telemetry flush interval for the north sensor deck is %d seconds", p.v2),
+			EvidenceMarker:   fmt.Sprintf("telemetry flush interval for the %s is %d seconds", p.paraphraseSubject, p.v2),
 			ExpectedSessions: 1, ExpectedFiles: 1,
 		},
 		{
@@ -270,9 +307,9 @@ func (p *canaryPlan) questions() []Question {
 		},
 		{
 			Key: "c4-timeboxed-pi", Tier: "timeboxed",
-			Prompt:           fmt.Sprintf("In a session recorded on %s, we set the engagement threshold of the amber relay. Report the value in degrees.", p.plantDay),
+			Prompt:           fmt.Sprintf("In a session recorded on %s, we set the engagement threshold of the %s. Report the value in degrees.", p.plantDay, p.timeboxedSubject),
 			AnswerContains:   []string{fmt.Sprintf("%d degrees", p.v4)},
-			EvidenceMarker:   fmt.Sprintf("amber relay engages at %d degrees", p.v4),
+			EvidenceMarker:   fmt.Sprintf("%s engages at %d degrees", p.timeboxedSubject, p.v4),
 			ExpectedSessions: 1, ExpectedFiles: 1,
 		},
 		{

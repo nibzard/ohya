@@ -176,8 +176,12 @@ func TestArmPromptShapes(t *testing.T) {
 func TestNewCanaryPlanDeterministicAndDistinct(t *testing.T) {
 	a := newCanaryPlan(42)
 	b := newCanaryPlan(42)
-	if a.code1 != b.code1 || a.v1 != b.v1 || a.v5New != b.v5New {
+	if a.code1 != b.code1 || a.v1 != b.v1 || a.v5New != b.v5New || a.paraphraseSubject != b.paraphraseSubject || a.timeboxedSubject != b.timeboxedSubject {
 		t.Fatal("same seed produced different plans")
+	}
+	c := newCanaryPlan(99)
+	if a.paraphraseSubject == c.paraphraseSubject && a.timeboxedSubject == c.timeboxedSubject {
+		t.Fatalf("different seeds reused both subjects: %q / %q", a.paraphraseSubject, a.timeboxedSubject)
 	}
 	if a.v5Old == a.v5New {
 		t.Fatalf("correction values must differ: %d", a.v5Old)
