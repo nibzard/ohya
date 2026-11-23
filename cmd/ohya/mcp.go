@@ -28,9 +28,7 @@ var mcpSpec = commandSpec{
 	description: "Serves the read-only sql(query) and bounded annotate(operations) MCP tools to any MCP client over stdio. " +
 		"Without --remote the tools run against the local hub database; with --remote they run on the joined hub through the authenticated sync connection, and the hub derives the annotation writer from the device identity. " +
 		"Register the command with the client, for example args [\"mcp\"] for Claude Code.",
-	argsTitle: "Arguments",
-	args:      "(none)",
-	examples:  []string{"ohya mcp", "ohya mcp --remote"},
+	examples: []string{"ohya mcp", "ohya mcp --remote"},
 }
 
 func runMcpCommand(args []string, stdout, stderr io.Writer) error {

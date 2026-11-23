@@ -40,8 +40,6 @@ var (
 		synopsis:    "report the owned service state",
 		usageLine:   "ohya service status [flags]",
 		description: "Reads the setup ownership receipt and queries the user service manager without modifying files or starting processes.",
-		argsTitle:   "Arguments",
-		args:        "(none)",
 		examples:    []string{"ohya service status", "ohya service status --hub --json"},
 	}
 	serviceStartSpec = commandSpec{
@@ -49,8 +47,6 @@ var (
 		synopsis:    "start the owned user service",
 		usageLine:   "ohya service start [flags]",
 		description: "Starts the service configured by ohya setup and waits until the service manager reports a running process. Already-running services are a no-op.",
-		argsTitle:   "Arguments",
-		args:        "(none)",
 		examples:    []string{"ohya service start", "ohya service start --hub --json"},
 	}
 	serviceStopSpec = commandSpec{
@@ -58,8 +54,6 @@ var (
 		synopsis:    "stop the owned user service",
 		usageLine:   "ohya service stop [flags]",
 		description: "Stops the service configured by ohya setup without removing its unit file, receipt, or stored memory. Already-stopped services are a no-op.",
-		argsTitle:   "Arguments",
-		args:        "(none)",
 		examples:    []string{"ohya service stop", "ohya service stop --hub --json"},
 	}
 	serviceRestartSpec = commandSpec{
@@ -67,8 +61,6 @@ var (
 		synopsis:    "restart the owned user service",
 		usageLine:   "ohya service restart [flags]",
 		description: "Stops and starts the service configured by ohya setup and waits until the service manager reports a running process.",
-		argsTitle:   "Arguments",
-		args:        "(none)",
 		examples:    []string{"ohya service restart", "ohya service restart --hub --json"},
 	}
 )

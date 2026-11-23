@@ -22,13 +22,13 @@ import (
 var setupSpec = commandSpec{
 	name: "ohya setup", synopsis: "configure local memory and installed agents", usageLine: "ohya setup [flags]",
 	description: "Configures a user service for local ingestion and registers ohya with installed agents. Preserves unrelated settings and reports each result. Rerun to repair owned configuration. Use --dry-run to inspect changes without writing files. Pi 0.84.2 uses an owned compatibility extension when native MCP is unavailable. Remote setup accepts --join-code-env and saves the hub settings for reruns.\nUse --hub to also run this machine as the hub for other devices: it adds an owned ohya serve user service, creates the Tailcat identity, checks that a relay answers, and prints a one-time join code with the device command.",
-	argsTitle:   "Arguments", args: "(none)", examples: []string{"ohya setup", "ohya setup --hub", "ohya setup --dry-run --json"},
+	examples:    []string{"ohya setup", "ohya setup --hub", "ohya setup --dry-run --json"},
 }
 
 var uninstallSpec = commandSpec{
 	name: "ohya uninstall", synopsis: "remove owned services and agent integrations", usageLine: "ohya uninstall [flags]",
 	description: "Stops owned services and removes owned agent entries. Preserves databases, credentials, sessions, and entries edited after setup. An unchanged executable owned by the standalone installer is removed unless --keep-binary is set. Package manager and manual executables are preserved.",
-	argsTitle:   "Arguments", args: "(none)", examples: []string{"ohya uninstall --json"},
+	examples:    []string{"ohya uninstall --json"},
 }
 
 var errSetupIncomplete = errors.New("setup is incomplete; review the component results and rerun ohya setup")

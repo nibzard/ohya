@@ -24,8 +24,6 @@ var purgeSpec = commandSpec{
 		"Agents hold no destructive tool: they audit with the read-only sql tool and mark garbage with annotate (namespace tags, key garbage), and the owner executes the purge here. " +
 		"--marked namespace.key selects the sessions whose events carry that annotation mark; see the garbage audit in DB.md. " +
 		"Freed pages stay in the database file (no VACUUM), and a recovery copy taken before a purge still holds the purged data.",
-	argsTitle: "Arguments",
-	args:      "(none)",
 	examples: []string{
 		"ohya purge --repo github.com/owner/name --before 2026-11-01T00:00:00Z",
 		"ohya purge --repo github.com/owner/name --before 2026-11-01T00:00:00Z --apply",

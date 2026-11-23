@@ -352,3 +352,42 @@ func TestMetricsOmitsDeadRetainedInstancesWithNoSamplesUnlessAll(t *testing.T) {
 		t.Fatalf("--all instances = %d, want 2", len(allEnv.Data.Instances))
 	}
 }
+
+func TestMetricsTextOutputShowsCounterDeltasAndRates(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "hub.db")
+	now := time.Now()
+	writeHistory(t, dir, strings.Repeat("8", 32), []observe.Snapshot{
+		historySample(now.Add(-2*time.Minute), 60_000, func(s *observe.Snapshot) {
+			s.Counters["parse_bytes"] = 1000
+		}),
+		historySample(now.Add(-1*time.Minute), 120_000, func(s *observe.Snapshot) {
+			s.Counters["parse_bytes"] = 1600
+		}),
+	})
+	var stdout bytes.Buffer
+	if err := runMetricsCommand([]string{"--state", dir, "--db", dbPath, "--window", "5m"}, &stdout, &stdout); err != errDegraded {
+		t.Fatalf("a partial window must exit three: %v", err)
+	}
+	text := stdout.String()
+	for _, want := range []string{"COUNTER", "parse_bytes", "600", "10.00"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("text output lacks %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestDurationAndRateTextStayShort(t *testing.T) {
+	cases := map[string]string{
+		durationMSText(0.25):     "0.2ms",
+		durationMSText(999.94):   "999.9ms",
+		durationMSText(122126.3): "122.1s",
+		rateText(1.934):          "1.93",
+		rateText(2878848178.37):  "2878848178",
+	}
+	for got, want := range cases {
+		if got != want {
+			t.Errorf("got %q; want %q", got, want)
+		}
+	}
+}

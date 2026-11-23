@@ -77,9 +77,7 @@ var devicesInviteSpec = commandSpec{
 	description: "Issues one join code and prints it on the first stdout line, so it can be piped to the joining device. " +
 		"The code is ohya1.<invitation>.<tailcat-address>: the invitation admits exactly one device within the code's lifetime, and the address holds the hub's pre-shared key, so the code is a secret. " +
 		"Run it on the hub; the device joins with ohya join <code>.",
-	argsTitle: "Arguments",
-	args:      "(none)",
-	examples:  []string{"ohya devices invite --ttl 15m"},
+	examples: []string{"ohya devices invite --ttl 15m"},
 }
 
 func runDevicesInvite(args []string, stdout, stderr io.Writer) error {
@@ -149,8 +147,6 @@ var devicesListSpec = commandSpec{
 	synopsis:    "list devices and invitations",
 	usageLine:   "ohya devices list [flags]",
 	description: "Prints every paired device with its state, pairing time, and the transport path and time of its last sync, then every invitation: used by which device, expired, or open until when.",
-	argsTitle:   "Arguments",
-	args:        "(none)",
 	examples:    []string{"ohya devices list"},
 }
 
@@ -297,7 +293,6 @@ var devicesRevokeSpec = commandSpec{
 	synopsis:    "revoke a device, final for its identity",
 	usageLine:   "ohya devices revoke <device-id> [flags]",
 	description: "Revokes one device. Revocation is final for the device identity: its connections close, its sources stay bound to the revoked identity, and re-admission needs a new device identity.",
-	argsTitle:   "Arguments",
 	args:        "<device-id>  the device ID shown by ohya devices list",
 	examples:    []string{"ohya devices revoke <device-id>"},
 }

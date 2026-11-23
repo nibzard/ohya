@@ -43,8 +43,7 @@ var sqlSpec = commandSpec{
 		"Pass - as the query argument to read one SQL statement from stdin (bounded to 64 KiB). " +
 		"Without --remote the command reads the local hub database and never writes or migrates it; with --remote it queries the joined hub through the saved pairing credential. " +
 		"All sql tool safeguards apply unchanged: single statement, SQLite authorizer, 500 rows, 256 KiB output, 5 second deadline, and ADR 0015 egress secret redaction.",
-	argsTitle: "Arguments",
-	args:      "<query | ->  one SQL SELECT or read-only PRAGMA statement, or - to read it from stdin",
+	args: "<query | ->  one SQL SELECT or read-only PRAGMA statement, or - to read it from stdin",
 	examples: []string{
 		`ohya sql "SELECT agent, count(*) FROM sessions GROUP BY agent"`,
 		`ohya sql --json "SELECT id, repo, last_event_at_ms FROM sessions ORDER BY last_event_at_ms DESC LIMIT 5"`,
@@ -63,8 +62,7 @@ var searchSpec = commandSpec{
 		"FTS5 parses '-name' as a column filter, so a bare hyphenated term fails with a no-such-column error; other bare punctuation fails with a syntax error. " +
 		"Without --remote the command reads the local hub database and never writes or migrates it; with --remote it queries the joined hub through the saved pairing credential. " +
 		"Bounds and the read-only policy are the sql tool's engine: at most 500 rows and 256 KiB per call, 5 seconds per query.",
-	argsTitle: "Arguments",
-	args:      "<query>  FTS5 query text, for example 'auth AND refresh'",
+	args: "<query>  FTS5 query text, for example 'auth AND refresh'",
 	examples: []string{
 		`ohya search "auth AND refresh"`,
 		`ohya search '"hyphenated-name"'`,
@@ -80,8 +78,7 @@ var showSpec = commandSpec{
 	description: "Prints one session's header — agent, device, native id, repo, working directory, branch, model, first prompt, timing, event count — followed by its newest events, excerpted, oldest first. " +
 		"Find the session id with ohya search or ohya sessions. Byte-identical replay duplicates stay hidden. " +
 		"Without --remote the command reads the local hub database and never writes or migrates it; with --remote it reads the joined hub through the saved pairing credential.",
-	argsTitle: "Arguments",
-	args:      "<session-id>  session id as printed by ohya search or ohya sessions",
+	args: "<session-id>  session id as printed by ohya search or ohya sessions",
 	examples: []string{
 		"ohya show claude-code:dev1:sess-1",
 		"ohya show --last 50 claude-code:dev1:sess-1",
@@ -96,8 +93,6 @@ var sessionsSpec = commandSpec{
 	description: "Lists the most recently active non-synthetic sessions with their agent, device, repository, working directory, branch, model, timing, event count, settled state (idle at least 10 minutes), and excerpted first prompt. " +
 		"Without --remote the command reads the local hub database and never writes or migrates it; with --remote it queries the joined hub through the saved pairing credential. " +
 		"The query runs through the sql tool's read-only engine with egress secret redaction.",
-	argsTitle: "Arguments",
-	args:      "(none)",
 	examples: []string{
 		"ohya sessions",
 		"ohya sessions --limit 10 --agent claude-code",

@@ -50,9 +50,7 @@ var secretsScanSpec = commandSpec{
 		"It never prints matched text, field values, or excerpts; output holds counts, pattern ids, event ids, and session ids only. " +
 		"The scan is read-only and best effort: a fixed table without a classifier finds only the shapes it knows, so a clean report is not proof that no secret is stored. " +
 		"Removing stored secrets stays a separate owner action, for example ohya purge.",
-	argsTitle: "Arguments",
-	args:      "(none)",
-	examples:  []string{"ohya secrets scan", "ohya secrets scan --db /path/to/hub.db --json"},
+	examples: []string{"ohya secrets scan", "ohya secrets scan --db /path/to/hub.db --json"},
 }
 
 func runSecretsScanCommand(args []string, stdout, stderr io.Writer) error {

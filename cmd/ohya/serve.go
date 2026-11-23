@@ -30,9 +30,7 @@ var serveSpec = commandSpec{
 		"The hub identity — node key, pre-shared key, relay region — is created on the first start and saved owner-only under tailcat-hub/ in the state directory, so its address never changes across restarts. " +
 		"The sync endpoint listens on port 9027 inside the Tailcat network stack and opens no port on the host; devices reach it through a DERP relay and a direct path when one exists. " +
 		"Devices join with ohya join and one code from ohya devices invite.",
-	argsTitle: "Arguments",
-	args:      "(none)",
-	examples:  []string{"ohya serve", "ohya serve --db /srv/ohya/hub.db --state /srv/ohya"},
+	examples: []string{"ohya serve", "ohya serve --db /srv/ohya/hub.db --state /srv/ohya"},
 }
 
 type serveFlagSet struct {

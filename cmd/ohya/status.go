@@ -41,9 +41,7 @@ var statusSpec = commandSpec{
 		"Multiple matching instances are listed separately and their counters are never merged. " +
 		"With --remote the command also opens one short-lived authenticated connection to fetch cached hub aggregate status (version, uptime, storage sizes, resources, limits) without reading logs or transcripts. " +
 		"Exit codes: 0 for a complete fresh result, 3 for a valid but partial, stale, or degraded result, 1 for failure, 2 for usage.",
-	argsTitle: "Arguments",
-	args:      "(none)",
-	examples:  []string{"ohya status --json", "ohya status --state ~/.ohya/join --role join"},
+	examples: []string{"ohya status --json", "ohya status --state ~/.ohya/join --role join"},
 }
 
 type statusIdentity struct {

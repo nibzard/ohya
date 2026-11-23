@@ -39,9 +39,7 @@ var usageSpec = commandSpec{
 	description: "Combines two local evidence sources over a time window: server usage records under the state directory's observe/ tree (phases, outcomes, column reads, sizes) and transcript evidence in the hub database (Claude Code mcp__ohya__ tool_use and tool_result pairs, Codex McpToolCall items), which also covers calls made before instrumentation existed and sessions where the tools were available but unused. " +
 		"Deterministic and read-only: no network, no LLM, no SQL text or transcript excerpts in the default output; --local-detail prints query text from transcripts, which are already local data, for the maintainer's own analysis. " +
 		"The whole report runs under a deadline and row bounds; on expiry it prints the partial result, and exits 1 when expiry left nothing to report.",
-	argsTitle: "Arguments",
-	args:      "(none)",
-	examples:  []string{"ohya usage", "ohya usage --since 7d --json", "ohya usage --until 2026-11-16T11:22:00Z"},
+	examples: []string{"ohya usage", "ohya usage --since 7d --json", "ohya usage --until 2026-11-16T11:22:00Z"},
 }
 
 type usageWindow struct {

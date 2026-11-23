@@ -136,13 +136,20 @@ func writeUsage(w io.Writer, spec commandSpec, fs *flag.FlagSet) {
 	fmt.Fprintf(w, "%s %s %s\n\n", s.bold(spec.name), s.dim("—"), spec.synopsis)
 	fmt.Fprintf(w, "%s\n\n  %s\n\n", s.bold("Usage:"), s.cyan(spec.usageLine))
 	fmt.Fprintf(w, "%s\n\n", wrap(spec.description, 80))
-	fmt.Fprintf(w, "%s\n\n", s.bold(spec.argsTitle+":"))
-	for _, line := range strings.Split(spec.args, "\n") {
-		if line != "" {
-			fmt.Fprintf(w, "  %s\n", line)
+	if spec.args != "" {
+		title := spec.argsTitle
+		if title == "" {
+			title = "Arguments"
 		}
+		fmt.Fprintf(w, "%s\n\n", s.bold(title+":"))
+		for _, line := range strings.Split(spec.args, "\n") {
+			if line != "" {
+				fmt.Fprintf(w, "  %s\n", line)
+			}
+		}
+		fmt.Fprintln(w)
 	}
-	fmt.Fprintf(w, "\n%s\n\n", s.bold("Flags:"))
+	fmt.Fprintf(w, "%s\n\n", s.bold("Flags:"))
 	renderFlags(w, s, fs)
 	fmt.Fprintf(w, "\n%s\n\n", s.bold("Examples:"))
 	for _, ex := range spec.examples {
@@ -204,8 +211,12 @@ func defaultSuffix(f *flag.Flag) string {
 }
 
 func wrap(text string, width int) string {
-	var out []string
+	var paragraphs []string
 	for _, para := range strings.Split(text, "\n") {
+		if strings.TrimSpace(para) == "" {
+			continue
+		}
+		var out []string
 		var line string
 		for _, word := range strings.Fields(para) {
 			switch {
@@ -219,6 +230,7 @@ func wrap(text string, width int) string {
 			}
 		}
 		out = append(out, line)
+		paragraphs = append(paragraphs, strings.Join(out, "\n"))
 	}
-	return strings.Join(out, "\n")
+	return strings.Join(paragraphs, "\n\n")
 }

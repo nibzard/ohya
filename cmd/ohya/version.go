@@ -20,9 +20,7 @@ var versionSpec = commandSpec{
 	description: "Prints one line of space-separated key=value pairs: the build identity (version, revision, dirty, go), the schema version this build migrates a database to, and every parser's output version. " +
 		"The command opens no database and needs no state.\n" +
 		"Compare a hub's line with the local one before rederiving: a build refuses rows derived by a newer parser, and the parser keys tell the two binaries apart.",
-	argsTitle: "Arguments",
-	args:      "(none)",
-	examples:  []string{"ohya version", "ohya --version"},
+	examples: []string{"ohya version", "ohya --version"},
 }
 
 func isVersionArg(arg string) bool {

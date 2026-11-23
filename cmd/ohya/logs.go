@@ -38,9 +38,7 @@ var logsSpec = commandSpec{
 		"A finite report stops at 1 MiB of entries and says so; --follow streams one instance, replays its lookback window once, and follows rotation. " +
 		"Logs are local only; this command never contacts the hub. " +
 		"Exit codes: 0 for a valid result, 3 for a partial or degraded result, 1 for failure, 2 for usage.",
-	argsTitle: "Arguments",
-	args:      "(none)",
-	examples:  []string{"ohya logs --since 10m --json", "ohya logs --follow --instance abc12345"},
+	examples: []string{"ohya logs --since 10m --json", "ohya logs --follow --instance abc12345"},
 }
 
 type logsInstance struct {
@@ -456,7 +454,7 @@ func writeLogsText(w io.Writer, data logsData) {
 		if silent > 0 {
 			line += " " + s.dim(fmt.Sprintf("(+%d silent)", silent))
 		}
-		fmt.Fprintf(w, "%s  %s\n", s.dim("Sources"), line)
+		fmt.Fprintf(w, "%s  %s\n", s.dim("Sources"), s.fit(line, 9))
 	} else if silent > 0 {
 		fmt.Fprintf(w, "%s  %s\n", s.dim("Sources"), s.dim(fmt.Sprintf("%d checked, 0 matching entries", silent)))
 	}

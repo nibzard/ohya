@@ -26,9 +26,7 @@ var metricsSpec = commandSpec{
 		"Counters are deltas between the first and last sample inside the window; rates divide those deltas by the monotonic time the process actually ran, so a requested window is never manufactured from less data. " +
 		"Quantiles are bucket estimates that need at least twenty observations, and percentiles are never averaged between instances. " +
 		"Exit codes: 0 for a complete window, 3 for a valid but partial or sample-less result, 1 for failure, 2 for usage.",
-	argsTitle: "Arguments",
-	args:      "(none)",
-	examples:  []string{"ohya metrics --window 5m --json", "ohya metrics --window 1h --role ingest"},
+	examples: []string{"ohya metrics --window 5m --json", "ohya metrics --window 1h --role ingest"},
 }
 
 type metricsHistogram struct {
@@ -422,8 +420,7 @@ func readHistorySamples(path string) ([]observe.Snapshot, int) {
 func writeMetricsText(w io.Writer, data metricsData) {
 	s := styleFor(w)
 	sep := " " + s.bullet() + " "
-	fmt.Fprintf(w, "%s  %s\n", s.bold("ohya metrics"), s.dim(fmt.Sprintf("window %s%srequested %s%s%s",
-		data.Window, sep, ageText(data.RequestedMS), sep, data.GeneratedUTC)))
+	fmt.Fprintf(w, "%s  %s\n", s.bold("ohya metrics"), s.dim(fmt.Sprintf("window %s%s%s", data.Window, sep, data.GeneratedUTC)))
 	for _, instance := range data.Instances {
 		if instance.DecodeError != "" {
 			fmt.Fprintf(w, "\n%s %s: %s\n", s.red("unreadable"), s.bold(shortID(instance.InstanceID)), instance.DecodeError)
@@ -436,23 +433,41 @@ func writeMetricsText(w io.Writer, data metricsData) {
 		var meta []string
 		meta = append(meta, fmt.Sprintf("%d samples", instance.SampleCount))
 		if instance.ObservedMS != nil {
-			meta = append(meta, "observed "+ageText(*instance.ObservedMS))
+			observed := "observed " + ageText(*instance.ObservedMS)
+			if !instance.Completeness.CoversWindow {
+				observed = s.yellow(observed)
+			}
+			meta = append(meta, observed)
 		}
-		if instance.MonotonicElapsedMS != nil {
+		if instance.MonotonicElapsedMS != nil && (instance.ObservedMS == nil || ageText(*instance.MonotonicElapsedMS) != ageText(*instance.ObservedMS)) {
 			meta = append(meta, "monotonic "+ageText(*instance.MonotonicElapsedMS))
 		}
 		if instance.Gaps != nil && *instance.Gaps > 0 {
 			meta = append(meta, s.yellow(fmt.Sprintf("%d gaps", *instance.Gaps)))
 		}
 		header := fmt.Sprintf("%s %s %s  %s", s.cyan(role), s.bold(shortID(instance.InstanceID)), s.dim(fmt.Sprintf("pid %d", instance.PID)), strings.Join(meta, sep))
-		if !instance.Completeness.CoversWindow {
-			header += " " + s.yellow("("+instance.Completeness.Reason+")")
-		}
 		fmt.Fprintf(w, "\n%s\n", header)
+
+		counters := cliTable{
+			indent:     "  ",
+			headers:    []string{"COUNTER", "DELTA", "PER SECOND"},
+			rightAlign: []bool{false, true, true},
+		}
+		for _, key := range sortedKeys(instance.Counters) {
+			delta := instance.Counters[key]
+			if delta == 0 {
+				continue
+			}
+			rate := s.dim("-")
+			if perSecond, ok := instance.RatesPerSecond[key]; ok {
+				rate = rateText(perSecond)
+			}
+			counters.addRow(key, fmt.Sprintf("%d", delta), rate)
+		}
 
 		tbl := cliTable{
 			indent:     "  ",
-			headers:    []string{"METRIC", "COUNT", "P50", "P95", "SUM"},
+			headers:    []string{"DURATION", "COUNT", "P50", "P95", "SUM"},
 			rightAlign: []bool{false, true, true, true, true},
 		}
 		for _, key := range sortedKeys(instance.Durations) {
@@ -462,12 +477,18 @@ func writeMetricsText(w io.Writer, data metricsData) {
 			}
 			p50, p95 := s.dim("-"), s.dim("-")
 			if delta.P50 != nil {
-				p50 = fmt.Sprintf("%.1fms", *delta.P50)
+				p50 = durationMSText(*delta.P50)
 			}
 			if delta.P95 != nil {
-				p95 = fmt.Sprintf("%.1fms", *delta.P95)
+				p95 = durationMSText(*delta.P95)
 			}
-			tbl.addRow(key, fmt.Sprintf("%d", delta.Count), p50, p95, fmt.Sprintf("%.1fms", delta.SumMS))
+			tbl.addRow(key, fmt.Sprintf("%d", delta.Count), p50, p95, durationMSText(delta.SumMS))
+		}
+		if len(counters.rows) > 0 {
+			counters.render(w, s)
+		}
+		if len(counters.rows) > 0 && len(tbl.rows) > 0 {
+			fmt.Fprintln(w)
 		}
 		if len(tbl.rows) > 0 {
 			tbl.render(w, s)
@@ -480,4 +501,18 @@ func writeMetricsText(w io.Writer, data metricsData) {
 		fmt.Fprintf(w, "\n%s\n", s.yellow("coverage: discovery truncated at the live-instance bound"))
 	}
 	writeStatusFindingsText(w, s, data.Findings)
+}
+
+func durationMSText(ms float64) string {
+	if ms < 1000 {
+		return fmt.Sprintf("%.1fms", ms)
+	}
+	return fmt.Sprintf("%.1fs", ms/1000)
+}
+
+func rateText(perSecond float64) string {
+	if perSecond < 100 {
+		return fmt.Sprintf("%.2f", perSecond)
+	}
+	return fmt.Sprintf("%.0f", perSecond)
 }

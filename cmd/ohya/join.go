@@ -46,9 +46,8 @@ var joinSpec = commandSpec{
 		"A device that already holds a credential sends its hello to the hub address in the code first: when the hub accepts it, the device keeps its identity, credential, and checkpoints, and the invitation stays unused; when the hub rejects it, join fails with the reason and never pairs as a new device. " +
 		"The join state directory is deliberately its own (default ~/.ohya/join): its checkpoints hold this hub's acknowledgments and must never mix with local ingestion's.\n" +
 		"Repeatable --exclude GLOB flags skip matching session files at discovery, exactly as on ohya ingest: an excluded path is never registered, read, or sent, and ohya status reports the per-agent skip counts.",
-	argsTitle: "Arguments",
-	args:      "<code>  join code from ohya devices invite; omit it to resume an already-paired device",
-	examples:  []string{"ohya join <code>", "ohya join --state ~/.ohya/join <code>"},
+	args:     "<code>  join code from ohya devices invite; omit it to resume an already-paired device",
+	examples: []string{"ohya join <code>", "ohya join --state ~/.ohya/join <code>"},
 }
 
 func runJoinCommand(args []string, stdout, stderr io.Writer) error {

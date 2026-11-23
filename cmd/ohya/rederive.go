@@ -20,9 +20,7 @@ var rederiveSpec = commandSpec{
 	usageLine: "ohya rederive [flags]",
 	description: "Re-derives stale normalized event rows from the stored raw records — inside the hub, with no access to the original files — in one transaction, recomputing sessions and token totals and rebuilding the search index. " +
 		"Event IDs and annotations survive, and an up-to-date hub is a no-op, so the command is safe to run any time.",
-	argsTitle: "Arguments",
-	args:      "(none)",
-	examples:  []string{"ohya rederive", "ohya rederive --db ~/.ohya/hub.db"},
+	examples: []string{"ohya rederive", "ohya rederive --db ~/.ohya/hub.db"},
 }
 
 func runRederiveCommand(args []string, stdout, stderr io.Writer) error {

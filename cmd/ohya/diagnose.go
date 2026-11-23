@@ -35,9 +35,7 @@ var diagnoseSpec = commandSpec{
 		"The file is created 0600 and never uploaded. " +
 		"With --remote this build records the unsupported remote fetch as a finding and still exports the local sections. " +
 		"Exit codes: 0 for a complete export, 3 for a partial export, 1 for failure, 2 for usage.",
-	argsTitle: "Arguments",
-	args:      "(none)",
-	examples:  []string{"ohya diagnose --output ./ohya-diagnostics.json", "ohya diagnose --output ./d.json --force"},
+	examples: []string{"ohya diagnose --output ./ohya-diagnostics.json", "ohya diagnose --output ./d.json --force"},
 }
 
 type diagnoseLimits struct {

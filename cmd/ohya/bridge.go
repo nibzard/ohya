@@ -12,7 +12,7 @@ import (
 	"github.com/nibzard/ohya/internal/setup"
 )
 
-var bridgeSpec = commandSpec{name: "ohya bridge", synopsis: "call memory tools for a Pi compatibility extension", usageLine: "ohya bridge --connection FILE", description: "Reads one bounded tool request from stdin and returns one MCP tool result. The connection names this executable's MCP command. Used by the owned Pi extension.", argsTitle: "Arguments", args: "(none)", examples: []string{"ohya bridge --connection ~/.ohya/setup/pi-bridge.json"}}
+var bridgeSpec = commandSpec{name: "ohya bridge", synopsis: "call memory tools for a Pi compatibility extension", usageLine: "ohya bridge --connection FILE", description: "Reads one bounded tool request from stdin and returns one MCP tool result. The connection names this executable's MCP command. Used by the owned Pi extension.", examples: []string{"ohya bridge --connection ~/.ohya/setup/pi-bridge.json"}}
 
 func runBridgeCommand(args []string, stdin io.Reader, stdout io.Writer) error {
 	c := newCommandFlags(bridgeSpec)

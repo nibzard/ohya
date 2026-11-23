@@ -19,7 +19,7 @@ var rootSpec = commandSpec{
 	name:      "ohya",
 	synopsis:  "one memory for all your coding agents",
 	usageLine: "ohya <command> [flags]",
-	description: "ohya captures Claude Code, Codex, and Pi agent sessions into one hub-owned SQLite database with full-text search, serves the read-only sql and bounded annotate MCP tools to coding agents, and synchronizes devices over an encrypted tailnet through serve and join. " +
+	description: "ohya captures Claude Code, Codex, Pi, and Antigravity agent sessions into one hub-owned SQLite database with full-text search, serves the read-only sql and bounded annotate MCP tools to coding agents, and synchronizes devices over an encrypted tailnet through serve and join. " +
 		"No command prompts for input: ohya is non-interactive by design.\n" +
 		"Exit codes: 0 success, 1 failure, 2 usage error, 3 degraded (ingest --once: at least one source failed or stopped; status, metrics, logs, and diagnose: partial, stale, or degraded observation).",
 	argsTitle: "Commands",
@@ -129,9 +129,7 @@ var ingestSpec = commandSpec{
 		"With --once, a pass in which a source failed or stopped exits 3 (degraded); the poll loop keeps running and keeps its stderr diagnostics.\n" +
 		"With --json (needs --once), the pass report is one JSON object instead of the text summary (docs/adr/0005).\n" +
 		"Repeatable --exclude GLOB flags skip matching session files at discovery: an excluded path is never registered, read, or sent, the pass summary and ohya status report per-agent skip counts, and already-stored sessions stay on the hub.",
-	argsTitle: "Arguments",
-	args:      "(none)",
-	examples:  []string{"ohya ingest --once", "ohya ingest --db ~/.ohya/hub.db", "ohya ingest --exclude '/home/me/.codex/sessions/rollout-*-guardian-*'"},
+	examples: []string{"ohya ingest --once", "ohya ingest --db ~/.ohya/hub.db", "ohya ingest --exclude '/home/me/.codex/sessions/rollout-*-guardian-*'"},
 }
 
 func runIngestCommand(args []string, stdout, stderr io.Writer) error {

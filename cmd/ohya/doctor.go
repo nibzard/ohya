@@ -42,9 +42,7 @@ var doctorSpec = commandSpec{
 		"Doctor opens the database read-only: it never migrates, repairs, or re-derives, and prints no transcript content or secrets.\n" +
 		"The --deep check copies the database into memory, so it takes time and memory in proportion to the database size.\n" +
 		"Every finding carries a severity and a one-line remedy. Exit codes: 0 when no finding is an error, 1 otherwise; warnings do not fail. A joined device checks its own state with --state ~/.ohya/join.",
-	argsTitle: "Arguments",
-	args:      "(none)",
-	examples:  []string{"ohya doctor", "ohya doctor --state ~/.ohya/join"},
+	examples: []string{"ohya doctor", "ohya doctor --state ~/.ohya/join"},
 }
 
 type finding struct {
