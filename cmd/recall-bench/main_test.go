@@ -93,6 +93,27 @@ func TestParseClaudeStreamMarksIsErrorResultNotOK(t *testing.T) {
 	}
 }
 
+func TestParseClaudeStreamTakesMaxUsagePerMessageOnTimeout(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "stream.jsonl")
+	lines := []string{
+		`{"type":"assistant","message":{"id":"msg_1","model":"test-model","content":[{"type":"thinking","thinking":"hmm"}],"usage":{"input_tokens":0,"output_tokens":0}}}`,
+		`{"type":"assistant","message":{"id":"msg_1","model":"test-model","content":[{"type":"tool_use","id":"c1","name":"Grep"}],"usage":{"input_tokens":250,"cache_read_input_tokens":800,"cache_creation_input_tokens":40,"output_tokens":35}}}`,
+		`{"type":"assistant","message":{"id":"msg_2","model":"test-model","content":[{"type":"tool_use","id":"c2","name":"Bash"}],"usage":{"input_tokens":100,"cache_read_input_tokens":900,"output_tokens":20}}}`,
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := parseClaudeStream(path)
+	if m.OK {
+		t.Fatalf("missing result event must not be OK")
+	}
+	if m.InputTokens != 350 || m.OutputTokens != 55 || m.CacheReadTokens != 1700 || m.CacheNewTokens != 40 {
+		t.Fatalf("partial timeout usage = in:%d out:%d read:%d new:%d, want 350/55/1700/40",
+			m.InputTokens, m.OutputTokens, m.CacheReadTokens, m.CacheNewTokens)
+	}
+}
+
 func TestParseClaudeStreamArrayToolResultContent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "stream.jsonl")
@@ -356,5 +377,61 @@ func TestMedianHelpers(t *testing.T) {
 	}
 	if got := medianInt(nil); got != "-" {
 		t.Fatalf("medianInt empty: %v", got)
+	}
+}
+
+type stubEvidenceResolver struct {
+	local  string
+	events map[int64]struct {
+		text, session, device string
+	}
+}
+
+func (s stubEvidenceResolver) eventRecord(_ context.Context, id int64) (string, string, string, bool, error) {
+	e, ok := s.events[id]
+	return e.text, e.session, e.device, ok, nil
+}
+
+func (s stubEvidenceResolver) sessionHasText(_ context.Context, _, _ string) (bool, error) {
+	return false, nil
+}
+
+func (s stubEvidenceResolver) localDevice() string { return s.local }
+
+func TestGradeRunRejectsLocalEchoOnRemoteOnlyQuestion(t *testing.T) {
+	q := Question{
+		Key: "x1", Tier: "crossdevice", Scope: "remote-only", Prompt: "p",
+		AnswerContains: []string{"301"}, EvidenceMarker: "Readable upload checkpoints",
+		ExpectedSessions: 1,
+	}
+	dir := t.TempDir()
+	localEcho := filepath.Join(dir, "curation.jsonl")
+	if err := os.WriteFile(localEcho, []byte(`{"text":"Readable upload checkpoints 301"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	noMarker := filepath.Join(dir, "other.jsonl")
+	if err := os.WriteFile(noMarker, []byte(`{"text":"unrelated"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := gradeRun(context.Background(), nil, q, armRaw, traceMetrics{Answer: "301\nevidence: " + localEcho}); got != "local-echo" {
+		t.Fatalf("raw local echo = %q, want local-echo", got)
+	}
+	if got := gradeRun(context.Background(), nil, q, armRaw, traceMetrics{Answer: "301\nevidence: " + noMarker}); got != "bad-evidence" {
+		t.Fatalf("raw wrong file = %q, want bad-evidence", got)
+	}
+
+	res := stubEvidenceResolver{
+		local: "dev-local",
+		events: map[int64]struct{ text, session, device string }{
+			10: {text: "Readable upload checkpoints 301", session: "claude-code:dev-local:s1", device: "dev-local"},
+			20: {text: "Readable upload checkpoints 301", session: "codex:dev-remote:s2", device: "dev-remote"},
+		},
+	}
+	if got := gradeRun(context.Background(), res, q, armOhya, traceMetrics{Answer: "301\nevidence: 10"}); got != "local-echo" {
+		t.Fatalf("ohya local-device citation = %q, want local-echo", got)
+	}
+	if got := gradeRun(context.Background(), res, q, armOhya, traceMetrics{Answer: "301\nevidence: 20"}); got != "correct" {
+		t.Fatalf("ohya remote-device citation = %q, want correct", got)
 	}
 }

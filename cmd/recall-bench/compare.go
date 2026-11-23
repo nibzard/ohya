@@ -151,14 +151,21 @@ func fraction(rs []runRecord) string {
 func costPerCorrect(rs []runRecord) string {
 	var cost float64
 	n := 0
+	unbilled := false
 	for _, r := range rs {
 		cost += r.CostUSD
+		if isUnbilledPartial(r) {
+			unbilled = true
+		}
 		if r.Verdict == "correct" || r.Verdict == "negative-correct" {
 			n++
 		}
 	}
 	if n == 0 {
 		return "-"
+	}
+	if unbilled {
+		return fmt.Sprintf("$%.3f+", cost/float64(n))
 	}
 	return fmt.Sprintf("$%.3f", cost/float64(n))
 }

@@ -82,6 +82,7 @@ func runBench(args []string) error {
 	claude := fs.String("claude", "claude", "`command` of the Claude Code client under test")
 	hubDB := fs.String("hub-db", "", "path to the hub `database` the ohya mcp tool opens (default the production ~/.ohya/hub.db)")
 	state := fs.String("state", "", "`directory` for the mcp resolver state (default DIR/resolver-state)")
+	localDevice := fs.String("local-device", "", "local device `id` rejected when grading remote-only questions (default from hub device.json)")
 	repeats := fs.Int("repeats", 3, "repeats per question per arm")
 	timeout := fs.Duration("timeout", 3*time.Minute, "per-run `timeout` for one agent run")
 	settleWait := fs.Duration("settle-wait", 15*time.Minute, "budget for preflight to wait out the ingest pipeline and the 10-minute settle gate")
@@ -101,16 +102,17 @@ func runBench(args []string) error {
 		return fmt.Errorf("-roots wants exactly three directories (claude, codex, pi), got %d", len(roots.values))
 	}
 	return bench(context.Background(), benchOptions{
-		out:        *out,
-		questions:  questions.values,
-		ohya:       *ohya,
-		claude:     *claude,
-		hubDB:      *hubDB,
-		state:      *state,
-		repeats:    *repeats,
-		timeout:    *timeout,
-		settleWait: *settleWait,
-		roots:      roots.values,
+		out:         *out,
+		questions:   questions.values,
+		ohya:        *ohya,
+		claude:      *claude,
+		hubDB:       *hubDB,
+		state:       *state,
+		localDevice: *localDevice,
+		repeats:     *repeats,
+		timeout:     *timeout,
+		settleWait:  *settleWait,
+		roots:       roots.values,
 	})
 }
 
@@ -175,6 +177,7 @@ func runRegrade(args []string) error {
 	ohya := fs.String("ohya", "bin/ohya", "`path` to the ohya binary serving the mcp tool")
 	hubDB := fs.String("hub-db", "", "path to the hub `database` (default the production ~/.ohya/hub.db)")
 	state := fs.String("state", "", "`directory` for the mcp resolver state (default DIR/resolver-state)")
+	localDevice := fs.String("local-device", "", "local device `id` rejected when grading remote-only questions (default from manifest or hub device.json)")
 	repeats := fs.Int("repeats", 3, "repeats recorded in the report header")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -187,13 +190,14 @@ func runRegrade(args []string) error {
 		qpaths = append(qpaths, *questions)
 	}
 	return regrade(context.Background(), benchOptions{
-		out:       *out,
-		questions: qpaths,
-		ohya:      *ohya,
-		hubDB:     *hubDB,
-		state:     *state,
-		repeats:   *repeats,
-		roots:     defaultRoots(),
+		out:         *out,
+		questions:   qpaths,
+		ohya:        *ohya,
+		hubDB:       *hubDB,
+		state:       *state,
+		localDevice: *localDevice,
+		repeats:     *repeats,
+		roots:       defaultRoots(),
 	})
 }
 

@@ -20,6 +20,7 @@ type manifest struct {
 	OhyaBinary    string             `json:"ohya_binary"`
 	OhyaVersion   string             `json:"ohya_version,omitempty"`
 	HubDB         string             `json:"hub_db"`
+	LocalDeviceID string             `json:"local_device_id,omitempty"`
 	HubSessions   int                `json:"hub_sessions"`
 	CanarySeed    int64              `json:"canary_seed,omitempty"`
 	Repeats       int                `json:"repeats"`
@@ -43,12 +44,13 @@ func manifestPath(outDir string) string {
 
 func writeManifestFor(ctx context.Context, opts benchOptions, ohya string, res *resolver, questions []Question, paths []string) error {
 	m := manifest{
-		StartedAt:  time.Now().UTC().Format(time.RFC3339),
-		OhyaBinary: ohya,
-		HubDB:      opts.hubDB,
-		Repeats:    opts.repeats,
-		Timeout:    opts.timeout.String(),
-		Roots:      opts.roots,
+		StartedAt:     time.Now().UTC().Format(time.RFC3339),
+		OhyaBinary:    ohya,
+		HubDB:         opts.hubDB,
+		LocalDeviceID: opts.localDevice,
+		Repeats:       opts.repeats,
+		Timeout:       opts.timeout.String(),
+		Roots:         opts.roots,
 	}
 	m.HarnessCommit, m.HarnessDirty = harnessIdentity()
 	m.OhyaVersion = commandOutput(ohya, "version")

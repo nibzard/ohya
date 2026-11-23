@@ -35,16 +35,28 @@ func buildReport(records []runRecord, questions []Question, opts benchOptions) s
 		t.cacheNew += r.CacheNewTokens
 		t.resultBytes += r.ToolResultBytes
 		t.cost += r.CostUSD
+		if isUnbilledPartial(r) {
+			t.unbilled++
+		}
 		perArm[r.Arm] = t
 	}
 
 	fmt.Fprintf(&b, "\n## Totals per arm\n\n")
 	fmt.Fprintf(&b, "| arm | runs | wall (s) | input tok | output tok | cache read tok | tool result KB | cost $ |\n")
 	fmt.Fprintf(&b, "|---|---|---|---|---|---|---|---|\n")
+	var unbilledNotes []string
 	for _, arm := range []string{armRaw, armOhya} {
 		t := perArm[arm]
-		fmt.Fprintf(&b, "| %s | %d | %.0f | %d | %d | %d | %.0f | %.2f |\n",
-			arm, t.runs, t.wall, t.input, t.output, t.cacheRead, float64(t.resultBytes)/1024, t.cost)
+		costCell := fmt.Sprintf("%.2f", t.cost)
+		if t.unbilled > 0 {
+			costCell += "*"
+			unbilledNotes = append(unbilledNotes, fmt.Sprintf("%s: %d", arm, t.unbilled))
+		}
+		fmt.Fprintf(&b, "| %s | %d | %.0f | %d | %d | %d | %.0f | %s |\n",
+			arm, t.runs, t.wall, t.input, t.output, t.cacheRead, float64(t.resultBytes)/1024, costCell)
+	}
+	if len(unbilledNotes) > 0 {
+		fmt.Fprintf(&b, "\n*Lower bound: excludes unbilled cost from timed-out/errored runs that exited before emitting a final result usage event (%s).\n", strings.Join(unbilledNotes, ", "))
 	}
 
 	fmt.Fprintf(&b, "\n## Per question\n\n")
@@ -114,6 +126,12 @@ type armTotals struct {
 	cacheNew    int64
 	resultBytes int64
 	cost        float64
+	unbilled    int
+}
+
+func isUnbilledPartial(r runRecord) bool {
+	return (r.Verdict == "timeout" || r.Verdict == "error") && r.CostUSD == 0 &&
+		(r.ToolCalls > 0 || r.InputTokens > 0 || r.OutputTokens > 0 || r.ToolResultBytes > 0)
 }
 
 func filter(records []runRecord, key, arm string) []runRecord {

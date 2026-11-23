@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/nibzard/ohya/internal/device"
 )
 
 const (
@@ -17,16 +19,17 @@ const (
 )
 
 type benchOptions struct {
-	out        string
-	questions  []string
-	ohya       string
-	claude     string
-	hubDB      string
-	state      string
-	repeats    int
-	timeout    time.Duration
-	settleWait time.Duration
-	roots      []string
+	out         string
+	questions   []string
+	ohya        string
+	claude      string
+	hubDB       string
+	state       string
+	localDevice string
+	repeats     int
+	timeout     time.Duration
+	settleWait  time.Duration
+	roots       []string
 }
 
 type runRecord struct {
@@ -113,6 +116,8 @@ func bench(ctx context.Context, opts benchOptions) error {
 		return err
 	}
 	defer resolver.close()
+	opts.localDevice = resolveLocalDeviceID(opts.localDevice, opts.out, opts.hubDB)
+	resolver.localDeviceID = opts.localDevice
 
 	if err := writeManifestFor(ctx, opts, ohya, resolver, questions, paths); err != nil {
 		return err
@@ -183,6 +188,8 @@ func regrade(ctx context.Context, opts benchOptions) error {
 		return err
 	}
 	defer res.close()
+	opts.localDevice = resolveLocalDeviceID(opts.localDevice, opts.out, opts.hubDB)
+	res.localDeviceID = opts.localDevice
 
 	traces, err := traceDirsOf(opts.out)
 	if err != nil {
@@ -485,6 +492,21 @@ func resolveExecutable(name string) (string, error) {
 		return abs, nil
 	}
 	return exec.LookPath(name)
+}
+
+func resolveLocalDeviceID(explicit, outDir, hubDB string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if m, ok := readManifest(outDir); ok && m.LocalDeviceID != "" {
+		return m.LocalDeviceID
+	}
+	if hubDB != "" {
+		if id, err := device.Load(filepath.Dir(hubDB)); err == nil {
+			return id
+		}
+	}
+	return ""
 }
 
 func fileContains(path, marker string) (bool, error) {

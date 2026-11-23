@@ -229,3 +229,25 @@ func TestWantSettledOf(t *testing.T) {
 		t.Fatalf("explicit: %d", got)
 	}
 }
+
+func TestReportAndCompareFlagUnbilledTimedOutCost(t *testing.T) {
+	q := Question{Key: "q1", Tier: "crossdevice", Scope: "remote-only", Prompt: "p", AnswerContains: []string{"301"}, EvidenceMarker: "m m m", ExpectedSessions: 1}
+	recs := []runRecord{
+		{Question: "q1", Arm: armRaw, Repeat: 1, Verdict: "correct", WallSeconds: 10, CostUSD: 0.10, ToolCalls: 3},
+		{Question: "q1", Arm: armRaw, Repeat: 2, Verdict: "timeout", WallSeconds: 180, CostUSD: 0, ToolCalls: 16},
+		{Question: "q1", Arm: armOhya, Repeat: 1, Verdict: "correct", WallSeconds: 5, CostUSD: 0.05, ToolCalls: 2},
+		{Question: "q1", Arm: armOhya, Repeat: 2, Verdict: "correct", WallSeconds: 6, CostUSD: 0.05, ToolCalls: 2},
+	}
+	rep := buildReport(recs, []Question{q}, benchOptions{repeats: 2})
+	for _, want := range []string{"| 0.10* |", "| 0.10 |", "*Lower bound:", "raw: 1"} {
+		if !strings.Contains(rep, want) {
+			t.Fatalf("report missing %q:\n%s", want, rep)
+		}
+	}
+	if got := costPerCorrect(selectArm(recs, armRaw)); got != "$0.100+" {
+		t.Fatalf("unbilled raw costPerCorrect = %q, want $0.100+", got)
+	}
+	if got := costPerCorrect(selectArm(recs, armOhya)); got != "$0.050" {
+		t.Fatalf("billed ohya costPerCorrect = %q, want $0.050", got)
+	}
+}

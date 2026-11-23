@@ -25,7 +25,13 @@ var negativePhrases = []string{
 
 var metaTools = map[string]bool{"ToolSearch": true}
 
-func gradeRun(ctx context.Context, res *resolver, q Question, arm string, m traceMetrics) string {
+type evidenceResolver interface {
+	eventRecord(ctx context.Context, id int64) (text string, sessionID string, deviceID string, found bool, err error)
+	sessionHasText(ctx context.Context, sessionID, marker string) (bool, error)
+	localDevice() string
+}
+
+func gradeRun(ctx context.Context, res evidenceResolver, q Question, arm string, m traceMetrics) string {
 	for _, call := range m.ToolCalls {
 		if metaTools[call] {
 			continue
@@ -82,27 +88,34 @@ func gradeRun(ctx context.Context, res *resolver, q Question, arm string, m trac
 		if !ok {
 			return "bad-evidence"
 		}
+		if q.Scope == "remote-only" {
+			return "local-echo"
+		}
 		return "correct"
 	}
 	id, ok := citedEventID(answer)
 	if !ok {
 		return "no-citation"
 	}
-	text, sessionID, found, err := res.eventText(ctx, id)
+	text, sessionID, deviceID, found, err := res.eventRecord(ctx, id)
 	if err != nil || !found {
 		return "bad-evidence"
 	}
-	if strings.Contains(text, q.EvidenceMarker) {
-		return "correct"
+	matched := strings.Contains(text, q.EvidenceMarker)
+	if !matched {
+		inSession, err := res.sessionHasText(ctx, sessionID, q.EvidenceMarker)
+		if err != nil {
+			return "bad-evidence"
+		}
+		matched = inSession
 	}
-	inSession, err := res.sessionHasText(ctx, sessionID, q.EvidenceMarker)
-	if err != nil {
+	if !matched {
 		return "bad-evidence"
 	}
-	if inSession {
-		return "correct"
+	if q.Scope == "remote-only" && res.localDevice() != "" && deviceID == res.localDevice() {
+		return "local-echo"
 	}
-	return "bad-evidence"
+	return "correct"
 }
 
 func citedEventID(answer string) (int64, bool) {
@@ -118,8 +131,11 @@ func citedEventID(answer string) (int64, bool) {
 }
 
 type resolver struct {
-	session *mcp.ClientSession
+	session       *mcp.ClientSession
+	localDeviceID string
 }
+
+func (r *resolver) localDevice() string { return r.localDeviceID }
 
 func openResolver(ctx context.Context, ohya, dbPath, stateDir string) (*resolver, error) {
 	cmd := exec.CommandContext(ctx, ohya, "mcp", "--db", dbPath, "--state", stateDir)
@@ -188,20 +204,22 @@ func (r *resolver) countSessionsWithText(ctx context.Context, marker string, set
 	return int(n), nil
 }
 
-func (r *resolver) eventText(ctx context.Context, id int64) (text string, sessionID string, found bool, err error) {
-	rows, err := r.query(ctx, fmt.Sprintf("SELECT id, session_id, text FROM events WHERE id = %d", id))
+func (r *resolver) eventRecord(ctx context.Context, id int64) (text string, sessionID string, deviceID string, found bool, err error) {
+	rows, err := r.query(ctx, fmt.Sprintf(
+		"SELECT e.id, e.session_id, s.device_id, e.text FROM events e JOIN sessions s ON s.id = e.session_id WHERE e.id = %d", id))
 	if err != nil {
-		return "", "", false, err
+		return "", "", "", false, err
 	}
 	if len(rows) == 0 {
-		return "", "", false, nil
+		return "", "", "", false, nil
 	}
-	if len(rows) > 1 || len(rows[0]) != 3 {
-		return "", "", false, fmt.Errorf("id lookup returned %v", rows)
+	if len(rows) > 1 || len(rows[0]) != 4 {
+		return "", "", "", false, fmt.Errorf("id lookup returned %v", rows)
 	}
 	sessionID, _ = rows[0][1].(string)
-	text, _ = rows[0][2].(string)
-	return text, sessionID, true, nil
+	deviceID, _ = rows[0][2].(string)
+	text, _ = rows[0][3].(string)
+	return text, sessionID, deviceID, true, nil
 }
 
 func (r *resolver) sessionHasText(ctx context.Context, sessionID, marker string) (bool, error) {
