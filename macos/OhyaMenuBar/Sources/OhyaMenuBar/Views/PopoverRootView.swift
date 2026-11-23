@@ -22,7 +22,7 @@ struct PopoverRootView: View {
                 .opacity(0.45)
 
             contentArea
-                .frame(maxHeight: OhyaTheme.popoverMaxHeight - 132)
+                .frame(height: OhyaTheme.popoverMaxHeight - 132)
 
             if let message = model.transientMessage {
                 HStack(spacing: 6) {
