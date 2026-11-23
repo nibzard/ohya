@@ -19,6 +19,7 @@ const DefaultRemoteTimeout = 60 * time.Second
 type RemoteClient struct {
 	conn       net.Conn
 	br         *bufio.Reader
+	bw         *bufio.Writer
 	mu         sync.Mutex
 	Timeout    time.Duration
 	negotiated bool
@@ -29,6 +30,7 @@ func NewRemoteClient(conn net.Conn) *RemoteClient {
 	return &RemoteClient{
 		conn:    conn,
 		br:      bufio.NewReaderSize(conn, 64<<10),
+		bw:      bufio.NewWriterSize(conn, 64<<10),
 		Timeout: DefaultRemoteTimeout,
 	}
 }
@@ -148,14 +150,14 @@ func (c *RemoteClient) roundTrip(ctx context.Context, write func(io.Writer) erro
 	stop := context.AfterFunc(ctx, func() { _ = c.conn.SetDeadline(time.Unix(1, 0)) })
 	defer stop()
 
-	bw := bufio.NewWriterSize(c.conn, 64<<10)
-	if err := write(bw); err != nil {
+	c.bw.Reset(c.conn)
+	if err := write(c.bw); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		return err
 	}
-	if err := bw.Flush(); err != nil {
+	if err := c.bw.Flush(); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}

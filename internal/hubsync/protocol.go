@@ -81,6 +81,7 @@ const compressionLevel = 3
 var batchEncoder = sync.OnceValue(func() *zstd.Encoder {
 	enc, err := zstd.NewWriter(nil,
 		zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(compressionLevel)),
+		zstd.WithEncoderConcurrency(1),
 		zstd.WithEncoderCRC(true))
 	if err != nil {
 		panic(fmt.Sprintf("hubsync: batch encoder options rejected: %v", err))
