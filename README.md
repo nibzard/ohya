@@ -282,7 +282,7 @@ when it connects, while rare playbooks (`ohya://guides/garbage-audit` and
 and mirrored in the installed `ohya` skill. A typical recall query:
 
 ```sql
-SELECT e.id, s.agent, s.cwd,
+SELECT e.id, e.session_id, s.agent, s.cwd,
        datetime(e.time_ms/1000, 'unixepoch') AS utc_time,
        snippet(events_fts, 0, '[', ']', '...', 24) AS excerpt
 FROM events_fts JOIN events_settled e ON e.id = events_fts.rowid

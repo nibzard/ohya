@@ -56,7 +56,7 @@ description: >-
 
 - **Interactive recall (default):** call the MCP ` + "`sql`" + ` and ` + "`annotate`" + ` tools.
 - **Scripted / multi-step pipelines:** run ` + "`ohya sql --json '<query>'`" + ` or ` + "`ohya sql --json - < query.sql`" + ` (add ` + "`--remote`" + ` on a joined device). It runs through the same read-only SQLite authorizer, 500-row / 256 KiB / 5 s bounds, and egress secret redaction as the MCP tool. Never open ` + "`hub.db`" + ` directly with ` + "`sqlite3`" + `.
-- **Keep results small:** use ` + "`snippet(events_fts, 0, '[', ']', '...', 24)`" + ` for FTS matches, ` + "`substr(first_prompt, 1, 160)`" + ` for session lists, and covering subqueries over ` + "`events_settled`" + ` before sorting by ` + "`time_ms`" + `.
+- **Keep results small & fast:** use ` + "`snippet(events_fts, 0, '[', ']', '...', 24)`" + ` for FTS matches, ` + "`substr(first_prompt, 1, 160)`" + ` for session lists, ` + "`datetime(col/1000, 'unixepoch')`" + ` for readable UTC times, ` + "`session_id = '...'`" + ` (indexed; never ` + "`LIKE '%...'`" + `), and covering subqueries over ` + "`events_settled`" + ` before sorting by ` + "`time_ms`" + `.
 - **FTS5 quoting:** wrap punctuation-bearing terms (hyphens, slashes, apostrophes) in double quotes such as ` + "`'\"auth-refresh\"'`" + `.
 
 ## Core Recall Recipes
@@ -82,11 +82,22 @@ ORDER BY s.last_event_at_ms DESC LIMIT 20;
 Full-text search with centered match snippet:
 
 ` + "```sql" + `
-SELECT e.id, s.agent, s.cwd, datetime(e.time_ms/1000, 'unixepoch') AS utc_time, snippet(events_fts, 0, '[', ']', '...', 24) AS excerpt
+SELECT e.id, e.session_id, s.agent, s.cwd, datetime(e.time_ms/1000, 'unixepoch') AS utc_time, snippet(events_fts, 0, '[', ']', '...', 24) AS excerpt
 FROM events_fts JOIN events_settled e ON e.id = events_fts.rowid
 JOIN sessions s ON s.id = e.session_id
 WHERE events_fts MATCH 'authentication AND refresh'
 ORDER BY events_fts.rank LIMIT 10;
+` + "```" + `
+
+Read surrounding records around a hit in the same session:
+
+` + "```sql" + `
+SELECT e.id, datetime(e.time_ms/1000, 'unixepoch') AS utc_time, e.kind, e.role, e.tool_name, substr(e.text, 1, 400) AS excerpt
+FROM events e
+WHERE e.session_id = 'claude-code:dev1:s1'
+  AND e.duplicate_of IS NULL
+  AND e.id BETWEEN 2-5 AND 2+5
+ORDER BY e.id;
 ` + "```" + `
 
 Count matching sessions and events in one pass:

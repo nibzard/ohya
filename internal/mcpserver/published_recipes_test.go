@@ -13,9 +13,9 @@ import (
 )
 
 const (
-	toolDescriptionSQLBlockCount = 10
+	toolDescriptionSQLBlockCount = 11
 	garbageGuideSQLBlockCount    = 8
-	analyticsGuideSQLBlockCount  = 4
+	analyticsGuideSQLBlockCount  = 5
 )
 
 var sqlBlockOpeners = []string{"SELECT ", "WITH ", "PRAGMA ", "EXPLAIN ", "VALUES "}
@@ -180,23 +180,39 @@ func TestPublishedRecipesRunVerbatim(t *testing.T) {
 		t.Fatalf("resume step 1 = %v, want the settled session claude-code:dev1:s1 over the newer live one", resume1.Rows)
 	}
 
-	resume2 := eventIDs(find("duplicate_of IS NULL"))
+	resume2 := eventIDs(find("ORDER BY ev.time_ms DESC, ev.id DESC LIMIT 50"))
 	if !slices.Equal(resume2, []int64{1, 2, 3}) {
 		t.Fatalf("resume step 2 = %v, want s1's three records oldest-first", resume2)
 	}
 
-	fts := find("snippet(events_fts")
+	contextAround := eventIDs(find("e.id BETWEEN 2-5 AND 2+5"))
+	if !slices.Equal(contextAround, []int64{1, 2, 3}) {
+		t.Fatalf("context-around-hit recipe = %v, want s1's surrounding records 1..3", contextAround)
+	}
+
+	fts := find("ORDER BY events_fts.rank LIMIT 10;")
 	if ids := eventIDs(fts); !slices.Equal(ids, []int64{2}) {
 		t.Fatalf("full-text recipe = %v, want only the event seeded with both terms", ids)
 	}
-	if agent, ok := fts.Rows[0][1].(string); !ok || agent != "claude-code" {
-		t.Fatalf("full-text agent = %v, want claude-code", fts.Rows[0][1])
+	if sid, ok := fts.Rows[0][1].(string); !ok || sid != "claude-code:dev1:s1" {
+		t.Fatalf("full-text session_id = %v, want claude-code:dev1:s1", fts.Rows[0][1])
 	}
-	if utc, ok := fts.Rows[0][3].(string); !ok || len(utc) != len("2006-01-02 15:04:05") || utc[4] != '-' || utc[13] != ':' {
-		t.Fatalf("full-text utc_time = %v, want formatted UTC timestamp", fts.Rows[0][3])
+	if agent, ok := fts.Rows[0][2].(string); !ok || agent != "claude-code" {
+		t.Fatalf("full-text agent = %v, want claude-code", fts.Rows[0][2])
 	}
-	if excerpt, ok := fts.Rows[0][4].(string); !ok || !strings.Contains(excerpt, "[authentication]") {
-		t.Fatalf("full-text snippet = %v, want highlighted match", fts.Rows[0][4])
+	if utc, ok := fts.Rows[0][4].(string); !ok || len(utc) != len("2006-01-02 15:04:05") || utc[4] != '-' || utc[13] != ':' {
+		t.Fatalf("full-text utc_time = %v, want formatted UTC timestamp", fts.Rows[0][4])
+	}
+	if excerpt, ok := fts.Rows[0][5].(string); !ok || !strings.Contains(excerpt, "[authentication]") {
+		t.Fatalf("full-text snippet = %v, want highlighted match", fts.Rows[0][5])
+	}
+
+	ftsPerSession := find("GROUP BY session_id ORDER BY best_rank")
+	if ids := eventIDs(ftsPerSession); !slices.Equal(ids, []int64{2}) {
+		t.Fatalf("one-hit-per-session FTS recipe = %v, want event 2", ids)
+	}
+	if excerpt, ok := ftsPerSession.Rows[0][5].(string); !ok || !strings.Contains(excerpt, "[authentication]") {
+		t.Fatalf("one-hit-per-session FTS snippet = %v, want highlighted match", ftsPerSession.Rows[0][5])
 	}
 
 	ftsCount := find("count(DISTINCT e.session_id)")
@@ -280,5 +296,62 @@ func TestPublishedRecipesRunVerbatim(t *testing.T) {
 	marked := find("a.key = 'garbage'")
 	if len(marked.Rows) != 1 || marked.Rows[0][0] != "claude-code:dev1:s-old" || marked.Rows[0][3] != "dev1" {
 		t.Fatalf("marked-sessions recipe = %v, want s-old marked by dev1", marked.Rows)
+	}
+}
+
+func TestOneHitPerSessionFTSDeduplicatesSession(t *testing.T) {
+	hub, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "hub.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { hub.Close() })
+	settled := time.Now().UnixMilli() - 3600_000
+	seed := []string{
+		fmt.Sprintf(`INSERT INTO sessions(id,agent,device_id,native_id,cwd,last_event_at_ms,event_count) VALUES
+		 ('claude-code:dev1:s1','claude-code','dev1','s1','/a',%d,3),
+		 ('codex:dev1:s2','codex','dev1','s2','/b',%d,1)`, settled, settled),
+		`INSERT INTO sources(id,device_id,agent,path) VALUES('src-1','dev1','claude-code','/a.jsonl'),('src-2','dev1','codex','/b.jsonl')`,
+		fmt.Sprintf(`INSERT INTO events(id,session_id,source_id,source_offset,time_ms,kind,role,text,raw_json) VALUES
+		 (1,'claude-code:dev1:s1','src-1',10,%d,'message','assistant','authentication refresh','{}'),
+		 (2,'claude-code:dev1:s1','src-1',20,%d,'message','assistant','authentication refresh authentication refresh','{}'),
+		 (3,'claude-code:dev1:s1','src-1',30,%d,'message','assistant','long filler words before authentication and later refresh token notes','{}'),
+		 (4,'codex:dev1:s2','src-2',10,%d,'message','assistant','authentication refresh in codex','{}')`, settled, settled+10, settled+20, settled+30),
+	}
+	for i, q := range seed {
+		if _, err := hub.Writer().Exec(q); err != nil {
+			t.Fatalf("seed %d: %v", i, err)
+		}
+	}
+	readers, err := hub.Reader()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { readers.Close() })
+	e := NewEngine(readers, hub.Writer(), EngineOptions{WriterID: "dev1"})
+
+	var recipe string
+	for _, block := range publishedSQLBlocks(t, GuideAnalyticsReviewURI, AnalyticsReviewGuide(EngineOptions{WriterID: "dev1"}), analyticsGuideSQLBlockCount) {
+		if strings.Contains(block, "GROUP BY session_id ORDER BY best_rank") {
+			recipe = block
+			break
+		}
+	}
+	if recipe == "" {
+		t.Fatal("missing one-hit-per-session FTS recipe")
+	}
+	res := mustQuery(t, e, recipe)
+	if res.RowCount != 2 {
+		t.Fatalf("deduped rows = %d (%v), want exactly 1 per session (2 total)", res.RowCount, res.Rows)
+	}
+	seen := map[string]bool{}
+	for _, row := range res.Rows {
+		sid, _ := row[1].(string)
+		seen[sid] = true
+		if excerpt, _ := row[5].(string); !strings.Contains(excerpt, "[authentication]") {
+			t.Fatalf("row %v missing highlighted snippet", row)
+		}
+	}
+	if !seen["claude-code:dev1:s1"] || !seen["codex:dev1:s2"] {
+		t.Fatalf("sessions = %v, want both s1 and s2", seen)
 	}
 }

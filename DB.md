@@ -416,7 +416,7 @@ with `no such column: refresh` (other bare punctuation, for example `/`,
 is an FTS5 syntax error).
 
 ```sql
-SELECT e.id, s.repo, s.agent, s.device_id,
+SELECT e.id, e.session_id, s.repo, s.agent, s.device_id,
        datetime(e.time_ms/1000, 'unixepoch') AS utc_time,
        snippet(events_fts, 0, '[', ']', '...', 24) AS excerpt
 FROM events_fts
@@ -425,6 +425,38 @@ JOIN sessions s ON s.id = e.session_id
 WHERE events_fts MATCH 'authentication AND refresh'
 ORDER BY events_fts.rank
 LIMIT 10;
+```
+
+One best hit per session (dedupes noisy multi-mention sessions; keep `ORDER BY`
+and `LIMIT` inside the CTE so FTS5 `snippet()` stays valid):
+
+```sql
+WITH hits AS (
+  SELECT e.id, e.session_id, s.agent, s.cwd,
+         datetime(e.time_ms/1000, 'unixepoch') AS utc_time,
+         events_fts.rank AS rk,
+         snippet(events_fts, 0, '[', ']', '...', 24) AS excerpt
+  FROM events_fts
+  JOIN events_settled e ON e.id = events_fts.rowid
+  JOIN sessions s ON s.id = e.session_id
+  WHERE events_fts MATCH 'authentication AND refresh'
+  ORDER BY events_fts.rank LIMIT 100
+)
+SELECT id, session_id, agent, cwd, utc_time, excerpt, min(rk) AS best_rank
+FROM hits GROUP BY session_id ORDER BY best_rank LIMIT 10;
+```
+
+Read surrounding records around a hit (always filter `session_id` with `=`,
+never `LIKE '%...'`, so SQLite uses `events_session_time`):
+
+```sql
+SELECT e.id, datetime(e.time_ms/1000, 'unixepoch') AS utc_time,
+       e.kind, e.role, e.tool_name, substr(e.text, 1, 400) AS excerpt
+FROM events e
+WHERE e.session_id = 'claude-code:dev1:s1'
+  AND e.duplicate_of IS NULL
+  AND e.id BETWEEN 2-5 AND 2+5
+ORDER BY e.id;
 ```
 
 Count matching sessions and events in one pass:

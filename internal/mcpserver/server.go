@@ -87,29 +87,29 @@ func ToolDescription(o EngineOptions) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, `Run one read-only SQL statement against the ohya transcript database and return rows as JSON.
 
-Policy & bounds: one statement per call (SELECT or allow-listed read-only PRAGMA; writes, DDL, ATTACH, extensions denied by authorizer). Limits: %d rows, %d bytes of row JSON, %s deadline, %d concurrent; excess rows set "truncated": true and truncation_reason.
-Secret redaction: string cells pass a fixed egress pattern table (AWS/GitHub/Anthropic/OpenAI/Slack/Google tokens, PEM/OpenSSH keys, secret-named assignments) -> [redacted:<kind>] with additive "redactions" count. Best-effort risk reduction, never a guarantee; stored records stay untouched (ohya purge removes stored data).
+Policy & bounds: one statement per call (SELECT or read-only PRAGMA; writes/DDL/ATTACH/extensions denied). Limits: %d rows, %d B JSON, %s deadline, %d concurrent; excess sets "truncated": true and truncation_reason.
+Secret redaction: egress patterns (cloud/AI/SCM tokens, PEM/SSH keys, secret assignments) -> [redacted:<kind>] with "redactions" count. Best-effort risk reduction, never a guarantee; stored records stay untouched (use ohya purge to delete).
 Current writer ID (for event_annotations.writer_id): %s
 
 Tables:
-- sessions(id, agent, device_id, native_id, repo, cwd, branch, model, first_prompt, started_at_ms, last_event_at_ms, event_count, metadata): id = agent:device_id:native_id; repo is host/path shared across devices
-- workspaces(device_id, path, repo, observed_at_ms): device-observed repo for one cwd (NULL = none)
-- sources(id, device_id, agent, path, file_identity, cursor_bytes, updated_at_ms): watched file incarnation and cursor
-- events(id, session_id, source_id, source_offset, time_ms, kind, role, tool_name, text, raw_json, metadata, ordinal, duplicate_of): immutable record; filter duplicate_of IS NULL to skip byte-identical replays
+- sessions(id, agent, device_id, native_id, repo, cwd, branch, model, first_prompt, started_at_ms, last_event_at_ms, event_count, metadata): id = agent:device_id:native_id; repo = host/path across devices
+- workspaces(device_id, path, repo, observed_at_ms): device-observed repo for cwd (NULL = none)
+- sources(id, device_id, agent, path, file_identity, cursor_bytes, updated_at_ms): watched file cursor
+- events(id, session_id, source_id, source_offset, time_ms, kind, role, tool_name, text, raw_json, metadata, ordinal, duplicate_of): filter duplicate_of IS NULL to skip replays
 - session_token_usage(session_id, message_id, input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens)
-- event_annotations(event_id, namespace, key, writer_id, value, created_at_ms, updated_at_ms): agent JSON annotations
-- events_fts: FTS5 index over events.text (rowid = events.id)
-- events_settled: events of sessions idle >= 10 min (default recall surface; omits active/live sessions)
+- event_annotations(event_id, namespace, key, writer_id, value, created_at_ms, updated_at_ms)
+- events_fts: FTS5 over events.text (rowid = events.id)
+- events_settled: events of sessions idle >= 10 min (default recall surface; omits active sessions)
 - schema_migrations(version, name, checksum, applied_at_ms)
 
-Schema inspection: SELECT sql FROM sqlite_master WHERE type = 'table'; read-only PRAGMAs (table_info, table_xinfo, table_list, index_list, index_info, index_xinfo, foreign_key_list, database_list, function_list, module_list, pragma_list, collation_list); EXPLAIN QUERY PLAN.
+Schema inspection: SELECT sql FROM sqlite_master WHERE type='table'; read-only PRAGMAs (table_info, index_list, foreign_key_list, pragma_list, etc.); EXPLAIN QUERY PLAN.
 
-Recipes (prefer substr/snippet to keep results small; format *_ms with datetime(col/1000, 'unixepoch'); use covering subqueries on events_settled before sorting by time_ms):
+Recipes (keep results small with substr/snippet; format *_ms via datetime(col/1000, 'unixepoch'); filter session_id with =, never LIKE; covering subqueries on events_settled before sorting by time_ms):
 
 Recent sessions:
 SELECT id, agent, substr(first_prompt, 1, 160) AS first_prompt, datetime(last_event_at_ms/1000, 'unixepoch') AS last_utc, event_count FROM sessions ORDER BY last_event_at_ms DESC LIMIT 5;
 
-Project sessions across devices (lookup repo in workspaces by cwd or normalize git origin to host/path):
+Project sessions across devices (repo = host/path from workspaces or git remote):
 SELECT device_id, agent, cwd, substr(first_prompt, 1, 160) AS first_prompt, datetime(last_event_at_ms/1000, 'unixepoch') AS last_utc FROM sessions
 WHERE repo = 'github.com/owner/name' ORDER BY last_event_at_ms DESC LIMIT 10;
 
@@ -151,12 +151,16 @@ FROM events e WHERE e.id IN (
   ORDER BY ev.time_ms DESC, ev.id DESC LIMIT 50)
 ORDER BY e.time_ms, e.id;
 
-Full-text search (BM25 + centered snippet). Wrap punctuation-bearing MATCH terms (hyphens, slashes, apostrophes) in double quotes such as '"auth-refresh"' (bare '-name' fails with no such column):
-SELECT e.id, s.agent, s.cwd, datetime(e.time_ms/1000, 'unixepoch') AS utc_time, snippet(events_fts, 0, '[', ']', '...', 24) AS excerpt
+Full-text search (BM25 + snippet; wrap punctuation MATCH terms in double quotes e.g. '"auth-refresh"'):
+SELECT e.id, e.session_id, s.agent, s.cwd, datetime(e.time_ms/1000, 'unixepoch') AS utc_time, snippet(events_fts, 0, '[', ']', '...', 24) AS excerpt
 FROM events_fts JOIN events_settled e ON e.id = events_fts.rowid
 JOIN sessions s ON s.id = e.session_id
 WHERE events_fts MATCH 'authentication AND refresh'
 ORDER BY events_fts.rank LIMIT 10;
+
+Context around a hit (surrounding records in the same session):
+SELECT e.id, datetime(e.time_ms/1000, 'unixepoch') AS utc_time, e.kind, e.role, e.tool_name, substr(e.text, 1, 400) AS excerpt
+FROM events e WHERE e.session_id = 'claude-code:dev1:s1' AND e.duplicate_of IS NULL AND e.id BETWEEN 2-5 AND 2+5 ORDER BY e.id;
 
 Count matching sessions and events in one pass:
 SELECT count(DISTINCT e.session_id) AS sessions, count(*) AS events
@@ -168,7 +172,7 @@ SELECT id, kind, role, tool_name, datetime(time_ms/1000, 'unixepoch') AS utc_tim
 
 More guides (MCP resources; also in DB.md):
 - %s — 3-step audit, mark (annotate tags.garbage), and hand over ohya purge --marked tags.garbage
-- %s — filter by model or device, session token totals, and paginated security review
+- %s — one-hit-per-session FTS, filter by model or device, session token totals, and paginated security review
 `, o.MaxRows, o.MaxOutputBytes, o.Deadline, o.MaxConcurrency, o.WriterID, GuideGarbageAuditURI, GuideAnalyticsReviewURI)
 	return b.String()
 }

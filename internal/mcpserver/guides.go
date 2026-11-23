@@ -119,6 +119,13 @@ The dry run prints the affected sessions, sources, event counts, and bytes; --ap
 func AnalyticsReviewGuide(o EngineOptions) string {
 	return fmt.Sprintf(`Analytics, filtering, and review pagination recipes for the ohya sql tool.
 
+One hit per session (dedupes noisy multi-mention sessions; keep ORDER BY + LIMIT inside the CTE so snippet() stays valid):
+WITH hits AS (
+  SELECT e.id, e.session_id, s.agent, s.cwd, datetime(e.time_ms/1000, 'unixepoch') AS utc_time, events_fts.rank AS rk, snippet(events_fts, 0, '[', ']', '...', 24) AS excerpt
+  FROM events_fts JOIN events_settled e ON e.id = events_fts.rowid JOIN sessions s ON s.id = e.session_id
+  WHERE events_fts MATCH 'authentication AND refresh' ORDER BY events_fts.rank LIMIT 100)
+SELECT id, session_id, agent, cwd, utc_time, excerpt, min(rk) AS best_rank FROM hits GROUP BY session_id ORDER BY best_rank LIMIT 10;
+
 One model's sessions (discover values first with SELECT DISTINCT model FROM sessions; NULL means the records carried no model):
 SELECT s.id, s.agent, s.device_id, substr(s.first_prompt, 1, 160) AS first_prompt, datetime(s.last_event_at_ms/1000, 'unixepoch') AS last_utc
 FROM sessions s WHERE s.model = 'claude-sonnet-4-5'
