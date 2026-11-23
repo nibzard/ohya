@@ -149,3 +149,67 @@ commands governed by `tla/Sync.tla` and `tla/Auth.tla`.
   macOS CI builds and tests the Swift package and its CLI contract decoding.
 - Public distribution of `ohya.app` shares the existing Apple Developer ID
   signing and notarization gate ([README.md](../../README.md)).
+
+## Amendment (2026-11-23): the app runs setup; setup never installs the app
+
+### Context
+
+On macOS, the menu bar app is the most direct way for a new user to start
+using ohya. Until now the app required an `ohya` executable that was already
+installed and set up, and no path told a new user how to get there. A test
+on 2026-11-23 with an empty home directory showed the effect. The app showed
+"Attention" with a warning about observation snapshots, the agents as "Not
+detected", and a Pause control for a service that did not exist. It showed
+no statement that ohya was not set up, and no way to set it up. Its "Copy
+fix" control copied that explanation text, not a command. The CLI already
+reports the correct state: `ohya service status --json` returns
+`"installed": false` with "not configured; run ohya setup".
+
+### Decision
+
+1. **Setup never installs the app.** `ohya setup` and `install.sh` stay a
+   small, cross-platform step that owns only files it can prove it wrote
+   ([ADR 0008](0008-integrated-setup.md)). They never download, copy, own, or
+   remove `ohya.app`. After a successful setup on macOS, the installer can
+   print one optional line that names the app distribution. It never installs
+   the app automatically.
+2. **The app runs setup.** When `ohya service status --json` reports that the
+   memory service is not installed, the app shows a first-run view in place of
+   the Status, Recall, and Devices surfaces. The view gives two choices:
+   - **Use this Mac:** runs `ohya setup --json`.
+   - **Join a hub:** reads the one-time join code from a secure text field,
+     puts it into the child process environment only, and runs
+     `ohya setup --join-code-env NAME --json`.
+
+   The app shows the per-component results from the JSON report and returns
+   to the normal surfaces when setup completes. If setup is incomplete, the
+   app shows each failed component with its detail and offers to run setup
+   again.
+3. **The CLI boundary does not change.** First-run setup is one more bounded
+   `ohya ... --json` invocation under boundary 1. The app never writes setup
+   receipts, service files, or agent configuration itself. `launchd` keeps
+   ownership of the services that setup creates (boundary 2).
+4. **Join codes keep the existing secret rules.** The code is held in memory
+   only for the duration of the setup call. It is never written to disk,
+   logged, put on the pasteboard, or passed as a command argument. This
+   removes the shell-history exposure of `ohya join CODE` for macOS app users.
+5. **Controls follow the service state.** When the service is not installed,
+   the app disables Pause/Resume and hides service-specific findings, so a
+   new user sees one next step instead of operator diagnostics.
+
+### Consequences
+
+- The supported first-install path for a new macOS user is the bundled
+  distribution: the DMG or Homebrew Cask installs `ohya.app` with its own
+  `ohya` executable, and the first launch runs setup. This path depends on
+  the Developer ID signing and notarization gate.
+- CLI-first users and Linux users keep `install.sh` and `ohya setup`
+  unchanged.
+- The app gains a first-run state and a decoder for the `ohya setup --json`
+  report. That report becomes a contract that the app consumes, under
+  [ADR 0005](0005-json-output.md).
+- Model checking stays not required: setup was already a CLI operation, and
+  the app adds no sync or authorization transition.
+- Fixing "Copy fix" so it copies a command, or hiding it when the finding
+  has no command, is a separate app defect and does not depend on this
+  amendment.

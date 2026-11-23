@@ -299,6 +299,19 @@ Each item delivers standalone value to CLI users and unlocks the Swift app:
 3. Add compact agent-integration health row from `ohya doctor --json` with a
    one-click repair trigger.
 
+### M4b. First-run setup *(macOS; [ADR 0017 amendment, 2026-11-23](../docs/adr/0017-macos-menubar-app.md))*
+
+1. Detect a missing memory service from `ohya service status --json`
+   (`installed: false`) and show a first-run view in place of the normal
+   surfaces; disable Pause/Resume and hide service findings in that state.
+2. **Use this Mac** runs `ohya setup --json`; **Join a hub** reads the code
+   from a secure field and runs `ohya setup --join-code-env NAME --json`.
+   Show per-component results; offer a rerun when setup is incomplete.
+3. Decode the `ohya setup --json` report in `OhyaMenuBarCore` with fixture
+   tests, including an incomplete report.
+4. "Copy fix" copies a runnable command, or is hidden when a finding has
+   none.
+
 ### M5. Remote visibility & signed macOS distribution *(depends on Plan 001 M5 + Apple Developer ID)*
 
 1. Consume `ohya status --remote --json` (from Plan 001 Milestone 5) so joined
