@@ -63,6 +63,7 @@ func startProbedHub(t *testing.T, stateDir string, region *tailcfg.DERPRegion) *
 }
 
 func TestProbeHubAnswersThroughRelay(t *testing.T) {
+	t.Parallel()
 	stateDir := t.TempDir()
 	region, _ := startStoppableDERP(t)
 	hub := startProbedHub(t, stateDir, region)
@@ -98,6 +99,7 @@ func TestProbeHubAnswersThroughRelay(t *testing.T) {
 }
 
 func TestProbeHubNamesUnreachableRelay(t *testing.T) {
+	t.Parallel()
 	stateDir := t.TempDir()
 	region, stop := startStoppableDERP(t)
 	hub := startProbedHub(t, stateDir, region)
@@ -119,6 +121,7 @@ func TestProbeHubNamesUnreachableRelay(t *testing.T) {
 }
 
 func TestProbeHubNamesSilentHub(t *testing.T) {
+	t.Parallel()
 	stateDir := t.TempDir()
 	region, _ := startStoppableDERP(t)
 	hub := startProbedHub(t, stateDir, region)

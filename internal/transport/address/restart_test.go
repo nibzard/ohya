@@ -9,6 +9,7 @@ import (
 )
 
 func TestDeviceRedialAfterHubRestart(t *testing.T) {
+	t.Parallel()
 	region := startLocalDERP(t)
 	state := t.TempDir()
 

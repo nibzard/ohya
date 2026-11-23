@@ -208,6 +208,7 @@ func TestHubKeepsAddressAcrossRestart(t *testing.T) {
 }
 
 func TestHubDeviceExchange(t *testing.T) {
+	t.Parallel()
 	region := startLocalDERP(t)
 	state := t.TempDir()
 
@@ -404,6 +405,7 @@ func TestHubRequiresStateDir(t *testing.T) {
 }
 
 func TestDeviceRejectsSecondHub(t *testing.T) {
+	t.Parallel()
 	region := startLocalDERP(t)
 	hub, err := NewHub(HubOptions{StateDir: t.TempDir(), Region: region})
 	if err != nil {
@@ -506,6 +508,7 @@ func TestValidateRegion(t *testing.T) {
 }
 
 func TestDeviceFailedDialDoesNotKillSiblingConnection(t *testing.T) {
+	t.Parallel()
 	region := startLocalDERP(t)
 	state := t.TempDir()
 

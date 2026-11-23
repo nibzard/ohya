@@ -9,6 +9,7 @@ import (
 )
 
 func TestPathInfoReportsMeasuredPath(t *testing.T) {
+	t.Parallel()
 	region := startLocalDERP(t)
 	hub, err := NewHub(HubOptions{StateDir: t.TempDir(), Region: region})
 	if err != nil {
