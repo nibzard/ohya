@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -25,8 +26,9 @@ const (
 )
 
 const (
-	minFitWidth  = 40
-	minFitColumn = 12
+	minFitWidth    = 40
+	minFitColumn   = 12
+	minBesideWidth = 36
 )
 
 type cliStyle struct {
@@ -93,6 +95,18 @@ func (s cliStyle) wrapHanging(text string, indent int) string {
 		return text
 	}
 	return strings.ReplaceAll(wrap(text, s.width-indent), "\n", "\n"+strings.Repeat(" ", indent))
+}
+
+func (s cliStyle) besideOrBelow(prefix, text string, belowIndent int) string {
+	if text == "" {
+		return prefix
+	}
+	beside := visibleWidth(prefix) + 1
+	if s.width == 0 || beside+visibleWidth(text) <= s.width || s.width-beside >= minBesideWidth {
+		return prefix + " " + s.wrapHanging(text, beside)
+	}
+	pad := strings.Repeat(" ", belowIndent)
+	return strings.TrimRight(prefix, " ") + "\n" + pad + s.wrapHanging(text, belowIndent)
 }
 
 func (s cliStyle) fit(text string, indent int) string {
@@ -321,7 +335,11 @@ func (t *cliTable) render(w io.Writer, s cliStyle) {
 		}
 	}
 	if s.width > 0 {
-		fitColumns(widths, s.width-visibleWidth(indent))
+		lastRight := numCols > 0 && numCols-1 < len(t.rightAlign) && t.rightAlign[numCols-1]
+		if !fitColumns(widths, s.width-visibleWidth(indent), !lastRight) {
+			t.renderStacked(w, s, indent)
+			return
+		}
 	}
 	writeRow := func(cells []string, isHeader bool) {
 		var b strings.Builder
@@ -362,18 +380,70 @@ func (t *cliTable) render(w io.Writer, s cliStyle) {
 	}
 }
 
-func fitColumns(widths []int, available int) {
+func fitColumns(widths []int, available int, shrinkLast bool) bool {
 	if len(widths) == 0 {
-		return
+		return true
 	}
 	total := 2 * (len(widths) - 1)
 	for _, width := range widths {
 		total += width
 	}
-	last := len(widths) - 1
-	if excess := total - available; excess > 0 {
-		widths[last] = max(widths[last]-excess, min(widths[last], minFitColumn))
+	excess := total - available
+	if excess <= 0 {
+		return true
 	}
+	last := len(widths) - 1
+	if !shrinkLast || widths[last]-excess < min(widths[last], minFitColumn) {
+		return false
+	}
+	widths[last] -= excess
+	return true
+}
+
+func (t *cliTable) renderStacked(w io.Writer, s cliStyle, indent string) {
+	detailIndent := visibleWidth(indent) + 2
+	for _, row := range t.rows {
+		if len(row) == 0 {
+			continue
+		}
+		fmt.Fprintf(w, "%s%s\n", indent, s.wrapHanging(row[0], visibleWidth(indent)))
+		var parts []string
+		for i := 1; i < len(row); i++ {
+			if row[i] == "" {
+				continue
+			}
+			label := ""
+			if i < len(t.headers) && t.headers[i] != "" {
+				label = s.dim(strings.ToLower(t.headers[i])) + " "
+			}
+			parts = append(parts, label+row[i])
+		}
+		if len(parts) > 0 {
+			fmt.Fprintf(w, "%s%s\n", strings.Repeat(" ", detailIndent), s.joinFit(parts, "  ", detailIndent))
+		}
+	}
+}
+
+func (s cliStyle) joinFit(parts []string, sep string, indent int) string {
+	if s.width == 0 {
+		return strings.Join(parts, sep)
+	}
+	available := s.width - indent
+	var lines []string
+	line := ""
+	for _, part := range parts {
+		switch {
+		case line == "":
+			line = s.wrapHanging(part, indent)
+		case visibleWidth(line)+visibleWidth(sep)+visibleWidth(part) <= available:
+			line += sep + part
+		default:
+			lines = append(lines, line)
+			line = s.wrapHanging(part, indent)
+		}
+	}
+	lines = append(lines, line)
+	return strings.Join(lines, "\n"+strings.Repeat(" ", indent))
 }
 
 func writeKeyValues(w io.Writer, s cliStyle, indent string, pairs [][2]string) {
@@ -385,7 +455,7 @@ func writeKeyValues(w io.Writer, s cliStyle, indent string, pairs [][2]string) {
 	}
 	for _, p := range pairs {
 		label := padRight(s.dim(p[0]), maxKey)
-		fmt.Fprintf(w, "%s%s  %s\n", indent, label, p[1])
+		fmt.Fprintf(w, "%s%s  %s\n", indent, label, s.wrapHanging(p[1], visibleWidth(indent)+maxKey+2))
 	}
 }
 
@@ -395,7 +465,7 @@ func writeStatusFindingsText(w io.Writer, s cliStyle, findings []statusFinding) 
 	}
 	if len(findings) == 1 && findings[0].Severity == sevOK {
 		f := findings[0]
-		fmt.Fprintf(w, "\n%s %s %s\n", s.severityTag(f.Severity), s.bold(f.Code+":"), f.Evidence)
+		fmt.Fprintf(w, "\n%s\n", s.wrapHanging(fmt.Sprintf("%s %s %s", s.severityTag(f.Severity), s.bold(f.Code+":"), f.Evidence), 2))
 		return
 	}
 	fmt.Fprintf(w, "\n%s\n", s.section("Findings"))
@@ -405,10 +475,10 @@ func writeStatusFindingsText(w io.Writer, s cliStyle, findings []statusFinding) 
 	}
 	seenHints := map[string]bool{}
 	for _, f := range findings {
-		fmt.Fprintf(w, "  %s %s %s\n", s.severityTag(f.Severity), s.bold(f.Code+":"), f.Evidence)
+		fmt.Fprintf(w, "  %s\n", s.wrapHanging(fmt.Sprintf("%s %s %s", s.severityTag(f.Severity), s.bold(f.Code+":"), f.Evidence), len(hintIndent)))
 		if f.Hint != "" && !seenHints[f.Hint] {
 			seenHints[f.Hint] = true
-			fmt.Fprintf(w, "%s%s\n", hintIndent, s.dim("→ "+f.Hint))
+			fmt.Fprintf(w, "%s%s\n", hintIndent, s.dim(s.wrapHanging("→ "+f.Hint, len(hintIndent)+2)))
 		}
 	}
 }
@@ -421,5 +491,29 @@ func serviceDisplayName(name string) string {
 		return "hub"
 	default:
 		return name
+	}
+}
+
+type styledBuffer struct {
+	*bytes.Buffer
+	style cliStyle
+}
+
+func writeWrapped(w io.Writer, render func(io.Writer)) {
+	s := styleFor(w)
+	buf := styledBuffer{Buffer: &bytes.Buffer{}, style: s}
+	render(buf)
+	if s.width == 0 {
+		io.Copy(w, buf)
+		return
+	}
+	for _, line := range strings.SplitAfter(buf.String(), "\n") {
+		body := strings.TrimSuffix(line, "\n")
+		if visibleWidth(body) <= s.width {
+			io.WriteString(w, line)
+			continue
+		}
+		indent := len(body) - len(strings.TrimLeft(body, " "))
+		fmt.Fprintf(w, "%s%s\n", strings.Repeat(" ", indent), s.wrapHanging(strings.TrimLeft(body, " "), indent+2))
 	}
 }

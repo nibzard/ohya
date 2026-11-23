@@ -930,9 +930,7 @@ func writeStatusText(w io.Writer, data statusData) {
 	if data.CLI.Dirty == "true" {
 		rev += "-dirty"
 	}
-	headerMeta := fmt.Sprintf("%s%s%s (%s)%sschema %d",
-		data.Topology.Mode, sep, data.CLI.Version, rev, sep, data.CLI.Schema)
-	fmt.Fprintf(w, "%s  %s\n", s.bold("ohya status"), s.dim(headerMeta))
+	fmt.Fprintln(w, s.joinFit([]string{s.bold("ohya status"), s.dim(data.Topology.Mode), s.dim(fmt.Sprintf("%s (%s)", data.CLI.Version, rev)), s.dim(fmt.Sprintf("schema %d", data.CLI.Schema))}, sep, 2))
 
 	var meta [][2]string
 	meta = append(meta, [2]string{"State", data.Topology.StateDir})
@@ -1097,7 +1095,7 @@ func writeStatusInstancesSection(w io.Writer, s cliStyle, active []statusInstanc
 		if len(active) > 0 {
 			fmt.Fprintln(w)
 		}
-		fmt.Fprintf(w, "  %s\n", s.dim(formatRetainedSummary(retained)))
+		fmt.Fprintf(w, "  %s\n", s.dim(s.wrapHanging(formatRetainedSummary(retained), 2)))
 	}
 }
 

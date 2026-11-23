@@ -222,7 +222,7 @@ func wrap(text string, width int) string {
 			switch {
 			case line == "":
 				line = word
-			case utf8.RuneCountInString(line)+1+utf8.RuneCountInString(word) <= width:
+			case visibleWidth(line)+1+visibleWidth(word) <= width:
 				line += " " + word
 			default:
 				out = append(out, line)

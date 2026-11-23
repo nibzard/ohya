@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 )
@@ -115,7 +116,7 @@ func TestNestedStyleRestoresOuterCode(t *testing.T) {
 }
 
 func TestCLITableFitsOnlyTheLastColumn(t *testing.T) {
-	s := cliStyle{width: 40}
+	s := cliStyle{width: 50}
 	tbl := cliTable{headers: []string{"ID", "TEXT"}}
 	tbl.addRow("claude-code:dev1:session-0001", strings.Repeat("word ", 20))
 	var out bytes.Buffer
@@ -139,5 +140,69 @@ func TestWrapHangingIndentsContinuationLines(t *testing.T) {
 	}
 	if got := (cliStyle{}).wrapHanging("alpha beta", 10); got != "alpha beta" {
 		t.Fatalf("unbounded width must not wrap: %q", got)
+	}
+}
+
+func TestCLITableStacksRowsThatCannotFit(t *testing.T) {
+	s := cliStyle{width: 46}
+	tbl := cliTable{
+		headers:    []string{"COUNTER", "DELTA", "PER SECOND"},
+		rightAlign: []bool{false, true, true},
+	}
+	tbl.addRow("watch_source_events{watch_event=missing}", "19929", "105")
+	var out bytes.Buffer
+	tbl.render(&out, s)
+	want := "  watch_source_events{watch_event=missing}\n    delta 19929  per second 105\n"
+	if out.String() != want {
+		t.Fatalf("stacked table = %q; want %q", out.String(), want)
+	}
+}
+
+func TestCLITableKeepsColumnsWhenTheyFit(t *testing.T) {
+	s := cliStyle{width: 46}
+	tbl := cliTable{headers: []string{"NAME", "N"}, rightAlign: []bool{false, true}}
+	tbl.addRow("ingest_passes", "91")
+	var out bytes.Buffer
+	tbl.render(&out, s)
+	if !strings.Contains(out.String(), "ingest_passes  91") {
+		t.Fatalf("fitting table must stay columnar:\n%s", out.String())
+	}
+}
+
+func TestJoinFitBreaksBetweenParts(t *testing.T) {
+	s := cliStyle{width: 30}
+	got := s.joinFit([]string{"ingest d667059c pid 2563867", "4 samples", "observed 3m11s"}, " · ", 2)
+	want := "ingest d667059c pid 2563867\n  4 samples · observed 3m11s"
+	if got != want {
+		t.Fatalf("joinFit = %q; want %q", got, want)
+	}
+	if got := (cliStyle{}).joinFit([]string{"a", "b"}, " · ", 2); got != "a · b" {
+		t.Fatalf("unbounded joinFit = %q", got)
+	}
+}
+
+func TestBesideOrBelowMovesTextUnderANarrowPrefix(t *testing.T) {
+	wide := cliStyle{width: 80}
+	if got := wide.besideOrBelow("  ✓ path", "/home/me/.bashrc", 6); got != "  ✓ path /home/me/.bashrc" {
+		t.Fatalf("wide = %q", got)
+	}
+	narrow := cliStyle{width: 46}
+	prefix := "  ✓ path-command   warning    "
+	got := narrow.besideOrBelow(prefix, "PATH currently selects /home/me/.local/bin/ohya. Use another path.", 6)
+	if !strings.HasPrefix(got, "  ✓ path-command   warning\n      PATH currently") {
+		t.Fatalf("narrow = %q", got)
+	}
+	for _, line := range strings.Split(got, "\n") {
+		if visibleWidth(line) > 46 {
+			t.Fatalf("line %q exceeds the width", line)
+		}
+	}
+}
+
+func TestWriteWrappedKeepsEachLineIndent(t *testing.T) {
+	var out bytes.Buffer
+	writeWrapped(&out, func(w io.Writer) { io.WriteString(w, "  alpha beta gamma\n") })
+	if out.String() != "  alpha beta gamma\n" {
+		t.Fatalf("non-terminal output must pass through: %q", out.String())
 	}
 }

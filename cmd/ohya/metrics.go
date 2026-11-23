@@ -420,7 +420,7 @@ func readHistorySamples(path string) ([]observe.Snapshot, int) {
 func writeMetricsText(w io.Writer, data metricsData) {
 	s := styleFor(w)
 	sep := " " + s.bullet() + " "
-	fmt.Fprintf(w, "%s  %s\n", s.bold("ohya metrics"), s.dim(fmt.Sprintf("window %s%s%s", data.Window, sep, data.GeneratedUTC)))
+	fmt.Fprintln(w, s.joinFit([]string{s.bold("ohya metrics"), s.dim("window " + data.Window), s.dim(data.GeneratedUTC)}, "  ", 2))
 	for _, instance := range data.Instances {
 		if instance.DecodeError != "" {
 			fmt.Fprintf(w, "\n%s %s: %s\n", s.red("unreadable"), s.bold(shortID(instance.InstanceID)), instance.DecodeError)
@@ -445,8 +445,8 @@ func writeMetricsText(w io.Writer, data metricsData) {
 		if instance.Gaps != nil && *instance.Gaps > 0 {
 			meta = append(meta, s.yellow(fmt.Sprintf("%d gaps", *instance.Gaps)))
 		}
-		header := fmt.Sprintf("%s %s %s  %s", s.cyan(role), s.bold(shortID(instance.InstanceID)), s.dim(fmt.Sprintf("pid %d", instance.PID)), strings.Join(meta, sep))
-		fmt.Fprintf(w, "\n%s\n", header)
+		title := fmt.Sprintf("%s %s %s", s.cyan(role), s.bold(shortID(instance.InstanceID)), s.dim(fmt.Sprintf("pid %d", instance.PID)))
+		fmt.Fprintf(w, "\n%s\n", s.joinFit(append([]string{title}, meta...), sep, 2))
 
 		counters := cliTable{
 			indent:     "  ",

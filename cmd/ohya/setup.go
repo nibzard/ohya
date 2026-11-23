@@ -310,11 +310,12 @@ func printSetupResult(stdout io.Writer, r setup.Result) {
 	default:
 		mark, status = s.boldYellow("▲"), s.yellow(r.Status)
 	}
-	line := fmt.Sprintf("  %s %s %s", mark, padRight(s.bold(r.Component), setupComponentWidth), padRight(status, setupStatusWidth))
-	if r.Detail != "" {
-		line += " " + strings.ReplaceAll(r.Detail, "\n", " ")
+	prefix := fmt.Sprintf("  %s %s %s", mark, padRight(s.bold(r.Component), setupComponentWidth), padRight(status, setupStatusWidth))
+	if r.Detail == "" {
+		fmt.Fprintln(stdout, strings.TrimRight(prefix, " "))
+		return
 	}
-	fmt.Fprintln(stdout, strings.TrimRight(line, " "))
+	fmt.Fprintln(stdout, s.besideOrBelow(prefix, strings.ReplaceAll(r.Detail, "\n", " "), 6))
 }
 
 func printSetupReport(stdout io.Writer, command string, asJSON bool, report setup.Report, printed int, err error) error {

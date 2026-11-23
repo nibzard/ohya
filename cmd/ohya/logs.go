@@ -427,8 +427,7 @@ func entryTextStyled(s cliStyle, entry observe.LogEntry) string {
 func writeLogsText(w io.Writer, data logsData) {
 	s := styleFor(w)
 	sep := " " + s.bullet() + " "
-	fmt.Fprintf(w, "%s  %s\n", s.bold("ohya logs"), s.dim(fmt.Sprintf("since %s%slimit %d%s%s",
-		data.SinceText, sep, data.Limit, sep, data.GeneratedUTC)))
+	fmt.Fprintln(w, s.joinFit([]string{s.bold("ohya logs"), s.dim("since " + data.SinceText), s.dim(fmt.Sprintf("limit %d", data.Limit)), s.dim(data.GeneratedUTC)}, sep, 2))
 	var activeSummaries []string
 	silent := 0
 	for _, instance := range data.Instances {
@@ -461,7 +460,7 @@ func writeLogsText(w io.Writer, data logsData) {
 	if len(data.Entries) > 0 {
 		fmt.Fprintln(w)
 		for _, entry := range data.Entries {
-			fmt.Fprintln(w, entryTextStyled(s, entry))
+			fmt.Fprintln(w, s.wrapHanging(entryTextStyled(s, entry), 2))
 		}
 	}
 	if data.Truncated {
@@ -496,7 +495,7 @@ func followLogs(ctx context.Context, view observe.InstanceView, o logsOptions, s
 			_ = printJSON(stdout, logsSpec.name, logsFollowData{FormatVersion: logsFormatVersion, Entry: entry})
 			return
 		}
-		fmt.Fprintln(stdout, entryTextStyled(s, entry))
+		fmt.Fprintln(stdout, s.wrapHanging(entryTextStyled(s, entry), 2))
 	}
 	sinceMS := o.nowMS() - o.since.Milliseconds()
 	backlog, _, _ := readLogFile(path)

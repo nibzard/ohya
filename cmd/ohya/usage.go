@@ -266,7 +266,7 @@ func runUsageCommand(args []string, stdout, stderr io.Writer) error {
 	if *asJSON {
 		return printJSON(stdout, usageSpec.name, report)
 	}
-	renderUsageText(stdout, report, stateDir)
+	writeWrapped(stdout, func(w io.Writer) { renderUsageText(w, report, stateDir) })
 	return nil
 }
 
@@ -1032,6 +1032,9 @@ func sortedKeyCounts(counts map[string]int64) []usageKeyCount {
 
 func renderUsageText(w io.Writer, report *usageReport, stateDir string) {
 	s := styleFor(w)
+	if out, ok := w.(styledBuffer); ok {
+		s = out.style
+	}
 	since := time.UnixMilli(report.SinceMS).UTC().Format(time.RFC3339)
 	until := time.UnixMilli(report.UntilMS).UTC().Format(time.RFC3339)
 	fmt.Fprintf(w, "%s  %s\n\n", s.bold("ohya usage"), s.dim(since+" .. "+until))

@@ -766,7 +766,7 @@ func printSearchResult(w io.Writer, res mcpserver.Result) {
 }
 
 func writeRecordLines(w io.Writer, s cliStyle, meta []string, text, sessionID string) {
-	fmt.Fprintln(w, s.fit(strings.Join(meta, " "+s.bullet()+" "), 0))
+	fmt.Fprintln(w, s.joinFit(meta, " "+s.bullet()+" ", 2))
 	if text != "" {
 		fmt.Fprintf(w, "  %s\n", s.fit(text, 2))
 	}
