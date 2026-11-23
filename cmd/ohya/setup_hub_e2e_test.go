@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -211,7 +212,11 @@ func TestHubSetupTwoStepFlow(t *testing.T) {
 			t.Fatalf("%s = %+v; full report %+v", component, r, first.Data.Results)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(home, ".config", "systemd", "user", "ohya-serve.service")); err != nil {
+	hubPlan, err := setup.HubServicePlan(runtime.GOOS, home, hubState, wrapper, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(hubPlan.Path); err != nil {
 		t.Fatalf("hub service file: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(hubState, "setup", "hub-service.json")); err != nil {
