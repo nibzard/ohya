@@ -66,10 +66,36 @@ func stableBinaryPath(actual, invoked string) string {
 	return actual
 }
 
+type setupRuntime struct {
+	home     string
+	getenv   func(string) string
+	unsetenv func(string) error
+	runners  func() (func(context.Context, []string) error, func(context.Context, []string) error)
+}
+
 func runSetupCommand(args []string, stdout, stderr io.Writer) error {
+	return runSetupCommandWith(args, stdout, stderr, setupRuntime{})
+}
+
+func runSetupCommandWith(args []string, stdout, stderr io.Writer, rt setupRuntime) error {
 	home, binary, err := setupPaths()
 	if err != nil {
 		return err
+	}
+	if rt.home != "" {
+		home = rt.home
+	}
+	getenv := rt.getenv
+	if getenv == nil {
+		getenv = os.Getenv
+	}
+	unsetenv := rt.unsetenv
+	if unsetenv == nil {
+		unsetenv = os.Unsetenv
+	}
+	runners := rt.runners
+	if runners == nil {
+		runners = serviceRunners
 	}
 	c := newCommandFlags(setupSpec)
 	binaryPath := c.fs.String("binary", binary, "absolute executable `path` registered with services and agents")
@@ -87,7 +113,7 @@ func runSetupCommand(args []string, stdout, stderr io.Writer) error {
 	asJSON := c.fs.Bool("json", false, "print one versioned JSON result")
 	roots := newAgentRootFlags(c.fs, home)
 	excludes := newExcludeFlag(c.fs)
-	if config := os.Getenv("CLAUDE_CONFIG_DIR"); config != "" {
+	if config := getenv("CLAUDE_CONFIG_DIR"); config != "" {
 		*roots.claude = filepath.Join(config, "projects")
 	}
 	if err := c.parse(args, stdout); err != nil {
@@ -138,14 +164,14 @@ func runSetupCommand(args []string, stdout, stderr io.Writer) error {
 			return c.usageErrorf("invalid join code environment variable name")
 		}
 		if !*dry {
-			code = os.Getenv(*codeEnv)
+			code = getenv(*codeEnv)
 			if code == "" {
 				return c.usageErrorf("join code environment variable is empty")
 			}
 			if _, _, err := parseJoinCode(code); err != nil {
 				return c.usageErrorf("join code environment variable does not hold one: %v", err)
 			}
-			if err := os.Unsetenv(*codeEnv); err != nil {
+			if err := unsetenv(*codeEnv); err != nil {
 				return err
 			}
 		}
@@ -190,8 +216,8 @@ func runSetupCommand(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	options := setup.Options{WorkingDirectory: cwd, NoModifyPath: *noModifyPath, Shell: os.Getenv("SHELL"), Database: db, Clients: setup.ClientOptions{Home: home, State: absState, Binary: binary, Args: clientArgs, Agents: *agents, Getenv: func(name string) string { return preferences.Homes[name] }}, ServiceArgs: serviceArgs, NoService: *noService, NoAgents: *noAgents, DryRun: *dry}
-	if run, loaded := serviceRunners(); run != nil {
+	options := setup.Options{WorkingDirectory: cwd, NoModifyPath: *noModifyPath, Shell: getenv("SHELL"), Database: db, Clients: setup.ClientOptions{Home: home, State: absState, Binary: binary, Args: clientArgs, Agents: *agents, Getenv: func(name string) string { return preferences.Homes[name] }}, ServiceArgs: serviceArgs, NoService: *noService, NoAgents: *noAgents, DryRun: *dry}
+	if run, loaded := runners(); run != nil {
 		options.RunService, options.LoadedService = run, loaded
 	}
 	if *hubMode {

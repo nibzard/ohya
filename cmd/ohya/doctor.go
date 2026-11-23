@@ -68,10 +68,23 @@ type doctorTransportSum struct {
 
 const doctorProbeTimeout = 45 * time.Second
 
+type doctorRuntime struct {
+	home       string
+	inspectRun func(context.Context, []string) error
+}
+
 func runDoctorCommand(args []string, stdout, stderr io.Writer) error {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("resolve home directory: %w", err)
+	return runDoctorCommandWith(args, stdout, stderr, doctorRuntime{})
+}
+
+func runDoctorCommandWith(args []string, stdout, stderr io.Writer, rt doctorRuntime) error {
+	home := rt.home
+	if home == "" {
+		var err error
+		home, err = os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("resolve home directory: %w", err)
+		}
 	}
 	c := newCommandFlags(doctorSpec)
 	db := c.fs.String("db", filepath.Join(home, ".ohya", "hub.db"),
@@ -126,9 +139,12 @@ func runDoctorCommand(args []string, stdout, stderr io.Writer) error {
 	} else if !os.IsNotExist(err) {
 		return jsonFailurePrint(*asJSON, stdout, doctorSpec.name, err)
 	}
-	inspectRun := func(ctx context.Context, args []string) error { return setup.RunServiceCommand(ctx, args) }
-	if run, _ := serviceRunners(); run != nil {
-		inspectRun = run
+	inspectRun := rt.inspectRun
+	if inspectRun == nil {
+		inspectRun = func(ctx context.Context, args []string) error { return setup.RunServiceCommand(ctx, args) }
+		if run, _ := serviceRunners(); run != nil {
+			inspectRun = run
+		}
 	}
 	integrations, inspectErr := setup.Inspect(context.Background(), setupState, inspectRun)
 	if inspectErr != nil {

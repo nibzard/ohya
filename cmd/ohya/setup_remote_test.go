@@ -12,6 +12,7 @@ func TestRemoteSetupPairsAndResumes(t *testing.T) {
 	if testing.Short() {
 		t.Skip("remote setup transport test")
 	}
+	t.Parallel()
 	dir := transportTestDir(t)
 	hubState := filepath.Join(dir, "hub-state")
 	hubDB := filepath.Join(dir, "hub.db")
@@ -24,7 +25,11 @@ func TestRemoteSetupPairsAndResumes(t *testing.T) {
 		}
 	}()
 	code := inviteCode(t, hubState)
-	t.Setenv("OHYA_SETUP_TEST_CODE", code)
+	env := map[string]string{"OHYA_SETUP_TEST_CODE": code}
+	rt := setupRuntime{
+		getenv:   func(k string) string { return env[k] },
+		unsetenv: func(k string) error { delete(env, k); return nil },
+	}
 	wrapper := filepath.Join(dir, "ohya-wrapper")
 	quoted := "'" + strings.ReplaceAll(os.Args[0], "'", "'\\''") + "'"
 	if err := os.WriteFile(wrapper, []byte("#!/bin/sh\nexec "+quoted+" child-run \"$@\"\n"), 0700); err != nil {
@@ -34,10 +39,10 @@ func TestRemoteSetupPairsAndResumes(t *testing.T) {
 	base := []string{"--state", state, "--binary", wrapper, "--no-agents", "--no-service", "--no-modify-path", "--json"}
 	var stdout, stderr bytes.Buffer
 	first := append(append([]string{}, base...), "--join-code-env", "OHYA_SETUP_TEST_CODE")
-	if err := runSetupCommand(first, &stdout, &stderr); err != nil {
+	if err := runSetupCommandWith(first, &stdout, &stderr, rt); err != nil {
 		t.Fatalf("remote setup: %v; %s %s", err, stdout.String(), stderr.String())
 	}
-	if os.Getenv("OHYA_SETUP_TEST_CODE") != "" {
+	if env["OHYA_SETUP_TEST_CODE"] != "" {
 		t.Fatal("code remains in process environment")
 	}
 	if bytes.Contains(stdout.Bytes(), []byte(code)) || bytes.Contains(stderr.Bytes(), []byte(code)) {
@@ -61,7 +66,7 @@ func TestRemoteSetupPairsAndResumes(t *testing.T) {
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if err := runSetupCommand(base, &stdout, &stderr); err != nil {
+	if err := runSetupCommandWith(base, &stdout, &stderr, rt); err != nil {
 		t.Fatalf("resume setup: %v; %s %s", err, stdout.String(), stderr.String())
 	}
 }

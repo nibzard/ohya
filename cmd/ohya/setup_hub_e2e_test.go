@@ -160,12 +160,12 @@ func resultStatus(t *testing.T, report setupReportJSON, component string) setup.
 
 func TestHubSetupTwoStepFlow(t *testing.T) {
 	skipUnlessTransportE2E(t)
+	t.Parallel()
 	dir := transportTestDir(t)
 	home := filepath.Join(dir, "home")
 	if err := os.MkdirAll(home, 0700); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("HOME", home)
 	hubState := filepath.Join(dir, "ohya")
 	hubDB := filepath.Join(hubState, "hub.db")
 	claudeRoot := filepath.Join(dir, "claude-projects")
@@ -180,16 +180,20 @@ func TestHubSetupTwoStepFlow(t *testing.T) {
 	}
 
 	manager := newChildServiceManager(t, hubDB, hubState, regionFile, claudeRoot)
-	previous := serviceRunnersHook
-	serviceRunnersHook = manager.hook
-	t.Cleanup(func() { serviceRunnersHook = previous })
+	env := map[string]string{}
+	rt := setupRuntime{
+		home:     home,
+		getenv:   func(k string) string { return env[k] },
+		unsetenv: func(k string) error { delete(env, k); return nil },
+		runners:  manager.hook,
+	}
 
-	hubArgs := []string{"setup", "--hub", "--state", hubState, "--binary", wrapper,
+	hubArgs := []string{"--hub", "--state", hubState, "--binary", wrapper,
 		"--no-agents", "--no-modify-path", "--claude-root", claudeRoot,
 		"--codex-root", "", "--pi-root", "", "--antigravity-root", "", "--json"}
 	var stdout, stderr bytes.Buffer
-	if code := cliMain(hubArgs, &stdout, &stderr); code != 0 {
-		t.Fatalf("hub setup = %d %s %s", code, stdout.String(), stderr.String())
+	if err := runSetupCommandWith(hubArgs, &stdout, &stderr, rt); err != nil {
+		t.Fatalf("hub setup = %v %s %s", err, stdout.String(), stderr.String())
 	}
 	var first setupReportJSON
 	if err := json.Unmarshal(stdout.Bytes(), &first); err != nil {
@@ -226,23 +230,23 @@ func TestHubSetupTwoStepFlow(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := cliMain([]string{"doctor", "--state", hubState, "--db", hubDB, "--json"}, &stdout, &stderr); code != 0 {
-		t.Fatalf("hub doctor = %d %s %s", code, stdout.String(), stderr.String())
+	if err := runDoctorCommandWith([]string{"--state", hubState, "--db", hubDB, "--json"}, &stdout, &stderr, doctorRuntime{home: home, inspectRun: manager.run}); err != nil {
+		t.Fatalf("hub doctor = %v %s %s", err, stdout.String(), stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "hub_identity") || !strings.Contains(stdout.String(), `"setup:hub-service","severity":"ok"`) {
 		t.Fatalf("doctor missed the hub checks: %s", stdout.String())
 	}
 
 	devState := filepath.Join(dir, "dev-ohya")
-	t.Setenv("OHYA_HUB_E2E_CODE", first.Data.Hub.Code)
-	devArgs := []string{"setup", "--state", devState, "--binary", wrapper, "--join-code-env", "OHYA_HUB_E2E_CODE",
+	env["OHYA_HUB_E2E_CODE"] = first.Data.Hub.Code
+	devArgs := []string{"--state", devState, "--binary", wrapper, "--join-code-env", "OHYA_HUB_E2E_CODE",
 		"--no-agents", "--no-service", "--no-modify-path", "--json"}
 	stdout.Reset()
 	stderr.Reset()
-	if code := cliMain(devArgs, &stdout, &stderr); code != 0 {
-		t.Fatalf("device setup = %d %s %s", code, stdout.String(), stderr.String())
+	if err := runSetupCommandWith(devArgs, &stdout, &stderr, rt); err != nil {
+		t.Fatalf("device setup = %v %s %s", err, stdout.String(), stderr.String())
 	}
-	if os.Getenv("OHYA_HUB_E2E_CODE") != "" {
+	if env["OHYA_HUB_E2E_CODE"] != "" {
 		t.Fatal("join code remains in the environment")
 	}
 	if _, err := os.Stat(filepath.Join(devState, "join", "credential.json")); err != nil {
@@ -274,8 +278,8 @@ func TestHubSetupTwoStepFlow(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := cliMain(hubArgs, &stdout, &stderr); code != 0 {
-		t.Fatalf("hub setup rerun = %d %s %s", code, stdout.String(), stderr.String())
+	if err := runSetupCommandWith(hubArgs, &stdout, &stderr, rt); err != nil {
+		t.Fatalf("hub setup rerun = %v %s %s", err, stdout.String(), stderr.String())
 	}
 	var rerun setupReportJSON
 	if err := json.Unmarshal(stdout.Bytes(), &rerun); err != nil {
@@ -294,13 +298,13 @@ func TestHubSetupTwoStepFlow(t *testing.T) {
 	}
 	t.Log("hub setup rerun changed nothing and issued a fresh code")
 
-	t.Setenv("OHYA_HUB_E2E_CODE", "")
-	devRerun := []string{"setup", "--state", devState, "--binary", wrapper,
+	delete(env, "OHYA_HUB_E2E_CODE")
+	devRerun := []string{"--state", devState, "--binary", wrapper,
 		"--no-agents", "--no-service", "--no-modify-path", "--json"}
 	stdout.Reset()
 	stderr.Reset()
-	if code := cliMain(devRerun, &stdout, &stderr); code != 0 {
-		t.Fatalf("device setup rerun = %d %s %s", code, stdout.String(), stderr.String())
+	if err := runSetupCommandWith(devRerun, &stdout, &stderr, rt); err != nil {
+		t.Fatalf("device setup rerun = %v %s %s", err, stdout.String(), stderr.String())
 	}
 	t.Log("device setup rerun reused the saved credential")
 

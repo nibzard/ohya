@@ -295,6 +295,7 @@ func fakeHubAddr(t *testing.T) string {
 }
 
 func TestDoctorJoinState(t *testing.T) {
+	t.Parallel()
 	const deviceID = "0123456789abcdef0123456789abcdef"
 	pairedEnv := func(t *testing.T) *doctorEnv {
 		e := newDoctorEnv(t)
@@ -393,6 +394,7 @@ func TestDoctorJoinState(t *testing.T) {
 }
 
 func TestDoctorHubTransport(t *testing.T) {
+	t.Parallel()
 	const deviceID = "0123456789abcdef0123456789abcdef"
 
 	t.Run("unpaired state reports no transport object", func(t *testing.T) {
