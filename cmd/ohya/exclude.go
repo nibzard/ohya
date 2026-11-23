@@ -52,7 +52,18 @@ func (g excludeGlobs) Match(path string) (bool, error) {
 	if len(g) == 0 {
 		return false, nil
 	}
-	for _, form := range excludePathForms(path) {
+	return g.matchForms(excludePathForms(path))
+}
+
+func (g excludeGlobs) matchRegular(path string, cache dirEvalCache) (bool, error) {
+	if len(g) == 0 {
+		return false, nil
+	}
+	return g.matchForms(cache.regularPathForms(path))
+}
+
+func (g excludeGlobs) matchForms(forms []string) (bool, error) {
+	for _, form := range forms {
 		for _, glob := range g {
 			matched, err := filepath.Match(glob, form)
 			if err != nil {
@@ -64,6 +75,36 @@ func (g excludeGlobs) Match(path string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+type resolvedDirEntry struct {
+	path string
+	ok   bool
+}
+
+type dirEvalCache map[string]resolvedDirEntry
+
+func (c dirEvalCache) regularPathForms(path string) []string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = filepath.Clean(path)
+	}
+	forms := []string{abs}
+	dir, base := filepath.Split(abs)
+	cleanDir := filepath.Clean(dir)
+	entry, cached := c[cleanDir]
+	if !cached {
+		resolved, err := filepath.EvalSymlinks(cleanDir)
+		entry = resolvedDirEntry{path: resolved, ok: err == nil}
+		c[cleanDir] = entry
+	}
+	if entry.ok {
+		resolved := filepath.Join(entry.path, base)
+		if resolved != abs {
+			forms = append(forms, resolved)
+		}
+	}
+	return forms
 }
 
 func excludePathForms(path string) []string {

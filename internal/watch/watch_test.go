@@ -911,6 +911,81 @@ func TestNormalizePathResolvesSymlinkedDirectories(t *testing.T) {
 	}
 }
 
+func TestNormalizePathCachedMatchesNormalizePath(t *testing.T) {
+	dir := t.TempDir()
+	realA := filepath.Join(dir, "real-a")
+	realB := filepath.Join(dir, "real-b")
+	for _, d := range []string{realA, realB} {
+		if err := os.Mkdir(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	linkA := filepath.Join(dir, "link-a")
+	if err := os.Symlink(realA, linkA); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	inputs := []string{
+		filepath.Join(linkA, "one.jsonl"),
+		filepath.Join(linkA, "two.jsonl"),
+		filepath.Join(linkA, "absent.jsonl"),
+		filepath.Join(realB, "three.jsonl"),
+		filepath.Join(realB, "four.jsonl"),
+		filepath.Join(dir, "missing-dir", "five.jsonl"),
+		filepath.Join(dir, "missing-dir", "six.jsonl"),
+	}
+	cache := make(map[string]resolvedDir)
+	for _, p := range inputs {
+		if got, want := normalizePathCached(p, cache), normalizePath(p); got != want {
+			t.Fatalf("normalizePathCached(%q) = %q, want %q", p, got, want)
+		}
+	}
+	if len(cache) != 3 {
+		t.Fatalf("cache entries = %d, want 3 unique directories", len(cache))
+	}
+}
+
+func BenchmarkPollUnchanged(b *testing.B) {
+	stateDir := b.TempDir()
+	root := b.TempDir()
+	const dirs, perDir = 10, 50
+	candidates := make([]string, 0, dirs*perDir)
+	for i := range dirs {
+		sub := filepath.Join(root, fmt.Sprintf("project-%02d", i))
+		if err := os.Mkdir(sub, 0o700); err != nil {
+			b.Fatal(err)
+		}
+		for j := range perDir {
+			p := filepath.Join(sub, fmt.Sprintf("session-%03d.jsonl", j))
+			if err := os.WriteFile(p, []byte("{\"type\":\"user\"}\n"), 0o600); err != nil {
+				b.Fatal(err)
+			}
+			candidates = append(candidates, p)
+		}
+	}
+	w, err := New(stateDir, "claude-code", Options{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	outcomes, err := w.Poll(candidates)
+	if err != nil {
+		b.Fatal(err)
+	}
+	for _, o := range outcomes {
+		if err := w.Acknowledge(o.Path, o.SourceID, o.End); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if _, err := w.Poll(candidates); err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for range b.N {
+		if _, err := w.Poll(candidates); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestStateFilesAreOwnerOnly(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "session.jsonl")

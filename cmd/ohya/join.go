@@ -353,13 +353,14 @@ func reportJoinBacklog(stateDir string, roots []agentRoot, excludes excludeGlobs
 		for _, s := range snaps {
 			byPath[s.Path] = s.CursorBytes
 		}
+		dirCache := make(dirEvalCache)
 		for _, path := range candidates {
 			info, err := os.Stat(path)
 			if err != nil {
 				continue
 			}
 			var acknowledged int64
-			for _, form := range excludePathForms(path) {
+			for _, form := range dirCache.regularPathForms(path) {
 				if cursor, ok := byPath[form]; ok {
 					acknowledged = cursor
 					break

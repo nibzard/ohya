@@ -111,6 +111,14 @@ func TestDiscoverSessionFilesExcludeMatchesSymlinkedPathForm(t *testing.T) {
 			t.Fatalf("form %q is neither the seen nor the resolved path", form)
 		}
 	}
+	cache := make(dirEvalCache)
+	cached := cache.regularPathForms(excluded[0])
+	if !slices.Equal(cached, excludePathForms(excluded[0])) {
+		t.Fatalf("cached forms = %v, want %v", cached, excludePathForms(excluded[0]))
+	}
+	if len(cache) != 1 {
+		t.Fatalf("cache entries = %d, want 1", len(cache))
+	}
 }
 
 func TestExcludeGlobFlagValidation(t *testing.T) {

@@ -639,6 +639,7 @@ func discoverAgentSessionFiles(agent string, dirs []agentDir, excludes excludeGl
 func walkSessionFiles(agent, root string, excludes excludeGlobs) ([]string, []string, error) {
 	var files []string
 	var excluded []string
+	dirCache := make(dirEvalCache)
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return fmt.Errorf("discover %s: %w", p, err)
@@ -657,7 +658,7 @@ func walkSessionFiles(agent, root string, excludes excludeGlobs) ([]string, []st
 				return nil
 			}
 		}
-		match, err := excludes.Match(p)
+		match, err := excludes.matchRegular(p, dirCache)
 		if err != nil {
 			return err
 		}
@@ -679,8 +680,9 @@ func walkSessionFiles(agent, root string, excludes excludeGlobs) ([]string, []st
 
 func excludedPathSet(paths []string) map[string]bool {
 	set := make(map[string]bool, len(paths))
+	dirCache := make(dirEvalCache)
 	for _, p := range paths {
-		for _, form := range excludePathForms(p) {
+		for _, form := range dirCache.regularPathForms(p) {
 			set[form] = true
 		}
 	}

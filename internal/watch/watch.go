@@ -78,11 +78,12 @@ type probe struct {
 
 func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 	probes := make(map[string]probe, len(candidates))
+	dirCache := make(map[string]resolvedDir)
 	for _, p := range candidates {
 		if p == "" {
 			continue
 		}
-		norm := normalizePath(p)
+		norm := normalizePathCached(p, dirCache)
 		if _, seen := probes[norm]; seen {
 			continue
 		}
@@ -504,14 +505,37 @@ func newSourceID() (string, error) {
 	return hex.EncodeToString(b[:]), nil
 }
 
+type resolvedDir struct {
+	path string
+	ok   bool
+}
+
 func normalizePath(p string) string {
+	return normalizePathCached(p, nil)
+}
+
+func normalizePathCached(p string, cache map[string]resolvedDir) string {
 	abs, err := filepath.Abs(p)
 	if err != nil {
 		return filepath.Clean(p)
 	}
 	dir, base := filepath.Split(abs)
-	if resolved, err := filepath.EvalSymlinks(filepath.Clean(dir)); err == nil {
-		return filepath.Join(resolved, base)
+	cleanDir := filepath.Clean(dir)
+	var entry resolvedDir
+	if cache != nil {
+		var cached bool
+		entry, cached = cache[cleanDir]
+		if !cached {
+			resolved, err := filepath.EvalSymlinks(cleanDir)
+			entry = resolvedDir{path: resolved, ok: err == nil}
+			cache[cleanDir] = entry
+		}
+	} else {
+		resolved, err := filepath.EvalSymlinks(cleanDir)
+		entry = resolvedDir{path: resolved, ok: err == nil}
+	}
+	if entry.ok {
+		return filepath.Join(entry.path, base)
 	}
 	return filepath.Clean(abs)
 }
