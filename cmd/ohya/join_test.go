@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -221,5 +222,23 @@ func TestJoinContextCancelDuringStartupStopsCleanly(t *testing.T) {
 				t.Fatalf("a credential was paired despite the canceled stop: %v", credErr)
 			}
 		})
+	}
+}
+
+func TestRejoinWithoutHubAddressNamesTheInviteAndInstallerSteps(t *testing.T) {
+	stateDir := t.TempDir()
+	cred := device.Credential{DeviceID: "a4ca22cc3f546eeffd469f74abade288", Secret: "0123456789abcdef0123456789abcdef"}
+	_, err := rejoin(context.Background(), nil, stateDir, cred, "", "", io.Discard)
+	if err == nil {
+		t.Fatal("rejoin without a code or a saved hub address succeeded")
+	}
+	for _, want := range []string{
+		cred.DeviceID,
+		"ohya devices invite",
+		"install.sh | sh -s -- --join",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("rejoin error misses %q:\n%v", want, err)
+		}
 	}
 }

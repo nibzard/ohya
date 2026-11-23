@@ -56,7 +56,7 @@ func runInstallCommand(args []string, stdout, stderr io.Writer) error {
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("integrated setup did not complete: %w; rerun %s setup", err, target)
+		return fmt.Errorf("integrated setup did not complete: %w; the setup output above names the next step", err)
 	}
 	return nil
 }

@@ -235,7 +235,7 @@ func rejoin(ctx context.Context, node transport.Device, stateDir string, cred de
 	if code == "" {
 		hubAddr, err := device.LoadHubAddress(stateDir)
 		if errors.Is(err, fs.ErrNotExist) {
-			return "", errors.New("this device holds no hub address; pass a join code from ohya devices invite once to save it")
+			return "", fmt.Errorf("device %s is paired but holds no hub address, as after an upgrade from a release that paired without a join code; on the hub, run ohya devices invite, then on this device run: %s", cred.DeviceID, deviceJoinCommand)
 		}
 		if err != nil {
 			return "", err
