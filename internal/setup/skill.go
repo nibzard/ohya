@@ -64,17 +64,17 @@ description: >-
 Find this project's sessions across all devices:
 
 ` + "```sql" + `
-SELECT device_id, agent, cwd, substr(first_prompt, 1, 160) AS first_prompt, last_event_at_ms
+SELECT device_id, agent, cwd, substr(first_prompt, 1, 160) AS first_prompt, datetime(last_event_at_ms/1000, 'unixepoch') AS last_utc
 FROM sessions WHERE repo = 'github.com/owner/name'
 ORDER BY last_event_at_ms DESC LIMIT 10;
 ` + "```" + `
 
-Find sessions by agent and time window (` + "`claude`" + `, ` + "`codex`" + `, ` + "`pi`" + `, ` + "`antigravity`" + `):
+Find sessions by agent and time window (` + "`claude-code`" + `, ` + "`codex`" + `, ` + "`pi`" + `, ` + "`antigravity`" + `):
 
 ` + "```sql" + `
-SELECT s.id, s.device_id, s.repo, substr(s.first_prompt, 1, 160) AS first_prompt, s.last_event_at_ms
+SELECT s.id, s.device_id, s.repo, substr(s.first_prompt, 1, 160) AS first_prompt, datetime(s.last_event_at_ms/1000, 'unixepoch') AS last_utc
 FROM sessions s
-WHERE s.agent = 'claude'
+WHERE s.agent = 'claude-code'
   AND s.last_event_at_ms >= (CAST(strftime('%s','now') AS INTEGER) - 7*86400) * 1000
 ORDER BY s.last_event_at_ms DESC LIMIT 20;
 ` + "```" + `
@@ -82,7 +82,7 @@ ORDER BY s.last_event_at_ms DESC LIMIT 20;
 Full-text search with centered match snippet:
 
 ` + "```sql" + `
-SELECT e.id, s.cwd, e.time_ms, snippet(events_fts, 0, '[', ']', '...', 24) AS excerpt
+SELECT e.id, s.agent, s.cwd, datetime(e.time_ms/1000, 'unixepoch') AS utc_time, snippet(events_fts, 0, '[', ']', '...', 24) AS excerpt
 FROM events_fts JOIN events_settled e ON e.id = events_fts.rowid
 JOIN sessions s ON s.id = e.session_id
 WHERE events_fts MATCH 'authentication AND refresh'

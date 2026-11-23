@@ -61,38 +61,38 @@ func openPublishedRecipesHub(t *testing.T) *Engine {
 	oversizedRaw := `{"type":"user","sessionId":"s-old","message":{"role":"user","content":"` + strings.Repeat("x", 70000) + `"}}`
 	seed := []string{
 		fmt.Sprintf(`INSERT INTO sessions(id,agent,device_id,native_id,repo,cwd,model,first_prompt,last_event_at_ms,event_count) VALUES
-		 ('claude:dev1:s1','claude','dev1','s1','github.com/owner/name','/repo','claude-sonnet-4-5','settled s1',%d,3),
-		 ('claude:dev1:s2','claude','dev1','s2','github.com/owner/name','/repo',NULL,'settled s2',%d,2),
-		 ('claude:dev1:s-old','claude','dev1','s-old','github.com/owner/name','/repo',NULL,'old session',%d,6),
-		 ('claude:dev1:s-live','claude','dev1','s-live','github.com/owner/name','/repo',NULL,'live session',%d,1),
-		 ('claude:laptop:s-lap','claude','laptop','s-lap','github.com/owner/demo','/demo','claude-sonnet-4-5','laptop session',%d,0),
-		 ('claude:dev1:s-gone','claude','dev1','s-gone',NULL,'/gone','claude-3-opus-20240229','gone session',%d,0)`,
+		 ('claude-code:dev1:s1','claude-code','dev1','s1','github.com/owner/name','/repo','claude-sonnet-4-5','settled s1',%d,3),
+		 ('claude-code:dev1:s2','claude-code','dev1','s2','github.com/owner/name','/repo',NULL,'settled s2',%d,2),
+		 ('claude-code:dev1:s-old','claude-code','dev1','s-old','github.com/owner/name','/repo',NULL,'old session',%d,6),
+		 ('claude-code:dev1:s-live','claude-code','dev1','s-live','github.com/owner/name','/repo',NULL,'live session',%d,1),
+		 ('claude-code:laptop:s-lap','claude-code','laptop','s-lap','github.com/owner/demo','/demo','claude-sonnet-4-5','laptop session',%d,0),
+		 ('claude-code:dev1:s-gone','claude-code','dev1','s-gone',NULL,'/gone','claude-3-opus-20240229','gone session',%d,0)`,
 			settled1, settled2, old, live, now-3*hour, old),
 		fmt.Sprintf(`INSERT INTO sources(id,device_id,agent,path,cursor_bytes,updated_at_ms) VALUES
-		 ('src-1','dev1','claude','/repo/1.jsonl',1000,%d),
-		 ('src-2','dev1','claude','/repo/2.jsonl',500,%d),
-		 ('src-3','dev1','claude','/repo/3.jsonl',9000,%d),
-		 ('src-live','dev1','claude','/repo/live.jsonl',100,%d)`,
+		 ('src-1','dev1','claude-code','/repo/1.jsonl',1000,%d),
+		 ('src-2','dev1','claude-code','/repo/2.jsonl',500,%d),
+		 ('src-3','dev1','claude-code','/repo/3.jsonl',9000,%d),
+		 ('src-live','dev1','claude-code','/repo/live.jsonl',100,%d)`,
 			fresh, fresh, stale, fresh),
 		fmt.Sprintf(`INSERT INTO events(id,session_id,source_id,source_offset,time_ms,kind,role,text,raw_json) VALUES
-		 (1,'claude:dev1:s1','src-1',100,%d,'message','user','first s1 record','{}'),
-		 (2,'claude:dev1:s1','src-1',200,%d,'message','assistant','hello authentication world, refresh the token','{}'),
-		 (3,'claude:dev1:s1','src-1',300,%d,'message','assistant','third s1 record','{}'),
-		 (4,'claude:dev1:s2','src-2',100,%d,'message','user','first s2 record','{}'),
-		 (5,'claude:dev1:s2','src-2',200,%d,'message','assistant','second s2 record','{}'),
-		 (6,'claude:dev1:s-live','src-live',100,%d,'message','user','live session record','{}'),
-		 (7,'claude:dev1:s-old','src-3',100,%d,'message','user','thirty day old record','{}'),
-		 (42,'claude:dev1:s-old','src-3',200,%d,'message','assistant','inspect me by id','{}'),
-		 (50,'claude:dev1:s-old','src-3',600,%d,'message','user',NULL,'%s'),
-		 (100,'claude:dev1:s-old','src-3',300,%d,'message','assistant','reviewed already','{}'),
-		 (101,'claude:dev1:s-old','src-3',400,%d,'message','assistant','needs review','{}'),
-		 (102,'claude:dev1:s-old','src-3',500,%d,'message','assistant','also needs review','{}')`,
+		 (1,'claude-code:dev1:s1','src-1',100,%d,'message','user','first s1 record','{}'),
+		 (2,'claude-code:dev1:s1','src-1',200,%d,'message','assistant','hello authentication world, refresh the token','{}'),
+		 (3,'claude-code:dev1:s1','src-1',300,%d,'message','assistant','third s1 record','{}'),
+		 (4,'claude-code:dev1:s2','src-2',100,%d,'message','user','first s2 record','{}'),
+		 (5,'claude-code:dev1:s2','src-2',200,%d,'message','assistant','second s2 record','{}'),
+		 (6,'claude-code:dev1:s-live','src-live',100,%d,'message','user','live session record','{}'),
+		 (7,'claude-code:dev1:s-old','src-3',100,%d,'message','user','thirty day old record','{}'),
+		 (42,'claude-code:dev1:s-old','src-3',200,%d,'message','assistant','inspect me by id','{}'),
+		 (50,'claude-code:dev1:s-old','src-3',600,%d,'message','user',NULL,'%s'),
+		 (100,'claude-code:dev1:s-old','src-3',300,%d,'message','assistant','reviewed already','{}'),
+		 (101,'claude-code:dev1:s-old','src-3',400,%d,'message','assistant','needs review','{}'),
+		 (102,'claude-code:dev1:s-old','src-3',500,%d,'message','assistant','also needs review','{}')`,
 			settled1+1000, settled1+2000, settled1+3000, settled2, settled2+1000, live,
 			old, old+1000, old+5000, oversizedRaw, old+2000, old+3000, old+4000),
 		fmt.Sprintf(`INSERT INTO events(id,session_id,source_id,source_offset,time_ms,kind,role,text,raw_json,duplicate_of) VALUES
-		 (51,'claude:dev1:s2','src-2',300,%d,'message','user',NULL,'{"type":"user","sessionId":"s2"}',4)`, old),
+		 (51,'claude-code:dev1:s2','src-2',300,%d,'message','user',NULL,'{"type":"user","sessionId":"s2"}',4)`, old),
 		fmt.Sprintf(`INSERT INTO workspaces(device_id,path,repo,observed_at_ms) VALUES('dev1','/gone',NULL,%d)`, old),
-		`INSERT INTO session_token_usage VALUES('claude:dev1:s1','msg-1',110,20,30,40)`,
+		`INSERT INTO session_token_usage VALUES('claude-code:dev1:s1','msg-1',110,20,30,40)`,
 		`INSERT INTO event_annotations VALUES(100,'security','review','{"status":"reviewed"}','dev1',1,1)`,
 		`INSERT INTO event_annotations VALUES(7,'tags','garbage','{"reason":"stale model session","evidence":7}','dev1',1,1)`,
 	}
@@ -176,8 +176,8 @@ func TestPublishedRecipesRunVerbatim(t *testing.T) {
 	}
 
 	resume1 := find("AND EXISTS (SELECT 1 FROM events_settled")
-	if len(resume1.Rows) != 1 || resume1.Rows[0][0] != "claude:dev1:s1" {
-		t.Fatalf("resume step 1 = %v, want the settled session claude:dev1:s1 over the newer live one", resume1.Rows)
+	if len(resume1.Rows) != 1 || resume1.Rows[0][0] != "claude-code:dev1:s1" {
+		t.Fatalf("resume step 1 = %v, want the settled session claude-code:dev1:s1 over the newer live one", resume1.Rows)
 	}
 
 	resume2 := eventIDs(find("duplicate_of IS NULL"))
@@ -189,8 +189,14 @@ func TestPublishedRecipesRunVerbatim(t *testing.T) {
 	if ids := eventIDs(fts); !slices.Equal(ids, []int64{2}) {
 		t.Fatalf("full-text recipe = %v, want only the event seeded with both terms", ids)
 	}
-	if excerpt, ok := fts.Rows[0][3].(string); !ok || !strings.Contains(excerpt, "[authentication]") {
-		t.Fatalf("full-text snippet = %v, want highlighted match", fts.Rows[0][3])
+	if agent, ok := fts.Rows[0][1].(string); !ok || agent != "claude-code" {
+		t.Fatalf("full-text agent = %v, want claude-code", fts.Rows[0][1])
+	}
+	if utc, ok := fts.Rows[0][3].(string); !ok || len(utc) != len("2006-01-02 15:04:05") || utc[4] != '-' || utc[13] != ':' {
+		t.Fatalf("full-text utc_time = %v, want formatted UTC timestamp", fts.Rows[0][3])
+	}
+	if excerpt, ok := fts.Rows[0][4].(string); !ok || !strings.Contains(excerpt, "[authentication]") {
+		t.Fatalf("full-text snippet = %v, want highlighted match", fts.Rows[0][4])
 	}
 
 	ftsCount := find("count(DISTINCT e.session_id)")
@@ -198,14 +204,14 @@ func TestPublishedRecipesRunVerbatim(t *testing.T) {
 		t.Fatalf("count recipe = %v, want 1 session and 1 event", ftsCount.Rows)
 	}
 
-	byAgentWindow := find("s.agent = 'claude'")
+	byAgentWindow := find("s.agent = 'claude-code'")
 	var agentWindowIDs []string
 	for _, row := range byAgentWindow.Rows {
 		agentWindowIDs = append(agentWindowIDs, row[0].(string))
 	}
 	slices.Sort(agentWindowIDs)
-	if !slices.Equal(agentWindowIDs, []string{"claude:dev1:s-live", "claude:dev1:s1", "claude:dev1:s2", "claude:laptop:s-lap"}) {
-		t.Fatalf("agent-window recipe = %v, want the four recent claude sessions", agentWindowIDs)
+	if !slices.Equal(agentWindowIDs, []string{"claude-code:dev1:s-live", "claude-code:dev1:s1", "claude-code:dev1:s2", "claude-code:laptop:s-lap"}) {
+		t.Fatalf("agent-window recipe = %v, want the four recent claude-code sessions", agentWindowIDs)
 	}
 
 	var modelSessions []string
@@ -213,12 +219,12 @@ func TestPublishedRecipesRunVerbatim(t *testing.T) {
 		modelSessions = append(modelSessions, row[0].(string))
 	}
 	slices.Sort(modelSessions)
-	if !slices.Equal(modelSessions, []string{"claude:dev1:s1", "claude:laptop:s-lap"}) {
+	if !slices.Equal(modelSessions, []string{"claude-code:dev1:s1", "claude-code:laptop:s-lap"}) {
 		t.Fatalf("model recipe = %v, want exactly the two seeded claude-sonnet-4-5 sessions", modelSessions)
 	}
 
 	device := find("s.device_id = 'laptop'")
-	if len(device.Rows) != 1 || device.Rows[0][0] != "claude:laptop:s-lap" {
+	if len(device.Rows) != 1 || device.Rows[0][0] != "claude-code:laptop:s-lap" {
 		t.Fatalf("device recipe = %v, want exactly the seeded laptop session", device.Rows)
 	}
 
@@ -248,7 +254,7 @@ func TestPublishedRecipesRunVerbatim(t *testing.T) {
 	}
 
 	noRepo := find("w.repo IS NULL")
-	if len(noRepo.Rows) != 1 || noRepo.Rows[0][0] != "claude:dev1:s-gone" {
+	if len(noRepo.Rows) != 1 || noRepo.Rows[0][0] != "claude-code:dev1:s-gone" {
 		t.Fatalf("no-repository recipe = %v, want only the seeded gone session", noRepo.Rows)
 	}
 
@@ -257,7 +263,7 @@ func TestPublishedRecipesRunVerbatim(t *testing.T) {
 		emptyIDs = append(emptyIDs, row[0].(string))
 	}
 	slices.Sort(emptyIDs)
-	if !slices.Equal(emptyIDs, []string{"claude:dev1:s-gone", "claude:dev1:s-live", "claude:laptop:s-lap"}) {
+	if !slices.Equal(emptyIDs, []string{"claude-code:dev1:s-gone", "claude-code:dev1:s-live", "claude-code:laptop:s-lap"}) {
 		t.Fatalf("empty-sessions recipe = %v, want the three sessions holding at most one event", emptyIDs)
 	}
 
@@ -272,7 +278,7 @@ func TestPublishedRecipesRunVerbatim(t *testing.T) {
 	}
 
 	marked := find("a.key = 'garbage'")
-	if len(marked.Rows) != 1 || marked.Rows[0][0] != "claude:dev1:s-old" || marked.Rows[0][3] != "dev1" {
+	if len(marked.Rows) != 1 || marked.Rows[0][0] != "claude-code:dev1:s-old" || marked.Rows[0][3] != "dev1" {
 		t.Fatalf("marked-sessions recipe = %v, want s-old marked by dev1", marked.Rows)
 	}
 }

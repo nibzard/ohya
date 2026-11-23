@@ -104,24 +104,24 @@ Tables:
 
 Schema inspection: SELECT sql FROM sqlite_master WHERE type = 'table'; read-only PRAGMAs (table_info, table_xinfo, table_list, index_list, index_info, index_xinfo, foreign_key_list, database_list, function_list, module_list, pragma_list, collation_list); EXPLAIN QUERY PLAN.
 
-Recipes (prefer substr/snippet to keep results small; use covering subqueries on events_settled before sorting by time_ms):
+Recipes (prefer substr/snippet to keep results small; format *_ms with datetime(col/1000, 'unixepoch'); use covering subqueries on events_settled before sorting by time_ms):
 
 Recent sessions:
-SELECT id, agent, substr(first_prompt, 1, 160) AS first_prompt, last_event_at_ms, event_count FROM sessions ORDER BY last_event_at_ms DESC LIMIT 5;
+SELECT id, agent, substr(first_prompt, 1, 160) AS first_prompt, datetime(last_event_at_ms/1000, 'unixepoch') AS last_utc, event_count FROM sessions ORDER BY last_event_at_ms DESC LIMIT 5;
 
 Project sessions across devices (lookup repo in workspaces by cwd or normalize git origin to host/path):
-SELECT device_id, agent, cwd, substr(first_prompt, 1, 160) AS first_prompt, last_event_at_ms FROM sessions
+SELECT device_id, agent, cwd, substr(first_prompt, 1, 160) AS first_prompt, datetime(last_event_at_ms/1000, 'unixepoch') AS last_utc FROM sessions
 WHERE repo = 'github.com/owner/name' ORDER BY last_event_at_ms DESC LIMIT 10;
 
-Sessions by agent and time window (agents: claude, codex, pi, antigravity; UTC day cutoff via CAST(strftime('%%s','2026-11-20') AS INTEGER)*1000):
-SELECT s.id, s.device_id, s.repo, substr(s.first_prompt, 1, 160) AS first_prompt, s.last_event_at_ms
+Sessions by agent and time window (agents: claude-code, codex, pi, antigravity; UTC day cutoff via CAST(strftime('%%s','2026-11-20') AS INTEGER)*1000):
+SELECT s.id, s.device_id, s.repo, substr(s.first_prompt, 1, 160) AS first_prompt, datetime(s.last_event_at_ms/1000, 'unixepoch') AS last_utc
 FROM sessions s
-WHERE s.agent = 'claude'
+WHERE s.agent = 'claude-code'
   AND s.last_event_at_ms >= (CAST(strftime('%%s','now') AS INTEGER) - 7*86400) * 1000
 ORDER BY s.last_event_at_ms DESC LIMIT 20;
 
 Project recent events (covering subquery avoids scanning wide rows):
-SELECT e.id, e.session_id, e.time_ms, e.kind, e.role, substr(e.text, 1, 300) AS excerpt
+SELECT e.id, e.session_id, datetime(e.time_ms/1000, 'unixepoch') AS utc_time, e.kind, e.role, substr(e.text, 1, 300) AS excerpt
 FROM events e WHERE e.id IN (
   SELECT ev.id FROM sessions s JOIN events_settled ev ON ev.session_id = s.id
   WHERE s.repo = 'github.com/owner/name'
@@ -129,7 +129,7 @@ FROM events e WHERE e.id IN (
 ORDER BY e.time_ms DESC;
 
 Date-bounded recall (keep both session and event bounds):
-SELECT e.id, e.session_id, e.time_ms, e.kind, e.role, substr(e.text, 1, 300) AS excerpt
+SELECT e.id, e.session_id, datetime(e.time_ms/1000, 'unixepoch') AS utc_time, e.kind, e.role, substr(e.text, 1, 300) AS excerpt
 FROM events e WHERE e.id IN (
   SELECT ev.id FROM sessions s JOIN events_settled ev ON ev.session_id = s.id
   WHERE s.last_event_at_ms >= (CAST(strftime('%%s','now') AS INTEGER) - 7*86400) * 1000
@@ -138,21 +138,21 @@ FROM events e WHERE e.id IN (
 ORDER BY e.time_ms DESC;
 
 Resume, step 1 — repo's last settled session:
-SELECT s.id, s.agent, s.device_id, substr(s.first_prompt, 1, 160) AS first_prompt, s.last_event_at_ms
+SELECT s.id, s.agent, s.device_id, substr(s.first_prompt, 1, 160) AS first_prompt, datetime(s.last_event_at_ms/1000, 'unixepoch') AS last_utc
 FROM sessions s WHERE s.repo = 'github.com/owner/name'
   AND EXISTS (SELECT 1 FROM events_settled e WHERE e.session_id = s.id)
 ORDER BY s.last_event_at_ms DESC LIMIT 1;
 
 Resume, step 2 — that session's newest 50 records oldest-first:
-SELECT e.id, e.time_ms, e.kind, e.role, e.tool_name, substr(e.text, 1, 400) AS excerpt
+SELECT e.id, datetime(e.time_ms/1000, 'unixepoch') AS utc_time, e.kind, e.role, e.tool_name, substr(e.text, 1, 400) AS excerpt
 FROM events e WHERE e.id IN (
-  SELECT ev.id FROM events ev WHERE ev.session_id = 'claude:dev1:s1'
+  SELECT ev.id FROM events ev WHERE ev.session_id = 'claude-code:dev1:s1'
     AND ev.duplicate_of IS NULL
   ORDER BY ev.time_ms DESC, ev.id DESC LIMIT 50)
 ORDER BY e.time_ms, e.id;
 
 Full-text search (BM25 + centered snippet). Wrap punctuation-bearing MATCH terms (hyphens, slashes, apostrophes) in double quotes such as '"auth-refresh"' (bare '-name' fails with no such column):
-SELECT e.id, s.cwd, e.time_ms, snippet(events_fts, 0, '[', ']', '...', 24) AS excerpt
+SELECT e.id, s.agent, s.cwd, datetime(e.time_ms/1000, 'unixepoch') AS utc_time, snippet(events_fts, 0, '[', ']', '...', 24) AS excerpt
 FROM events_fts JOIN events_settled e ON e.id = events_fts.rowid
 JOIN sessions s ON s.id = e.session_id
 WHERE events_fts MATCH 'authentication AND refresh'
@@ -164,7 +164,7 @@ FROM events_fts JOIN events_settled e ON e.id = events_fts.rowid
 WHERE events_fts MATCH 'authentication AND refresh';
 
 Inspect one record by id:
-SELECT id, kind, role, tool_name, time_ms, raw_json FROM events WHERE id = 42;
+SELECT id, kind, role, tool_name, datetime(time_ms/1000, 'unixepoch') AS utc_time, raw_json FROM events WHERE id = 42;
 
 More guides (MCP resources; also in DB.md):
 - %s — 3-step audit, mark (annotate tags.garbage), and hand over ohya purge --marked tags.garbage

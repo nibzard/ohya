@@ -62,14 +62,14 @@ func GarbageAuditGuide() string {
 	return `Garbage audit — answer "clean up the data" in three steps: audit, mark, hand over. You cannot delete anything: the sql tool is read-only by design, so a prompt-injected transcript can never erase stored history, including evidence of itself. Find the garbage with the queries below, mark the deciding event of each garbage session with the annotate tool, then present the exact ohya purge commands for the operator to run.
 
 Sources that stopped syncing (never committed a batch, or idle for 30 or more days):
-SELECT src.id, src.agent, src.device_id, src.path, src.updated_at_ms
+SELECT src.id, src.agent, src.device_id, src.path, datetime(src.updated_at_ms/1000, 'unixepoch') AS updated_utc
 FROM sources src
 WHERE src.updated_at_ms IS NULL
    OR src.updated_at_ms < (CAST(strftime('%s','now') AS INTEGER) - 30*86400) * 1000
 ORDER BY src.updated_at_ms, src.id;
 
 Sessions whose working directory resolved to no repository — the device observed that cwd and found none; check the path before calling it garbage:
-SELECT s.id, s.agent, s.device_id, s.cwd, s.last_event_at_ms
+SELECT s.id, s.agent, s.device_id, s.cwd, datetime(s.last_event_at_ms/1000, 'unixepoch') AS last_utc
 FROM sessions s JOIN workspaces w ON w.device_id = s.device_id AND w.path = s.cwd
 WHERE w.repo IS NULL
 ORDER BY s.last_event_at_ms DESC LIMIT 50;
@@ -84,25 +84,25 @@ FROM events e WHERE e.source_id = 'src-3' AND length(e.raw_json) > 65536
 ORDER BY bytes DESC;
 
 Empty or single-record sessions — aborted starts and failed first calls. sessions.event_count is the maintained total, so this reads only the sessions table; synthetic ohya-synthetic companions follow their source and are never selectable:
-SELECT s.id, s.agent, s.device_id, s.last_event_at_ms, s.event_count
+SELECT s.id, s.agent, s.device_id, datetime(s.last_event_at_ms/1000, 'unixepoch') AS last_utc, s.event_count
 FROM sessions s
 WHERE s.native_id NOT LIKE 'ohya-synthetic:%' AND s.event_count <= 1
 ORDER BY s.event_count, s.last_event_at_ms DESC, s.id LIMIT 50;
 
 Replay copies inside one session you now suspect (byte-identical re-pages; 0 means none):
 SELECT count(*) AS replay_copies FROM events e
-WHERE e.session_id = 'claude:dev1:s2' AND e.duplicate_of IS NOT NULL;
+WHERE e.session_id = 'claude-code:dev1:s2' AND e.duplicate_of IS NOT NULL;
 
 Model distribution — a stale model shows as its own row with old activity; confirm before marking its sessions:
-SELECT s.model, count(*) AS sessions, min(s.last_event_at_ms) AS oldest, max(s.last_event_at_ms) AS newest
+SELECT s.model, count(*) AS sessions, datetime(min(s.last_event_at_ms)/1000, 'unixepoch') AS oldest_utc, datetime(max(s.last_event_at_ms)/1000, 'unixepoch') AS newest_utc
 FROM sessions s WHERE s.model IS NOT NULL GROUP BY s.model
-ORDER BY oldest, s.model;
+ORDER BY min(s.last_event_at_ms), s.model;
 
 Marking: annotate the deciding event of each session you call garbage — namespace tags, key garbage, and a value stating the reason and the evidence event id. Marks are persistent and writer-attributed, which is the owner's audit trail:
 {"operations":[{"op":"upsert","event_id":42,"namespace":"tags","key":"garbage","value":{"reason":"aborted start, single record","evidence":42}}]}
 
 Review what is marked before the owner runs anything:
-SELECT DISTINCT s.id, s.agent, s.device_id, a.writer_id, s.last_event_at_ms
+SELECT DISTINCT s.id, s.agent, s.device_id, a.writer_id, datetime(s.last_event_at_ms/1000, 'unixepoch') AS last_utc
 FROM event_annotations a
 JOIN events e ON e.id = a.event_id
 JOIN sessions s ON s.id = e.session_id
@@ -120,12 +120,12 @@ func AnalyticsReviewGuide(o EngineOptions) string {
 	return fmt.Sprintf(`Analytics, filtering, and review pagination recipes for the ohya sql tool.
 
 One model's sessions (discover values first with SELECT DISTINCT model FROM sessions; NULL means the records carried no model):
-SELECT s.id, s.agent, s.device_id, substr(s.first_prompt, 1, 160) AS first_prompt, s.last_event_at_ms
+SELECT s.id, s.agent, s.device_id, substr(s.first_prompt, 1, 160) AS first_prompt, datetime(s.last_event_at_ms/1000, 'unixepoch') AS last_utc
 FROM sessions s WHERE s.model = 'claude-sonnet-4-5'
 ORDER BY s.last_event_at_ms DESC LIMIT 10;
 
 One device's sessions (discover values first with SELECT DISTINCT device_id FROM sessions; name the device of each session you cite):
-SELECT s.id, s.agent, s.repo, substr(s.first_prompt, 1, 160) AS first_prompt, s.last_event_at_ms
+SELECT s.id, s.agent, s.repo, substr(s.first_prompt, 1, 160) AS first_prompt, datetime(s.last_event_at_ms/1000, 'unixepoch') AS last_utc
 FROM sessions s WHERE s.device_id = 'laptop'
 ORDER BY s.last_event_at_ms DESC LIMIT 10;
 

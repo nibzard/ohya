@@ -416,8 +416,9 @@ with `no such column: refresh` (other bare punctuation, for example `/`,
 is an FTS5 syntax error).
 
 ```sql
-SELECT s.repo, s.agent, s.device_id,
-       e.time_ms, snippet(events_fts, 0, '[', ']', '...', 24) AS excerpt
+SELECT e.id, s.repo, s.agent, s.device_id,
+       datetime(e.time_ms/1000, 'unixepoch') AS utc_time,
+       snippet(events_fts, 0, '[', ']', '...', 24) AS excerpt
 FROM events_fts
 JOIN events e ON e.id = events_fts.rowid
 JOIN sessions s ON s.id = e.session_id
@@ -448,7 +449,7 @@ subquery first: it sorts on the covering `events_session_time` index without
 reading `events` rows, and the outer query reads only the rows it returns.
 
 ```sql
-SELECT e.id, e.session_id, e.time_ms, e.kind, e.role, substr(e.text, 1, 300) AS excerpt
+SELECT e.id, e.session_id, datetime(e.time_ms/1000, 'unixepoch') AS utc_time, e.kind, e.role, substr(e.text, 1, 300) AS excerpt
 FROM events e WHERE e.id IN (
   SELECT ev.id FROM sessions s JOIN events_settled ev ON ev.session_id = s.id
   WHERE s.cwd = '/home/agent/project' OR s.repo = 'github.com/owner/name'
