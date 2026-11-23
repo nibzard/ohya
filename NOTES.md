@@ -2396,4 +2396,44 @@ How to use this file:
     med 29.4 s -> 14.3 s (-51%, beating raw 41.6 s), `paraphrase` wall
     med 48.5 s -> 27.8 s (-43%), `negative` input tok med 21.5k -> 8.4k
     (-61%).
+  - Atuin `v18.25.1` (`2026-11-20`) head-to-head exercise (2026-11-23,
+    `recall-runs/20261123T0001Z/atuin-compare.md`, same 12 questions x 3
+    repeats = 36 runs on `glm-5.3`, Atuin fully isolated in `/tmp/atuin-bench/`
+    with `auto_sync = false`):
+    - Import & footprint: local `claude-code` (3,041 threads, 2m11s), `codex`
+      (2,517 threads, 7m35s), `pi` (89 threads, 0.8s) = 5,647 threads in
+      9m46s, 3.7 GB on disk (`2.2 GB records.db` + `1.5 GB threads.db`,
+      zstd-compressed `content_z`). Requires running `atuin daemon` even for
+      read-only MCP queries. No Antigravity (`agy`) harness, no `threads`
+      delete/purge subcommand. Upfront MCP schema: 16,879 B (~4,220 tok, 6
+      tools) vs ohya's 7,374 B (~1,844 tok). Important correction vs
+      2026-11-19 note: `v18.25.1` now stores zstd-compressed `ToolResult`
+      payloads in `messages.content_z` and FTS-indexes them (`messages_fts`
+      has 1.51M rows), even though `atuin_threads_read` collapses tool runs
+      unless `roles` includes `tool`.
+    - Shared 11 local questions (33 runs/arm, apples-to-apples): `raw`
+      33/33 (1,263 s, 279 calls, 524 KB, $6.05), `atuin` 33/33 (779 s, 127
+      calls, 197 KB, 22.9k out tok, $3.79, $0.115/correct), `ohya` 33/33
+      (922 s, 117 calls, 182 KB, 35.6k out tok, $4.15, $0.126/correct).
+    - All 12 questions incl. remote-only `x1-crossdevice-uploader` (36
+      runs/arm): `raw` 35/36 (1 timeout, 1,792 s, $8.03), `atuin` 35/36 (1
+      timeout, 1,235 s, 544 KB, $5.25 + unbilled timeout), `ohya` **36/36**
+      (0 timeouts, **992 s**, **128 calls**, **207 KB**, **$4.53**,
+      **$0.126/correct**). Note: `raw` and `atuin` only passed 2/3 on `x1`
+      via the local benchmark-authoring session echo; `ohya` read the actual
+      remote MacBook session in 23.4 s / 4 calls.
+    - Actionable finding for ohya: on local FTS lookups, ohya used fewer
+      tool calls (117 vs 127), fewer result bytes (182 KB vs 197 KB), and
+      fewer cache-read tokens (1.79M vs 1.89M), yet emitted +55% more output
+      tokens (35.6k vs 22.9k) and 18% more wall time (922 s vs 779 s).
+      Trace inspection showed two causes: (1) composing SQL takes more
+      output/thinking tokens than a 2-arg search tool, and (2) ohya's FTS
+      recipe returns raw `e.time_ms` epoch-ms instead of ISO timestamps
+      (`datetime(e.time_ms/1000, 'unixepoch')`) and omits `s.agent`, causing
+      extra thinking tokens and follow-up queries on date/agent questions
+      (`c4-timeboxed-pi`, `r3-timeboxed-incident`). Meanwhile ohya cleanly
+      beat Atuin on `c6-aggregate` (14.3 s / 0.3 KB vs 30.0 s / 2.3 KB),
+      `c8-negative` (17.0 s / 2.5 KB vs 31.6 s / 13.3 KB), `c2-paraphrase`
+      (11.9 s vs 20.7 s), `c5-correction` (14.9 s vs 18.8 s), and
+      cross-device `x1` (23.4 s vs 165.5 s / timeout).
 
