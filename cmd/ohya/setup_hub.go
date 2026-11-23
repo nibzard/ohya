@@ -103,9 +103,14 @@ func finishHubSetup(state string, ttl time.Duration) (*setup.HubJoin, error) {
 }
 
 func printHubJoin(stdout io.Writer, hub setup.HubJoin) {
-	fmt.Fprintf(stdout, "ohya: hub: relay region %s, node key %s\n", hub.RelayRegion, hub.NodeKey)
-	fmt.Fprintf(stdout, "ohya: join code (secret, one use, expires %s):\n%s\n", hub.ExpiresAt, hub.Code)
-	fmt.Fprintf(stdout, "ohya: on each device run: %s\n", hub.DeviceCommand)
+	s := styleFor(stdout)
+	fmt.Fprintf(stdout, "\n%s\n", s.section("Hub ready"))
+	writeKeyValues(stdout, s, "  ", [][2]string{
+		{"Relay region", hub.RelayRegion},
+		{"Node key", hub.NodeKey},
+	})
+	fmt.Fprintf(stdout, "\n%s %s\n%s\n", s.section("Join code"), s.yellow("(secret, one use, expires "+hub.ExpiresAt+")"), hub.Code)
+	fmt.Fprintf(stdout, "\n%s\n%s\n", s.section("On each device, run:"), hub.DeviceCommand)
 }
 
 func isVersionMismatch(err error) bool {

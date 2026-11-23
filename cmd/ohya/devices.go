@@ -103,8 +103,9 @@ func runDevicesInvite(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return jsonFailurePrint(*flags.json, stdout, devicesInviteSpec.name, err)
 	}
-	fmt.Fprintf(stderr, "expires %s (one device may use the invitation once; the hub address does not expire); join with: ohya join <code>\n",
-		msTime(expiresAtMS))
+	es := styleFor(stderr)
+	fmt.Fprintf(stderr, "%s %s\n", es.bold("Join code"), es.dim(fmt.Sprintf("one device, one use, expires %s; the hub address does not expire", msTime(expiresAtMS))))
+	fmt.Fprintf(stderr, "%s\n", es.dim("on the device, run: ohya join <code>"))
 	if *flags.json {
 		return printJSON(stdout, devicesInviteSpec.name,
 			inviteJSONData{Code: code, ExpiresAt: msTime(expiresAtMS)})

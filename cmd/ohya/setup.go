@@ -290,24 +290,28 @@ func runUninstallCommand(args []string, stdout, stderr io.Writer) error {
 	return printSetupReport(stdout, uninstallSpec.name, *asJSON, report, 0, err)
 }
 
+const setupComponentWidth = 14
+
 func printSetupResult(stdout io.Writer, r setup.Result) {
 	s := styleFor(stdout)
-	status := r.Status
+	mark, status := s.dim("·"), r.Status
 	switch r.Status {
 	case "configured", "created", "started", "restarted", "removed", "updated":
-		status = s.green(r.Status)
+		mark, status = s.boldGreen("✓"), s.green(r.Status)
 	case "unchanged", "skipped", "unmanaged":
 		status = s.dim(r.Status)
 	case "failed":
-		status = s.boldRed(r.Status)
+		mark, status = s.boldRed("✗"), s.boldRed(r.Status)
+	case "planned":
+		mark, status = s.cyan("○"), s.cyan(r.Status)
 	default:
-		status = s.yellow(r.Status)
+		mark, status = s.boldYellow("▲"), s.yellow(r.Status)
 	}
-	fmt.Fprintf(stdout, "ohya: %s: %s", s.bold(r.Component), status)
+	line := fmt.Sprintf("  %s %s %s", mark, padRight(s.bold(r.Component), setupComponentWidth), padRight(status, 10))
 	if r.Detail != "" {
-		fmt.Fprintf(stdout, " %s %s", s.dim("—"), strings.ReplaceAll(r.Detail, "\n", " "))
+		line += " " + strings.ReplaceAll(r.Detail, "\n", " ")
 	}
-	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, strings.TrimRight(line, " "))
 }
 
 func printSetupReport(stdout io.Writer, command string, asJSON bool, report setup.Report, printed int, err error) error {
