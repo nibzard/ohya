@@ -2436,4 +2436,24 @@ How to use this file:
       `c8-negative` (17.0 s / 2.5 KB vs 31.6 s / 13.3 KB), `c2-paraphrase`
       (11.9 s vs 20.7 s), `c5-correction` (14.9 s vs 18.8 s), and
       cross-device `x1` (23.4 s vs 165.5 s / timeout).
+  - Targeted `v0.6.0` verification (`66ccefc`, 2026-11-23,
+    `recall-runs/20261123T-v060-targeted/compare.md`, 5 affected questions x
+    3 repeats = 15 runs on `glm-5.3`: `r1`, `r2`, `r3`, `c4`, `c7` after
+    landing UTC timestamps, `s.agent`, `e.session_id`, `= never LIKE`,
+    context-around-hit, and 1-hit-per-session FTS): `ohya` Run 2 -> `v0.6.0`
+    held 15/15 correct while cutting total wall 595 s -> **439 s (-26%)**,
+    calls 66 -> **55 (-17%)**, input tokens 247.8k -> **199.7k (-19%; 17%
+    under Atuin's 240.0k)**, output tokens 25.1k -> **19.6k (-22%)**,
+    tool-result bytes 152 KB -> **122 KB (-20%; under Atuin's 129 KB)**, and
+    cost $2.39 -> **$1.96 (-18%)**. Largest median gains: `c4-timeboxed-pi`
+    43.4 s -> 18.6 s (-57%, 7.1 KB -> 1.5 KB), `c7-multihop` 31.1 s -> 22.6 s
+    (-27%, out tok 1,875 -> 966), `r1-needle-incident` 35.2 s -> 26.6 s
+    (-24%), `r3-timeboxed-incident` 31.4 s -> 26.7 s (calls 5 -> 3, zero 5 s
+    SQL timeouts). The -$0.43 drop closes the local-only cost gap vs Atuin
+    `v18.25.1` (implying ~$3.72 vs $3.79 across the 11 shared local
+    questions).
+  - `v0.6.0` released on 2026-11-23 from `66ccefc` (CI run 45160837836, all 7
+    jobs green; `make check` + `make tla` zero errors); local upgrade via
+    `sh install.sh` succeeded end to end (`ohya doctor` 20/20 `ok`, all four
+    owned skills installed, `ohya-serve.service` restarted).
 
