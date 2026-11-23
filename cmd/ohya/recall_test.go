@@ -236,7 +236,7 @@ func TestShowPrintsNewestEvents(t *testing.T) {
 		time.UnixMilli(1763000000000).UTC().Format(time.RFC3339),
 		time.UnixMilli(1763000009000).UTC().Format(time.RFC3339),
 		"5 events",
-		"newest 3 events (oldest first):",
+		"Newest 3 events, oldest first",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("show output lacks %q:\n%s", want, out)
@@ -279,7 +279,7 @@ func eventLines(t *testing.T, out string) []string {
 	var lines []string
 	inEvents := false
 	for _, line := range strings.Split(out, "\n") {
-		if strings.HasPrefix(line, "newest ") {
+		if strings.HasPrefix(line, "Newest ") {
 			inEvents = true
 			continue
 		}
@@ -349,8 +349,8 @@ func TestRecallParsesFlagsOnEitherSideOfPositional(t *testing.T) {
 	}{
 		{"search flags before", []string{"search", "--db", db, "refresh"}, "refresh token"},
 		{"search flags after", []string{"search", "refresh", "--db", db}, "refresh token"},
-		{"show flags before", []string{"show", "--db", db, "--last", "2", "claude-code:dev1:sess-1"}, "newest 2 events"},
-		{"show flags after", []string{"show", "claude-code:dev1:sess-1", "--db", db, "--last", "2"}, "newest 2 events"},
+		{"show flags before", []string{"show", "--db", db, "--last", "2", "claude-code:dev1:sess-1"}, "Newest 2 events"},
+		{"show flags after", []string{"show", "claude-code:dev1:sess-1", "--db", db, "--last", "2"}, "Newest 2 events"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

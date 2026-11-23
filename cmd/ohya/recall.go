@@ -750,7 +750,6 @@ func printSearchResult(w io.Writer, res mcpserver.Result) {
 		fmt.Fprintln(w, s.dim("no matches"))
 		return
 	}
-	sep := " " + s.bullet() + " "
 	for i, row := range res.Rows {
 		if len(row) != 6 {
 			fmt.Fprintf(w, "unexpected result width %d; want 6 columns\n", len(row))
@@ -759,21 +758,24 @@ func printSearchResult(w io.Writer, res mcpserver.Result) {
 		if i > 0 {
 			fmt.Fprintln(w)
 		}
-		meta := []string{
-			s.bold("#" + recallValue(row[0])),
-			s.bold(recallValue(row[1])),
-			s.cyan(recallValue(row[2])),
-		}
-		if repo := recallDash(row[3]); repo != "-" {
+		meta := []string{s.bold("#" + recallValue(row[0])), s.cyan(recallValue(row[2]))}
+		if repo := recallValue(row[3]); repo != "" {
 			meta = append(meta, repo)
 		}
 		meta = append(meta, s.dim(recallTime(row[4])))
-		fmt.Fprintln(w, strings.Join(meta, sep))
-		fmt.Fprintf(w, "  %s\n", excerptText(recallValue(row[5])))
+		writeRecordLines(w, s, meta, excerptText(recallValue(row[5])), recallValue(row[1]))
 	}
 	if res.Truncated {
 		fmt.Fprintf(w, "\n%s\n", s.yellow(fmt.Sprintf("; result truncated (%s)", res.TruncationReason)))
 	}
+}
+
+func writeRecordLines(w io.Writer, s cliStyle, meta []string, text, sessionID string) {
+	fmt.Fprintln(w, s.fit(strings.Join(meta, " "+s.bullet()+" "), 0))
+	if text != "" {
+		fmt.Fprintf(w, "  %s\n", s.fit(text, 2))
+	}
+	fmt.Fprintf(w, "  %s\n", s.dim("ohya show "+sessionID))
 }
 
 func printShowResult(w io.Writer, header, events mcpserver.Result) {
@@ -792,14 +794,14 @@ func printShowResult(w io.Writer, header, events mcpserver.Result) {
 		{"Branch", recallDash(row[6])},
 		{"Model", recallDash(row[7])},
 		{"Time", fmt.Sprintf("%s → %s (%s events)", recallTime(row[9]), recallTime(row[10]), recallValue(row[11]))},
-		{"Prompt", excerptText(recallValue(row[8]))},
+		{"Prompt", s.fit(excerptText(recallValue(row[8])), 8)},
 	}
 	writeKeyValues(w, s, "", meta)
 	if events.RowCount == 0 {
 		fmt.Fprintf(w, "\n%s\n", s.dim("no events"))
 		return
 	}
-	fmt.Fprintf(w, "\n%s\n", s.section(fmt.Sprintf("newest %d events (oldest first):", events.RowCount)))
+	fmt.Fprintf(w, "\n%s\n", s.section(fmt.Sprintf("Newest %d events, oldest first", events.RowCount)))
 	tbl := cliTable{
 		indent:  "  ",
 		headers: []string{"ID", "TIME", "KIND", "EXCERPT"},
@@ -829,7 +831,6 @@ func printSessionsResult(w io.Writer, res mcpserver.Result) {
 		fmt.Fprintln(w, s.dim("no sessions"))
 		return
 	}
-	sep := " " + s.bullet() + " "
 	for i, row := range res.Rows {
 		if len(row) < 12 {
 			fmt.Fprintf(w, "unexpected session width %d; want 13 columns\n", len(row))
@@ -838,38 +839,32 @@ func printSessionsResult(w io.Writer, res mcpserver.Result) {
 		if i > 0 {
 			fmt.Fprintln(w)
 		}
-		styledState := s.dim("settled")
-		if len(row) > 12 {
-			if settled, ok := recallBool(row[12]); ok && !settled {
-				styledState = s.green("active")
-			}
+		meta := []string{s.cyan(recallValue(row[1]))}
+		if repo := recallValue(row[4]); repo != "" {
+			meta = append(meta, s.bold(repo))
+		} else if cwd := recallValue(row[5]); cwd != "" {
+			meta = append(meta, cwd)
 		}
-		parts := []string{
-			s.bold(recallValue(row[0])),
-			s.cyan(recallValue(row[1])),
-			s.dim(recallValue(row[2])),
-		}
-		if repo := recallDash(row[4]); repo != "-" {
-			parts = append(parts, repo)
-		}
-		parts = append(parts,
-			s.dim(recallTime(row[10])),
-			s.dim(recallValue(row[11])+" events"),
-			styledState,
-		)
-		fmt.Fprintln(w, strings.Join(parts, sep))
-		if prompt := excerptText(recallValue(row[8])); prompt != "" {
-			fmt.Fprintf(w, "  %s\n", s.dim(prompt))
-		}
+		meta = append(meta, s.dim(recallTime(row[10])), s.dim(recallValue(row[11])+" events"), sessionState(s, row))
+		writeRecordLines(w, s, meta, excerptText(recallValue(row[8])), recallValue(row[0]))
 	}
 	if res.Truncated {
 		fmt.Fprintf(w, "\n%s\n", s.yellow(fmt.Sprintf("; result truncated (%s)", res.TruncationReason)))
 	}
 }
 
+func sessionState(s cliStyle, row []any) string {
+	if len(row) > 12 {
+		if settled, ok := recallBool(row[12]); ok && !settled {
+			return s.green("active")
+		}
+	}
+	return s.dim("settled")
+}
+
 func eventLabel(kind, role, tool string) string {
 	label := kind
-	if role != "" {
+	if role != "" && role != kind {
 		label += "/" + role
 	}
 	if tool != "" {

@@ -250,3 +250,22 @@ func TestDoctorExplicitRemoteJoinStateDoesNotDoubleAppendJoin(t *testing.T) {
 		t.Fatalf("device_identity finding = %+v (all output:\n%s), want ok with device %s", f, out, deviceID)
 	}
 }
+
+func TestCollapseSetupOKKeepsProblemsVisible(t *testing.T) {
+	findings := []finding{
+		{Check: "schema_version", Severity: sevOK, Detail: "ok"},
+		{Check: "setup:service", Severity: sevOK, Detail: "owned integration is configured"},
+		{Check: "setup:claude", Severity: sevWarn, Detail: "entry changed", Remedy: "rerun ohya setup"},
+		{Check: "setup:codex", Severity: sevOK, Detail: "owned integration is configured"},
+	}
+	got := collapseSetupOK(findings)
+	if len(got) != 3 {
+		t.Fatalf("collapsed = %+v; want 3 findings", got)
+	}
+	if got[1].Check != "setup" || got[1].Detail != "2 owned integrations configured: service, codex" {
+		t.Fatalf("collapsed setup finding = %+v", got[1])
+	}
+	if got[2].Check != "setup:claude" || got[2].Severity != sevWarn {
+		t.Fatalf("warning finding lost: %+v", got[2])
+	}
+}

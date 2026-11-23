@@ -74,3 +74,58 @@ func TestCLITableAlignsPlainAndColoredEqually(t *testing.T) {
 		t.Fatalf("header width mismatch: %q", clines[0])
 	}
 }
+
+func TestStyleLeavesNonTerminalWidthUnbounded(t *testing.T) {
+	t.Setenv("COLUMNS", "50")
+	if got := styleFor(&bytes.Buffer{}).width; got != 0 {
+		t.Fatalf("non-TTY width = %d; want 0 so piped output is never cut", got)
+	}
+}
+
+func TestTruncateVisibleKeepsANSIBalanced(t *testing.T) {
+	s := cliStyle{color: true}
+	cases := []struct {
+		text  string
+		width int
+		want  string
+	}{
+		{"abcdef", 10, "abcdef"},
+		{"abcdef", 6, "abcdef"},
+		{"abcdef", 4, "abc…"},
+		{"héllo wörld", 5, "héll…"},
+	}
+	for _, tc := range cases {
+		if got := truncateVisible(tc.text, tc.width); got != tc.want {
+			t.Fatalf("truncateVisible(%q, %d) = %q; want %q", tc.text, tc.width, got, tc.want)
+		}
+	}
+	got := truncateVisible(s.dim("abcdef"), 4)
+	if visibleWidth(got) != 4 || !strings.HasSuffix(got, "…"+ansiReset) {
+		t.Fatalf("styled truncation = %q; want 4 visible cells ending in a reset", got)
+	}
+}
+
+func TestNestedStyleRestoresOuterCode(t *testing.T) {
+	s := cliStyle{color: true}
+	got := s.dim("a " + s.bold("b") + " c")
+	want := ansiDim + "a " + ansiBold + "b" + ansiReset + ansiDim + " c" + ansiReset
+	if got != want {
+		t.Fatalf("nested style = %q; want %q", got, want)
+	}
+}
+
+func TestCLITableFitsOnlyTheLastColumn(t *testing.T) {
+	s := cliStyle{width: 40}
+	tbl := cliTable{headers: []string{"ID", "TEXT"}}
+	tbl.addRow("claude-code:dev1:session-0001", strings.Repeat("word ", 20))
+	var out bytes.Buffer
+	tbl.render(&out, s)
+	for _, line := range strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n") {
+		if strings.Contains(line, "claude-code") && !strings.Contains(line, "claude-code:dev1:session-0001") {
+			t.Fatalf("identifier column was cut: %q", line)
+		}
+	}
+	if !strings.Contains(out.String(), "…") {
+		t.Fatalf("last column was not fitted:\n%s", out.String())
+	}
+}

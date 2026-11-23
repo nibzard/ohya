@@ -148,7 +148,11 @@ func runDoctorCommand(args []string, stdout, stderr io.Writer) error {
 		if detail == "" {
 			detail = "owned integration is configured"
 		}
-		findings = append(findings, finding{Check: "setup:" + item.Component, Severity: severity, Detail: detail, Remedy: "rerun ohya setup to repair owned configuration; preserve intentional user edits"})
+		f := finding{Check: "setup:" + item.Component, Severity: severity, Detail: detail}
+		if severity != sevOK {
+			f.Remedy = "rerun ohya setup to repair owned configuration; preserve intentional user edits"
+		}
+		findings = append(findings, f)
 	}
 	findings = append(findings, checkHubUnits(context.Background(), home)...)
 	if *asJSON {
@@ -600,6 +604,7 @@ func writeFindings(w io.Writer, findings []finding) {
 		}
 		return
 	}
+	findings = collapseSetupOK(findings)
 	maxCheck := 0
 	okCount, warnCount, errCount := 0, 0, 0
 	for _, f := range findings {
@@ -616,21 +621,60 @@ func writeFindings(w io.Writer, findings []finding) {
 		}
 	}
 	fmt.Fprintf(w, "%s\n\n", s.bold("ohya doctor"))
+	detailIndent := 2 + 1 + 2 + maxCheck + 2
 	for _, f := range findings {
-		fmt.Fprintf(w, "  %s  %s  %s\n", s.severityTag(f.Severity), padRight(s.bold(f.Check), maxCheck), f.Detail)
+		fmt.Fprintf(w, "  %s  %s  %s\n", s.severityTag(f.Severity), padRight(s.bold(f.Check), maxCheck), s.fit(f.Detail, detailIndent))
 		if f.Remedy != "" {
-			fmt.Fprintf(w, "     %s  %s\n", strings.Repeat(" ", maxCheck), s.dim("→ "+f.Remedy))
+			fmt.Fprintf(w, "%s%s\n", strings.Repeat(" ", detailIndent), s.dim(s.fit("→ "+f.Remedy, detailIndent)))
 		}
 	}
 	fmt.Fprintln(w)
+	counts := []string{}
+	if errCount > 0 {
+		counts = append(counts, plural(errCount, "error", "errors"))
+	}
+	if warnCount > 0 {
+		counts = append(counts, plural(warnCount, "warning", "warnings"))
+	}
+	counts = append(counts, fmt.Sprintf("%d ok", okCount))
 	switch {
 	case errCount > 0:
-		fmt.Fprintf(w, "%s %s\n", s.boldRed("✗"), s.red(fmt.Sprintf("%d error, %d warning, %d ok", errCount, warnCount, okCount)))
+		fmt.Fprintf(w, "%s %s\n", s.boldRed("✗"), s.red(strings.Join(counts, ", ")))
 	case warnCount > 0:
-		fmt.Fprintf(w, "%s %s\n", s.boldYellow("▲"), s.yellow(fmt.Sprintf("%d warning, %d ok", warnCount, okCount)))
+		fmt.Fprintf(w, "%s %s\n", s.boldYellow("▲"), s.yellow(strings.Join(counts, ", ")))
 	default:
 		fmt.Fprintf(w, "%s %s\n", s.boldGreen("✓"), s.green(fmt.Sprintf("all %d checks passed", okCount)))
 	}
+}
+
+func collapseSetupOK(findings []finding) []finding {
+	var out []finding
+	var components []string
+	at := -1
+	for _, f := range findings {
+		component, isSetup := strings.CutPrefix(f.Check, "setup:")
+		if !isSetup || f.Severity != sevOK || f.Detail != "owned integration is configured" {
+			out = append(out, f)
+			continue
+		}
+		if at < 0 {
+			at = len(out)
+			out = append(out, finding{})
+		}
+		components = append(components, component)
+	}
+	if at >= 0 {
+		out[at] = finding{Check: "setup", Severity: sevOK,
+			Detail: fmt.Sprintf("%s configured: %s", plural(len(components), "owned integration", "owned integrations"), strings.Join(components, ", "))}
+	}
+	return out
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, one)
+	}
+	return fmt.Sprintf("%d %s", n, many)
 }
 
 func hasError(findings []finding) bool {

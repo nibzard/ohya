@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"golang.org/x/term"
 )
 
 const (
@@ -21,24 +24,49 @@ const (
 	ansiBoldYellow = "\x1b[1;33m"
 )
 
+const (
+	minFitWidth  = 40
+	minFitColumn = 12
+)
+
 type cliStyle struct {
 	color bool
+	width int
 }
 
 func styleFor(w io.Writer) cliStyle {
+	return cliStyle{color: colorEnabled(w), width: terminalWidth(w)}
+}
+
+func colorEnabled(w io.Writer) bool {
 	if os.Getenv("NO_COLOR") != "" {
-		return cliStyle{}
+		return false
 	}
 	if strings.EqualFold(os.Getenv("TERM"), "dumb") {
-		return cliStyle{}
+		return false
 	}
 	if force := os.Getenv("FORCE_COLOR"); force != "" && force != "0" {
-		return cliStyle{color: true}
+		return true
 	}
 	if force := os.Getenv("CLICOLOR_FORCE"); force != "" && force != "0" {
-		return cliStyle{color: true}
+		return true
 	}
-	return cliStyle{color: isTerminalWriter(w)}
+	return isTerminalWriter(w)
+}
+
+func terminalWidth(w io.Writer) int {
+	if !isTerminalWriter(w) {
+		return 0
+	}
+	if columns, err := strconv.Atoi(os.Getenv("COLUMNS")); err == nil && columns > 0 {
+		return max(columns, minFitWidth)
+	}
+	f := w.(*os.File)
+	columns, _, err := term.GetSize(int(f.Fd()))
+	if err != nil || columns <= 0 {
+		return 0
+	}
+	return max(columns, minFitWidth)
 }
 
 func isTerminalWriter(w io.Writer) bool {
@@ -57,7 +85,14 @@ func (s cliStyle) wrap(code, text string) string {
 	if !s.color || text == "" {
 		return text
 	}
-	return code + text + ansiReset
+	return code + strings.ReplaceAll(text, ansiReset, ansiReset+code) + ansiReset
+}
+
+func (s cliStyle) fit(text string, indent int) string {
+	if s.width == 0 {
+		return text
+	}
+	return truncateVisible(text, s.width-indent)
 }
 
 func (s cliStyle) bold(text string) string       { return s.wrap(ansiBold, text) }
@@ -190,6 +225,42 @@ func visibleWidth(text string) int {
 	return width
 }
 
+func truncateVisible(text string, width int) string {
+	if width <= 0 || visibleWidth(text) <= width {
+		return text
+	}
+	var b strings.Builder
+	visible := 0
+	styled := false
+	for i := 0; i < len(text); {
+		if text[i] == 0x1b && i+1 < len(text) && text[i+1] == '[' {
+			j := i + 2
+			for j < len(text) && (text[j] < 0x40 || text[j] > 0x7e) {
+				j++
+			}
+			if j < len(text) {
+				j++
+			}
+			b.WriteString(text[i:j])
+			styled = true
+			i = j
+			continue
+		}
+		if visible == width-1 {
+			break
+		}
+		_, size := utf8.DecodeRuneInString(text[i:])
+		b.WriteString(text[i : i+size])
+		visible++
+		i += size
+	}
+	b.WriteString("…")
+	if styled {
+		b.WriteString(ansiReset)
+	}
+	return b.String()
+}
+
 func padRight(text string, width int) string {
 	pad := width - visibleWidth(text)
 	if pad <= 0 {
@@ -242,6 +313,9 @@ func (t *cliTable) render(w io.Writer, s cliStyle) {
 			}
 		}
 	}
+	if s.width > 0 {
+		fitColumns(widths, s.width-visibleWidth(indent))
+	}
 	writeRow := func(cells []string, isHeader bool) {
 		var b strings.Builder
 		b.WriteString(indent)
@@ -253,7 +327,7 @@ func (t *cliTable) render(w io.Writer, s cliStyle) {
 			if i > 0 {
 				b.WriteString("  ")
 			}
-			cell := cells[i]
+			cell := truncateVisible(cells[i], widths[i])
 			rendered := cell
 			if isHeader {
 				rendered = s.dim(cell)
@@ -278,6 +352,20 @@ func (t *cliTable) render(w io.Writer, s cliStyle) {
 	}
 	for _, row := range t.rows {
 		writeRow(row, false)
+	}
+}
+
+func fitColumns(widths []int, available int) {
+	if len(widths) == 0 {
+		return
+	}
+	total := 2 * (len(widths) - 1)
+	for _, width := range widths {
+		total += width
+	}
+	last := len(widths) - 1
+	if excess := total - available; excess > 0 {
+		widths[last] = max(widths[last]-excess, min(widths[last], minFitColumn))
 	}
 }
 
