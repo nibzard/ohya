@@ -294,3 +294,22 @@ public enum SetupCommand {
         return arguments
     }
 }
+
+public enum ReleaseVersion {
+    public static func isNewer(_ candidate: String, than installed: String) -> Bool {
+        guard let a = parse(candidate), let b = parse(installed) else { return false }
+        if a.core != b.core {
+            return a.core.lexicographicallyPrecedes(b.core) == false
+        }
+        return !a.prerelease && b.prerelease
+    }
+
+    private static func parse(_ version: String) -> (core: [Int], prerelease: Bool)? {
+        guard version.hasPrefix("v") else { return nil }
+        let body = version.dropFirst()
+        let coreText = body.prefix { $0 != "-" && $0 != "+" }
+        let parts = coreText.split(separator: ".", omittingEmptySubsequences: false).map { Int($0) }
+        guard parts.count == 3, parts.allSatisfy({ $0 != nil }) else { return nil }
+        return (parts.compactMap { $0 }, body.count > coreText.count && body[coreText.endIndex] == "-")
+    }
+}

@@ -8,6 +8,9 @@ struct StatusView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
+                if let update = model.bundledUpdate {
+                    updateCard(update)
+                }
                 if let error = model.lastError {
                     unavailableCard(error)
                 }
@@ -27,6 +30,40 @@ struct StatusView: View {
             }
             .padding(14)
         }
+    }
+
+    private func updateCard(_ update: VersionData) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Image(systemName: "arrow.down.app.fill")
+                    .foregroundStyle(OhyaTheme.brandPurple)
+                    .font(.title3)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("ohya \(update.version) is available")
+                        .font(.subheadline.weight(.medium))
+                    Text("This Mac runs \(model.version?.version ?? "an older version"). Updating restarts capture with the new version.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+            }
+            if let error = model.updateError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                Spacer()
+                Button(model.isUpdating ? "Updating…" : "Update") {
+                    Task { await model.installBundledUpdate() }
+                }
+                .disabled(model.isUpdating)
+            }
+        }
+        .padding(10)
+        .ohyaGlassControl(cornerRadius: 10)
     }
 
     private func unavailableCard(_ error: OhyaRunnerError) -> some View {

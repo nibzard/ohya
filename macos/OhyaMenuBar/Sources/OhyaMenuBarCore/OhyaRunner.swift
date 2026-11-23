@@ -44,14 +44,21 @@ public struct CLIResponse<T: Sendable>: Sendable {
 
 public struct BinaryLocator: Sendable {
     public static func defaultCandidates(home: String = NSHomeDirectory(), bundleExecutableDir: String? = Bundle.main.executableURL?.deletingLastPathComponent().path) -> [String] {
-        var candidates: [String] = []
+        var candidates = [
+            (home as NSString).appendingPathComponent(".local/bin/ohya"),
+            "/opt/homebrew/bin/ohya",
+            "/usr/local/bin/ohya",
+        ]
         if let bundleDir = bundleExecutableDir {
             candidates.append((bundleDir as NSString).appendingPathComponent("ohya"))
         }
-        candidates.append((home as NSString).appendingPathComponent(".local/bin/ohya"))
-        candidates.append("/opt/homebrew/bin/ohya")
-        candidates.append("/usr/local/bin/ohya")
         return candidates
+    }
+
+    public static func bundledBinary(fileManager: FileManager = .default, bundleExecutableDir: String? = Bundle.main.executableURL?.deletingLastPathComponent().path) -> String? {
+        guard let bundleDir = bundleExecutableDir else { return nil }
+        let path = (bundleDir as NSString).appendingPathComponent("ohya")
+        return fileManager.isExecutableFile(atPath: path) ? path : nil
     }
 
     public static func resolve(overridePath: String? = nil, fileManager: FileManager = .default, home: String = NSHomeDirectory(), bundleExecutableDir: String? = Bundle.main.executableURL?.deletingLastPathComponent().path) -> Result<String, OhyaRunnerError> {

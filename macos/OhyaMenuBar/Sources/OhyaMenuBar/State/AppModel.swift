@@ -83,6 +83,9 @@ final class AppModel {
     private(set) var summary = StatusEvaluator.evaluate(status: nil, error: nil)
 
     private(set) var setupNeeded = false
+    private(set) var bundledUpdate: VersionData?
+    private(set) var isUpdating = false
+    private(set) var updateError: String?
     private(set) var isRunningSetup = false
     private(set) var setupReport: SetupReport?
     private(set) var setupError: String?
@@ -171,11 +174,57 @@ final class AppModel {
     func refreshAll() async {
         resolveBinary()
         await refreshVersion()
+        await refreshBundledUpdate()
         await refreshSetupNeeded()
         await refreshStatus()
         if !setupNeeded {
             await refreshSecondary(force: true)
         }
+    }
+
+    private func refreshBundledUpdate() async {
+        bundledUpdate = nil
+        guard let bundled = BinaryLocator.bundledBinary(),
+              let installed = version,
+              resolvedBinaryPath != bundled,
+              let response: CLIResponse<VersionData> = try? await runner.runJSON(
+                  binaryPath: bundled,
+                  arguments: ["version", "--json"],
+                  timeout: 5
+              ),
+              ReleaseVersion.isNewer(response.data.version, than: installed.version)
+        else { return }
+        bundledUpdate = response.data
+    }
+
+    func installBundledUpdate() async {
+        guard let bundled = BinaryLocator.bundledBinary(), !isUpdating else { return }
+        isUpdating = true
+        defer { isUpdating = false }
+        updateError = nil
+        do {
+            let response: CLIResponse<SetupReport> = try await runner.runJSON(
+                binaryPath: bundled,
+                arguments: SetupCommand.arguments(
+                    binaryPath: bundled,
+                    bundleExecutableDir: (bundled as NSString).deletingLastPathComponent,
+                    joinCodeVariable: nil
+                ),
+                timeout: 180,
+                acceptReportOnFailure: true
+            )
+            if response.data.isComplete {
+                showTransientMessage("ohya is updated")
+            } else {
+                let failed = response.data.results.filter(\.isFailure).map(\.component).joined(separator: ", ")
+                updateError = "The update is incomplete (\(failed)); run ohya setup in a terminal to see the details."
+            }
+        } catch let err as OhyaRunnerError {
+            updateError = err.localizedDescription
+        } catch {
+            updateError = error.localizedDescription
+        }
+        await refreshAll()
     }
 
     private func refreshSetupNeeded() async {
