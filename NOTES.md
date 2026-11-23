@@ -2380,4 +2380,20 @@ How to use this file:
     and day. The crossdevice raw-arm "successes" cited the curator's own
     transcript, proving the curation-echo caveat is real; next run
     should build that question script-only with digit-masked curation.
+  - Run 2 results (2026-11-23, `recall-runs/20261123T0001Z/`, 72 runs,
+    glm-5.3 on both arms via `claude-zai` `ANTHROPIC_*` env, ohya at
+    `aafefda` with FTS5 `snippet()`, bounded `first_prompt`, agent+window
+    and FTS count recipes, and MCP guide resources trimming upfront prompt
+    15,431 -> 7,374 bytes): `raw` arm stayed flat ($8.08 -> $8.03,
+    $0.231 -> $0.229/correct, 35/36) while `ohya` improved to **36/36
+    (0 timeouts)**, total wall 1300 s -> 992 s (-24%; -45% vs raw),
+    tool-result bytes 519 KB -> 207 KB (-60%; -74% vs raw), input tokens
+    591k -> 520k (-12%), output tokens 47.2k -> 38.1k (-19%), cache-read
+    tokens 2.64M -> 1.96M (-26%), API cost $5.45 -> $4.53 (-17%; -44% vs
+    raw), and cost per correct answer $0.160 -> $0.126 (-21%). Both Run 1
+    losses flipped: `timeboxed` 4/6 -> 6/6 (wall med 83.9 s -> 43.4 s,
+    `c4-timeboxed-pi` result bytes 55.5 KB -> 7.1 KB), `aggregate` wall
+    med 29.4 s -> 14.3 s (-51%, beating raw 41.6 s), `paraphrase` wall
+    med 48.5 s -> 27.8 s (-43%), `negative` input tok med 21.5k -> 8.4k
+    (-61%).
 
