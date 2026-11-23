@@ -30,6 +30,7 @@ type traceMetrics struct {
 type streamEvent struct {
 	Type    string  `json:"type"`
 	Subtype string  `json:"subtype"`
+	IsError bool    `json:"is_error"`
 	Result  string  `json:"result"`
 	Model   string  `json:"model"`
 	DurMS   int64   `json:"duration_ms"`
@@ -123,7 +124,7 @@ func parseClaudeStream(path string) traceMetrics {
 			}
 		case "result":
 			resultSeen = true
-			m.Answer, m.OK = ev.Result, ev.Subtype == "success"
+			m.Answer, m.OK = ev.Result, ev.Subtype == "success" && !ev.IsError
 			m.DurationMS, m.NumTurns = ev.DurMS, ev.Turns
 			m.CostUSD = ev.CostUSD
 			if ev.Model != "" {

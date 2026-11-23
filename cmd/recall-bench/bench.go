@@ -339,9 +339,11 @@ func runArm(ctx context.Context, opts benchOptions, claude string, res *resolver
 	if runCtx.Err() != nil {
 		rec.Verdict = "timeout"
 		rec.Problems = append(rec.Problems, "run timed out after "+opts.timeout.String())
-	} else if runErr != nil && !m.OK {
+	} else if !m.OK {
 		rec.Verdict = "error"
-		rec.Problems = append(rec.Problems, "claude exited with error: "+runErr.Error())
+		if runErr != nil {
+			rec.Problems = append(rec.Problems, "claude exited with error: "+runErr.Error())
+		}
 	} else {
 		rec.Verdict = gradeRun(context.Background(), res, q, arm, m)
 	}

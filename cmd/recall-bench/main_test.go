@@ -77,6 +77,22 @@ func TestParseClaudeStreamDropsDeniedCalls(t *testing.T) {
 	}
 }
 
+func TestParseClaudeStreamMarksIsErrorResultNotOK(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "stream.jsonl")
+	line := `{"type":"result","subtype":"success","is_error":true,"result":"Not logged in","duration_ms":50,"num_turns":1}` + "\n"
+	if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := parseClaudeStream(path)
+	if m.OK {
+		t.Fatalf("is_error=true result marked OK: %+v", m)
+	}
+	if len(m.Problems) == 0 {
+		t.Fatalf("expected problem recorded for is_error result: %+v", m)
+	}
+}
+
 func TestParseClaudeStreamArrayToolResultContent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "stream.jsonl")
