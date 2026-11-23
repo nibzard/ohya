@@ -34,6 +34,31 @@ extension OhyaRunnerError: LocalizedError {
             return nil
         }
     }
+
+    public var copyableText: String {
+        switch self {
+        case .binaryNotFound(let searched):
+            var lines = ["Could not find the ohya executable."]
+            if !searched.isEmpty {
+                lines.append("Searched: \(searched.joined(separator: ", "))")
+            }
+            lines.append("Install ohya or set its path in Settings.")
+            return lines.joined(separator: "\n")
+        case .timedOut(let command, let seconds):
+            let cmd = command.isEmpty ? "ohya" : "ohya \(command.joined(separator: " "))"
+            return "\(cmd) timed out after \(Int(seconds))s."
+        case .processLaunchFailed(let message):
+            return message
+        case .commandFailed(let code, let message, let hint, let exitCode):
+            var lines = ["[\(code), exit \(exitCode)] \(message)"]
+            if !hint.isEmpty {
+                lines.append(hint)
+            }
+            return lines.joined(separator: "\n")
+        case .decodeFailed(let message):
+            return "Unexpected ohya output: \(message)"
+        }
+    }
 }
 
 public struct CLIResponse<T: Sendable>: Sendable {

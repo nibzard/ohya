@@ -313,3 +313,163 @@ public enum ReleaseVersion {
         return (parts.compactMap { $0 }, body.count > coreText.count && body[coreText.endIndex] == "-")
     }
 }
+
+public enum CopyFormatter {
+    public static func finding(_ finding: StatusFinding) -> String {
+        var lines = ["[\(finding.severity)] \(finding.code): \(finding.evidence)"]
+        if let hint = finding.hint, !hint.isEmpty {
+            lines.append(hint)
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    public static func doctorFinding(_ finding: DoctorFinding) -> String {
+        let label = finding.check.map { "\($0): " } ?? ""
+        let detail = finding.detail ?? ""
+        var lines = ["[\(finding.severity)] \(label)\(detail)".trimmingCharacters(in: .whitespaces)]
+        if let remedy = finding.remedy, !remedy.isEmpty {
+            lines.append("Remedy: \(remedy)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    public static func setupReport(_ report: SetupReport) -> String {
+        var lines = [report.isComplete ? "Setup complete" : "Setup incomplete"]
+        for result in report.results {
+            if let detail = result.detail, !detail.isEmpty {
+                lines.append("- \(result.component): \(result.status) — \(detail)")
+            } else {
+                lines.append("- \(result.component): \(result.status)")
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    public static func logs(_ entries: [LogEntry]) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return entries.map { entry in
+            let timestamp = formatter.string(from: Date(timeIntervalSince1970: Double(entry.timeMS) / 1000.0))
+            let outcome = entry.outcome.map { " (\($0))" } ?? ""
+            return "\(timestamp) \(entry.level.uppercased()) \(entry.component) \(entry.eventCode)\(outcome) [\(DisplayFormat.shortID(entry.instanceID))]"
+        }.joined(separator: "\n")
+    }
+
+    public static func statusSummary(
+        version: VersionData?,
+        binaryPath: String?,
+        setupNeeded: Bool,
+        summary: StatusSummary,
+        status: StatusData?,
+        doctor: DoctorData?,
+        lastError: OhyaRunnerError?,
+        updateError: String?,
+        actionError: String?
+    ) -> String {
+        var lines: [String] = []
+        if let version {
+            lines.append("ohya \(version.version) (schema \(version.schema))")
+        } else {
+            lines.append("ohya")
+        }
+        let stateLabel = setupNeeded ? "Not set up" : summary.iconState.shortStatusLabel
+        lines.append("Status: \(summary.topologyLabel) · \(stateLabel)")
+        if let binaryPath {
+            lines.append("Binary: \(binaryPath)")
+        }
+        if let status {
+            lines.append("State dir: \(status.topology.stateDir)")
+            if !status.topology.agentRoots.isEmpty {
+                let agents = status.topology.agentRoots.map { root -> String in
+                    let name = DisplayFormat.agentDisplayName(root.agent)
+                    let excluded = status.instances.reduce(0) { $0 + Int($1.excluded?[root.agent] ?? 0) }
+                    if root.present == 0 {
+                        return "\(name): not detected"
+                    }
+                    if excluded > 0 {
+                        return "\(name): watching (\(excluded) excl)"
+                    }
+                    return "\(name): watching"
+                }.joined(separator: ", ")
+                lines.append("Agents: \(agents)")
+            }
+            if summary.activeSources > 0 || summary.stoppedSources > 0 {
+                var parts = ["\(summary.activeSources) active"]
+                if summary.stoppedSources > 0 {
+                    parts.append("\(summary.stoppedSources) stopped")
+                }
+                lines.append("Sources: \(parts.joined(separator: ", "))")
+            }
+            if summary.totalBacklogBytes > 0 {
+                lines.append("Backlog: \(DisplayFormat.bytes(summary.totalBacklogBytes)) remaining")
+            }
+            lines.append("Storage: \(storageDescription(status: status))")
+            if let remoteHub = status.remoteHub, remoteHub.reachable, let hub = remoteHub.hub {
+                lines.append("Hub: \(hub.version) (\(remoteHub.transportPath ?? "connected"))")
+            }
+        }
+        if let transport = doctor?.transport {
+            var parts = [transport.path]
+            if let answers = transport.hubAnswers {
+                parts.insert(answers ? "hub reachable" : "hub unreachable", at: 0)
+            }
+            if let region = transport.relayRegion, !region.isEmpty {
+                parts.append("relay \(region)")
+            }
+            if let rtt = transport.roundTripMS {
+                parts.append(String(format: "%.0f ms", rtt))
+            }
+            lines.append("Transport: \(parts.joined(separator: ", "))")
+        }
+        if let lastError {
+            lines.append("Error:\n\(lastError.copyableText)")
+        }
+        if let updateError, !updateError.isEmpty {
+            lines.append("Update error: \(updateError)")
+        }
+        if let actionError, !actionError.isEmpty {
+            lines.append("Action error: \(actionError)")
+        }
+        if !summary.actionableWarnings.isEmpty {
+            lines.append("Findings:")
+            for item in summary.actionableWarnings {
+                lines.append("- \(finding(item).replacingOccurrences(of: "\n", with: "\n  "))")
+            }
+        }
+        if let doctor {
+            let issues = doctor.findings.filter { $0.severity != "ok" }
+            if issues.isEmpty {
+                lines.append("Doctor: all checks ok")
+            } else {
+                lines.append("Doctor:")
+                for item in issues {
+                    lines.append("- \(doctorFinding(item).replacingOccurrences(of: "\n", with: "\n  "))")
+                }
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func storageDescription(status: StatusData) -> String {
+        if status.storage.location == "remote-hub" {
+            if let remote = status.remoteHub, remote.reachable, remote.supported,
+               let files = remote.storageFiles, let size = storageSize(files) {
+                return "\(size) (hub)"
+            }
+            return "owned by hub"
+        }
+        return storageSize(status.storage.files ?? [:]) ?? "empty"
+    }
+
+    private static func storageSize(_ files: [String: Int64]) -> String? {
+        let db = Double(files["db"] ?? 0)
+        let wal = Double(files["wal"] ?? 0)
+        if db == 0 && wal == 0 {
+            return nil
+        }
+        if wal >= 1024 * 1024 {
+            return "\(DisplayFormat.bytes(db)) (+\(DisplayFormat.bytes(wal)) WAL)"
+        }
+        return DisplayFormat.bytes(db)
+    }
+}

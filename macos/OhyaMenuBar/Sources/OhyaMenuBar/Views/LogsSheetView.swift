@@ -11,6 +11,11 @@ struct LogsSheetView: View {
                 Text("Recent Warnings & Errors")
                     .font(.headline)
                 Spacer()
+                if let entries = model.logsData?.entries, !entries.isEmpty {
+                    CopyFeedbackButton("Copy All") {
+                        model.copyText(CopyFormatter.logs(entries.reversed()))
+                    }
+                }
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.cancelAction)
             }
@@ -45,6 +50,7 @@ struct LogsSheetView: View {
                             Divider().opacity(0.3)
                         }
                     }
+                    .textSelection(.enabled)
                 }
             } else {
                 Text("No warnings or errors in the last 24 hours.")

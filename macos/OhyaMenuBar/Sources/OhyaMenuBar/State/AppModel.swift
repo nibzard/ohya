@@ -95,6 +95,7 @@ final class AppModel {
     private(set) var isTogglingService = false
     private(set) var isExportingDiagnostics = false
     private(set) var transientMessage: String?
+    private(set) var actionError: String?
 
     var searchQuery = ""
     var recallAgent: RecallAgentFilter = .all
@@ -220,7 +221,7 @@ final class AppModel {
                 updateError = "The update is incomplete (\(failed)); run ohya setup in a terminal to see the details."
             }
         } catch let err as OhyaRunnerError {
-            updateError = err.localizedDescription
+            updateError = err.copyableText
         } catch {
             updateError = error.localizedDescription
         }
@@ -264,7 +265,7 @@ final class AppModel {
                 showTransientMessage("ohya is set up")
             }
         } catch let err as OhyaRunnerError {
-            setupError = err.localizedDescription
+            setupError = err.copyableText
         } catch {
             setupError = error.localizedDescription
         }
@@ -403,6 +404,7 @@ final class AppModel {
         guard let binary = resolvedBinaryPath, !isTogglingService, !setupNeeded else { return }
         isTogglingService = true
         defer { isTogglingService = false }
+        actionError = nil
 
         let action = summary.isPaused ? "start" : "stop"
         do {
@@ -414,9 +416,9 @@ final class AppModel {
             showTransientMessage(resp.data.running ? "Capture resumed" : "Capture paused")
             await refreshStatus()
         } catch let err as OhyaRunnerError {
-            showTransientMessage(err.localizedDescription)
+            showActionError(err.copyableText)
         } catch {
-            showTransientMessage(error.localizedDescription)
+            showActionError(error.localizedDescription)
         }
     }
 
@@ -460,6 +462,9 @@ final class AppModel {
                 guard generation == recallGeneration else { return }
                 searchHits = resp.data.matches
             }
+        } catch let err as OhyaRunnerError {
+            guard generation == recallGeneration else { return }
+            recallError = err.copyableText
         } catch {
             guard generation == recallGeneration else { return }
             recallError = error.localizedDescription
@@ -516,7 +521,7 @@ final class AppModel {
             )
             devicesData = resp.data
         } catch let err as OhyaRunnerError {
-            devicesError = err.localizedDescription
+            devicesError = err.copyableText
         } catch {
             devicesError = error.localizedDescription
         }
@@ -534,7 +539,7 @@ final class AppModel {
             activeInvite = resp.data
             await refreshDevices()
         } catch let err as OhyaRunnerError {
-            devicesError = err.localizedDescription
+            devicesError = err.copyableText
         } catch {
             devicesError = error.localizedDescription
         }
@@ -563,7 +568,7 @@ final class AppModel {
             showTransientMessage("Revoked \(DisplayFormat.shortID(deviceID))")
             await refreshDevices()
         } catch let err as OhyaRunnerError {
-            devicesError = err.localizedDescription
+            devicesError = err.copyableText
         } catch {
             devicesError = error.localizedDescription
         }
@@ -571,6 +576,7 @@ final class AppModel {
 
     func applyMarkedPurge() async {
         guard let binary = resolvedBinaryPath else { return }
+        actionError = nil
         do {
             let resp: CLIResponse<PurgeData> = try await runner.runJSON(
                 binaryPath: binary,
@@ -583,9 +589,9 @@ final class AppModel {
             await refreshStatus()
             await refreshSecondary(force: true)
         } catch let err as OhyaRunnerError {
-            showTransientMessage(err.localizedDescription)
+            showActionError(err.copyableText)
         } catch {
-            showTransientMessage(error.localizedDescription)
+            showActionError(error.localizedDescription)
         }
     }
 
@@ -615,6 +621,7 @@ final class AppModel {
 
         isExportingDiagnostics = true
         defer { isExportingDiagnostics = false }
+        actionError = nil
 
         do {
             let result = try await runner.runRaw(
@@ -626,11 +633,45 @@ final class AppModel {
                 NSWorkspace.shared.activateFileViewerSelecting([destination])
                 showTransientMessage("Diagnostics saved")
             } else {
-                showTransientMessage("Diagnostics export failed")
+                let stderrText = String(data: result.stderr, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                showActionError(stderrText.isEmpty ? "Diagnostics export failed (exit \(result.exitCode))" : stderrText)
             }
+        } catch let err as OhyaRunnerError {
+            showActionError(err.copyableText)
         } catch {
-            showTransientMessage(error.localizedDescription)
+            showActionError(error.localizedDescription)
         }
+    }
+
+    func copyText(_ text: String, notice: String? = nil) {
+        clipboard.copyText(text)
+        if let notice {
+            showTransientMessage(notice)
+        }
+    }
+
+    func copyStatusSummary(showNotice: Bool = false) {
+        let text = CopyFormatter.statusSummary(
+            version: version,
+            binaryPath: resolvedBinaryPath,
+            setupNeeded: setupNeeded,
+            summary: summary,
+            status: status,
+            doctor: doctor,
+            lastError: lastError,
+            updateError: updateError,
+            actionError: actionError
+        )
+        copyText(text, notice: showNotice ? "Status copied" : nil)
+    }
+
+    func showActionError(_ message: String) {
+        actionError = message
+    }
+
+    func clearActionError() {
+        actionError = nil
     }
 
     func showTransientMessage(_ message: String) {

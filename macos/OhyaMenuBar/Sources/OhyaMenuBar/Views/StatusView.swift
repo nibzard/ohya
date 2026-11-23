@@ -49,10 +49,17 @@ struct StatusView: View {
                 Spacer()
             }
             if let error = model.updateError {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
+                HStack(alignment: .top, spacing: 6) {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                    Spacer(minLength: 4)
+                    CopyFeedbackButton("Copy") {
+                        model.copyText(error)
+                    }
+                }
             }
             HStack {
                 Spacer()
@@ -68,15 +75,24 @@ struct StatusView: View {
 
     private func unavailableCard(_ error: OhyaRunnerError) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label(error.localizedDescription, systemImage: "exclamationmark.triangle.fill")
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(.orange)
+            HStack(alignment: .top, spacing: 6) {
+                Label(error.localizedDescription, systemImage: "exclamationmark.triangle.fill")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 4)
+                CopyFeedbackButton("Copy") {
+                    model.copyText(error.copyableText)
+                }
+            }
             if let hint = error.hintText {
                 Text(hint)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
         .ohyaGlassControl(cornerRadius: 10)
@@ -121,6 +137,11 @@ struct StatusView: View {
                                     .foregroundStyle(.secondary)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
+                        }
+                        .textSelection(.enabled)
+                        Spacer(minLength: 4)
+                        CopyFeedbackButton("Copy") {
+                            model.copyText(CopyFormatter.finding(finding))
                         }
                     }
                 }
@@ -186,14 +207,21 @@ struct StatusView: View {
                     }
                 }
             }
+            .textSelection(.enabled)
         }
     }
 
     private var overviewSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Overview")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+            HStack {
+                Text("Overview")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                CopyFeedbackButton("Copy") {
+                    model.copyStatusSummary()
+                }
+            }
 
             VStack(spacing: 6) {
                 if model.summary.activeSources > 0 {
@@ -218,6 +246,7 @@ struct StatusView: View {
                     infoRow("Health", value: doctorSummary)
                 }
             }
+            .textSelection(.enabled)
         }
     }
 

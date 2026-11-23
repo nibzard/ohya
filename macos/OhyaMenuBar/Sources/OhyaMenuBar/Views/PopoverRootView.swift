@@ -32,6 +32,36 @@ struct PopoverRootView: View {
             }
             .frame(height: OhyaTheme.popoverMaxHeight - 132)
 
+            if let error = model.actionError {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .font(.caption)
+                        .padding(.top, 1)
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                    Spacer(minLength: 4)
+                    CopyFeedbackButton("Copy") {
+                        model.copyText(error)
+                    }
+                    Button {
+                        model.clearActionError()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Dismiss error")
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+                .transition(.opacity)
+            }
+
             if let message = model.transientMessage {
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark.circle.fill")
@@ -55,6 +85,7 @@ struct PopoverRootView: View {
         }
         .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: model.selectedSection)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: model.transientMessage)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: model.actionError)
         .sheet(isPresented: $model.showingLogs) {
             LogsSheetView(model: model)
         }
@@ -209,6 +240,7 @@ struct PopoverRootView: View {
             Button("") { model.selectSection(.recall) }.keyboardShortcut("k", modifiers: .command)
             Button("") { openSettingsWindow() }.keyboardShortcut(",", modifiers: .command)
             Button("") { Task { await model.refreshAll() } }.keyboardShortcut("r", modifiers: .command)
+            Button("") { model.copyStatusSummary(showNotice: true) }.keyboardShortcut("c", modifiers: [.command, .shift])
         }
         .opacity(0)
         .frame(width: 0, height: 0)
