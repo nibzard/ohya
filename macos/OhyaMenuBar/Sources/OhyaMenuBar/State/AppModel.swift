@@ -137,17 +137,31 @@ final class AppModel {
         pollTask = Task { [weak self] in
             guard let self else { return }
             await self.refreshAll()
-            while !Task.isCancelled {
-                let delay: Duration = self.isPopoverVisible ? .seconds(4) : .seconds(15)
-                try? await Task.sleep(for: delay)
-                guard !Task.isCancelled else { break }
-                await self.refreshStatus()
-            }
+            await self.runPollLoop()
+        }
+    }
+
+    private func restartPollCadence() {
+        guard resolvedBinaryPath != nil || lastError != nil else { return }
+        pollTask?.cancel()
+        pollTask = Task { [weak self] in
+            guard let self else { return }
+            await self.runPollLoop()
+        }
+    }
+
+    private func runPollLoop() async {
+        while !Task.isCancelled {
+            let delay: Duration = self.isPopoverVisible ? .seconds(4) : .seconds(60)
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { break }
+            await self.refreshStatus()
         }
     }
 
     func setPopoverVisible(_ visible: Bool) {
         isPopoverVisible = visible
+        restartPollCadence()
         guard visible else { return }
         Task {
             await refreshStatus()
@@ -321,7 +335,7 @@ final class AppModel {
 
         do {
             var statusArgs = ["status", "--json"]
-            let fetchRemote = status?.topology.mode == "remote" && Date().timeIntervalSince(lastRemoteHubFetch) >= 15
+            let fetchRemote = isPopoverVisible && status?.topology.mode == "remote" && Date().timeIntervalSince(lastRemoteHubFetch) >= 15
             if fetchRemote {
                 statusArgs.append("--remote")
                 lastRemoteHubFetch = Date()

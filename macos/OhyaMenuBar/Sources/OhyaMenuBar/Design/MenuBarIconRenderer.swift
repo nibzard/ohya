@@ -3,8 +3,14 @@ import CoreGraphics
 import Foundation
 import OhyaMenuBarCore
 
+@MainActor
 enum MenuBarIconRenderer {
+    private static var imageCache: [MenuBarIconState: NSImage] = [:]
+
     static func render(state: MenuBarIconState) -> NSImage {
+        if let cached = imageCache[state] {
+            return cached
+        }
         let size = NSSize(width: 18, height: 18)
         let parsed = cachedTemplateSVG
 
@@ -49,6 +55,7 @@ enum MenuBarIconRenderer {
         }
         image.isTemplate = true
         image.accessibilityDescription = state.accessibilityLabel
+        imageCache[state] = image
         return image
     }
 
