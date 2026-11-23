@@ -1,6 +1,6 @@
 # Release and recovery operations
 
-The newest release is v0.6.0, published on 2026-11-23 from commit `66ccefc`
+The newest release is v0.6.1, published on 2026-11-23 from commit `bf50937`
 after the full candidate matrix passed; its macOS archives are unsigned. Apple signing and
 notarization must pass before a signed public release. Generated candidates
 are not qualified releases merely because packaging succeeds.
@@ -245,6 +245,19 @@ more full recovery copy, so the cost above applies once per hub. Beyond that:
   host end to end with exit 0, installed all four skills, restarted
   `ohya-serve.service`, and both `ohya doctor` (20/20 `ok`) and `ohya status`
   exited 0.
+- v0.6.1 (commit `bf50937`, dirty=false) was published on 2026-11-23 after
+  the full hosted matrix passed (run 45180792640) and local `make check` +
+  `make tla` passed with zero errors. v0.6.1 stays on schema 8 and changes
+  only CLI text output: terminal-width fitting, shorter `sessions` and
+  `search` records, `doctor` remedies only on failing checks, `metrics`
+  counter tables, aligned `setup` rows, and tidier help. It also records
+  v0.6.0 and v0.6.1 in `releasedSchemas`; v0.6.0 had shipped without that
+  record, which failed `TestReleasedSchemasMatchPublishedTags`. The
+  released installer upgraded the linux-amd64 hub host with exit 0; after
+  restarting `ohya-serve.service`, `ohya doctor` reported no errors. The
+  upgrade showed that v0.6.1 marks the healthy setup statuses `running`,
+  `ready`, and `not needed` with the warning mark; the fix is on `main` for
+  the next release.
 - The installer refuses to replace an executable whose digest matches neither
   its receipt entry nor the previous one ("installed executable has changed;
   preserve it"). A copy installed by hand outside `install.sh` triggers this

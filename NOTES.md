@@ -2459,8 +2459,8 @@ How to use this file:
 
 
 - CLI output review (2026-11-23, every command run in a pseudo-TTY at
-  110–120 columns against the live hub and a fixture database). Fixed in
-  `7332972`, `485ff43`, `c7cc98a`, `e6af32d`: terminal fitting, sessions/search
+  110–120 columns against the live hub and a fixture database). Shipped in v0.6.1
+  (`7332972`, `485ff43`, `c7cc98a`, `e6af32d`): terminal fitting, sessions/search
   layout, doctor remedies on passing checks, nested-style resets, setup
   rows, metrics counters, empty help sections. Still open:
   - `ohya status --state DIR` without `--db` reports the default hub's
@@ -2479,3 +2479,5 @@ How to use this file:
     `ingest_batches{batch_result=committed}=6`.
   - `version` prints one long `key=value` line; it is machine-shaped by
     design, and `--json` exists.
+  - The install output (`install.sh` through `ohya setup`) still mixes
+    `ohya: …` lines with the new aligned rows.
