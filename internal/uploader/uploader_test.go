@@ -1395,7 +1395,7 @@ func TestSourcesMissingAtStartupReportedAsOneCount(t *testing.T) {
 	f.mustSync()
 	f.up.Close()
 	for _, path := range []string{a, b} {
-		if err := os.Remove(path); err != nil {
+		if err := os.Rename(path, path+".gone"); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -2401,6 +2401,17 @@ How to use this file:
     one is unverified; a single-writer lock per state directory is the
     candidate fix and belongs in the sync TLA+ model's assumptions.
 
+- Inode reuse after deletion on Linux (observed 2026-11-23 in CI, ext4):
+  a new session file can receive the inode of a just-deleted, already
+  checkpointed source. The watcher then reports the new file as that
+  source "replaced (content before the acknowledged cursor changed)" and
+  says bytes "were never uploaded and are lost", which is false: the old
+  file was deleted and the new file is new. Tests that delete and then
+  create files now rename the old files out of the watched pattern
+  instead. Unverified in production; a fix would compare more than file
+  identity (for example the head bytes) before treating a path as a
+  replaced source.
+
 - Recall bench (2026-11-22, `cmd/recall-bench`): comparative measurement of
   raw transcript files versus the ohya sql MCP tool as recall access paths,
   with real headless clients; design and protocol in

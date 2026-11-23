@@ -622,7 +622,7 @@ func TestIngestSourcesMissingAtStartupReportedAsOneCount(t *testing.T) {
 	}
 	done()
 	for _, path := range []string{first, second} {
-		if err := os.Remove(path); err != nil {
+		if err := os.Rename(path, path+".gone"); err != nil {
 			t.Fatal(err)
 		}
 	}
