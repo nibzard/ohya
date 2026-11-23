@@ -20,120 +20,56 @@ One Go binary. No cloud account. No embeddings.
 
 [Quick start](#quick-start) ·
 [How it works](#how-it-works) ·
+[Compare](#how-ohya-compares) ·
 [Reference](docs/reference.md) ·
 [Architecture](ARCHITECTURE.md) ·
 [Contributing](CONTRIBUTING.md)
 
 </div>
 
-> [!IMPORTANT]
-> ohya is pre-release. Install the [latest release](https://github.com/nibzard/ohya/releases/latest)
-> with `install.sh`, or build from source. Ingestion, MCP tools, and device
-> sync run end to end. macOS archives are not signed or notarized yet; a
-> Homebrew tap is still open.
+Your agents make decisions, debug failures, and leave work unfinished every
+day. That context stays in one tool on one machine, until it is lost. ohya
+captures it and gives it back to the next agent:
 
-## Why ohya
+- **Hand off across agents and machines.** Start in Claude Code, continue in
+  Codex on another laptop, and recover what the first agent decided and tried.
+- **Keep your data on your hardware.** Devices sync over an encrypted tailnet
+  to a hub that you run. There is no third-party server.
+- **Query with plain SQL.** Agents use `SELECT` and FTS5 full-text search
+  through the `sql` MCP tool. There are no embeddings and no AI pipeline.
 
-Your agents produce decisions, debugging sessions, and unfinished work every
-day. That context stays in one tool on one machine, until it is lost.
+## Quick start
 
-- **Cross-agent handoffs:** start in Claude Code, continue in Codex, Pi, or
-  Antigravity (`agy`), and recover the earlier decisions, attempts, and
-  unfinished work—even on another machine.
-- **Local-first:** your transcripts stay on hardware that you own. Devices
-  sync over an encrypted tailnet to a hub that you run.
-- **Plain SQL, small context footprint:** agents query with `SELECT` and
-  FTS5/BM25 (`snippet()`), with <8 KB of upfront MCP schema and rare
-  audit/analytics playbooks loaded on demand as MCP resources. There is no
-  ingestion model, no vector store, and no AI pipeline.
-- **Lossless while retained:** every original JSONL record is kept byte for
-  byte. Parser upgrades re-derive rows from the stored records.
-- **Owner-decided retention:** nothing is deleted automatically, and nothing
-  is kept forever against your will. `ohya purge` plans (dry-run by default)
-  and deletes whole sessions by session, repository, agent, age, or the
-  garbage marks an agent placed with `annotate`; purged
-  sources are tombstoned so their devices are refused until you re-admit
-  them, and purged bytes never return on their own
-  ([ADR 0013](docs/adr/0013-owner-scoped-session-purge.md),
-  [ADR 0016](docs/adr/0016-agent-marked-purge-scope.md)).
-- **Durable:** Claude Code deletes transcripts after 30 days by default
-  (`cleanupPeriodDays`). ohya keeps every record that it has ingested until
-  you decide otherwise.
+Install the latest release (macOS arm64/amd64, Linux amd64):
 
-### Atuin threads, compared (2026-11-23)
+```sh
+curl -fsSL https://github.com/nibzard/ohya/releases/latest/download/install.sh | sh
+```
 
-[Atuin](https://atuin.sh) shipped "threads" in
-[v18.24.0](https://github.com/atuinsh/atuin/releases/tag/v18.24.0) on
-2026-10-15: capture and search of the same Claude Code, Codex, and Pi
-session files ohya watches, served to agents over MCP. That convergence
-validates the demand and the architecture. The differences below were
-verified directly against Atuin `v18.25.1` (`2026-11-20`), its repository,
-and its issue tracker on 2026-11-23:
+The installer downloads the matching binary, verifies its checksum, installs
+it in `~/.local/bin`, and runs `ohya setup`. Setup registers ohya with each
+detected agent (MCP entry and an `ohya` skill) and starts a user service that
+imports existing history and follows new records. You do not need Go.
 
-- **Sharing and trust.** Atuin threads are single-user; the live "Threads
-  for teams" beta is hosted-hub-only and uploads shared threads in
-  plaintext to the hosted hub. ohya shares through an operator-owned hub
-  with no third-party server: one-time invitations, encrypted device sync,
-  and final revocation.
-- **Fidelity.** Atuin `v18.25.1` stores zstd-compressed conversation and
-  tool-result payloads in `threads.db`, clipping tool input/output at
-  64 KiB and replacing secrets at capture. ohya keeps every original JSONL
-  record byte for byte without clipping or mutating stored data and reduces
-  secret risk at egress
-  ([ADR 0015](docs/adr/0015-egress-secret-redaction.md)).
-- **Recall surface & runtime.** `atuin mcp` exposes 6 fixed tools
-  (~16.9 KB of upfront tool schemas) and requires a running `atuin daemon`
-  even for read-only thread search; it has no upper date bound, boolean
-  `OR`/`NOT`, model/device filters, or exact counts beyond its 20-thread
-  search cap ([#4589](https://github.com/atuinsh/atuin/issues/4589)). ohya
-  serves two tools (`sql`, `annotate`) plus on-demand MCP guide resources
-  (<8 KB upfront), opens SQLite directly read-only with no daemon
-  required, and expresses date, model, device, and count queries as one
-  `WHERE` or `GROUP BY` ([DB.md](DB.md#recall-recipes)).
-- **Harnesses & retention.** Atuin has no Antigravity (`agy`) harness and
-  no user-facing `threads` delete or purge command
-  ([#4434](https://github.com/atuinsh/atuin/issues/4434)). ohya ingests
-  Antigravity alongside Claude Code, Codex, and Pi, and ships owner-decided
-  purge with source tombstones
-  ([ADR 0013](docs/adr/0013-owner-scoped-session-purge.md)).
-- **Verification.** ohya's sync and authorization state machines are
-  model-checked with TLA+/TLC ([tla/](tla/README.md)), so the durability
-  and revocation claims rest on checked invariants.
+Open a new terminal and check the installation:
 
-### Measured recall (2026-11-23)
+```sh
+ohya doctor
+```
 
-Evaluated with `cmd/recall-bench` on `glm-5.3` (12 questions × 3 repeats =
-36 runs/arm, 180 s timeout) across needle, paraphrase, timeboxed,
-correction, aggregate count, multihop, negative, and cross-device tiers on
-the same local corpus, comparing raw on-disk transcripts (`Bash`/`Grep`/`Read`),
-an isolated local Atuin `v18.25.1` (`auto_sync = false`), and `ohya`:
+Then start a new Claude Code, Codex, Pi, or Antigravity session and ask:
 
-| Scope | Arm | Correct | Timeouts | Wall (s) | Tool calls | Tool result KB | Cache read tok | Cost ($) | $/correct |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| **All 12 questions** (36 runs, incl. cross-device) | `raw` | 35/36 | 1 | 1,792 | 354 | 788 | 5.05M | $8.03\* | $0.229\* |
-| | `atuin` v18.25.1 | 35/36 | 1 | 1,235 | 205 | 544 | 3.22M | $5.25\* | $0.150\* |
-| | **`ohya`** | **36/36** | **0** | **992** | **128** | **207** | **1.96M** | **$4.53** | **$0.126** |
-| **11 shared local questions** (33 runs, no cross-device) | `raw` | 33/33 | 0 | 1,263 | 279 | 524 | 3.06M | $6.05 | $0.183 |
-| | `atuin` v18.25.1 | 33/33 | 0 | **779** | 127 | 197 | 1.89M | **$3.79** | **$0.115** |
-| | `ohya` | 33/33 | 0 | 922 | **117** | **182** | **1.79M** | $4.15 | $0.126 |
+> Use ohya to find the last work on this repository. What did the previous
+> agent decide, what did it try, and what remains unfinished? Cite event IDs
+> and check the current files before continuing.
 
-\*Timed-out runs (`raw` r2, `atuin` r3 on the remote-only question) did not
-emit a final usage event, so their failed tool calls are unbilled in the
-total.
+The first import of a large history can take some time. To share memory
+between machines, see [Share memory across machines](#share-memory-across-machines).
 
-Takeaways: vs raw transcript search, `ohya` cut wall time by **45%**,
-tool-result bytes by **74%**, cache-read tokens by **61%**, and cost by
-**44%** with zero timeouts. Against local Atuin `v18.25.1`, `ohya` won the
-full suite and led decisively on cross-device recall (23.4 s vs 165.5 s /
-timeout), distinct-session counting (14.3 s / 0.3 KB vs 30.0 s / 2.3 KB),
-and verified absence (17.0 s / 2.5 KB vs 31.6 s / 13.3 KB), while Atuin's
-two-argument search tool used fewer output tokens on simple local keyword
-lookups (since writing SQL emits more assistant tokens than calling a fixed
-search wrapper; in a targeted `v0.6.0` follow-up on the 5 affected local
-questions after updating the recipes to format `datetime(..., 'unixepoch')`,
-return `e.session_id`/`s.agent`, and read context around a hit, `ohya` cut
-wall time a further **26%** and cost **18%** ($2.39 → $1.96), closing the
-local cost gap vs Atuin).
+> [!NOTE]
+> ohya is pre-release. Ingestion, MCP tools, and device sync run end to end.
+> The macOS archives are not signed or notarized yet, and there is no
+> Homebrew tap yet.
 
 ## How it works
 
@@ -156,111 +92,6 @@ local cost gap vs Atuin).
 <p align="center">
   <img alt="Terminal: ohya ingest imports 51 events from 5 sources, ohya doctor reports ok checks, and the sql tool returns sessions per agent." src="docs/assets/terminal.svg" width="860">
 </p>
-
-## Quick start
-
-Install the latest release (macOS arm64/amd64, Linux amd64):
-
-```sh
-curl -fsSL https://github.com/nibzard/ohya/releases/latest/download/install.sh | sh
-```
-
-The release-hosted installer downloads the matching binary, verifies its
-archive checksum, installs it in `~/.local/bin`, and runs setup. Setup
-registers MCP integrations and an owned `ohya` skill (`skills/ohya/SKILL.md`)
-for detected agents, and starts a user service that imports existing history
-and follows new records. No Go toolchain is needed.
-
-Open a new terminal, then check the installation:
-
-```sh
-ohya version
-ohya doctor
-```
-
-Start a new Claude Code, Codex, Pi, or Antigravity session and try:
-
-> Use ohya to find the last work on this repository. What did the previous
-> agent decide, what did it try, and what remains unfinished? Cite event IDs
-> and check the current files before continuing.
-
-The first history import can take time. For memory across machines, follow
-[Share memory across machines](#share-memory-across-machines) below.
-
-### Build from source
-
-Building from source requires Go 1.27.3 or later, CGO, and a C compiler
-(Xcode Command Line Tools on macOS, `build-essential` on Debian or Ubuntu).
-
-```sh
-git clone https://github.com/nibzard/ohya && cd ohya
-make build
-./bin/ohya setup --dry-run   # show the changes setup will make
-./bin/ohya setup             # ingestion service + MCP entries for detected agents
-./bin/ohya doctor            # check the result
-```
-
-<details>
-<summary>Manual setup (no service, no client changes)</summary>
-
-```sh
-./bin/ohya ingest --once     # import existing history, then exit
-./bin/ohya ingest            # or: keep polling until stopped
-```
-
-Skip specific session files with a repeatable `--exclude GLOB` (stdlib
-`path.Match` semantics, matched against absolute source paths); skipped
-counts show in the pass summary and `ohya status`:
-
-```sh
-./bin/ohya ingest --exclude '/home/me/.codex/sessions/rollout-*-guardian-*'
-```
-
-Register the MCP server in your agent, for example in Claude Code:
-
-```json
-{
-  "mcpServers": {
-    "ohya": { "command": "/absolute/path/to/bin/ohya", "args": ["mcp"] }
-  }
-}
-```
-
-</details>
-
-### Share memory across machines
-
-Two steps and one shared code
-([ADR 0012](docs/adr/0012-two-step-multi-machine-setup.md)):
-
-1. On the hub machine, run:
-
-   ```sh
-   ohya setup --hub
-   ```
-
-   Setup keeps local ingestion, adds an owned `ohya serve` user service,
-   creates the hub identity, checks that a relay answers, and prints a
-   one-time join code together with the device command.
-
-2. On each other machine, paste the printed command:
-
-   ```sh
-   curl -fsSL https://github.com/nibzard/ohya/releases/latest/download/install.sh | sh -s -- --join
-   ```
-
-   The installer reads the code from the terminal (`/dev/tty`) without
-   echo, so it stays out of shell history and the screen.
-
-Agents and scripts pass the code through a variable instead:
-`install.sh --join-code-env NAME` (nothing prompts under `--json`; without
-a terminal the code must come that way). Both machines need outbound
-internet access to meet through a relay; no reachable hub address,
-certificate, or open port is required. Joined agents use
-`ohya mcp --remote` and query the shared history on the hub. New codes at
-any time: `ohya devices invite`. Revoke a device with
-`ohya devices revoke ID`. See [serve and join](docs/reference.md#commands)
-for the transport, join codes, and state directories.
 
 ## What agents can ask
 
@@ -314,6 +145,179 @@ immediate handoff from an active session, the receiving agent can query
 `github.com/nibzard/ohya`, and it matches across devices even when the
 working directory differs. Each device reads the git remote of its session
 directories and sends only the normalized value to the hub.
+
+## Share memory across machines
+
+Two steps and one shared code
+([ADR 0012](docs/adr/0012-two-step-multi-machine-setup.md)):
+
+1. On the hub machine, run:
+
+   ```sh
+   ohya setup --hub
+   ```
+
+   Setup keeps local ingestion, adds an owned `ohya serve` user service,
+   creates the hub identity, checks that a relay answers, and prints a
+   one-time join code together with the device command.
+
+2. On each other machine, paste the printed command:
+
+   ```sh
+   curl -fsSL https://github.com/nibzard/ohya/releases/latest/download/install.sh | sh -s -- --join
+   ```
+
+   The installer reads the code from the terminal (`/dev/tty`) without
+   echo, so it stays out of shell history and the screen.
+
+- **Networking:** both machines need only outbound internet access. They
+  meet through a relay, so the hub needs no public address, certificate, or
+  open port.
+- **Scripts and agents:** pass the code in an environment variable with
+  `install.sh --join-code-env NAME`. Nothing prompts under `--json`.
+- **Recall:** agents on a joined device use `ohya mcp --remote` and query
+  the shared history on the hub.
+- **Devices:** issue a new code with `ohya devices invite`, and revoke a
+  device with `ohya devices revoke ID`.
+
+See [serve and join](docs/reference.md#commands) for the transport, join
+codes, and state directories.
+
+## Why ohya
+
+- **Lossless while retained.** ohya keeps every original JSONL record byte
+  for byte. A parser upgrade re-derives rows from the stored records
+  (`ohya rederive`).
+- **Durable.** Claude Code deletes transcripts after 30 days by default
+  (`cleanupPeriodDays`). ohya keeps every record it ingested until you decide
+  otherwise.
+- **Owner-decided retention.** Nothing is deleted automatically. `ohya purge`
+  plans a deletion (dry run by default) by session, repository, agent, age,
+  or the garbage marks an agent placed with `annotate`. A purged source is
+  refused until you re-admit it
+  ([ADR 0013](docs/adr/0013-owner-scoped-session-purge.md),
+  [ADR 0016](docs/adr/0016-agent-marked-purge-scope.md)).
+- **Small context footprint.** The MCP schema that agents load up front is
+  less than 8 KB. Rare playbooks for audits and analytics load on demand as
+  MCP resources.
+- **Checked sync.** The sync and authorization state machines are
+  model-checked with TLA+/TLC ([`tla/`](tla/README.md)).
+
+## How ohya compares
+
+### Measured recall
+
+We ran `cmd/recall-bench` on `glm-5.3` with 12 questions, 3 repeats each
+(36 runs per setup, 180 s timeout). The questions cover needle lookups,
+paraphrases, time windows, corrections, counts, multi-hop chains, verified
+absence, and cross-device recall. Each setup answered from the same corpus:
+raw transcripts on disk (`Bash`, `Grep`, `Read`), a local Atuin `v18.25.1`,
+and ohya. Results from 2026-11-23:
+
+| All 12 questions | Raw transcripts | Atuin v18.25.1 | **ohya** |
+| :--- | ---: | ---: | ---: |
+| Correct answers | 35 / 36 | 35 / 36 | **36 / 36** |
+| Timeouts | 1 | 1 | **0** |
+| Total wall time | 1,792 s | 1,235 s | **992 s** |
+| Tool calls | 354 | 205 | **128** |
+| Tool output read | 788 KB | 544 KB | **207 KB** |
+| Total cost | $8.03\* | $5.25\* | **$4.53** |
+
+Compared with raw transcript search, ohya used 45% less wall time, 74% less
+tool output, and 44% less money, with no timeouts. It answered the
+cross-device question in 23.4 s; Atuin took 165.5 s or timed out.
+
+\*A run that timed out reported no final usage, so its cost is missing from
+the total.
+
+<details>
+<summary>Local questions only, cache tokens, and cost per correct answer</summary>
+
+The 11 questions that need no second device (33 runs per setup):
+
+| Local questions | Raw transcripts | Atuin v18.25.1 | ohya |
+| :--- | ---: | ---: | ---: |
+| Correct answers | 33 / 33 | 33 / 33 | 33 / 33 |
+| Total wall time | 1,263 s | **779 s** | 922 s |
+| Tool calls | 279 | 127 | **117** |
+| Tool output read | 524 KB | 197 KB | **182 KB** |
+| Cache-read tokens | 3.06M | 1.89M | **1.79M** |
+| Total cost | $6.05 | **$3.79** | $4.15 |
+| Cost per correct answer | $0.183 | **$0.115** | $0.126 |
+
+On simple local keyword lookups, Atuin's two-argument search tool was faster
+and cheaper: writing SQL takes more output tokens than calling a fixed search
+tool. A follow-up on the 5 affected questions, after the `v0.6.0` recipe
+changes, cut ohya's wall time by a further 26% and its cost by 18%
+($2.39 → $1.96), which closes most of that gap.
+
+ohya also led on distinct-session counting (14.3 s and 0.3 KB, against
+30.0 s and 2.3 KB for Atuin) and on verified absence (17.0 s and 2.5 KB,
+against 31.6 s and 13.3 KB).
+
+For all 12 questions, cache-read tokens were 5.05M (raw), 3.22M (Atuin), and
+1.96M (ohya). Cost per correct answer was $0.229, $0.150, and $0.126.
+
+</details>
+
+### Atuin threads
+
+[Atuin](https://atuin.sh) shipped "threads" in
+[v18.24.0](https://github.com/atuinsh/atuin/releases/tag/v18.24.0)
+(2026-10-15). It captures and searches the same Claude Code, Codex, and Pi
+session files and serves them to agents over MCP. We checked these
+differences against Atuin `v18.25.1`, its repository, and its issue tracker
+on 2026-11-23:
+
+| | Atuin threads v18.25.1 | ohya |
+| :--- | :--- | :--- |
+| Sharing | Single user. The "Threads for teams" beta uploads shared threads in plaintext to a hosted hub. | A hub that you run. One-time invitations, encrypted device sync, final revocation. |
+| Fidelity | Compressed payloads; tool input and output clipped at 64 KiB; secrets replaced at capture. | Every original record kept byte for byte; secrets redacted when results leave the hub ([ADR 0015](docs/adr/0015-egress-secret-redaction.md)). |
+| Recall surface | 6 fixed tools (about 16.9 KB of schema); needs a running daemon; no upper date bound, `OR`/`NOT`, model or device filters, or exact counts past 20 threads ([#4589](https://github.com/atuinsh/atuin/issues/4589)). | 2 tools (`sql`, `annotate`) under 8 KB; opens SQLite read-only with no daemon; dates, models, devices, and counts are one `WHERE` or `GROUP BY` ([recipes](DB.md#recall-recipes)). |
+| Harnesses | No Antigravity. | Claude Code, Codex, Pi, and Antigravity. |
+| Retention | No delete or purge command ([#4434](https://github.com/atuinsh/atuin/issues/4434)). | Owner-decided purge with source tombstones. |
+| Verification | — | Sync and authorization model-checked with TLA+/TLC. |
+
+## Build from source
+
+Building from source requires Go 1.27.3 or later, CGO, and a C compiler
+(Xcode Command Line Tools on macOS, `build-essential` on Debian or Ubuntu).
+
+```sh
+git clone https://github.com/nibzard/ohya && cd ohya
+make build
+./bin/ohya setup --dry-run   # show the changes setup will make
+./bin/ohya setup             # ingestion service + MCP entries for detected agents
+./bin/ohya doctor            # check the result
+```
+
+<details>
+<summary>Manual setup (no service, no client changes)</summary>
+
+```sh
+./bin/ohya ingest --once     # import existing history, then exit
+./bin/ohya ingest            # or: keep polling until stopped
+```
+
+Skip specific session files with a repeatable `--exclude GLOB` (stdlib
+`path.Match` semantics, matched against absolute source paths); skipped
+counts show in the pass summary and `ohya status`:
+
+```sh
+./bin/ohya ingest --exclude '/home/me/.codex/sessions/rollout-*-guardian-*'
+```
+
+Register the MCP server in your agent, for example in Claude Code:
+
+```json
+{
+  "mcpServers": {
+    "ohya": { "command": "/absolute/path/to/bin/ohya", "args": ["mcp"] }
+  }
+}
+```
+
+</details>
 
 ## Commands
 
