@@ -14,9 +14,11 @@ See [ADR 0017](../../docs/adr/0017-macos-menubar-app.md) and [Plan 005](../../pl
 
 ```sh
 cd macos/OhyaMenuBar
-swift test
-swift run OhyaMenuBar
+xcrun swift test
+xcrun swift run OhyaMenuBar
 ```
+
+Use `xcrun swift`, not a bare `swift`. A toolchain from swiftly can come first on `PATH`, and it cannot compile against the Xcode SDK (`cannot find 'URL' in scope`, `unknown argument: '-target-arch-variant'`).
 
 ## Build `Ohya.app` bundle
 

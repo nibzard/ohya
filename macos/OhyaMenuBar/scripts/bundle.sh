@@ -10,9 +10,9 @@ OUT_APP="$ROOT/.build/Ohya.app"
 cp "$TEMPLATE_SRC" "$TEMPLATE_DST"
 
 cd "$ROOT"
-swift build -c release
+xcrun swift build -c release
 
-BIN_DIR="$(swift build -c release --show-bin-path)"
+BIN_DIR="$(xcrun swift build -c release --show-bin-path)"
 rm -rf "$OUT_APP"
 mkdir -p "$OUT_APP/Contents/MacOS" "$OUT_APP/Contents/Resources"
 

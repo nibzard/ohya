@@ -34,3 +34,5 @@ looper_*/
 /testdata/bench/
 # local release candidates
 /dist/
+# SwiftPM build output for the macOS menu bar app
+/macos/OhyaMenuBar/.build/
