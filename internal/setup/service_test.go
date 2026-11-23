@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -135,5 +136,52 @@ func TestSystemdAcceptsGeneratedUnit(t *testing.T) {
 	output, err := exec.CommandContext(ctx, analyzer, "--user", "verify", path).CombinedOutput()
 	if err != nil {
 		t.Fatalf("systemd rejected generated unit: %v %s", err, output)
+	}
+}
+
+func fakeLaunchctl(t *testing.T, printsBeforeRelease int) string {
+	t.Helper()
+	dir := t.TempDir()
+	script := `#!/bin/sh
+dir="` + dir + `"
+case "$1" in
+bootout) echo ` + strconv.Itoa(printsBeforeRelease) + ` > "$dir/remaining" ;;
+print)
+	remaining=$(cat "$dir/remaining" 2>/dev/null || echo 0)
+	echo print >> "$dir/prints"
+	if [ "$remaining" -gt 0 ]; then
+		echo $((remaining - 1)) > "$dir/remaining"
+		echo "state = running"
+		exit 0
+	fi
+	echo "Could not find service" >&2
+	exit 113 ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(dir, "launchctl"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return dir
+}
+
+func TestLaunchdBootoutWaitsUntilLabelIsReleased(t *testing.T) {
+	dir := fakeLaunchctl(t, 3)
+	if err := RunServiceCommand(context.Background(), []string{"launchctl", "bootout", "gui/501/com.nibzard.ohya"}); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "prints"))
+	if got := strings.Count(string(raw), "print"); got != 4 {
+		t.Fatalf("bootout returned after %d print checks, want 4 (3 loaded, 1 released)", got)
+	}
+}
+
+func TestLaunchdBootoutReportsALabelThatStaysLoaded(t *testing.T) {
+	fakeLaunchctl(t, 1000)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err := RunServiceCommand(ctx, []string{"launchctl", "bootout", "gui/501/com.nibzard.ohya"})
+	if err == nil || !strings.Contains(err.Error(), "still holds gui/501/com.nibzard.ohya") {
+		t.Fatalf("bootout error = %v", err)
 	}
 }

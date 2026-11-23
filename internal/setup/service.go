@@ -230,6 +230,9 @@ func RunServiceCommand(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	if args[0] == "launchctl" && len(args) == 3 && args[1] == "bootout" {
+		return waitLaunchdRelease(ctx, args[2])
+	}
 	if args[0] == "launchctl" && len(args) > 1 && args[1] == "print" {
 		return serviceRunning("darwin", output, serviceKind(args))
 	}
@@ -258,6 +261,24 @@ func waitService(ctx context.Context, s Service, run func(context.Context, []str
 		case <-ctx.Done():
 			return fmt.Errorf("service did not stay ready: %w", errors.Join(ctx.Err(), last))
 		case <-time.After(250 * time.Millisecond):
+		}
+	}
+}
+
+const launchdReleaseTimeout = 30 * time.Second
+
+func waitLaunchdRelease(ctx context.Context, target string) error {
+	ctx, cancel := context.WithTimeout(ctx, launchdReleaseTimeout)
+	defer cancel()
+	for {
+		_, err := serviceOutput(ctx, []string{"launchctl", "print", target})
+		if err != nil && ctx.Err() == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("launchd still holds %s after bootout: %w", target, ctx.Err())
+		case <-time.After(200 * time.Millisecond):
 		}
 	}
 }
