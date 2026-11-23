@@ -2358,6 +2358,42 @@ How to use this file:
     purge, invite, and revoke.
   - The popover layout has no automated test.
 
+- Upgrade of a pre-Tailcat joined Mac to v0.6.1 (2026-11-23, observed on
+  this MacBook). Fixed on main: launchd bootout race (d8c875e), shared
+  skill directories through symlinks (0a98606), the dead-end hint for a
+  paired device without `hub-address.json` (302069f). Open frictions:
+  - An unused invitation stays redeemable after a rejoin with an existing
+    credential ("the invitation stays unused"), and no command revokes an
+    invitation. A code pasted into a shell or chat stays live until its
+    TTL. Consuming or revoking it changes the authorization state machine,
+    so it needs a TLA+ update first.
+  - `ohya join CODE` takes the code only as an argument, which puts it into
+    shell history and `ps`; README lists `ohya join CODE` while INSTALL.md
+    says never to put the code in an argument. The hidden-code path exists
+    only in the installer (`--join`) and setup (`--join-code-env`).
+  - Every join start prints one "source ... disappeared; the checkpoint is
+    kept" line per checkpointed file that its agent deleted (26 lines here,
+    all uploaded in full). This repeats at each restart and in the launchd
+    stderr log. Proposal: sources missing at the first pass of a process
+    with no unsent bytes collapse to one counted line; per-file lines stay
+    for data loss and for a disappearance seen while running. This changes
+    the T081 decision, so update the codex ingest and uploader tests.
+  - Backlog progress prints "0 of N bytes acknowledged, rate unknown so
+    far" and, at the end, "N of N bytes acknowledged, rate unknown so far"
+    before "complete". Proposal: skip the progress line while the rate is
+    unknown after the first, and never print it once sent equals total.
+  - A joined device needs two commands after an upgrade (`ohya join CODE`
+    in the foreground, then `ohya setup`), and running both leaves two
+    join processes on one state directory until setup replaces the
+    service. The installer `--join` path does both in one step; error
+    messages should point to it (now done for the missing-address case).
+  - `join` and `ingest` take no lock on their state directory (verified:
+    only setup and the installer use `flock`), so two uploaders ran on one
+    set of checkpoints for minutes. Hub deduplication probably prevents
+    duplicate events, but an older acknowledgment written after a newer
+    one is unverified; a single-writer lock per state directory is the
+    candidate fix and belongs in the sync TLA+ model's assumptions.
+
 - Recall bench (2026-11-22, `cmd/recall-bench`): comparative measurement of
   raw transcript files versus the ohya sql MCP tool as recall access paths,
   with real headless clients; design and protocol in
