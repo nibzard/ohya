@@ -2344,12 +2344,19 @@ How to use this file:
   - Speed up `make check`: `cmd/ohya` takes ~466 s; mark independent CLI
     unit tests `t.Parallel()` and consolidate redundant subprocess builds.
 
-- macOS menu bar app (`macos/OhyaMenuBar`) cannot build on the Linux VM:
-  no Swift toolchain (verified 2026-11-21). Changes made here are
-  unverified until someone runs `swift test` on a Mac. The 2026-11-21
-  review fixes and cleanups (19774e8..d356297) await that check; before
-  them the test target likely did not compile (plain import of
-  internal memberwise initializers, fixed 3643b94).
+- macOS menu bar app (`macos/OhyaMenuBar`) verified on macOS 27.2 with
+  Xcode 27.2 (2026-11-23): `xcrun swift test` passes (5 tests, no build
+  warnings), and `scripts/bundle.sh` builds `Ohya.app`. A manual run with
+  embedded v0.6.1 against a throwaway `HOME` showed the Status, Recall
+  (list and search), and Devices tabs with real data. Open items:
+  - The app needs ohya v0.6.x. A v0.1.x binary does not have `status`,
+    `sessions`, `usage`, `logs`, `purge`, `service`, or `search`.
+  - The agent label "antigravity" shows in lowercase, and Recall has no
+    Antigravity filter chip.
+  - Not exercised: Pause/Resume (launchd labels are global, so a throwaway
+    `HOME` does not isolate them), the logs sheet, diagnostics export,
+    purge, invite, and revoke.
+  - The popover layout has no automated test.
 
 - Recall bench (2026-11-22, `cmd/recall-bench`): comparative measurement of
   raw transcript files versus the ohya sql MCP tool as recall access paths,
