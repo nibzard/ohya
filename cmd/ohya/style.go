@@ -88,6 +88,13 @@ func (s cliStyle) wrap(code, text string) string {
 	return code + strings.ReplaceAll(text, ansiReset, ansiReset+code) + ansiReset
 }
 
+func (s cliStyle) wrapHanging(text string, indent int) string {
+	if s.width == 0 || s.width-indent < minFitColumn {
+		return text
+	}
+	return strings.ReplaceAll(wrap(text, s.width-indent), "\n", "\n"+strings.Repeat(" ", indent))
+}
+
 func (s cliStyle) fit(text string, indent int) string {
 	if s.width == 0 {
 		return text

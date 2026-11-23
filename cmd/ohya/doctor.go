@@ -621,9 +621,9 @@ func writeFindings(w io.Writer, findings []finding) {
 	fmt.Fprintf(w, "%s\n\n", s.bold("ohya doctor"))
 	detailIndent := 2 + 1 + 2 + maxCheck + 2
 	for _, f := range findings {
-		fmt.Fprintf(w, "  %s  %s  %s\n", s.severityTag(f.Severity), padRight(s.bold(f.Check), maxCheck), s.fit(f.Detail, detailIndent))
+		fmt.Fprintf(w, "  %s  %s  %s\n", s.severityTag(f.Severity), padRight(s.bold(f.Check), maxCheck), s.wrapHanging(f.Detail, detailIndent))
 		if f.Remedy != "" {
-			fmt.Fprintf(w, "%s%s\n", strings.Repeat(" ", detailIndent), s.dim(s.fit("→ "+f.Remedy, detailIndent)))
+			fmt.Fprintf(w, "%s%s\n", strings.Repeat(" ", detailIndent), s.dim(s.wrapHanging("→ "+f.Remedy, detailIndent)))
 		}
 	}
 	fmt.Fprintln(w)

@@ -129,3 +129,15 @@ func TestCLITableFitsOnlyTheLastColumn(t *testing.T) {
 		t.Fatalf("last column was not fitted:\n%s", out.String())
 	}
 }
+
+func TestWrapHangingIndentsContinuationLines(t *testing.T) {
+	s := cliStyle{width: 30}
+	got := s.wrapHanging("alpha beta gamma delta epsilon zeta", 10)
+	want := "alpha beta gamma\n          delta epsilon zeta"
+	if got != want {
+		t.Fatalf("wrapHanging = %q; want %q", got, want)
+	}
+	if got := (cliStyle{}).wrapHanging("alpha beta", 10); got != "alpha beta" {
+		t.Fatalf("unbounded width must not wrap: %q", got)
+	}
+}
