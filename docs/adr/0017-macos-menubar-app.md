@@ -181,6 +181,11 @@ reports the correct state: `ohya service status --json` returns
      puts it into the child process environment only, and runs
      `ohya setup --join-code-env NAME --json`.
 
+   When the resolved `ohya` is the copy inside the app bundle, the app runs
+   `ohya install` with the same flags instead. That copies the executable to
+   `~/.local/bin` before setup runs, so the service that setup writes never
+   points inside `ohya.app`, which can move or update.
+
    The app shows the per-component results from the JSON report and returns
    to the normal surfaces when setup completes. If setup is incomplete, the
    app shows each failed component with its detail and offers to run setup

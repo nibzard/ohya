@@ -82,6 +82,11 @@ final class AppModel {
     private(set) var lastError: OhyaRunnerError?
     private(set) var summary = StatusEvaluator.evaluate(status: nil, error: nil)
 
+    private(set) var setupNeeded = false
+    private(set) var isRunningSetup = false
+    private(set) var setupReport: SetupReport?
+    private(set) var setupError: String?
+
     private(set) var isRefreshing = false
     private var statusRefreshPending = false
     private(set) var isTogglingService = false
@@ -166,8 +171,55 @@ final class AppModel {
     func refreshAll() async {
         resolveBinary()
         await refreshVersion()
+        await refreshSetupNeeded()
         await refreshStatus()
-        await refreshSecondary(force: true)
+        if !setupNeeded {
+            await refreshSecondary(force: true)
+        }
+    }
+
+    private func refreshSetupNeeded() async {
+        guard let binary = resolvedBinaryPath else { return }
+        if let response: CLIResponse<ServiceStatusData> = try? await runner.runJSON(
+            binaryPath: binary,
+            arguments: ["service", "status", "--json"],
+            timeout: 10
+        ) {
+            setupNeeded = !response.data.installed
+        }
+    }
+
+    func runSetup(joinCode: String?) async {
+        guard let binary = resolvedBinaryPath, !isRunningSetup else { return }
+        isRunningSetup = true
+        defer { isRunningSetup = false }
+        setupError = nil
+        setupReport = nil
+
+        let code = joinCode?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let arguments = SetupCommand.arguments(
+            binaryPath: binary,
+            bundleExecutableDir: Bundle.main.executableURL?.deletingLastPathComponent().path,
+            joinCodeVariable: code.isEmpty ? nil : SetupCommand.joinCodeVariable
+        )
+        do {
+            let response: CLIResponse<SetupReport> = try await runner.runJSON(
+                binaryPath: binary,
+                arguments: arguments,
+                timeout: 180,
+                environment: code.isEmpty ? [:] : [SetupCommand.joinCodeVariable: code],
+                acceptReportOnFailure: true
+            )
+            setupReport = response.data
+            if response.data.isComplete {
+                showTransientMessage("ohya is set up")
+            }
+        } catch let err as OhyaRunnerError {
+            setupError = err.localizedDescription
+        } catch {
+            setupError = error.localizedDescription
+        }
+        await refreshAll()
     }
 
     private func resolveBinary() {
@@ -213,6 +265,9 @@ final class AppModel {
             resolveBinary()
         }
         guard let binary = resolvedBinaryPath else { return }
+        if setupNeeded {
+            await refreshSetupNeeded()
+        }
 
         do {
             var statusArgs = ["status", "--json"]
@@ -296,7 +351,7 @@ final class AppModel {
     }
 
     func toggleService() async {
-        guard let binary = resolvedBinaryPath, !isTogglingService else { return }
+        guard let binary = resolvedBinaryPath, !isTogglingService, !setupNeeded else { return }
         isTogglingService = true
         defer { isTogglingService = false }
 

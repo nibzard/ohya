@@ -14,15 +14,23 @@ struct PopoverRootView: View {
                 .padding(.top, 12)
                 .padding(.bottom, 8)
 
-            segmentedSwitcher
-                .padding(.horizontal, 14)
-                .padding(.bottom, 10)
+            if !model.setupNeeded {
+                segmentedSwitcher
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 10)
+            }
 
             Divider()
                 .opacity(0.45)
 
-            contentArea
-                .frame(height: OhyaTheme.popoverMaxHeight - 132)
+            Group {
+                if model.setupNeeded {
+                    FirstRunView(model: model)
+                } else {
+                    contentArea
+                }
+            }
+            .frame(height: OhyaTheme.popoverMaxHeight - 132)
 
             if let message = model.transientMessage {
                 HStack(spacing: 6) {
@@ -81,7 +89,7 @@ struct PopoverRootView: View {
                 Circle()
                     .fill(statusDotColor)
                     .frame(width: 7, height: 7)
-                Text(model.summary.iconState.shortStatusLabel)
+                Text(model.setupNeeded ? "Not set up" : model.summary.iconState.shortStatusLabel)
                     .font(.caption.weight(.medium))
                     .foregroundStyle(statusTextColor)
             }
@@ -142,7 +150,7 @@ struct PopoverRootView: View {
                     .font(.caption.weight(.medium))
                 }
                 .buttonStyle(.borderless)
-                .disabled(model.isTogglingService || model.resolvedBinaryPath == nil)
+                .disabled(model.isTogglingService || model.resolvedBinaryPath == nil || model.setupNeeded)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 4)
 

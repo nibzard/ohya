@@ -2357,6 +2357,12 @@ How to use this file:
     `HOME` does not isolate them), the logs sheet, diagnostics export,
     purge, invite, and revoke.
   - The popover layout has no automated test.
+  - First-run setup (plan 005 M4b) verified 2026-11-23 against an empty
+    `HOME`: the "Not set up" view, Use this Mac (an incomplete report,
+    because the real service holds the global launchd label), and Join a
+    hub with a real code all worked. A throwaway `HOME` does not isolate a
+    join: it pairs a real new device with the hub, which then needs
+    `ohya devices revoke`. Test Join a hub only against a test hub.
 
 - Upgrade of a pre-Tailcat joined Mac to v0.6.1 (2026-11-23, observed on
   this MacBook). Fixed on main: launchd bootout race (d8c875e), shared

@@ -86,14 +86,6 @@ struct StatusView: View {
                             }
                         }
                     }
-                    if let hint = finding.hint, hint.contains("ohya ") {
-                        HStack {
-                            Spacer()
-                            CopyFeedbackButton("Copy fix", systemImage: "terminal") {
-                                model.clipboard.copyText(hint)
-                            }
-                        }
-                    }
                 }
                 .padding(10)
                 .background(

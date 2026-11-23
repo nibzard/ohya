@@ -88,9 +88,11 @@ public actor OhyaRunner {
         binaryPath: String,
         arguments: [String],
         timeout: TimeInterval = 15,
-        acceptDegradedExit3: Bool = false
+        acceptDegradedExit3: Bool = false,
+        environment: [String: String] = [:],
+        acceptReportOnFailure: Bool = false
     ) async throws -> CLIResponse<T> {
-        let raw = try await execute(binaryPath: binaryPath, arguments: arguments, timeout: timeout)
+        let raw = try await execute(binaryPath: binaryPath, arguments: arguments, timeout: timeout, environment: environment)
         let allowed = raw.exitCode == 0 || (acceptDegradedExit3 && raw.exitCode == 3)
 
         let envelope: JSONEnvelope<T>
@@ -119,7 +121,7 @@ public actor OhyaRunner {
             )
         }
 
-        guard allowed, let data = envelope.data else {
+        guard allowed || acceptReportOnFailure, let data = envelope.data else {
             throw OhyaRunnerError.commandFailed(
                 code: "unexpected_exit",
                 message: "ohya exited with status \(raw.exitCode)",
@@ -136,20 +138,21 @@ public actor OhyaRunner {
         arguments: [String],
         timeout: TimeInterval = 30
     ) async throws -> (exitCode: Int32, stdout: Data, stderr: Data) {
-        try await execute(binaryPath: binaryPath, arguments: arguments, timeout: timeout)
+        try await execute(binaryPath: binaryPath, arguments: arguments, timeout: timeout, environment: [:])
     }
 
     private func execute(
         binaryPath: String,
         arguments: [String],
-        timeout: TimeInterval
+        timeout: TimeInterval,
+        environment: [String: String]
     ) async throws -> (exitCode: Int32, stdout: Data, stderr: Data) {
         try await withCheckedThrowingContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: binaryPath)
             process.arguments = arguments
             process.currentDirectoryURL = URL(fileURLWithPath: NSTemporaryDirectory())
-            process.environment = scrubbedEnvironment()
+            process.environment = scrubbedEnvironment().merging(environment) { _, added in added }
 
             let stdoutPipe = Pipe()
             let stderrPipe = Pipe()

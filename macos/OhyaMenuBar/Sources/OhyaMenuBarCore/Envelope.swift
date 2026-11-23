@@ -136,7 +136,47 @@ public struct StatusFinding: Decodable, Sendable, Equatable, Identifiable {
 }
 
 public struct ServiceStatusData: Decodable, Sendable, Equatable {
+    public let installed: Bool
     public let running: Bool
+}
+
+public struct SetupReport: Decodable, Sendable, Equatable {
+    public let results: [SetupResult]
+
+    public var isComplete: Bool {
+        !results.contains(where: \.isFailure)
+    }
+}
+
+public struct SetupResult: Decodable, Sendable, Equatable, Identifiable {
+    public var id: String { component }
+    public let component: String
+    public let status: String
+    public let detail: String?
+
+    public enum Outcome: Sendable, Equatable {
+        case success
+        case neutral
+        case warning
+        case failure
+    }
+
+    public var outcome: Outcome {
+        switch status {
+        case "failed", "unsupported", "blocked":
+            return .failure
+        case "configured", "created", "started", "restarted", "removed", "updated", "running", "ready", "saved":
+            return .success
+        case "unchanged", "skipped", "unmanaged", "not needed", "absent", "planned":
+            return .neutral
+        default:
+            return .warning
+        }
+    }
+
+    public var isFailure: Bool {
+        outcome == .failure
+    }
 }
 
 public struct SearchData: Decodable, Sendable, Equatable {

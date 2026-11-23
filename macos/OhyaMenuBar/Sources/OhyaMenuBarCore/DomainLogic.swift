@@ -280,3 +280,17 @@ public enum DisplayFormat {
         return String(format: "%d:%02d", mins, secs)
     }
 }
+
+public enum SetupCommand {
+    public static let joinCodeVariable = "OHYA_JOIN_CODE"
+
+    public static func arguments(binaryPath: String, bundleExecutableDir: String?, joinCodeVariable: String?) -> [String] {
+        let binaryDir = (binaryPath as NSString).deletingLastPathComponent
+        let bundled = bundleExecutableDir.map { ($0 as NSString).standardizingPath == (binaryDir as NSString).standardizingPath } ?? false
+        var arguments = [bundled ? "install" : "setup", "--json"]
+        if let joinCodeVariable {
+            arguments += ["--join-code-env", joinCodeVariable]
+        }
+        return arguments
+    }
+}
