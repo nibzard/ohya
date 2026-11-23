@@ -79,6 +79,7 @@ func TestJoinOldCodeFormatRejected(t *testing.T) {
 
 func TestJoinExpiredInvitationNamesRemedy(t *testing.T) {
 	skipUnlessTransportE2E(t)
+	t.Parallel()
 	dir := transportTestDir(t)
 	hubState := filepath.Join(dir, "hub-state")
 	hubDB := filepath.Join(dir, "hub", "hub.db")
@@ -107,6 +108,7 @@ func TestJoinExpiredInvitationNamesRemedy(t *testing.T) {
 
 func TestJoinUsedInvitationNamesRemedy(t *testing.T) {
 	skipUnlessTransportE2E(t)
+	t.Parallel()
 	dir := transportTestDir(t)
 	hubState := filepath.Join(dir, "hub-state")
 	hubDB := filepath.Join(dir, "hub", "hub.db")
@@ -134,6 +136,7 @@ func TestJoinUsedInvitationNamesRemedy(t *testing.T) {
 
 func TestJoinRebindKeepsDevice(t *testing.T) {
 	skipUnlessTransportE2E(t)
+	t.Parallel()
 	dir := transportTestDir(t)
 	hubState := filepath.Join(dir, "hub-state")
 	hubDB := filepath.Join(dir, "hub", "hub.db")
@@ -222,6 +225,7 @@ func TestJoinRebindKeepsDevice(t *testing.T) {
 
 func TestJoinRebindRevokedRejected(t *testing.T) {
 	skipUnlessTransportE2E(t)
+	t.Parallel()
 	dir := transportTestDir(t)
 	hubState := filepath.Join(dir, "hub-state")
 	hubDB := filepath.Join(dir, "hub", "hub.db")
@@ -269,6 +273,7 @@ func TestJoinRebindRevokedRejected(t *testing.T) {
 
 func TestJoinRebindDifferentHubRejected(t *testing.T) {
 	skipUnlessTransportE2E(t)
+	t.Parallel()
 	dir := transportTestDir(t)
 	hubAState := filepath.Join(dir, "hub-a-state")
 	hubBState := filepath.Join(dir, "hub-b-state")
@@ -317,6 +322,7 @@ func TestJoinRebindDifferentHubRejected(t *testing.T) {
 
 func TestTransportReporting(t *testing.T) {
 	skipUnlessTransportE2E(t)
+	t.Parallel()
 	dir := transportTestDir(t)
 	hubState := filepath.Join(dir, "hub-state")
 	hubDB := filepath.Join(dir, "hub", "hub.db")

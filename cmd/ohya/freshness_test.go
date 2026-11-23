@@ -1152,6 +1152,7 @@ func TestFreshnessSmoke(t *testing.T) {
 	if testing.Short() {
 		t.Skip("end-to-end stack test")
 	}
+	t.Parallel()
 	opts := freshnessOptionsFromEnv(t)
 	st := startFreshnessStack(t, opts)
 	rep := measureFreshness(t, st, opts)
