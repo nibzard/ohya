@@ -914,6 +914,9 @@ func (u *Uploader) reportBacklog(now time.Time, done bool) {
 	if d.total < backlogLogFloor {
 		return
 	}
+	if !done && (sent == 0 || left <= 0) {
+		return
+	}
 	if d.logged && now.Sub(d.lastLog) < backlogLogInterval && !done {
 		return
 	}
@@ -924,7 +927,7 @@ func (u *Uploader) reportBacklog(now time.Time, done bool) {
 	case done:
 		u.logf("upload backlog for %s: complete, %d bytes acknowledged in %s", agent, sent, now.Sub(d.start).Round(time.Second))
 	case !rateKnown:
-		u.logf("upload backlog for %s: %d of %d bytes acknowledged, rate unknown so far", agent, sent, d.total)
+		u.logf("upload backlog for %s: %d of %d bytes acknowledged", agent, sent, d.total)
 	case left > 0:
 		eta := time.Duration(float64(left) / rate * float64(time.Second))
 		u.logf("upload backlog for %s: %d of %d bytes acknowledged, %.0f bytes/s, about %s left",

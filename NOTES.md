@@ -1727,8 +1727,9 @@ How to use this file:
     bytes and completes when a later pass sees none (completion is
     detected at the START of the next pass, so tests need one extra
     sync). Rate publishes only with ≥2 ack samples spanning ≥1 s inside
-    a 10 s window; before that the log says "rate unknown so far". Log
-    lines need a ≥1 MiB total and print at most every 10 s — small
+    a 10 s window; before that the log line has no rate. Log lines need
+    a ≥1 MiB total, at least one acknowledged byte, and bytes left
+    (except the completion line), and print at most every 10 s — small
     appends stay fully silent. ETA uses float math; integer
     `Duration/Duration` truncates.
 
@@ -2361,7 +2362,9 @@ How to use this file:
 - Upgrade of a pre-Tailcat joined Mac to v0.6.1 (2026-11-23, observed on
   this MacBook). Fixed on main: launchd bootout race (d8c875e), shared
   skill directories through symlinks (0a98606), the dead-end hint for a
-  paired device without `hub-address.json` (302069f). Open frictions:
+  paired device without `hub-address.json` (302069f), one counted line
+  for sources already missing at startup (aa2c5ed), and backlog progress
+  lines without news. Open frictions:
   - An unused invitation stays redeemable after a rejoin with an existing
     credential ("the invitation stays unused"), and no command revokes an
     invitation. A code pasted into a shell or chat stays live until its
@@ -2371,17 +2374,6 @@ How to use this file:
     shell history and `ps`; README lists `ohya join CODE` while INSTALL.md
     says never to put the code in an argument. The hidden-code path exists
     only in the installer (`--join`) and setup (`--join-code-env`).
-  - Every join start prints one "source ... disappeared; the checkpoint is
-    kept" line per checkpointed file that its agent deleted (26 lines here,
-    all uploaded in full). This repeats at each restart and in the launchd
-    stderr log. Proposal: sources missing at the first pass of a process
-    with no unsent bytes collapse to one counted line; per-file lines stay
-    for data loss and for a disappearance seen while running. This changes
-    the T081 decision, so update the codex ingest and uploader tests.
-  - Backlog progress prints "0 of N bytes acknowledged, rate unknown so
-    far" and, at the end, "N of N bytes acknowledged, rate unknown so far"
-    before "complete". Proposal: skip the progress line while the rate is
-    unknown after the first, and never print it once sent equals total.
   - A joined device needs two commands after an upgrade (`ohya join CODE`
     in the foreground, then `ohya setup`), and running both leaves two
     join processes on one state directory until setup replaces the

@@ -1063,8 +1063,15 @@ func TestBacklogProgressReportedWhileDraining(t *testing.T) {
 	if !strings.Contains(logged, fmt.Sprintf("complete, %d bytes acknowledged", size(t, a))) {
 		t.Fatalf("log misses the completion line with the drained byte count:\n%s", logged)
 	}
-	if !strings.Contains(logged, "rate unknown so far") {
-		t.Fatalf("log misses the unknown-rate report before a window exists:\n%s", logged)
+	total := size(t, a)
+	for _, noise := range []string{
+		fmt.Sprintf(": 0 of %d bytes acknowledged", total),
+		fmt.Sprintf(": %d of %d bytes acknowledged", total, total),
+		"rate unknown",
+	} {
+		if strings.Contains(logged, noise) {
+			t.Fatalf("log repeats a progress line without news (%q):\n%s", noise, logged)
+		}
 	}
 	agent := claudecode.AgentName
 	if got := f.obs.Gauge("upload_backlog_bytes", agent); got != 0 {
