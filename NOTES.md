@@ -230,6 +230,17 @@ How to use this file:
     `events(source_id, parser_version)` of the doctor note ("Doctor cost on
     a 6.6 GB hub"). After the release each costs one full copy.
 
+- A stray build was deleted by mistake (2026-11-24, 22:23): a scratch
+  cleanup ran `rm -f` with relative paths while the shell stood in the
+  repository root, and removed `ohya` there (50,636,568 bytes, built on
+  2026-11-23 at 13:13). Git ignores that path, so `git status` never
+  showed it. No service, MCP configuration, or running process used that
+  path: all of them run `/home/agent/.local/bin/ohya` (v0.7.0). No copy
+  of the file exists. `make build` writes a build of the current tree to
+  `bin/ohya`; that build has schema 9, so do not run a write command of
+  it against the live hub before the release. Rule: delete with absolute
+  paths, after `ls -l` of each target.
+
 - Competitive clock — claude-mem (verified 2026-11-24): thedotmack/claude-mem
   v16.1.2 (Apache-2.0, 119,454 stars, 395,623 npm downloads in 30 days,
   15 releases in 12 days) is the category leader on agent memory, with the
