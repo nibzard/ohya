@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/mattn/go-sqlite3"
 )
@@ -106,42 +105,8 @@ func (d *DB) FTSIndexConsistent(ctx context.Context) error {
 			if !ok {
 				return fmt.Errorf("store: integrity snapshot source is %T, want the bundled SQLite driver", srcRaw)
 			}
-			backup, err := dstConn.Backup("main", srcConn, "main")
-			if err != nil {
+			if err := copySnapshot(ctx, dstConn, srcConn, nil); err != nil {
 				return fmt.Errorf("store: snapshot database: %w", err)
-			}
-			var stepErr error
-			var done bool
-			for !done {
-				if err := ctx.Err(); err != nil {
-					stepErr = err
-					break
-				}
-				done, stepErr = backup.Step(backupStepPages)
-				if stepErr != nil {
-					break
-				}
-				if !done {
-					timer := time.NewTimer(backupStepYield)
-					select {
-					case <-ctx.Done():
-						timer.Stop()
-						stepErr = ctx.Err()
-					case <-timer.C:
-					}
-					if stepErr != nil {
-						break
-					}
-				}
-			}
-			finishErr := backup.Close()
-			switch {
-			case stepErr != nil:
-				return fmt.Errorf("store: snapshot database: %w", stepErr)
-			case finishErr != nil:
-				return fmt.Errorf("store: snapshot database: %w", finishErr)
-			case !done:
-				return fmt.Errorf("store: snapshot database: incomplete")
 			}
 			return nil
 		})

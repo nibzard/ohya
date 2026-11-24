@@ -396,11 +396,13 @@ the highest stored parser version per agent against this build, and FTS consiste
 
 The FTS check runs the FTS5 `integrity-check` command with the `rank` argument, which compares the
 index with the external content. SQLite refuses that command on a `mode=ro` connection, because it
-is a write statement. The check therefore copies the database into a private in-memory database with
-the backup API, which writes nothing to the hub. The `rank` comparison expects an index entry for
-every content row, and this schema leaves text-less events unindexed, so the check first drops the
-delete trigger on the copy and removes the text-less rows. It runs on one connection, because each
-pooled connection would get its own in-memory database.
+is a write statement. The check therefore copies the database to a private temporary file under
+TMPDIR with the backup API, which writes nothing to the hub. The copy holds one read transaction on
+the source from the first step to the last, so commits from the hub do not restart it, and the hub
+keeps its writers. The check needs free disk a little more than the size of the database, and its
+time grows with the database size. The `rank` comparison expects an index entry for every content
+row, and this schema leaves text-less events unindexed, so the check first drops the delete trigger
+on the copy and removes the text-less rows.
 
 `count(*)` on the external-content `events_fts` table reads the content table, not the index. To
 enumerate indexed documents, query through `MATCH`.

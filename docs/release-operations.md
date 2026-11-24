@@ -154,9 +154,12 @@ one database in pages:
 - Busy emulated or spinning disks: minutes per GB.
 - Measured worst case: a 13.1 GB recovery point on a saturated single-disk VM
   took 8.5 h, about 39 min per GB, and starved every other process on the
-  machine (2026-11-16, NOTES.md). Schedule migrations on such disks for idle
-  time; while the copy runs, setup holds the setup lock and owned ingestion is
-  stopped.
+  machine (2026-11-16, NOTES.md). A build before 2026-11-24 restarted the copy
+  from the first page at each commit from another connection. The copy now
+  holds one read snapshot ([ADR 0008](adr/0008-integrated-setup.md)), so budget
+  from a measurement with a current build. Schedule migrations on slow disks
+  for idle time; while the copy runs, setup holds the setup lock and owned
+  ingestion is stopped.
 
 Setup reports the estimated copy size before starting and a progress line on
 stderr at every further 10 percent of the copy. A copy whose average rate

@@ -118,6 +118,17 @@ succeeds, so an interrupted copy never leaves a partial recovery point that
 pruning would keep, and staging abandoned by a killed run is removed on the
 next run.
 
+The copy reads one snapshot (2026-11-24). The copy loop holds a read transaction
+on the source database from the first step to the last. The destination shows
+the state of one moment, and a commit from another connection leaves the copy
+unchanged. Before this change, each step opened and closed its own read
+transaction. A commit from another connection between two steps restarted the
+copy from the first page. On a hub that received commits faster than one copy
+pass, the copy did not complete. The WAL grows by the writes made during the
+copy, because no checkpoint can pass the held read transaction. The next
+checkpoint reclaims that space. The FTS check of `ohya doctor --deep` copies
+the database with the same loop (`DB.md`, "Inspection").
+
 Owned ingestion is stopped before the recovery point, including on a setup
 rerun with unchanged service settings. External writers do not invalidate the
 online snapshot. Setup does not proceed to database opening when backup or
