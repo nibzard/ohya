@@ -45,7 +45,8 @@ func call(t *testing.T, session *mcp.ClientSession, query string) *mcp.CallToolR
 }
 
 func TestServerServesSQLTool(t *testing.T) {
-	session := connect(t, EngineOptions{WriterID: "dev1"})
+	const releaseWriterID = "0123456789abcdef0123456789abcdef"
+	session := connect(t, EngineOptions{WriterID: releaseWriterID})
 
 	tools, err := session.ListTools(context.Background(), nil)
 	if err != nil {
@@ -68,8 +69,8 @@ func TestServerServesSQLTool(t *testing.T) {
 	}
 	description := sql.Description
 	for _, want := range []string{
-		"Current writer ID", "dev1", "events_fts", "events_settled", "event_annotations",
-		"session_token_usage", "sqlite_master", "one statement per call",
+		"Current writer ID", releaseWriterID, "events_fts", "events_settled", "event_annotations",
+		"session_token_usage", "sqlite_master", "one statement per call", "search text with MATCH",
 		"truncated", "MATCH", "Secret redaction", "[redacted:", "redactions",
 		"Best-effort risk reduction, never a guarantee", "ohya purge",
 		"Date-bounded recall", "strftime('%s','now')",

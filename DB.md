@@ -505,7 +505,9 @@ The same shape serves an `events_fts MATCH` result when the filter is wide:
 filter, order, and limit in a covering subquery, then read the chosen rows.
 Measured effect and the rejected alternatives (an `events(time_ms)` index, a
 wider covering index) are recorded in docs/performance.md
-("Recall query deadline").
+("Recall query deadline"). When a query exceeds the deadline, the error
+names the cause that the SQLite authorizer reported to the engine: `LIKE`
+on `events`, `count()` on `events`, or a wide read.
 
 Agents persist their interpretations in `event_annotations`; there is no built-in
 classifier or dedicated classification table. Add secondary indexes or normalized file references only after real
@@ -521,7 +523,8 @@ unmodified after substituting one discovered literal (a repo, a model, a
 device, or a session id). Each recipe keeps the subquery shape of the
 project recall example, because a plain `ORDER BY e.time_ms` over a wide
 filter reads one `events` row per match and can exceed the 5 s deadline on
-a large hub.
+a large hub. The error of a query that exceeds the deadline names the
+cause.
 
 **Sessions by agent and time window.** Scope `sessions` by `agent` and
 `last_event_at_ms` first, then inspect the chosen `session_id` through
