@@ -1,0 +1,3 @@
+Decision 4 of the owner's list for 2026-11-24 ("do 2-4"): the protocol document described neither the keepalive nor the probe before the registration, both from 9d86d67 of the owner. Each statement was checked against internal/uploader/uploader.go (connect, keepalive, negotiate, the reset of the ready map in dialHello) and internal/hubsync/endpoint.go (the read deadline before each frame, DefaultIdleTimeout of 5 minutes).
+
+The keepalive test of that commit got wider margins in f4b440c, one commit earlier. Only the README of the TLA+ models changed, so the models were not run again.
