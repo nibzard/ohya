@@ -1,0 +1,56 @@
+# Design: the source workspace in the authorization model
+
+## Problem
+
+ADR 0018 adds a write of the device to the hub: the workspace of a
+source. AGENTS.md requires a TLA+ model for each change of the sync and
+authorization state machines. The model must state the rule and must
+not hide a gap behind a sentinel.
+
+## Approach
+
+- `srcWs` maps a source to a workspace or to `None`, and `srcWsWriter`
+  maps it to the writing session or to `None`. The pair copies the shape
+  of a workspace observation (`wsObs` and `wsWriter`), so a reader knows
+  the pattern.
+- `SetSourceWorkspace` needs `Authorized(c)`, `srcReg[s] = "registered"`,
+  and `srcOwner[s] = sesDevice[c]`. The action does not bind ownership,
+  because `Upload` binds it at the first accepted batch. An action that
+  binds ownership here would break `OwnershipImmobile`.
+- The first write wins, with the IF/ELSE form of `Observe`. A later
+  report leaves both variables unchanged, so it creates no new state and
+  does not grow the state space.
+- `SourceWorkspaceWriterFromSession` is stated in the strict form
+  `srcWsWriter[s] # None => srcOwner[s] # None /\ sesDevice[...] = srcOwner[s]`.
+  The short form `sesDevice[srcWsWriter[s]] = srcOwner[s]` holds on its
+  own when both sides are `None`, so it would not catch a write through
+  a foreign session for a source without an owner.
+- `SourceWorkspaceHasWriter` ties the value to its writer, and
+  `SourceWorkspaceWriteOnce` is an action property, because "the first
+  path stays" is a statement about steps.
+
+## Measurements (2026-11-24)
+
+- `Auth.cfg`: 18,286,389 distinct states, 3 min 30 s (baseline
+  4,635,297 states, about 2 min).
+- `AuthWide.cfg`: 51,982,533 distinct states, 10 min 48 s (baseline
+  13,324,149 states, about 9 min).
+- `make tla` on the final model: all five models pass; Auth 3 min 34 s,
+  AuthWide 11 min 17 s.
+
+## Mutations (Auth.cfg)
+
+- Owner guard removed: `SourceWorkspaceWriterFromSession` violated.
+- Overwrite allowed (`IF TRUE`): `SourceWorkspaceWriteOnce` violated.
+- `srcReg` guard removed: no violation, by design. The refusal of a
+  report for a purged source is a Go test in `internal/hubsync`.
+
+## Gotchas
+
+- `Upload` folds the registration into the first accepted batch, so the
+  new action is enabled only after an `Upload` by the owner device. On
+  the wire, the device sends the frame after the acknowledgment of the
+  registration. The uploader tests pin that order.
+- The new variables belong in every `UNCHANGED` list except the list of
+  `Upload`, which changes the ownership variables next to them. A wrong
+  entry there makes TLC stop with a type error.
