@@ -2576,6 +2576,38 @@ How to use this file:
     Research note:
     /notes/2026-11-24-concurrent-open-migration-race.md.
 
+- TestIdleKeepalivePreventsReconnectProbeStorm (`9d86d67`; margins
+  changed 2026-11-25): it failed in one of two full runs on `5fcd091`
+  with `idle syncs triggered 4 extra source round trips (total 14,
+  initial 10)` and passed 60 times alone. The four round trips are one
+  reconnect: the hello and one probe for each of the three sources. The
+  test gave the hub an idle timeout of 140 ms and the uploader a
+  keepalive interval of 40 ms. A pass that stalled for more than about
+  75 ms delayed the keepalive, the hub closed the connection, and the
+  next pass connected again.
+  - Reproduced with four `dd` writers that synced each write
+    (`bs=1M oflag=dsync`): 6 failures in 30 runs. The same load slowed
+    one run from 2.7 s to 7 s, so a stall of that size is ordinary on a
+    busy disk. CPU contention alone (24 busy processes, test at nice 10)
+    caused no failure in 30 runs.
+  - The hub timeout is now 2 s and the idle window 2.5 s: 0 failures in
+    24 runs under the same writers and in 12 under CPU contention.
+    Without a keepalive in the window (interval 30 s) the test still
+    fails with the same four round trips.
+  - Guideline, as for TestTimeoutRetries: keep each real-time margin of
+    a test far above the stalls of a loaded machine, and reproduce a
+    timing failure under load before the margins change.
+
+- TestTransportReporting (2026-11-24): it failed in one full run on
+  `5fcd091` with `protocol_compatible = <nil>; want true` after 536 s,
+  while an 18 GB copy of the hub and the same test run loaded the disk
+  (load average about 10). It passed in the next full run (`cmd/ohya` in
+  374 s) and alone. The hub had answered, and the protocol query of the
+  doctor then failed with an error that is not a version error, so the
+  doctor left `ProtocolCompatible` nil and reported `hub_protocol` as a
+  warning with the cause. That is the intended output for a hub that
+  does not answer within 45 s. No change: the load was mine.
+
 - Compressed backfill measured (2026-11-20, T146, docs/performance.md
   "Compressed backfill"): ADR 0014's deferred tuning questions closed with
   data. Numbers and facts worth keeping:

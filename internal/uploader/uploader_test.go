@@ -1457,7 +1457,7 @@ func TestSourcesMissingAtStartupReportedAsOneCount(t *testing.T) {
 func TestIdleKeepalivePreventsReconnectProbeStorm(t *testing.T) {
 	f := newFixture(t, Options{KeepaliveInterval: 40 * time.Millisecond})
 	db := openHubDB(t, filepath.Join(t.TempDir(), "hub.db"))
-	h := serve(t, db, f.reg, hubsync.Options{IdleTimeout: 140 * time.Millisecond})
+	h := serve(t, db, f.reg, hubsync.Options{IdleTimeout: 2 * time.Second})
 	f.dialer.point(h.addr)
 
 	a := filepath.Join(f.dir, "a.jsonl")
@@ -1469,7 +1469,7 @@ func TestIdleKeepalivePreventsReconnectProbeStorm(t *testing.T) {
 	f.mustSync()
 
 	rttsAfterInit := f.obs.DurationCount("upload_round_trip_duration")
-	deadline := time.Now().Add(320 * time.Millisecond)
+	deadline := time.Now().Add(2500 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		time.Sleep(35 * time.Millisecond)
 		f.mustSync()
