@@ -25,3 +25,5 @@ bytes less than a release build, which has a 32-character device ID.
 
 ## Related
 - 254d0f4 (the hints in the engine)
+
+Cherry-pick of 368d5d8 for the branch release/v0.7.1 (v0.7.1). The note above was written for the original commit.
