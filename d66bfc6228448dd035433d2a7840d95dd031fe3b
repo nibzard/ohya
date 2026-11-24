@@ -1,0 +1,44 @@
+# Design: the sourceWorkspace frame
+
+## Problem
+
+The device must bring the workspace of a source to the hub (ADR 0018).
+The registration frame already carries the path of a source, so the
+question was whether to extend it or to add a frame.
+
+## Approach
+
+- A new frame, sent after the acknowledgment of the registration. The
+  registration frame stays as it is. An old hub would read extra bytes
+  of a longer registration as its next frame, answer `CodeMalformed`,
+  and close the connection, so every old device and hub would break at
+  once. A separate frame that only a capable hub gets breaks nothing.
+- Capability bit 2 gates the frame. The device sends it only after the
+  `welcome` offered the bit, so the upgrade order is hub first.
+- The reader reads the path through the bounded field reader of the
+  frame. It allocates nothing past the bound of 4,096 bytes, and an
+  empty path is a decode error.
+- `checkFields` holds the bound checks of the writers of both frames.
+  The error messages of the registration writer are unchanged.
+- `handleSourceWorkspace` checks the device of the frame against the
+  connection before it calls the store, like `handleRegistration`. A
+  wrong device is `CodeAuth` and closes the connection.
+- `storeErrorCode` maps `ErrSourceWorkspaceRejected` to `CodeRejected`
+  with no retry. The other errors of `SetSourceWorkspace` are the known
+  not-registered, purged, and ownership errors, so they map as before.
+- `capabilities()` is the one place that names the bits of the hub.
+  `hubCapabilities` was declared and never used.
+
+## Key Trade-offs
+
+- One small frame per source and per process, in place of a second
+  query of the device for each source.
+
+## Gotchas
+
+- A writer that fails inside `roundTrip` of the uploader closes the
+  connection and reports the hub as unreachable. The device validates
+  the frame into a buffer before it sends, so a refused path never
+  costs a connection. That change is in the device commit.
+- `FuzzReadFrame` has a seed for the new marker and re-encodes a frame
+  that it read.
