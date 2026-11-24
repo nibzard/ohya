@@ -260,6 +260,46 @@ func TestSetupRefusesRecoveryPointWithoutFreeSpace(t *testing.T) {
 	}
 }
 
+func TestMeasureCopySpace(t *testing.T) {
+	o := recoveryOptions(t)
+	holder, err := store.Open(context.Background(), o.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := holder.Writer().Exec(`INSERT INTO recovery_size_probe VALUES ('wal')`); err != nil {
+		t.Fatal(err)
+	}
+	database, err := os.Stat(o.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wal, err := os.Stat(o.Database + "-wal")
+	if err != nil || wal.Size() == 0 {
+		t.Fatalf("no WAL: %v", err)
+	}
+	want := uint64(database.Size() + wal.Size())
+	space, err := MeasureCopySpace(o.Database, o.Clients.State)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if space.Size != want || space.Required != want+want/10+recoverySpaceMarginBytes || space.Free == 0 {
+		t.Fatalf("space = %+v; want size %d, required %d, and a free count", space, want, want+want/10+recoverySpaceMarginBytes)
+	}
+	if err := holder.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(o.Database, 5<<40); err != nil {
+		t.Fatal(err)
+	}
+	sparse, err := MeasureCopySpace(o.Database, o.Clients.State)
+	if err != nil || sparse.Size != 5<<40 || sparse.Free >= sparse.Required {
+		t.Fatalf("sparse database: space = %+v, err %v; want more required than free", sparse, err)
+	}
+	if _, err := MeasureCopySpace(filepath.Join(o.Clients.State, "absent.db"), o.Clients.State); !os.IsNotExist(err) {
+		t.Fatalf("absent database: err = %v", err)
+	}
+}
+
 func TestSetupInterruptedRecoveryCopyLeavesNoPartialPoint(t *testing.T) {
 	o := recoveryOptions(t)
 	staleSchema(t, o)

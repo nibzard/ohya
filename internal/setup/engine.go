@@ -387,6 +387,28 @@ const recoveryStagingPrefix = ".recovery-"
 
 var ErrInsufficientSpace = errors.New("insufficient free space for the recovery point")
 
+type CopySpace struct {
+	Size     uint64
+	Required uint64
+	Free     uint64
+}
+
+func MeasureCopySpace(database, targetDir string) (CopySpace, error) {
+	info, err := os.Lstat(database)
+	if err != nil {
+		return CopySpace{}, err
+	}
+	size := uint64(info.Size())
+	if wal, err := os.Lstat(database + "-wal"); err == nil && wal.Mode().IsRegular() {
+		size += uint64(wal.Size())
+	}
+	free, err := availableBytes(targetDir)
+	if err != nil {
+		return CopySpace{}, err
+	}
+	return CopySpace{Size: size, Required: size + size/10 + recoverySpaceMarginBytes, Free: free}, nil
+}
+
 func recoveryPoint(ctx context.Context, o Options) (Result, error) {
 	database := o.Database
 	if database == "" {
@@ -412,18 +434,13 @@ func recoveryPoint(ctx context.Context, o Options) (Result, error) {
 	} else if !os.IsNotExist(err) {
 		return Result{}, err
 	}
-	copyBytes := info.Size()
-	if wal, err := os.Lstat(database + "-wal"); err == nil && wal.Mode().IsRegular() {
-		copyBytes += wal.Size()
-	}
-	required := copyBytes + copyBytes/10 + recoverySpaceMarginBytes
-	free, err := availableBytes(dir)
+	space, err := MeasureCopySpace(database, dir)
 	if err != nil {
 		return Result{}, err
 	}
-	if free < uint64(required) {
+	if space.Free < space.Required {
 		detail := fmt.Sprintf("only %s free on %s for a recovery point of about %s",
-			formatBytes(int64(free)), dir, formatBytes(required))
+			FormatBytes(int64(space.Free)), dir, FormatBytes(int64(space.Required)))
 		result := Result{Component: "backup", Status: "failed", Detail: detail}
 		return result, fmt.Errorf("%w: %s; remove old recovery points under %s or free space, then rerun ohya setup (setup --state can use a disk with more space)",
 			ErrInsufficientSpace, detail, dir)
@@ -438,7 +455,7 @@ func recoveryPoint(ctx context.Context, o Options) (Result, error) {
 	point := filepath.Join(dir, "recovery-"+strings.TrimPrefix(filepath.Base(staging), recoveryStagingPrefix))
 	path := filepath.Join(staging, "hub.db")
 	result := Result{Component: "backup", Status: "saved", Detail: filepath.Join(point, "hub.db"), Changed: true}
-	o.progress(fmt.Sprintf("saving recovery point (about %s) to %s…", formatBytes(copyBytes), dir))
+	o.progress(fmt.Sprintf("saving recovery point (about %s) to %s…", FormatBytes(int64(space.Size)), dir))
 	if err := store.Backup(ctx, database, path, recoveryProgress(o)); err != nil {
 		_ = os.RemoveAll(staging)
 		result.Status = "failed"
@@ -474,7 +491,7 @@ func recoveryProgress(o Options) func(done, total int64) {
 			return
 		}
 		lastDecile = decile
-		o.progress(fmt.Sprintf("recovery point %d%% (%s of %s)", percent, formatBytes(done), formatBytes(total)))
+		o.progress(fmt.Sprintf("recovery point %d%% (%s of %s)", percent, FormatBytes(done), FormatBytes(total)))
 	}
 }
 
@@ -537,7 +554,7 @@ func pruneRecoveryPoints(dir string, keep int) error {
 	return nil
 }
 
-func formatBytes(n int64) string {
+func FormatBytes(n int64) string {
 	switch {
 	case n >= 1<<30:
 		return fmt.Sprintf("%.1f GB", float64(n)/(1<<30))
