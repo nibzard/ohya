@@ -1,0 +1,1 @@
+v0.7.1 ships schema 8 and is tagged on the release branch release/v0.7.1, not on main: main already holds the schema 9 change (ADR 0018), which goes into v0.8.0. This commit keeps make check green on main as soon as the v0.7.1 tag is visible, as f115b69 did for v0.7.0.
