@@ -120,8 +120,11 @@ one-line remedy; `--json` prints the same findings in the
 [ADR 0005](adr/0005-json-output.md) envelope. Doctor is read-only: it
 opens the database read-only — never migrates, repairs, or re-derives —
 creates no device identity, and prints no transcript content or secrets.
-The `--deep` FTS5 check copies the database into memory, so its time and
-memory use grow with the database; without `--deep`, doctor reports the
+The `--deep` FTS5 check copies the database to a temporary file under
+TMPDIR, so it needs free disk a little more than the database size, and
+its time grows with the database size. The hub keeps running during the
+check. Doctor reports the check as an error when it cannot run, and
+names the free space it needs. Without `--deep`, doctor reports the
 check as skipped.
 Exit code 0 means no finding is an error; warnings alone do not fail. It
 takes the same `--db` and `--state` flags as `ingest`, and

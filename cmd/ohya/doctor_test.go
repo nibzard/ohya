@@ -522,6 +522,80 @@ func TestDoctorFTSCorruptionIsAnError(t *testing.T) {
 	}
 }
 
+func TestCheckFTSIndexRefusesWithoutSpaceForTheSnapshot(t *testing.T) {
+	database := filepath.Join(t.TempDir(), "hub.db")
+	if err := os.WriteFile(database, []byte("SQLite format 3\x00"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(database, 5<<40); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	findings := checkFTSIndex(context.Background(), database, func(context.Context) error {
+		called = true
+		return nil
+	})
+	f := soleFinding(t, findings, "fts_index")
+	if f.Severity != sevError || !strings.HasPrefix(f.Detail, "deep check did not run: it needs about") ||
+		!strings.Contains(f.Remedy, "set TMPDIR to a filesystem with more room") {
+		t.Fatalf("finding = %+v; want the refusal with the TMPDIR remedy", f)
+	}
+	if called {
+		t.Fatal("ran the check without space for the snapshot")
+	}
+}
+
+func TestDoctorDeepCheckWithoutSpaceIsAnError(t *testing.T) {
+	e := newDoctorEnv(t)
+	if err := os.Truncate(e.dbPath, 5<<40); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ := doctorRun(t, e, "--deep")
+	if code != 1 {
+		t.Fatalf("exit code %d; want 1 (stdout %q)", code, out)
+	}
+	f := soleFinding(t, parseDoctorFindings(t, out), "fts_index")
+	if f.Severity != sevError || !strings.HasPrefix(f.Detail, "deep check did not run:") {
+		t.Fatalf("finding = %+v; want the refusal", f)
+	}
+}
+
+func TestCheckFTSIndexNamesTheOutcome(t *testing.T) {
+	e := newDoctorEnv(t)
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
+	hub, err := store.OpenReadOnly(e.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hub.Close()
+	malformed := errors.New("database disk image is malformed")
+	for _, tc := range []struct {
+		name, detail, remedy string
+		check                func(context.Context) error
+	}{
+		{"missing TMPDIR", "deep check could not run: store: create integrity snapshot dir:",
+			"check the free space there", hub.FTSIndexConsistent},
+		{"copy error", "deep check could not run: store: snapshot database: no space left on device",
+			"check the free space there", func(context.Context) error {
+				return errors.New("store: snapshot database: no space left on device")
+			}},
+		{"inconsistent index", "events_fts failed the FTS5 integrity-check: store: events_fts differs from the events table: database disk image is malformed",
+			"restore the database from a backup", func(context.Context) error {
+				return fmt.Errorf("%w: %w", store.ErrFTSIndexInconsistent, malformed)
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := soleFinding(t, checkFTSIndex(context.Background(), e.dbPath, tc.check), "fts_index")
+			if f.Severity != sevError || !strings.HasPrefix(f.Detail, tc.detail) || !strings.Contains(f.Remedy, tc.remedy) {
+				t.Fatalf("finding = %+v; want detail %q and a remedy with %q", f, tc.detail, tc.remedy)
+			}
+			if tc.name != "inconsistent index" && strings.Contains(f.Remedy, "restore the database") {
+				t.Fatalf("finding = %+v; a check that could not run must not ask for a restore", f)
+			}
+		})
+	}
+}
+
 func TestDoctorMissingDatabaseWarns(t *testing.T) {
 	dir := t.TempDir()
 	code, out, _ := runCLI("doctor", "--db", filepath.Join(dir, "absent.db"), "--state", dir)
