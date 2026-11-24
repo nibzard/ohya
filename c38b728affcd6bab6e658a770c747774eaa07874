@@ -1,0 +1,20 @@
+# Design: the content of migration 009
+
+## Problem
+`ohya doctor` reads the newest parser version per agent. The query scanned every row of `events` for `parser_version`, which migration 004 added as the last column, after the large text columns. SQLite must follow the overflow chain of a row to reach such a column, so the scan read the whole payload of every event: 4 to 5 minutes on a cold copy of the hub. NOTES.md had the index since 2026-11-15 and deferred it because a migration costs a full recovery copy.
+
+## Approach
+Fold both deferred items into migration 009 before its release: `DROP COLUMN file_identity` and `CREATE INDEX events_source_parser_version ON events(source_id, parser_version)`. Change the doctor query to a grouped subquery over the covering index.
+
+## Key Trade-offs
+- The migration now takes minutes on a large hub (3 min 41 s on a copy of this hub), where it was instant before. That is why the next commit makes `ohya setup` apply migrations before a service starts.
+- A reader on schema 8 that is run from a new binary gets a slower query (4 min 52 s against 3 min 52 s) until the hub is migrated. That state lasts only from the binary replacement to the migration of setup.
+- `DROP COLUMN` needs SQLite 3.35 or later; the binary bundles 3.54.1. The released-schema test seeds the column for every released schema and checks that it is gone.
+
+## Alternatives Considered
+- Keep the old query and rely on the index: 1.09 s on the copy, against 0.18 s with the grouped subquery. The query change is three lines.
+- A separate migration 010 for the index: rejected, it would cost one more full recovery copy.
+
+## References
+- NOTES.md: "Schema 9 upgrade path", "Doctor cost on a 6.6 GB hub".
+- docs/release-operations.md: "Purge and recovery points".
