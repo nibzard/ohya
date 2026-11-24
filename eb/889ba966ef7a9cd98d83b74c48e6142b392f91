@@ -1,0 +1,12 @@
+FTSIndexConsistent returned each error of the integrity-check
+statement as one error text. ohya doctor --deep then reported every
+error as a failed integrity-check with the remedy to restore a backup,
+also when the copy to the temporary file failed.
+
+The error now wraps ErrFTSIndexInconsistent when SQLite returns its
+corruption code (SQLITE_CORRUPT_VTAB). The existing corruption test
+asserts the sentinel. DB.md "Inspection" states the three outcomes of
+the check.
+
+Found on 2026-11-24 when the help text of ohya doctor --deep was
+corrected. Verified: go test ./internal/store and make check.
