@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -122,6 +123,62 @@ func TestFTSIndexConsistentDetectsCorruption(t *testing.T) {
 	}
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestFTSIndexConsistentFinishesWhileAnotherConnectionCommits(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hub.db")
+	w, err := Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	seedOneIndexedEvent(t, w.Writer())
+	if _, err := w.Writer().Exec(`CREATE TABLE integrity_probe (padding TEXT); INSERT INTO integrity_probe VALUES (hex(zeroblob(33554432)))`); err != nil {
+		t.Fatal(err)
+	}
+
+	ro, err := OpenReadOnly(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+
+	writer := rawSQLite(t, path)
+	if _, err := writer.Exec(`PRAGMA synchronous = OFF`); err != nil {
+		t.Fatal(err)
+	}
+	stop := make(chan struct{})
+	commits := make(chan int, 1)
+	go func() {
+		n := 0
+		for {
+			select {
+			case <-stop:
+				commits <- n
+				return
+			default:
+			}
+			if _, err := writer.Exec(`INSERT INTO integrity_probe VALUES ('x')`); err != nil {
+				t.Error(err)
+				commits <- n
+				return
+			}
+			n++
+			time.Sleep(100 * time.Microsecond)
+		}
+	}()
+	err = ro.FTSIndexConsistent(ctx)
+	close(stop)
+	written := <-commits
+	if err != nil {
+		t.Fatalf("check with %d commits during the copy: %v", written, err)
+	}
+	if written == 0 {
+		t.Fatal("no commit landed during the check")
 	}
 }
 

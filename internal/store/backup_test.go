@@ -103,6 +103,46 @@ func TestBackupReportsProgress(t *testing.T) {
 	}
 }
 
+func TestBackupCopiesOneSnapshotWhileAnotherConnectionCommits(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	dir := t.TempDir()
+	db, source := createBackupSource(t, dir, "hub.db", true)
+	defer db.Close()
+	writer := db.Writer()
+	if _, err := writer.Exec(`INSERT INTO backup_progress_probe VALUES (hex(zeroblob(4194304)))`); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(dir, "backup.db")
+	var steps int
+	err := Backup(ctx, source, destination, func(done, total int64) {
+		steps++
+		if _, err := writer.Exec(`UPDATE backup_probe SET value = value || 'x'`); err != nil {
+			t.Error(err)
+		}
+	})
+	if err != nil {
+		t.Fatalf("copy with a commit after each of %d steps: %v", steps, err)
+	}
+	if steps < 3 {
+		t.Fatalf("%d steps; the source must take more than two steps to copy", steps)
+	}
+	restored, err := Open(ctx, destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+	var value string
+	var padding int
+	probe := `SELECT (SELECT value FROM backup_probe), (SELECT max(length(padding)) FROM backup_progress_probe)`
+	if err := restored.writer.QueryRow(probe).Scan(&value, &padding); err != nil {
+		t.Fatal(err)
+	}
+	if value != "durable" || padding != 8388608 {
+		t.Fatalf("the copy is not one snapshot: probe %q, longest padding %d; want durable and 8388608", value, padding)
+	}
+}
+
 func TestBackupBudget(t *testing.T) {
 	for _, tc := range []struct {
 		total int64

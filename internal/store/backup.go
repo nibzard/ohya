@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"os"
@@ -65,36 +66,15 @@ func Backup(ctx context.Context, source, destination string, progress func(done,
 			if !ok {
 				return errors.New("backup source is not a SQLite connection")
 			}
-			backup, err := destinationConn.Backup("main", sourceConn, "main")
-			if err != nil {
-				return err
-			}
 			copyCtx, cancel := context.WithTimeout(ctx, backupBudget(pageCount*pageSize))
 			defer cancel()
-			for {
-				if err := copyCtx.Err(); err != nil {
-					_ = backup.Close()
-					return err
-				}
-				done, err := backup.Step(backupStepPages)
-				if progress != nil && pageSize > 0 {
-					total := int64(backup.PageCount()) * pageSize
-					progress(total-int64(backup.Remaining())*pageSize, total)
-				}
-				if err != nil {
-					_ = backup.Close()
-					return err
-				}
-				if done {
-					return backup.Close()
-				}
-				select {
-				case <-copyCtx.Done():
-					_ = backup.Close()
-					return copyCtx.Err()
-				case <-time.After(backupStepYield):
+			var report func(copied, total int64)
+			if progress != nil && pageSize > 0 {
+				report = func(copied, total int64) {
+					progress(copied*pageSize, total*pageSize)
 				}
 			}
+			return copySnapshot(copyCtx, destinationConn, sourceConn, report)
 		})
 	})
 	if err != nil {
@@ -112,6 +92,51 @@ func Backup(ctx context.Context, source, destination string, progress func(done,
 	}
 	defer dir.Close()
 	return dir.Sync()
+}
+
+func copySnapshot(ctx context.Context, destination, source *sqlite3.SQLiteConn, progress func(copied, total int64)) (err error) {
+	read, err := source.Begin()
+	if err != nil {
+		return fmt.Errorf("begin the source read: %w", err)
+	}
+	if _, err := source.Exec(`SELECT count(*) FROM sqlite_schema`, nil); err != nil {
+		_ = read.Rollback()
+		return fmt.Errorf("take the source snapshot: %w", err)
+	}
+	defer func() {
+		if read.Rollback() != nil {
+			err = errors.Join(err, driver.ErrBadConn)
+		}
+	}()
+	backup, err := destination.Backup("main", source, "main")
+	if err != nil {
+		return err
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			_ = backup.Close()
+			return err
+		}
+		done, err := backup.Step(backupStepPages)
+		if progress != nil {
+			progress(int64(backup.PageCount()-backup.Remaining()), int64(backup.PageCount()))
+		}
+		if err != nil {
+			_ = backup.Close()
+			return err
+		}
+		if done {
+			return backup.Close()
+		}
+		timer := time.NewTimer(backupStepYield)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			_ = backup.Close()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func sourcePageMetrics(ctx context.Context, conn *sql.Conn) (pageSize, pageCount int64, err error) {
