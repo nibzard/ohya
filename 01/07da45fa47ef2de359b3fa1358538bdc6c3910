@@ -1,0 +1,10 @@
+recoveryPoint in internal/setup computed the free space for a copy of
+the hub database on its own. ohya doctor --deep needs the same rule
+before it starts a snapshot, so the rule moved into MeasureCopySpace:
+the database size with its WAL, the bytes that the copy needs (the
+size, 10 percent, and a 64 MiB margin), and the free bytes of the
+target directory. formatBytes became FormatBytes for the doctor
+finding. TestMeasureCopySpace pins the rule with a sparse 5 TiB file.
+
+Found on 2026-11-24 during a read-only analysis of the live hub.
+Verified: go test ./internal/setup and make check.
