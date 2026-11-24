@@ -71,6 +71,190 @@ How to use this file:
   an opener that stops matching (for example a block rewritten to start
   with DELETE) trips the count pin instead.
 
+- Hub measurements 2026-11-24 (a read-only pass over the live hub; aggregates
+  only; the fixes are in the next two bullets): 7,031 real sessions, 2.88M
+  events, 16.8 GiB on disk for 10.74 GB ingested (1.68x), 233 repositories,
+  two devices.
+  - Adoption over 30 days: `sql` ran 163 times in 40 sessions; Claude Code
+    had the tool in 357 sessions and called it in 37; `annotate` has zero
+    rows; of the 163 calls 22 hit the deadline and 26 returned an error.
+  - The CLI leaves no usage record: `ohya sql` builds the same engine with
+    no observer (cmd/ohya/recall.go `openRecallBackend`), so `ohya usage`
+    counts MCP calls only and the 40 sessions are a lower bound. A
+    transcript search finds `ohya sql|search|show|sessions` mentions in
+    shell commands of at most 31 more sessions.
+  - `sessions.repo` is NULL for 2,888 of 7,031 real sessions (41%): 1,071
+    Claude Code looper-worktree sessions that started before 2026-11-16
+    (paths first observed later, worktrees since deleted), 1,461 Codex
+    sessions outside a git tree, and all Antigravity sessions (62 at that
+    hour, 73 later the same day; the parser records no cwd). Every
+    looper-worktree session since 2026-11-18 resolves.
+  - `SELECT count(*) FROM events` scans `sqlite_autoindex_events_1`: 3.1 s
+    warm, over the 5 s deadline on a cold cache. `sum(event_count)` on
+    `sessions` is instant.
+  - `ohya secrets scan` (17:12, v0.7.0) took 12 min 24 s and reported
+    8,997 matches in 5,813 events and 1,925 sessions. A rescan at 21:24
+    with a build of `41cc624` (3,197 s under load) reported 5,185 matches
+    in 2,613 events and 702 sessions. Per pattern, before and after:
+    openai-api-key 4,714 and 505, env-assignment 3,627 and 3,760,
+    anthropic-api-key 106 and 194, private-key-block 147 and 149,
+    aws-access-key-id 237 and 445, google-api-key 92 and 29,
+    github-token 46 and 31, slack-token 28 and 72. Four patterns grew
+    because of one new session, the Claude Code session that did this
+    work (543 matches in 85 events: test fixtures and doc examples).
+    1,224 sessions left the list (2,899 matches, all `sk-` inside
+    identifiers); 382 sessions kept the same events (2,199 and 2,179
+    matches); 319 sessions kept fewer matches (3,899 and 2,463).
+  - Secrets triage list (2026-11-24, built from the rescan; one line per
+    session; counts, shapes, and variable names, never a value; kept
+    outside the repository): 427 sessions hold 2,493 plausible matches
+    and 2,692 are dropped as placeholders, dates, path segments, or
+    low-entropy values. Priority 1 (a known key shape or a private key
+    block of 600 characters or more): 61 sessions (claude-code 13,
+    codex 48). Priority 2 (another token shape or a small key block): 38
+    (antigravity 1, claude-code 5, codex 32). Priority 3 (environment
+    assignments only): 328 (claude-code 21, codex 304, pi 3). The first
+    estimate after the 17:12 scan (about 250 values in 197 sessions) was
+    too low. The owner reviews the list: rotate first, then purge.
+  - Query failures: of 163 MCP `sql` calls, 22 hit the 5 s deadline and 26
+    returned an error. Agents use `LIKE` in 71 calls (44%); `LIKE` appears
+    in 12 of the 23 slowest calls and a wide `events` scan in 13. No prior
+    decision exists on a substring index (FTS5 trigram) or a deadline hint.
+  - Antigravity scoping: 73 of 73 sessions have no cwd, repo, or branch.
+    The parser reads cwd only from a `Command Working Directory:` line in a
+    system message. A count on 2026-11-24 finds the text in 10 of 8,600
+    Antigravity events: `planner_response`, `generic`, and `checkpoint`
+    records of one conversation, and no system message. An earlier note
+    here said that no record carries the line. Fixed on `main` for the
+    next schema release (ADR 0018; see "Antigravity workspace" below):
+    the sessions get a `cwd` when the hub and each device run a build
+    with schema 9.
+  - `ohya doctor --deep` passed on this hub on 2026-11-24: 19 findings,
+    all `ok`; `events_fts` is consistent with `events`. The run took
+    24 min 45 s (about 10 minutes for the copy, 15 for the check) with a
+    local build of `3bf3d50`. The installed v0.7.0 holds the code before
+    that fix, and a regression test shows that this code does not finish a
+    copy while another connection commits (see "Migration recovery copy
+    cost" below). v0.7.0 was not run with `--deep` on the live hub. Before
+    the fix, the help and four documents said that the check copies the
+    database into memory; it copies to a temporary file under TMPDIR and
+    needs free disk a little more than the database.
+  - `ohya purge` takes one `--session` per run, so a list of 427 sessions
+    needs 427 runs. Decision 2026-11-24: keep that friction for a
+    destructive command. `xargs -n 1` runs a list.
+  - `sources.file_identity` is dead: migration 001 declares it, the sql
+    tool description and `observe.ReadCatalogue` list it, and no code
+    writes it (0 non-NULL rows on the hub). Migration 009 (2026-11-24)
+    kept it, to keep the removal apart from the workspace column. Each
+    migration costs one full recovery copy, so remove the column in the
+    next schema change that has its own reason.
+  - `docs/release-operations.md` opens with "The newest release is
+    v0.6.1" and has no entry for v0.7.0 (tag at `60eb331`, 2026-11-23).
+    The entry needs the release facts (candidate run, checks) from the
+    person who cut the release.
+
+- Hub fixes 2026-11-24 (plan approved by the owner: correctness, error
+  text of the pull path, and documents; no hooks and no injection into a
+  session, see PRODUCT.md "Pull, never push"). All on `main`, none
+  released. The first two groups need no schema change; the Antigravity
+  workspace is schema 9.
+  - Redaction (`41cc624`): the six prefix patterns start with a left
+    boundary that stays in the output, so `task-`, `desk-`, `disk-`,
+    `ask-`, and `risk-` identifiers stay whole. Accepted risk, recorded in
+    the amendment of ADR 0015: a key glued to a letter, digit, hyphen, or
+    underscore is no longer redacted.
+  - `doctor --deep` (`0107da4`, `771aea1`, `7baf6df`): one space rule
+    shared with the recovery copy, a guard before the snapshot, an error
+    of its own for an inconsistent index, and "could not run" with the
+    cause for each other failure. The help and four documents no longer
+    say that the check copies the database into memory.
+  - Documents of record (`c11ef2b`): the usage doc says that CLI calls
+    write no usage record, the secret scan section has the recipe from
+    scan to purge, and README and PRODUCT.md state the pull-only rule.
+  - Query deadlines (`6b503a6`, `254d0f4`, `368d5d8`): the trace of
+    functions and columns is always on, and a deadline error ends with one
+    hint (`LIKE` over `events`, `count` over `events`, or a narrow query).
+    `like` is in the function catalogue, so `ohya usage` reports it. No
+    trigram index was added: watch the share of deadline errors in
+    `ohya usage` over 30 days first (baseline: 22 of 163 calls).
+  - Test helper: `oldHub.kick` in `internal/uploader` closed nothing, so
+    the "after reconnect" assertions of the old hub test held without a
+    reconnect (fixed in `2812eb5`).
+  - Concurrent open (`2ff0478`, added outside the plan): two processes
+    that open the same database at the same time apply each migration
+    once, and `store.Open` repeats its attempt on a busy error. This is
+    the fix of the `TestHubSetupTwoStepFlow` failure (see its entry
+    below, under "TestTimeoutRetries").
+  - Open: the released-schema lists in DB.md stop at v0.7.0 until the
+    next release.
+
+- Antigravity workspace (2026-11-24, ADR 0018; `c220c9e`, `ed9b421`,
+  `d66bfc6`, `2812eb5`, `5c62866`): Antigravity transcripts carry no
+  working directory, so no session of that agent had a `cwd` or a `repo`
+  (73 of 73: 68 on the hub machine, 5 on the MacBook). Rule: the `cwd` of
+  a session is its first record `cwd`, else the workspace of a source that
+  holds its events. The device reads the workspace of a conversation from
+  `conversation_summaries.db` next to the brain root and sends it in the
+  `sourceWorkspace` frame (marker `F`, capability bit 2). The hub stores
+  the first path of a source write-once in `sources.workspace_path`.
+  - The index file is not documented by Antigravity. ohya opens it with
+    `immutable=1`, which reads the main file only and not the write-ahead
+    log: a conversation that Antigravity has not checkpointed is missed
+    once and found by the next lookup. Checked with a temporary database:
+    no `-wal` or `-shm` file appears and the file bytes stay unchanged.
+    For contrast: a plain read-only open of the real index by an
+    exploration agent created both files in the Antigravity directory at
+    18:08 on 2026-11-24. Both were gone at 21:00, after the index itself
+    changed at 19:46.
+  - The parser is unchanged and `OutputVersion` stays 1, so no re-derive
+    is forced.
+  - Model: `SetSourceWorkspace` in Auth.tla. The final model has
+    18,286,389 states (Auth, 3 min 34 s) and 51,982,533 states (AuthWide,
+    11 min 17 s), 3.9 times the counts before the action and under the
+    30-minute bound. Two of three mutations are caught; the third
+    survives by design (tla/README.md).
+  - Limits: the first workspace of a source is final, and a later change
+    in the index is ignored. The upgrade order is hub first: an old hub
+    advertises no bit 2, and a new device then sends no frame and logs
+    one line per process.
+  - Open until the release: schema 8 to 9 costs one full recovery copy
+    (about 17 GiB) at the next `ohya setup`, so check the free space
+    first. Then run `SELECT count(*), count(cwd), count(repo) FROM
+    sessions WHERE agent = 'antigravity'`. 25 of the 68 conversation
+    directories on the hub machine are gone, so some sessions get a `cwd`
+    and no `repo`, which is correct. The MacBook fills its 5 sessions
+    when its ohya is upgraded.
+  - Decision for the owner before v0.8.0: migration 009 is not released,
+    so two deferred schema items can go into it at no extra recovery
+    copy — the removal of `sources.file_identity` and the index
+    `events(source_id, parser_version)` of the doctor note ("Doctor cost on
+    a 6.6 GB hub"). After the release each costs one full copy.
+
+- Competitive clock — claude-mem (verified 2026-11-24): thedotmack/claude-mem
+  v16.1.2 (Apache-2.0, 119,454 stars, 395,623 npm downloads in 30 days,
+  15 releases in 12 days) is the category leader on agent memory, with the
+  opposite design. Hooks inside 20+ agents send each tool call to a local
+  worker; a second model (default `haiku` through the Claude Agent SDK)
+  writes observations and a session summary; up to 10,000 characters are
+  injected at SessionStart; 19 to 26 fixed MCP tools (about 14 KB of schema
+  by source estimate); SQLite FTS5 plus a Chroma sidecar. Capture is
+  at-most-once by owner decision (one 250 ms live handoff, RAM buffer,
+  5-minute expiry; `docs/architecture/observer-lifecycle.md`: "An outage can
+  leave a gap in generated memory") because an LLM reducer cannot be replayed.
+  Past sessions are not imported; tool fields are cut to 16,000 characters
+  before the model sees them and `tool_uses` rows to 64 KiB. Cloud Sync is
+  opt-in, plaintext to sync.cmem.ai, one shared token, derived rows only;
+  TeamBrain is hosted and paid. Defaults: telemetry on, auto-update on,
+  redaction off, local API open on loopback. No formal verification. Open
+  flanks: #4159 (warmup pings burn billed calls), #4969 (an update broke
+  hooks), #4841 (no origin machine on synced memories), plan trackers
+  #3602-#3610. Where it leads: zero-effort push recall, harness breadth, a
+  web viewer. ohya's wedge stays: lossless raw records, full history import,
+  deterministic replay, no model cost, bounded SQL, operator hub, checked
+  sync. Full study: /notes/2026-11-24-claude-mem-vs-ohya.md. No follow-up
+  task filed; the study lists candidate actions (recall-bench arm, dated
+  comparison sections, a decision on a deterministic session-start index).
+
 - Device-side exclude globs landed 2026-11-20 (T147): one repeatable
   `--exclude GLOB` flag on ingest, join, and setup; one enforcement point
   (discoverSessionFiles in cmd/ohya/ingest.go — an excluded path is never
@@ -1117,9 +1301,11 @@ How to use this file:
   (1.3 s). An index `events(source_id, parser_version)` with a per-source
   `max` subquery cuts it to 0.02 s (42 MB, 19 s build), measured on a clone.
   Not added alone because each migration now forces a full recovery copy at
-  setup; add it with the next schema migration. `doctor --deep` still copies
-  the whole database into `:memory:` (`store.FTSIndexConsistent`), so RAM use
-  equals database size; copying only the FTS shadow tables is unverified.
+  setup; add it with the next schema migration. `doctor --deep` copies the
+  whole database to a temporary file under TMPDIR (`store.FTSIndexConsistent`
+  through the backup API; a note here said "into memory" until 2026-11-24),
+  so it needs free disk a little more than the database and took 24 min 45 s
+  on the 18.1 GB hub; copying only the FTS shadow tables is unverified.
 
 - README recall trial (2026-11-15): release-hosted installer URL and its
   `--help` verified by download. Quickstart now separates installed usage
@@ -1162,6 +1348,18 @@ How to use this file:
   so the measured 39 min/GB worst case still completes). Cost guidance is in
   docs/release-operations.md "Recovery point cost". Idle-time execution and
   incremental backup remain unimplemented.
+  Probable cause found 2026-11-24 (commit `3bf3d50`, ADR 0008): the stepped
+  copy held no read transaction between steps, and SQLite restarts a stepped
+  copy at page 1 when another connection commits between two steps
+  (`sqlite3_backup_step` documentation). The 8.5 h fit many restarts plus
+  one last pass after the other writers stopped at 08:42: that is an
+  inference, no log shows the restarts. The copy now holds one read
+  snapshot from the first step to the last. Measured the same day: 758 MB/s
+  raw read on this disk, and about 10 minutes for one copy pass of 18.1 GB
+  (inside the `doctor --deep` run), so the "10 MB/s ceiling" was not a
+  property of the disk. Two regression tests hold a second connection that
+  commits during the copy. Research note:
+  /notes/2026-11-24-stepped-copy-restarts.md.
 
 - Ingest idle write amplification (root-caused and fixed 2026-11-16):
   idle ingest wrote ~9 MB/s; 99.9% went to `sources/<agent>.json`
@@ -2217,6 +2415,22 @@ How to use this file:
   - Known accepted false positives: a long random base64 run can collide
     with the AIza and AKIA shapes; over-redaction is chosen over egress of
     a real secret.
+  - Fixed (2026-11-24, `41cc624`): the `sk-` pattern had no left boundary,
+    so it redacted ordinary identifiers. `sk-[A-Za-z0-9_-]{20,}` matched
+    inside `task-…`, `desk-`, `disk-`, `ask-`, and `risk-` slugs, and
+    `ohya sql "SELECT 'task-add-device-revocation-regression-tests' AS x"`
+    returned `ta[redacted:openai-api-key]`. On the live hub 4,287 of 4,714
+    `openai-api-key` hits (91%) and 69 of 92 `AIza` hits sat inside a
+    longer token. The six prefix patterns now start with a left boundary
+    (`(^|[^A-Za-z0-9_-])`) that `keep` preserves, with regression tests
+    and an amendment in ADR 0015. Rescan of the hub: 5,185 matches in 702
+    sessions, from 8,997 in 1,925 (see "Hub measurements 2026-11-24").
+    Accepted risk: a key glued to a letter, digit, hyphen, or underscore is
+    no longer redacted.
+  - Triage caution (2026-11-24): a scratch script's "name before the
+    value" capture printed four high-entropy neighbours of `AIza` hits.
+    Triage code must print counts, lengths, and variable names only, and
+    must capture a name only after a real separator (`:`, `=`, a quote).
   - Truncation interplay: redaction runs after row collection, so a
     `substr()`-cut excerpt can cut a secret shape in half and pass it
     through — best-effort by design and stated in the tool description.
@@ -2256,17 +2470,46 @@ How to use this file:
   Guideline: an injected-fault deadline must be far above machine
   latencies, because the fault only needs the deadline to exist.
 
-- TestHubSetupTwoStepFlow failed twice (2026-11-19, 20:35–21:03) in
+- TestHubSetupTwoStepFlow (2026-11-19 to 2026-11-24): it failed in
   full-package runs with `the hub did not answer through its relay …
-  context deadline exceeded` while this VM's root volume sat at 98%
-  (4.4 GB free); the identical tree passed the same test isolated
-  (29 s), paired with TestServeJoinEndToEnd (31 s), and in a whole
-  `make check` (407 s for cmd/ohya) after the volume dropped to 68%
-  (63 GB free). No code change: the child-serve hub startup plus the
-  30 s `hubProbeWait` relay probe cannot absorb fsync latency on a
-  nearly full volume. If it recurs, check `df -h /` before suspecting
-  the transport; a bigger `hubProbeWait` is a product decision, not a
-  test fix.
+  context deadline exceeded` after about 35 s, and it passed alone. On
+  2026-11-24 it failed in 6 of 10 full runs with 78 GiB free, so a nearly
+  full volume (the first suspect, 98% on 2026-11-19) was not the cause.
+  The logs of the child processes showed the cause on 2026-11-24. The
+  first `ohya setup --hub` starts the ingest child and the hub child on
+  one fresh database, and both ran the migrations. The runner read
+  `schema_migrations` outside its transaction, so the slower child ran a
+  migration that the other had just committed and exited at its open
+  (`migration 004_parser_output_version: duplicate column name:
+  parser_version`). The hub child never joined its relay, and each probe
+  of setup waited 10 s for a ping that nobody answered. A second kind
+  needs no second migration: a new connection gets `database is locked`
+  at once at its first statement while another process creates the
+  database or recovers the write-ahead log. The busy timeout does not
+  apply there, because SQLite skips the busy handler when a wait could
+  deadlock. In a stress test on the old code, at least 9 of 36 and 5 of
+  36 concurrent opens of one fresh database failed in two runs.
+  - Fixed (2026-11-24, `2ff0478`): each migration runs in a
+    `BEGIN IMMEDIATE` transaction that reads `schema_migrations` again,
+    so the second process waits and finds the migration recorded.
+    `store.Open` repeats its attempt on a busy error until one busy
+    timeout has passed since the attempt that first failed. With the
+    fix, 200 concurrent opens passed, the test passed 3 times under the
+    load of seven other test packages, and two uncached full runs passed
+    (`GOFLAGS=-count=1 make check`: `cmd/ohya` in 233 s and 296 s).
+  - On an installation the loser did not stay down: systemd restarts a
+    service that exits after 5 s (`Restart=on-failure`), so a first
+    install showed a short outage and a journal line.
+  - A cached run proves nothing about a flake: `make check` returns the
+    results of the last run when no Go file changed. Use
+    `GOFLAGS=-count=1` to count flakes.
+  - Open: a migration that one process runs for longer than about two
+    busy timeouts still makes a process that opens the database at that
+    time exit with `database is locked`. No current migration is that
+    slow (009 is two `ADD COLUMN`). A longer wait is a decision for the
+    owner. `store.OpenReadOnly` has no retry, and macOS was not tested.
+    Research note:
+    /notes/2026-11-24-concurrent-open-migration-race.md.
 
 - Compressed backfill measured (2026-11-20, T146, docs/performance.md
   "Compressed backfill"): ADR 0014's deferred tuning questions closed with
@@ -2307,10 +2550,13 @@ How to use this file:
     ...Decode in internal/hubsync; x-ratio rides a ReportMetric, so
     benchstat tracks ratios too). Drain rows stay out of CI (fsync- and
     model-bound; the bench job reports, never fails).
-  - `OHYA_UPLOAD_COMPRESSION=off` in the joining process suppresses the
-    capability offer for its lifetime (uploader reads it per connection) —
-    the A/B knob and the operational escape hatch, documented in
-    docs/sync-protocol.md; pinned by TestCompressionDisabledUploadsPlainFrames.
+  - `OHYA_UPLOAD_COMPRESSION=off` in the joining process removes the zstd
+    bit from its capability offer for its lifetime (uploader reads it per
+    connection) — the A/B knob and the operational escape hatch,
+    documented in docs/sync-protocol.md; pinned by
+    TestCompressionDisabledUploadsPlainFrames. Since `2812eb5`
+    (2026-11-24) a process that reports a source workspace still offers
+    bit 2, and a process that reports none sends no offer.
   - klauspost/compress exposes four speed classes, not the zstd level
     range (EncoderLevelFromZstd: 1–2 fastest, 3–5 default, 6–9 better,
     10+ best) — a "level 5" bench is identical to level 3, so label by
