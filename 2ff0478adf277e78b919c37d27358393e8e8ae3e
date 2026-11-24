@@ -1,0 +1,59 @@
+# Design: one migration, many openers
+
+## Problem
+
+Two processes open the same hub database at the same time: the memory
+service and the hub service at a first install, and after an upgrade
+with a schema change. Each one runs the pending migrations. The runner
+read `schema_migrations` in one statement and applied the pending
+migrations in later transactions. Between the two, the other process
+committed the same migration. The first statement of the slower process
+then met a table or a column that already existed, and the process
+exited.
+
+`TestHubSetupTwoStepFlow` showed the effect since 2026-11-19, and the
+cause was taken to be a slow relay probe or a full volume. The hub child
+died at `store.Open`, and the probe of `ohya setup --hub` found no hub
+on the relay. The log of the hub child held the cause:
+`migration 004_parser_output_version: duplicate column name:
+parser_version`. The test passed alone. With seven other test packages
+as load, it failed in the first run.
+
+## Approach
+
+- `BEGIN IMMEDIATE` takes the write lock before the first read. The
+  check of `schema_migrations` and the migration are then one step: the
+  second process waits for the first and finds the migration recorded.
+  The registry uses the same rule for a racing consume
+  (`_txlock=immediate`).
+- Each migration stays in its own transaction. The policy in DB.md
+  promises that a failed migration rolls back alone and that the next
+  run resumes at the first pending version.
+- The checksum is compared again inside the transaction. A version that
+  another binary recorded with other bytes gets the same rejection as
+  at the start of `migrate`.
+- `store.Open` repeats verify and migrate while SQLite reports a busy
+  database. Two processes that create the database or recover the
+  write-ahead log at the same time get "database is locked" at once,
+  without the busy timeout. The attempt repeats until one busy timeout
+  has passed since the attempt that first failed. A full wait in the
+  busy handler thus leads to no second full wait.
+- The transaction runs on one `*sql.Conn`. The busy timeout of the DSN
+  stays at 5 s for every other statement.
+
+## Measurements
+
+- Before: at least 9 of 36 concurrent opens of one fresh database failed
+  in one experiment run and 5 of 36 in another, with `table … already
+  exists` or with `database is locked` at the first statement.
+- After: 200 concurrent opens passed. `TestHubSetupTwoStepFlow` passed
+  3 times in a row under the load of seven other test packages.
+
+## Limits
+
+- A migration that one process runs for longer than about two busy
+  timeouts makes a process that opens the database at that time exit
+  with `database is locked`. No current migration is that slow. A
+  longer wait is a decision for the owner.
+- `store.OpenReadOnly` has no retry. It relies on an open writer, as
+  DB.md states.
