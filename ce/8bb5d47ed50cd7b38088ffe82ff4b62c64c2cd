@@ -1,0 +1,14 @@
+# Context
+
+The notes of 2026-11-24 come from one working session and are committed
+here as one change. They hold the measurements of the live hub, the
+secrets rescan, the fix commits of the day, the cause of the
+`TestHubSetupTwoStepFlow` failure, and the Antigravity workspace.
+
+Two statements are corrected. The failure of `TestHubSetupTwoStepFlow`
+came from a race between two processes that migrated one database, not
+from a nearly full volume. `OHYA_UPLOAD_COMPRESSION=off` removes only the
+zstd bit from the capability offer since `2812eb5`.
+
+Open items for the owner start with "Open" or "Decision for the owner".
+The secrets triage list stays outside the repository.
