@@ -25,6 +25,8 @@ VARIABLES
   srcReallows,
   srcOwner,
   srcEverOwned,
+  srcWs,
+  srcWsWriter,
   annRows,
   annRowSes,
   wsObs,
@@ -32,7 +34,7 @@ VARIABLES
 
 vars == <<invState, invUsedBy, registry, pairedVia, revokedEver,
           sesDevice, sesLive, srcReg, srcPurges, srcReallows,
-          srcOwner, srcEverOwned, annRows, annRowSes, wsObs, wsWriter>>
+          srcOwner, srcEverOwned, srcWs, srcWsWriter, annRows, annRowSes, wsObs, wsWriter>>
 
 None == "none"
 
@@ -57,6 +59,8 @@ Init ==
   /\ srcReallows  = [s \in Sources |-> 0]
   /\ srcOwner     = [s \in Sources |-> None]
   /\ srcEverOwned = [s \in Sources |-> {}]
+  /\ srcWs        = [s \in Sources |-> None]
+  /\ srcWsWriter  = [s \in Sources |-> None]
   /\ annRows      = [a \in Annotations |-> {}]
   /\ annRowSes    = [a \in Annotations |-> [d \in Devices |-> None]]
   /\ wsObs        = [d \in Devices |-> [w \in Workspaces |-> None]]
@@ -66,13 +70,15 @@ IssueInvitation(i) ==
   /\ invState[i] = "unissued"
   /\ invState'  = [invState EXCEPT ![i] = "open"]
   /\ UNCHANGED <<wsObs, wsWriter, invUsedBy, registry, pairedVia, revokedEver, sesDevice,
-                 sesLive, srcReg, srcPurges, srcReallows, srcOwner, srcEverOwned, annRows, annRowSes>>
+                 sesLive, srcReg, srcPurges, srcReallows, srcOwner, srcEverOwned, srcWs,
+                 srcWsWriter, annRows, annRowSes>>
 
 ExpireInvitation(i) ==
   /\ invState[i] = "open"
   /\ invState'  = [invState EXCEPT ![i] = "expired"]
   /\ UNCHANGED <<wsObs, wsWriter, invUsedBy, registry, pairedVia, revokedEver, sesDevice,
-                 sesLive, srcReg, srcPurges, srcReallows, srcOwner, srcEverOwned, annRows, annRowSes>>
+                 sesLive, srcReg, srcPurges, srcReallows, srcOwner, srcEverOwned, srcWs,
+                 srcWsWriter, annRows, annRowSes>>
 
 ConsumeInvitation(d, i) ==
   /\ invState[i] = "open"
@@ -82,7 +88,8 @@ ConsumeInvitation(d, i) ==
   /\ registry'  = [registry EXCEPT ![d] = "active"]
   /\ pairedVia' = [pairedVia EXCEPT ![d] = i]
   /\ UNCHANGED <<wsObs, wsWriter, revokedEver, sesDevice, sesLive, srcReg,
-                 srcPurges, srcReallows, srcOwner, srcEverOwned, annRows, annRowSes>>
+                 srcPurges, srcReallows, srcOwner, srcEverOwned, srcWs, srcWsWriter,
+                 annRows, annRowSes>>
 
 RevokeDevice(d) ==
   /\ registry[d] = "active"
@@ -93,7 +100,7 @@ RevokeDevice(d) ==
                         THEN FALSE
                         ELSE sesLive[c]]
   /\ UNCHANGED <<wsObs, wsWriter, invState, invUsedBy, pairedVia, sesDevice,
-                 srcReg, srcPurges, srcReallows, srcOwner, srcEverOwned,
+                 srcReg, srcPurges, srcReallows, srcOwner, srcEverOwned, srcWs, srcWsWriter,
                  annRows, annRowSes>>
 
 OpenSession(d, c) ==
@@ -102,13 +109,15 @@ OpenSession(d, c) ==
   /\ sesDevice'  = [sesDevice EXCEPT ![c] = d]
   /\ sesLive'    = [sesLive EXCEPT ![c] = TRUE]
   /\ UNCHANGED <<wsObs, wsWriter, invState, invUsedBy, registry, pairedVia, revokedEver,
-                 srcReg, srcPurges, srcReallows, srcOwner, srcEverOwned, annRows, annRowSes>>
+                 srcReg, srcPurges, srcReallows, srcOwner, srcEverOwned, srcWs, srcWsWriter,
+                 annRows, annRowSes>>
 
 CloseSession(c) ==
   /\ sesLive[c]
   /\ sesLive' = [sesLive EXCEPT ![c] = FALSE]
   /\ UNCHANGED <<wsObs, wsWriter, invState, invUsedBy, registry, pairedVia, revokedEver,
-                 sesDevice, srcReg, srcPurges, srcReallows, srcOwner, srcEverOwned, annRows, annRowSes>>
+                 sesDevice, srcReg, srcPurges, srcReallows, srcOwner, srcEverOwned, srcWs,
+                 srcWsWriter, annRows, annRowSes>>
 
 Upload(c, s) ==
   /\ Authorized(c)
@@ -118,7 +127,8 @@ Upload(c, s) ==
         /\ srcOwner'     = [srcOwner EXCEPT ![s] = d]
         /\ srcEverOwned' = [srcEverOwned EXCEPT ![s] = srcEverOwned[s] \cup {d}]
   /\ UNCHANGED <<wsObs, wsWriter, invState, invUsedBy, registry, pairedVia, revokedEver,
-                 sesDevice, sesLive, srcReg, srcPurges, srcReallows, annRows, annRowSes>>
+                 sesDevice, sesLive, srcReg, srcPurges, srcReallows, srcWs, srcWsWriter,
+                 annRows, annRowSes>>
 
 Annotate(c, a) ==
   /\ Authorized(c)
@@ -127,7 +137,8 @@ Annotate(c, a) ==
         /\ annRowSes' = [annRowSes EXCEPT ![a] =
                            [annRowSes[a] EXCEPT ![d] = c]]
   /\ UNCHANGED <<wsObs, wsWriter, invState, invUsedBy, registry, pairedVia, revokedEver,
-                 sesDevice, sesLive, srcReg, srcPurges, srcReallows, srcOwner, srcEverOwned>>
+                 sesDevice, sesLive, srcReg, srcPurges, srcReallows, srcOwner, srcEverOwned,
+                 srcWs, srcWsWriter>>
 
 DeleteAnnotation(c, a) ==
   /\ Authorized(c)
@@ -136,7 +147,8 @@ DeleteAnnotation(c, a) ==
         /\ annRowSes' = [annRowSes EXCEPT ![a] =
                            [annRowSes[a] EXCEPT ![d] = c]]
   /\ UNCHANGED <<wsObs, wsWriter, invState, invUsedBy, registry, pairedVia, revokedEver,
-                 sesDevice, sesLive, srcReg, srcPurges, srcReallows, srcOwner, srcEverOwned>>
+                 sesDevice, sesLive, srcReg, srcPurges, srcReallows, srcOwner, srcEverOwned,
+                 srcWs, srcWsWriter>>
 
 Observe(c, w, r) ==
   /\ Authorized(c)
@@ -146,7 +158,20 @@ Observe(c, w, r) ==
                /\ wsWriter' = [wsWriter EXCEPT ![d][w] = c]
           ELSE UNCHANGED <<wsObs, wsWriter>>
   /\ UNCHANGED <<invState, invUsedBy, registry, pairedVia, revokedEver,
-                 sesDevice, sesLive, srcReg, srcPurges, srcReallows, srcOwner, srcEverOwned, annRows, annRowSes>>
+                 sesDevice, sesLive, srcReg, srcPurges, srcReallows, srcOwner, srcEverOwned,
+                 srcWs, srcWsWriter, annRows, annRowSes>>
+
+SetSourceWorkspace(c, s, p) ==
+  /\ Authorized(c)
+  /\ srcReg[s] = "registered"
+  /\ srcOwner[s] = sesDevice[c]
+  /\ IF srcWs[s] = None
+       THEN /\ srcWs'       = [srcWs EXCEPT ![s] = p]
+            /\ srcWsWriter' = [srcWsWriter EXCEPT ![s] = c]
+       ELSE UNCHANGED <<srcWs, srcWsWriter>>
+  /\ UNCHANGED <<wsObs, wsWriter, invState, invUsedBy, registry, pairedVia, revokedEver,
+                 sesDevice, sesLive, srcReg, srcPurges, srcReallows, srcOwner, srcEverOwned,
+                 annRows, annRowSes>>
 
 PurgeSource(s) ==
   /\ srcPurges[s] < MaxPurges
@@ -154,7 +179,8 @@ PurgeSource(s) ==
   /\ srcReg'    = [srcReg EXCEPT ![s] = "purged"]
   /\ srcPurges' = [srcPurges EXCEPT ![s] = srcPurges[s] + 1]
   /\ UNCHANGED <<invState, invUsedBy, registry, pairedVia, revokedEver, sesDevice,
-                 sesLive, srcReallows, srcOwner, srcEverOwned, annRows, annRowSes, wsObs, wsWriter>>
+                 sesLive, srcReallows, srcOwner, srcEverOwned, srcWs, srcWsWriter,
+                 annRows, annRowSes, wsObs, wsWriter>>
 
 ReallowSource(s) ==
   /\ srcReg[s] = "purged"
@@ -162,7 +188,8 @@ ReallowSource(s) ==
   /\ srcReg'      = [srcReg EXCEPT ![s] = "registered"]
   /\ srcReallows' = [srcReallows EXCEPT ![s] = srcReallows[s] + 1]
   /\ UNCHANGED <<invState, invUsedBy, registry, pairedVia, revokedEver, sesDevice,
-                 sesLive, srcPurges, srcOwner, srcEverOwned, annRows, annRowSes, wsObs, wsWriter>>
+                 sesLive, srcPurges, srcOwner, srcEverOwned, srcWs, srcWsWriter,
+                 annRows, annRowSes, wsObs, wsWriter>>
 
 ReadDiagnostics(c) ==
   /\ Authorized(c)
@@ -191,6 +218,8 @@ Next ==
        \/ DeleteAnnotation(c, a)
   \/ \E c \in Sessions, w \in Workspaces, r \in Repos :
        Observe(c, w, r)
+  \/ \E c \in Sessions, s \in Sources, p \in Workspaces :
+       SetSourceWorkspace(c, s, p)
 
 Spec == Init /\ [][Next]_vars
 
@@ -207,6 +236,8 @@ TypeOK ==
   /\ srcReallows  \in [Sources -> 0..MaxPurges]
   /\ srcOwner     \in [Sources -> Devices \cup {None}]
   /\ srcEverOwned \in [Sources -> SUBSET Devices]
+  /\ srcWs        \in [Sources -> Workspaces \cup {None}]
+  /\ srcWsWriter  \in [Sources -> Sessions \cup {None}]
   /\ annRows      \in [Annotations -> SUBSET Devices]
   /\ annRowSes    \in [Annotations -> [Devices -> Sessions \cup {None}]]
   /\ wsObs        \in [Devices -> [Workspaces -> Repos \cup {None}]]
@@ -268,6 +299,22 @@ ObservationWriteOnce ==
        wsObs[d][w] # None =>
          /\ wsObs'[d][w] = wsObs[d][w]
          /\ wsWriter'[d][w] = wsWriter[d][w]]_vars
+
+SourceWorkspaceWriterFromSession ==
+  \A s \in Sources :
+    srcWsWriter[s] # None =>
+      /\ srcOwner[s] # None
+      /\ sesDevice[srcWsWriter[s]] = srcOwner[s]
+
+SourceWorkspaceHasWriter ==
+  \A s \in Sources :
+    (srcWs[s] # None) = (srcWsWriter[s] # None)
+
+SourceWorkspaceWriteOnce ==
+  [][\A s \in Sources :
+       srcWs[s] # None =>
+         /\ srcWs'[s] = srcWs[s]
+         /\ srcWsWriter'[s] = srcWsWriter[s]]_vars
 
 Quiescent ==
   /\ \A i \in Invitations : invState[i] # "open"

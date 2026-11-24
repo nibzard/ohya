@@ -6,7 +6,9 @@ cursor and acknowledgment protocol from the "Sync contract" in
 authorization, pairing, and revocation rules from its "Authorization and
 SQL" and "Agent annotations" sections. Both carry the owner purge
 lifecycle of [ADR 0013](../docs/adr/0013-owner-scoped-session-purge.md):
-the tombstoned source, its refusal, and re-admission.
+the tombstoned source, its refusal, and re-admission. `Auth.tla` also
+carries the source workspace of a device
+([ADR 0018](../docs/adr/0018-device-observed-source-workspace.md)).
 TLC checks the models against the properties recorded here. The sync
 endpoint (T017, `internal/hubsync`), the uploader (T019), and pairing
 with revocation (T018, `internal/registry`) must implement these state
@@ -270,7 +272,9 @@ the purge actions were added (ADR 0013), were each caught:
 rules in the "Authorization and SQL" and "Agent annotations" sections of
 [ARCHITECTURE.md](../ARCHITECTURE.md): the hub-owned device credential
 registry, one-time expiring pairing invitations, per-request revocation
-checks, source ownership, and annotation writer ownership. Pairing,
+checks, source ownership, annotation writer ownership, and the source
+workspace of a device
+([ADR 0018](../docs/adr/0018-device-observed-source-workspace.md)). Pairing,
 credentials, and revocation (T018) implement this state machine in
 `internal/registry` (the registry store and its endpoint authenticator)
 with `internal/hubsync` carrying the per-request `Authorize` gate and the
@@ -293,6 +297,7 @@ fixed source ownership — this model is that assumption, checked.
 | Annotation slot (event, namespace, key) | constant `Annotations`; the writer completes the identity |
 | Annotation rows and their writers | `annRows[a]`, `annRowSes[a][d]` |
 | Workspace observation (ADR 0009) | `wsObs[d][w]`, written once, and its writer session `wsWriter[d][w]` |
+| Source workspace (ADR 0018) | `srcWs[s]`, written once, and its writer session `srcWsWriter[s]` |
 
 | Constant | Meaning |
 |---|---|
@@ -301,7 +306,7 @@ fixed source ownership — this model is that assumption, checked.
 | `Sessions` | Session (connection) slot strings |
 | `Sources` | Source identity strings |
 | `Annotations` | Annotation slots: the `(event_id, namespace, key)` part of the annotation identity. The `writer_id` part is state (the row owner), not a constant |
-| `Workspaces` | Workspace paths. The device part of the `(device_id, path)` identity is state, not a constant |
+| `Workspaces` | Workspace paths, observed by a device or reported for a source. The device part of the `(device_id, path)` identity is state, not a constant |
 | `Repos` | Observed values, including the "no repository" value |
 | `MaxPurges` | The most owner purges one source may receive; bounds the counters so the state space stays finite |
 
@@ -331,9 +336,10 @@ Actions and the scenarios they cover:
 | `OpenSession` | Only an active device establishes a session; the slot binds to it permanently |
 | `CloseSession` | A session ends; the device binding survives |
 | `Upload` | The first accepted upload binds the source to the session's device; the same device's retries are accepted; any other device — stranger, paired, or the revoked former owner — is rejected; refused while the source is tombstoned (ADR 0013) |
-| `PurgeSource` / `ReallowSource` | The owner's purge and re-admission of a source (ADR 0013): the registration flips registered ↔ purged, nothing else moves — ownership, the registry, and sessions are untouched |
+| `PurgeSource` / `ReallowSource` | The owner's purge and re-admission of a source (ADR 0013): the registration flips registered ↔ purged, nothing else moves — ownership, the source workspace, the registry, and sessions are untouched |
 | `Annotate` / `DeleteAnnotation` | Upsert or delete of the session device's own row on a slot; the request carries no writer, so another device's row is not addressable. Deleting an absent row succeeds and removes nothing |
 | `Observe` | A workspace observation for the session device's own workspace. The first one is stored; a repeat, with the same or another value, changes nothing |
+| `SetSourceWorkspace` | A session reports the workspace of a registered source of its own device (ADR 0018). The first report is stored with the session as its writer; a repeat, with the same or another path, changes nothing; refused while the source is tombstoned |
 
 A rejected request is the absence of a transition: the authorization
 guard fails and no state changes.
@@ -370,9 +376,13 @@ Every configuration checks all of these.
 - `ObservationWriterFromSession` / `ObservationHasWriter` — every stored
   workspace observation was written through a session of the device that
   owns the workspace.
+- `SourceWorkspaceWriterFromSession` / `SourceWorkspaceHasWriter` — every
+  stored source workspace was written through a session of the device that
+  owns the source.
 
-The action property `ObservationWriteOnce` checks that a stored
-observation, and its writer, never change.
+The action properties `ObservationWriteOnce` and `SourceWorkspaceWriteOnce`
+check that a stored observation, or a stored source workspace, and its
+writer never change.
 
 ## Design decisions fixed by the model
 
@@ -417,6 +427,14 @@ observation, and its writer, never change.
   identical-retry no-ops, limits, and foreign keys are Go tests
   (`internal/store`, T009). This model covers only ownership and
   authorization.
+- **A source workspace follows its registration.** `Upload` folds the
+  registration of a source into its first accepted batch, so in the model
+  `SetSourceWorkspace` is enabled only after an `Upload` by the owner
+  device. On the wire, the device sends the `sourceWorkspace` frame after
+  the hub acknowledged the registration frame; the uploader tests pin that
+  order (`internal/uploader`). The hub checks the path, and sets the
+  working directory of the sessions that have none, in Go tests
+  (`internal/store`, `internal/hubsync`).
 - **Reads and remote diagnostics.** `ReadDiagnostics(c)` models the bounded
   remote-status request on an authenticated session: it requires the exact
   same `Authorized(c)` guard (live session + active registry state, so
@@ -428,10 +446,14 @@ observation, and its writer, never change.
 
 ## Models
 
-| Configuration | Bounds | What it exercises | Size (checked 2026-11-19) |
+| Configuration | Bounds | What it exercises | Size (checked 2026-11-24) |
 |---|---|---|---|
-| `Auth.cfg` | 2 devices, 2 invitations, 3 sessions, 2 sources, 1 workspace, 2 values, 1 purge per source | Full interleaving: pairing races, revocation under live sessions, cross-writer annotations on one slot, competing observations of one workspace, purge and reallow racing uploads and revocation | 4,635,297 states, ~2 min |
-| `AuthWide.cfg` | 3 devices, 2 invitations, 3 sessions, 2 sources, 1 workspace, 2 values, 1 purge per source | Pairing scarcity: one device stays a stranger whatever happens; one device owning both sources while another owns none | 13,324,149 states, ~9 min |
+| `Auth.cfg` | 2 devices, 2 invitations, 3 sessions, 2 sources, 1 workspace, 2 values, 1 purge per source | Full interleaving: pairing races, revocation under live sessions, cross-writer annotations on one slot, competing observations of one workspace, a source workspace racing purge and revocation, purge and reallow racing uploads | 18,286,389 states, ~3.5 min |
+| `AuthWide.cfg` | 3 devices, 2 invitations, 3 sessions, 2 sources, 1 workspace, 2 values, 1 purge per source | Pairing scarcity: one device stays a stranger whatever happens; one device owning both sources while another owns none | 51,982,533 states, ~11 min |
+
+The action `SetSourceWorkspace` raised both state counts by a factor of
+3.9. Each configuration stays below 30 minutes, so no constant bounds the
+action.
 
 In `Auth.cfg`, three session slots let both devices hold live sessions
 and still close a session and open a new one on a fresh slot. In
@@ -481,6 +503,18 @@ no recreated source row, no stored records — is what `Sync.tla` checks
 that purge and reallow never move ownership or registry state, so
 revocation still wins over re-admission.
 
+Three mutations of `SetSourceWorkspace`, run on 2026-11-24 against
+`Auth.cfg` when the action was added (ADR 0018):
+
+- The hub stores the workspace through a session of another device:
+  `SourceWorkspaceWriterFromSession` violated.
+- The hub overwrites a stored source workspace:
+  `SourceWorkspaceWriteOnce` violated.
+- Dropping the `srcReg` guard survived by design, like the `Upload` purge
+  mutation above: a report for an owned purged source changes no
+  authorization state. The refusal is pinned by Go tests
+  (`internal/hubsync`, `internal/store`).
+
 ## No liveness property
 
 Every property in scope is safety. Pairing and revocation are single
@@ -495,6 +529,8 @@ starvation bug.
 - Cryptography, credential storage, and transport security: assumptions
   above.
 - Annotation value and batch semantics: Go tests (`internal/store`, T009).
+- The path of a source workspace: the device observes it, and the hub
+  checks only its length and its text (ADR 0018).
 - Batch validation, cursors, and replay: `Sync.tla` and Go tests (T017).
 - Hub-side rate limiting, connection bounds, request quotas: operational
   limits, not protocol states.
