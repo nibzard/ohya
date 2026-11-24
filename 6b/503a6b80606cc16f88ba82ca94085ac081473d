@@ -1,0 +1,23 @@
+# Context
+
+## Background
+`ohya usage` reports the SQL functions of each `sql` call by name.
+`NormalizeFunctions` keeps a name only when it is in
+`FunctionCatalogue`. Each other name becomes "other". The SQLite
+authorizer reports the LIKE operator as the function "like" (verified
+on 2026-11-24 with a Python sqlite3 authorizer probe, SQLite 3.45.1).
+The catalogue did not list "like". So the function that causes most
+deadline errors was invisible in the usage report.
+
+## Why This Way
+This commit comes first. The test `TestUsageRecordsLikeFunction` of the
+next commit needs the catalogue entry.
+
+## Gotchas
+- The catalogue is in alphabetical order. Keep it so. No test checks
+  the order.
+- SQLite reports the name in lower case.
+
+## Related
+- 254d0f4 (the trace and the hints that need "like")
+- NOTES.md, 2026-11-24: the usage analysis of the live hub
