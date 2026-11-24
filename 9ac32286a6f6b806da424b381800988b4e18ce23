@@ -34,3 +34,5 @@ after the run, fts_index ok.
 - commit 3bf3d50 (copy snapshot)
 - /notes/2026-11-24-stepped-copy-restarts.md
 - DB.md "Inspection", docs/reference.md "ohya doctor"
+
+Cherry-pick of 7baf6df for the branch release/v0.7.1 (v0.7.1). The note above was written for the original commit.
