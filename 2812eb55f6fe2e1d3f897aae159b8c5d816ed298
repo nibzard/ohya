@@ -1,0 +1,44 @@
+# Design: the source workspace on the device
+
+## Problem
+
+The uploader must bring the workspace of a source to the hub, without
+knowledge of Antigravity and without a way to block or slow down the
+batches of a source.
+
+## Approach
+
+- `Options.SourceWorkspace` is a lookup function, injected the way
+  `workspace.Resolve` is. `internal/uploader` stays free of Antigravity
+  knowledge.
+- The frame sits after the acknowledgment of the registration and before
+  the cursor probe. A probe can stop a source, for example on a cursor
+  regression that the retained file cannot replay. The workspace does not
+  depend on the cursor, so it goes first.
+- One map, `sourceTold`, is enough. `prepare` runs once per source and per
+  connection, so a source without a workspace is looked up again only on
+  a new connection. A second map for "not found" would repeat what
+  `ready` already states.
+- A hub error for the frame is not passed to `sourceRefused`. That
+  function blocks the source for the rest of the process. The workspace
+  is an addition, so the batches go on and the log line names the cause.
+- The frame is built into a buffer before the exchange. A writer error
+  inside `roundTrip` closes the connection and reports the hub as
+  unreachable, which would be a wrong diagnosis for a long path.
+- The offer always includes bit 2. A process without a lookup then never
+  sends the frame, and the offer stays a constant.
+- With `OHYA_UPLOAD_COMPRESSION=off`, a process without a lookup still
+  sends no `caps` frame, as an old device does. A process with a lookup
+  offers bit 2 only, so the switch keeps its meaning for A/B measurement
+  of compression.
+
+## Test helper fixes
+
+- `oldHub.kick` closed nothing. `serve` removed each connection from the
+  set at its start, so the "after reconnect" assertions of the old hub
+  test held without a reconnect. The removal now runs when `serve` ends.
+- `oldHub` now answers a capability offer with the intersection of the
+  offer and its support, as the protocol says. Before, it refused every
+  offer, so a test of a hub without bit 2 had no way to run.
+- The peeked marker of a frame must be copied before the frame is read.
+  The buffer of the reader can change under the slice that `Peek` returns.
