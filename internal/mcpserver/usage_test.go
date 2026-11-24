@@ -108,6 +108,15 @@ func TestUsageRecordsAuthorizerReadsAndFunctions(t *testing.T) {
 	}
 }
 
+func TestUsageRecordsLikeFunction(t *testing.T) {
+	e, sink := newUsageTestEngine(t, EngineOptions{}, nil)
+
+	mustQuery(t, e, `SELECT id FROM events WHERE text LIKE '%auth%'`)
+	if record := mustRecord(t, sink, 1); !slices.Contains(record.Functions, "like") {
+		t.Fatalf("functions = %v, want like", record.Functions)
+	}
+}
+
 func TestUsageRecordsOutcomeCodes(t *testing.T) {
 	t.Run("busy", func(t *testing.T) {
 		e, sink := newUsageTestEngine(t, EngineOptions{MaxConcurrency: 1}, nil)

@@ -311,6 +311,35 @@ func TestQueryDeadlineInterruptsExecution(t *testing.T) {
 	mustQuery(t, e, `SELECT 1`)
 }
 
+func TestQueryDeadlineErrorNamesItsCause(t *testing.T) {
+	const endless = `WITH RECURSIVE c(n) AS (VALUES(0) UNION ALL SELECT n+1 FROM c WHERE n < 1000000000) `
+	for _, tc := range []struct {
+		name  string
+		query string
+		want  string
+	}{
+		{"like", endless + `SELECT count(*) FROM events, c WHERE events.text LIKE '%' || c.n || '%'`, hintLike},
+		{"count", endless + `SELECT count(*) FROM events, c`, hintCount},
+		{"wide", endless + `SELECT e.id FROM events e, c WHERE e.text = 'needle' ORDER BY e.time_ms`, hintNarrow},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newTestEngine(t, EngineOptions{Deadline: 200 * time.Millisecond})
+			_, err := e.Query(context.Background(), tc.query)
+			if !errors.Is(err, ErrDeadline) || !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("error = %v, want ErrDeadline", err)
+			}
+			message := err.Error()
+			const start = "execution deadline exceeded (200ms per call): "
+			if !strings.HasPrefix(message, start) || !strings.HasSuffix(message, "; "+tc.want) {
+				t.Fatalf("error = %q", message)
+			}
+			if len(message) > 1024 {
+				t.Fatalf("error message = %d bytes, want at most 1024", len(message))
+			}
+		})
+	}
+}
+
 func TestQueryBusyFailsFastAndRecovers(t *testing.T) {
 	e := newTestEngine(t, EngineOptions{MaxConcurrency: 1, Deadline: 20 * time.Second})
 
