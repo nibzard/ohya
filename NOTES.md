@@ -148,16 +148,14 @@ How to use this file:
     kept it, to keep the removal apart from the workspace column. Each
     migration costs one full recovery copy, so remove the column in the
     next schema change that has its own reason.
-  - `docs/release-operations.md` opens with "The newest release is
-    v0.6.1" and has no entry for v0.7.0 (tag at `60eb331`, 2026-11-23).
-    The entry needs the release facts (candidate run, checks) from the
-    person who cut the release.
 
 - Hub fixes 2026-11-24 (plan approved by the owner: correctness, error
   text of the pull path, and documents; no hooks and no injection into a
   session, see PRODUCT.md "Pull, never push"). All on `main`, none
-  released. The first two groups need no schema change; the Antigravity
-  workspace is schema 9.
+  released. The commits were made on a stale base and sit on top of
+  `origin/main` since the merge `f62cdc5` (see "Integration 2026-11-24").
+  The first two groups need no schema change; the Antigravity workspace
+  is schema 9.
   - Redaction (`41cc624`): the six prefix patterns start with a left
     boundary that stays in the output, so `task-`, `desk-`, `disk-`,
     `ask-`, and `risk-` identifiers stay whole. Accepted risk, recorded in
@@ -187,6 +185,32 @@ How to use this file:
     below, under "TestTimeoutRetries").
   - Open: the released-schema lists in DB.md stop at v0.7.0 until the
     next release.
+
+- Integration 2026-11-24 (merge `f62cdc5`): the 17 commits of this day
+  were made on `f115b69`, nine commits behind `origin/main` (the v0.7.0
+  release work, fetched 2026-11-23 23:05). The cause: no `git fetch` and
+  no `git status -sb` ran before the work began, and `git status` alone
+  does not show a branch that is behind. Rule: run both at the start of
+  a session in this worktree.
+  - The remote `9d86d67` probes a source that the hub knows and skips
+    its registration. `2812eb5` sent the `sourceWorkspace` frame after
+    that registration, so a known source never sent its workspace; after
+    an upgrade, no existing source would. Three tests of `2812eb5`
+    failed on the merged tree. The frame now follows the probe of a
+    known source too, and one new test covers it.
+  - `KeepaliveInterval` of the remote and `SourceWorkspace` are both in
+    `uploader.Options`. `Uploader.offer` holds the capability offer for
+    the connection and for the keepalive.
+  - `docs/release-operations.md` holds the v0.7.0 entry (`5f2d015`). A
+    bullet in the measurements above said it had none, and is removed.
+  - Checks on the merged tree: `GOFLAGS=-count=1 make check` passed
+    twice (`cmd/ohya` in 258 s and in 251 s), and the tests of
+    `internal/uploader` and `internal/hubsync` passed with the race
+    detector. `make tla` was not rerun: neither side changed `tla/`. The
+    Swift app changes of the remote were not built here: this VM has no
+    Xcode.
+  - Open: `docs/sync-protocol.md` describes neither the keepalive
+    (`9d86d67`, 3 minutes) nor the probe before the registration.
 
 - Antigravity workspace (2026-11-24, ADR 0018; `c220c9e`, `ed9b421`,
   `d66bfc6`, `2812eb5`, `5c62866`): Antigravity transcripts carry no
