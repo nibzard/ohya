@@ -57,3 +57,5 @@ as load, it failed in the first run.
   longer wait is a decision for the owner.
 - `store.OpenReadOnly` has no retry. It relies on an open writer, as
   DB.md states.
+
+Two full runs of make check without the test cache (GOFLAGS=-count=1) passed on the final tree, with cmd/ohya in 233 s and in 296 s. Before the fix, 6 of 10 full runs failed on the same day.
