@@ -94,7 +94,7 @@ Current writer ID (for event_annotations.writer_id): %s
 Tables:
 - sessions(id, agent, device_id, native_id, repo, cwd, branch, model, first_prompt, started_at_ms, last_event_at_ms, event_count, metadata): id = agent:device_id:native_id; repo = host/path across devices
 - workspaces(device_id, path, repo, observed_at_ms): device-observed repo for cwd (NULL = none)
-- sources(id, device_id, agent, path, file_identity, cursor_bytes, updated_at_ms): watched file cursor
+- sources(id, device_id, agent, path, cursor_bytes, updated_at_ms): watched file cursor
 - events(id, session_id, source_id, source_offset, time_ms, kind, role, tool_name, text, raw_json, metadata, ordinal, duplicate_of): filter duplicate_of IS NULL to skip replays
 - session_token_usage(session_id, message_id, input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens)
 - event_annotations(event_id, namespace, key, writer_id, value, created_at_ms, updated_at_ms)

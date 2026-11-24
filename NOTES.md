@@ -142,12 +142,11 @@ How to use this file:
   - `ohya purge` takes one `--session` per run, so a list of 427 sessions
     needs 427 runs. Decision 2026-11-24: keep that friction for a
     destructive command. `xargs -n 1` runs a list.
-  - `sources.file_identity` is dead: migration 001 declares it, the sql
-    tool description and `observe.ReadCatalogue` list it, and no code
-    writes it (0 non-NULL rows on the hub). Migration 009 (2026-11-24)
-    kept it, to keep the removal apart from the workspace column. Each
-    migration costs one full recovery copy, so remove the column in the
-    next schema change that has its own reason.
+  - `sources.file_identity` was dead: migration 001 declared it, the sql
+    tool description and `observe.ReadCatalogue` listed it, and no code
+    wrote it (0 non-NULL rows on the hub). Migration 009 drops it
+    (2026-11-25), and both lists no longer name it. See "Schema 9
+    upgrade path" below.
 
 - Hub fixes 2026-11-24 (plan approved by the owner: correctness, error
   text of the pull path, and documents; no hooks and no injection into a
@@ -273,16 +272,40 @@ How to use this file:
     one line per process.
   - Open until the release: schema 8 to 9 costs one full recovery copy
     (about 17 GiB) at the next `ohya setup`, so check the free space
-    first. Then run `SELECT count(*), count(cwd), count(repo) FROM
+    first. Measured on 2026-11-24 with a current build: the copy of
+    16.91 GiB took 11 min 21 s while a test run loaded the disk (26 to
+    71 MiB/s). Budget about 15 minutes with ingestion stopped and about
+    20 GB of free space; the kept recovery point holds 18 GB afterwards.
+    The installed v0.7.1 read the migrated copy, so processes that were
+    started before the upgrade keep their read access. Then run
+    `SELECT count(*), count(cwd), count(repo) FROM
     sessions WHERE agent = 'antigravity'`. 25 of the 68 conversation
     directories on the hub machine are gone, so some sessions get a `cwd`
     and no `repo`, which is correct. The MacBook fills its 5 sessions
     when its ohya is upgraded.
-  - Decision for the owner before v0.8.0: migration 009 is not released,
-    so two deferred schema items can go into it at no extra recovery
-    copy — the removal of `sources.file_identity` and the index
+  - Decision of the owner (2026-11-24): migration 009 is not released,
+    so two deferred schema items go into it at no extra recovery copy —
+    the removal of `sources.file_identity` and the index
     `events(source_id, parser_version)` of the doctor note ("Doctor cost on
-    a 6.6 GB hub"). After the release each costs one full copy.
+    a 6.6 GB hub"). Done 2026-11-25; see "Schema 9 upgrade path" below.
+
+- Schema 9 upgrade path (2026-11-25; decision of the owner for v0.8.0):
+  - Migration 009 now also drops `sources.file_identity` and builds the
+    index `events_source_parser_version` on `events(source_id,
+    parser_version)`. The `parser_versions` check of `ohya doctor` reads
+    it through a grouped subquery.
+  - Measured on a read-only copy of this hub (9,415 sources, 2,892,749
+    events, 18.15 GB). Without the index, the old query took 3 min 52 s
+    and the new one 4 min 52 s on a cold cache: `parser_version` is the
+    last column of `events`, after the large text columns, so each scan
+    reads the overflow pages of every row. Checked on a synthetic table
+    of 20 KB rows: a scan of the last column read 966 MiB from disk and
+    a count of the rows read 196 MiB. With the index, the new query
+    took 0.18 s and the old one 1.09 s. The migration (`store.Open`)
+    took 3 min 41 s and grew the file by 117 MiB.
+  - Tests: the query and its plan in `internal/store/doctor_test.go`,
+    and the columns of `sources` and the plan after each released
+    upgrade in `migrate_released_test.go`.
 
 - A stray build was deleted by mistake (2026-11-24, 22:23): a scratch
   cleanup ran `rm -f` with relative paths while the shell stood in the
@@ -1371,6 +1394,9 @@ How to use this file:
   through the backup API; a note here said "into memory" until 2026-11-24),
   so it needs free disk a little more than the database and took 24 min 45 s
   on the 18.1 GB hub; copying only the FTS shadow tables is unverified.
+  Added by migration 009 on 2026-11-25. On the 18.15 GB hub the query took
+  4 min 52 s without the index on a cold cache and 0.18 s with it ("Schema 9
+  upgrade path").
 
 - README recall trial (2026-11-15): release-hosted installer URL and its
   `--help` verified by download. Quickstart now separates installed usage
@@ -2570,8 +2596,9 @@ How to use this file:
     `GOFLAGS=-count=1` to count flakes.
   - Open: a migration that one process runs for longer than about two
     busy timeouts still makes a process that opens the database at that
-    time exit with `database is locked`. No current migration is that
-    slow (009 is two `ADD COLUMN`). A longer wait is a decision for the
+    time exit with `database is locked`. Migration 009 is that slow on a
+    large hub since it builds the index: 3 min 41 s on this hub (see
+    "Schema 9 upgrade path"). A longer wait is a decision for the
     owner. `store.OpenReadOnly` has no retry, and macOS was not tested.
     Research note:
     /notes/2026-11-24-concurrent-open-migration-race.md.

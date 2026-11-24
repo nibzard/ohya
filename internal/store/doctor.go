@@ -37,11 +37,14 @@ func (d *DB) AppliedSchemaVersion(ctx context.Context) (version int, found bool,
 	return int(max.Int64), true, nil
 }
 
+const parserVersionsQuery = `SELECT s.agent, max(m.newest)
+ FROM sources s
+ JOIN (SELECT source_id, max(parser_version) AS newest FROM events GROUP BY source_id) m
+   ON m.source_id = s.id
+ GROUP BY s.agent`
+
 func (d *DB) MaxParserVersions(ctx context.Context) (map[string]int, error) {
-	rows, err := d.readers.QueryContext(ctx,
-		`SELECT s.agent, max(e.parser_version)
-		 FROM events e JOIN sources s ON s.id = e.source_id
-		 GROUP BY s.agent`)
+	rows, err := d.readers.QueryContext(ctx, parserVersionsQuery)
 	if err != nil {
 		return nil, fmt.Errorf("store: read parser versions: %w", err)
 	}

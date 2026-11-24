@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"maps"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -80,6 +82,65 @@ func TestAppliedSchemaVersionRejectsForeignDatabase(t *testing.T) {
 	if _, _, err := ro.AppliedSchemaVersion(context.Background()); !errors.Is(err, ErrNoSchemaMigrations) {
 		t.Fatalf("error = %v; want ErrNoSchemaMigrations", err)
 	}
+}
+
+func TestMaxParserVersionsReadsTheNewestVersionOfEachSource(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "hub.db")
+	w, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	for _, q := range []string{
+		`INSERT INTO sources (id, device_id, agent, path) VALUES ('s-a', 'd1', 'claude-code', '/a')`,
+		`INSERT INTO sources (id, device_id, agent, path) VALUES ('s-b', 'd1', 'claude-code', '/b')`,
+		`INSERT INTO sources (id, device_id, agent, path) VALUES ('s-c', 'd1', 'codex', '/c')`,
+		`INSERT INTO sources (id, device_id, agent, path) VALUES ('s-idle', 'd1', 'pi', '/idle')`,
+		`INSERT INTO sessions (id, agent, device_id, native_id) VALUES ('x:claude-code:n', 'claude-code', 'd1', 'n')`,
+		`INSERT INTO sessions (id, agent, device_id, native_id) VALUES ('x:codex:n', 'codex', 'd1', 'n')`,
+		`INSERT INTO events (session_id, source_id, source_offset, kind, raw_json, parser_version) VALUES
+			('x:claude-code:n', 's-a', 0, 'user', '{}', 1),
+			('x:claude-code:n', 's-a', 1, 'user', '{}', 3),
+			('x:claude-code:n', 's-b', 0, 'user', '{}', 2),
+			('x:codex:n', 's-c', 0, 'response_item', '{}', 4)`,
+	} {
+		if _, err := w.Writer().ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ro, err := OpenReadOnly(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+	got, err := ro.MaxParserVersions(ctx)
+	if err != nil || !maps.Equal(got, map[string]int{"claude-code": 3, "codex": 4}) {
+		t.Fatalf("parser versions = %v, %v; want the newest version of each agent and no entry for a source without events", got, err)
+	}
+	plan, indexed := explainParserVersions(t, ro.readers)
+	if !indexed {
+		t.Fatalf("the query does not read the index events_source_parser_version:\n%s", strings.Join(plan, "\n"))
+	}
+}
+
+func explainParserVersions(t *testing.T, db *sql.DB) (plan []string, indexed bool) {
+	t.Helper()
+	rows, err := db.Query(`EXPLAIN QUERY PLAN ` + parserVersionsQuery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var node, parent, unused int
+		var detail string
+		if err := rows.Scan(&node, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, detail)
+		indexed = indexed || strings.Contains(detail, "events_source_parser_version")
+	}
+	return plan, indexed
 }
 
 func seedOneIndexedEvent(t *testing.T, db *sql.DB) {

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -99,8 +100,9 @@ func seedReleasedDatabase(t *testing.T, db *sql.DB, schema int) {
 		releasedClaudeSession, deviceHex)
 	must(`INSERT INTO sessions(id,agent,device_id,native_id,event_count)
 		VALUES(?, 'codex', ?, 'rel-thread', 1)`, releasedCodexSession, deviceHex)
-	must(`INSERT INTO sources(id,device_id,agent,path,cursor_bytes,updated_at_ms)
-		VALUES('relsrc-a', ?, 'claude-code', ?, ?, ?)`, deviceHex, releasedClaudePath, releasedClaudeCursor(), releasedSeedMs)
+	must(`INSERT INTO sources(id,device_id,agent,path,file_identity,cursor_bytes,updated_at_ms)
+		VALUES('relsrc-a', ?, 'claude-code', ?, 'released-file-identity', ?, ?)`,
+		deviceHex, releasedClaudePath, releasedClaudeCursor(), releasedSeedMs)
 	must(`INSERT INTO sources(id,device_id,agent,path,cursor_bytes,updated_at_ms)
 		VALUES('relsrc-b', ?, 'codex', '/released/rollout.jsonl', ?, ?)`, deviceHex, releasedCodexCursor(), releasedSeedMs)
 	res, err := tx.Exec(`INSERT INTO events(session_id,source_id,source_offset,kind,role,text,raw_json,parser_version)
@@ -222,6 +224,33 @@ func assertReleasedRowsSurviveUpgrade(t *testing.T, db *sql.DB, fromSchema, toSc
 	}
 	if !tableExists(t, db, "purged_sources") {
 		t.Fatal("purged_sources table missing after upgrade")
+	}
+	if toSchema >= 9 {
+		columns := make([]string, 0, 8)
+		rows, err := db.Query(`SELECT name FROM pragma_table_info('sources') ORDER BY cid`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				t.Fatal(err)
+			}
+			columns = append(columns, name)
+		}
+		if err := rows.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if slices.Contains(columns, "file_identity") || !slices.Contains(columns, "workspace_path") {
+			t.Fatalf("sources columns after upgrade = %v; want workspace_path and no file_identity", columns)
+		}
+		if _, err := db.Exec(`SELECT file_identity FROM sources WHERE id='relsrc-a'`); err == nil {
+			t.Fatal("sources.file_identity is still readable after the upgrade")
+		}
+		plan, indexed := explainParserVersions(t, db)
+		if !indexed {
+			t.Fatalf("the parser version query reads no index after the upgrade:\n%s", strings.Join(plan, "\n"))
+		}
 	}
 }
 

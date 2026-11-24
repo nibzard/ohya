@@ -21,7 +21,11 @@ adds `purged_sources`, the tombstones of owner-purged sources (see
 [009_source_workspace.sql](internal/store/migrations/009_source_workspace.sql)
 adds `workspace_path` to `sources` and `purged_sources`, the device-observed
 workspace of a source (see "Repository derivation" and
-[ADR 0018](docs/adr/0018-device-observed-source-workspace.md)).
+[ADR 0018](docs/adr/0018-device-observed-source-workspace.md)). It also drops
+`sources.file_identity`, which no write path filled, and adds the index
+`events_source_parser_version` on `events(source_id, parser_version)`. The
+`parser_versions` check of `ohya doctor` reads that index alone and no row of
+`events`.
 Do not duplicate the DDL here.
 Databases ship with releases: v0.1.0 and v0.1.1 ship schema 6, v0.1.2 and
 v0.2.0 ship schema 7, and v0.3.0, v0.4.0, v0.5.0, v0.5.1, v0.6.0, v0.6.1, v0.7.0, and v0.7.1 ship schema 8
@@ -85,7 +89,7 @@ migrations, and has no writer.
 | Table | Meaning |
 |---|---|
 | `sessions` | Device/agent/native session identity and observed aggregates |
-| `sources` | File incarnation, authoritative committed byte cursor, and device-observed workspace |
+| `sources` | Watched file path, authoritative committed byte cursor, and device-observed workspace |
 | `events` | One immutable original JSONL record and normalized searchable fields |
 | `session_token_usage` | Token counts of one API response, keyed by session and message ID |
 | `event_annotations` | Agent-written JSON values keyed by event, namespace, key and writer |

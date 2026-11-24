@@ -199,7 +199,6 @@ var ReadCatalogue = []string{
 	"sources.agent",
 	"sources.cursor_bytes",
 	"sources.device_id",
-	"sources.file_identity",
 	"sources.id",
 	"sources.path",
 	"sources.updated_at_ms",

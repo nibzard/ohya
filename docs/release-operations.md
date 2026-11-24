@@ -177,6 +177,9 @@ and migration 009 (`workspace_path` of a source,
 [ADR 0018](adr/0018-device-observed-source-workspace.md)) are schema-only,
 but the next `ohya setup` run after each of these upgrades takes one more
 full recovery copy, because the schema of the database is behind the build.
+Migration 009 also drops `sources.file_identity` and builds the index
+`events_source_parser_version`. On a copy of a hub with 2.9 million events
+(18.15 GB) that took 3 min 41 s and grew the file by 117 MiB (2026-11-24).
 So the cost above applies once per hub and per migration. Check the free
 space before you upgrade. Beyond that:
 
