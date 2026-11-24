@@ -409,7 +409,9 @@ GitHub, Anthropic, OpenAI, Slack, and Google token shapes, PEM and
 OPENSSH private-key blocks, and secret-named `UPPER_SNAKE=VALUE`
 assignments become kind-labeled markers such as
 `[redacted:github-token]`, and the result counts replacements in
-`redactions`. This is best-effort risk reduction, never a guarantee;
+`redactions`. Each token pattern needs a separator before its prefix, so
+an identifier such as `task-add-…` and encoded data stay unchanged.
+This is best-effort risk reduction, never a guarantee;
 stored records are never modified. The tool
 description publishes the schema, core recall recipes, the limits, and this
 device's writer ID, and steers agents to the `events_settled` view —

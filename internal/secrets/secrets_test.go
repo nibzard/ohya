@@ -42,6 +42,18 @@ func TestRedactMatchesRealShapedSecrets(t *testing.T) {
 			"private-key-block", sshBody},
 		{"plain private key block", pemBlock("PRIVATE KEY", repeat("k", 64)),
 			"private-key-block", repeat("k", 64)},
+		{"token after a quote", `{"token":"ghp_` + repeat("f", 36) + `"}`,
+			"github-token", "ghp_" + repeat("f", 36)},
+		{"key after an equals sign", "key=sk-proj-" + repeat("d", 40),
+			"openai-api-key", "sk-proj-" + repeat("d", 40)},
+		{"key after a colon", `{"key":sk-proj-` + repeat("d", 40) + `}`,
+			"openai-api-key", "sk-proj-" + repeat("d", 40)},
+		{"key after a space", "Authorization: Bearer sk-ant-api03-" + repeat("C", 40),
+			"anthropic-api-key", "sk-ant-api03-" + repeat("C", 40)},
+		{"key after a newline", "first line\nsk-proj-" + repeat("d", 40),
+			"openai-api-key", "sk-proj-" + repeat("d", 40)},
+		{"token after a bracket", "(xoxb-123456789012-123456789012345678-" + repeat("e", 24) + ")",
+			"slack-token", "xoxb-123456789012-123456789012345678-"},
 		{"env assignment", "DATABASE_PASSWORD=correct-horse-battery",
 			"env-assignment", "correct-horse-battery"},
 		{"quoted env assignment", `SERVICE_API_KEY="` + repeat("m", 20) + `"`,
@@ -96,10 +108,26 @@ func TestRedactLeavesNearMissesAlone(t *testing.T) {
 		"-----BEGIN PUBLIC KEY-----\n" + publicBody + "\n-----END PUBLIC KEY-----",
 		"-----BEGIN PRIVATE KEY-----\n" + repeat("h", 64),
 		"SELECT id FROM events WHERE kind = 'message' AND id > 100",
+		"task-add-device-revocation-regression-tests",
+		"desk-notification-service-account-rotation",
+		"disk-usage-metrics-collector-daemon",
+		"ask-clarifying-questions-before-refactor",
+		"risk-assessment-checklist-for-release",
+		"task-ant-workspace-planner-and-sync",
 	} {
 		out, n := Redact(s)
 		if n != 0 || out != s {
 			t.Fatalf("near miss %q became %q with %d matches; want untouched", s, out, n)
+		}
+	}
+}
+
+func TestRedactLeavesTokenShapesWithoutABoundary(t *testing.T) {
+	token := "sk-proj-" + repeat("d", 40)
+	for _, s := range []string{"x" + token, "-" + token, "_" + token, "7" + token} {
+		out, n := Redact(s)
+		if n != 0 || out != s {
+			t.Fatalf("glued shape %q became %q with %d matches; a key needs a boundary before its prefix", s, out, n)
 		}
 	}
 }
@@ -200,6 +228,7 @@ func FuzzRedact(f *testing.F) {
 	f.Add(pemBlock("OPENSSH PRIVATE KEY", repeat("b", 200)))
 	f.Add("nested \"json\" with sk-ant-api03-" + repeat("C", 40) + " inside")
 	f.Add("-----BEGIN PRIVATE KEY-----")
+	f.Add("task-add-device-revocation-regression-tests")
 	f.Fuzz(func(t *testing.T, s string) {
 		out, n := Redact(s)
 		again, n2 := Redact(out)

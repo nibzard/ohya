@@ -614,7 +614,9 @@ Engine details (`internal/mcpserver`):
   kind-labeled marker such as `[redacted:github-token]`, the variable name of
   a matched assignment stays readable, and the result carries one additive
   `redactions` count (omitted when zero, so the wire shape is unchanged for
-  clean results). The pass runs inside the engine, so the stdio tool, the
+  clean results). Each token pattern requires a separator before its
+  prefix, so an identifier that contains a prefix, such as `task-add-…`,
+  stays unchanged. The pass runs inside the engine, so the stdio tool, the
   remote query frames, and the operator recall commands all share it. It is
   best-effort risk reduction over untouched stored records, never a
   guarantee; `ohya secrets scan` reports the same table's findings per
