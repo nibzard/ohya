@@ -104,7 +104,7 @@ Tables:
 
 Schema inspection: SELECT sql FROM sqlite_master WHERE type='table'; read-only PRAGMAs (table_info, index_list, foreign_key_list, pragma_list, etc.); EXPLAIN QUERY PLAN.
 
-Recipes (keep results small with substr/snippet; format *_ms via datetime(col/1000, 'unixepoch'); filter session_id with =, never LIKE; covering subqueries on events_settled before sorting by time_ms):
+Recipes (keep results small with substr/snippet; format *_ms via datetime(col/1000, 'unixepoch'); filter session_id with =, never LIKE; search text with MATCH; covering subqueries on events_settled before sorting by time_ms):
 
 Recent sessions:
 SELECT id, agent, substr(first_prompt, 1, 160) AS first_prompt, datetime(last_event_at_ms/1000, 'unixepoch') AS last_utc, event_count FROM sessions ORDER BY last_event_at_ms DESC LIMIT 5;

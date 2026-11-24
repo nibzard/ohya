@@ -525,7 +525,7 @@ func recallQuery(ctx context.Context, backend recallBackend, query string) (mcps
 	case errors.Is(err, mcpserver.ErrQueryTooLarge):
 		return res, classify(err, "query_too_large", "shorten the query to at most 64 KiB")
 	case errors.Is(err, mcpserver.ErrDeadline):
-		return res, classify(err, "query_deadline", "narrow the query with a covering subquery or LIMIT")
+		return res, classify(err, "query_deadline", "")
 	case errors.Is(err, mcpserver.ErrBusy):
 		return res, classify(err, "server_busy", "retry once an active query finishes")
 	}

@@ -1469,6 +1469,15 @@ is investigated, not silently raised:
   mattering: the levers are sampling the usage record or a cheaper
   trace, and the three-way knob (`OHYA_BENCH_OBSERVE=metrics`) exists to
   re-measure the split after any such change.
+- Update, 2026-11-24: the engine now builds the trace for each `sql` call,
+  also when it has no observer, no event sink, and no usage sink. The
+  error of a query that exceeds its deadline names its cause, and the cause
+  comes from the trace (`queryError` in internal/mcpserver/query.go). On
+  the same fixed workload, an engine without those sinks now measures 12 to
+  44 more allocations and at most 2.1 KiB more per query than the "off"
+  column (300 iterations per benchmark). The time differences were within
+  noise. The other columns of the table were not measured again. They
+  built the trace before, and the trace gained one set of table names.
 - A regression guard pins the hot-path allocation contract:
   `TestRecorderHotPathAllocations` (internal/observe) fails if a
   pass-shaped Add/Observe/Set call set allocates more than 6 times

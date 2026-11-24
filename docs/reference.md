@@ -402,7 +402,9 @@ read-only connection guarded by a SQLite authorizer. Writes, schema
 changes, `ATTACH`, extension loading, and state-changing pragmas are
 denied; queries run under a 5 second deadline, return at most 500 rows
 and 256 KiB of row JSON, and report truncation explicitly instead of
-silently. String values
+silently. When a query exceeds the deadline, the error names the cause
+that the authorizer saw: `LIKE` on `events`, `count()` on `events`, or a
+wide read. String values
 in every result also pass a fixed secret pattern table at egress
 ([ADR 0015](adr/0015-egress-secret-redaction.md)): AWS access key ids,
 GitHub, Anthropic, OpenAI, Slack, and Google token shapes, PEM and
@@ -474,7 +476,8 @@ stdin (capped at 64 KiB). Every `sql` tool safeguard applies unchanged —
 read-only connection, authorizer (`purged_sources` denied), single statement,
 500 rows, 256 KiB output, 5 second deadline, and ADR 0015 egress secret
 redaction — making `ohya sql --json` the sanctioned path for shell or Python
-pipelines over local or `--remote` hubs.
+pipelines over local or `--remote` hubs. When a query exceeds the deadline,
+the error names its cause, as it does in the MCP tool.
 
 `ohya search <query>` runs one bounded read-only FTS5 query with BM25
 ranking over stored events (the `events` table, so live sessions are

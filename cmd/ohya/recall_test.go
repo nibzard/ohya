@@ -2,7 +2,10 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -531,6 +534,32 @@ func TestRecallFloat64WireNumbersDecodeCleanly(t *testing.T) {
 	})
 	if len(res.Matches) != 1 || res.Matches[0].EventID != 42 || res.Matches[0].TimeMS == nil || *res.Matches[0].TimeMS != 1763000002000 {
 		t.Fatalf("float64 search match = %+v", res.Matches)
+	}
+}
+
+type recallBackendFunc func(context.Context, string) (mcpserver.Result, error)
+
+func (f recallBackendFunc) Query(ctx context.Context, query string) (mcpserver.Result, error) {
+	return f(ctx, query)
+}
+
+func TestRecallDeadlineCarriesTheEngineHint(t *testing.T) {
+	const hint = "this query used LIKE and read events; LIKE on a large table reads every row: " +
+		"filter session_id with = and search text with events_fts MATCH"
+	backend := recallBackendFunc(func(context.Context, string) (mcpserver.Result, error) {
+		return mcpserver.Result{}, fmt.Errorf("%w (5s per call): interrupted; %s", mcpserver.ErrDeadline, hint)
+	})
+
+	_, err := recallQuery(context.Background(), backend, `SELECT id FROM events WHERE text LIKE '%x%'`)
+	var classified *classifiedError
+	if !errors.As(err, &classified) || classified.code != "query_deadline" {
+		t.Fatalf("error = %v, want query_deadline", err)
+	}
+	if classified.hint != "" {
+		t.Fatalf("remedy = %q, want none: the engine error names the cause", classified.hint)
+	}
+	if !strings.Contains(err.Error(), hint) {
+		t.Fatalf("error = %v, want the hint of the engine", err)
 	}
 }
 
