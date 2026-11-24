@@ -1,0 +1,48 @@
+# Design: storage of the source workspace
+
+## Problem
+
+Antigravity records carry no working directory. The hub needs a place
+for the workspace that the device reports, and a rule that gives each
+session a cwd without a re-derivation of the hub.
+
+## Approach
+
+- The value belongs to the source (`sources.workspace_path`), not to
+  the session. One source is one Antigravity conversation, and one
+  value per source is enough for every session of that source.
+- `SetSourceWorkspace` fills the sessions that have no cwd and stores
+  the column in one transaction. The fill comes first. A crash between
+  the two statements leaves no half state.
+- The fill also copies the repository of a known `workspaces` row of the
+  same device, so a session that already has an observation gets its
+  repository in the same write.
+- Ingest reads the column in its source query. `applySessionDelta` uses
+  the workspace only when the session has no cwd and the records of the
+  batch carry none. The rule is the same in `finalizeSession` of a
+  re-derivation.
+- The tombstone carries the column. Without it, a reallow would create
+  a source row without a workspace, and write-once would need an
+  exception for that one case.
+- `workspacePathProblem` holds the path checks of a workspace
+  observation. The source workspace uses the same checks, so the two
+  writes cannot drift apart. The error text of an observation is
+  unchanged.
+- `SourcesWithoutWorkspace` lists the sources of one device and agent
+  that have no workspace. It runs on the writer, like the other source
+  reads of a pass.
+
+## Key Trade-offs
+
+- The first path is final. Antigravity keeps one workspace per
+  conversation, and a second value would need a rule for the sessions
+  that already have the first one.
+- Schema 9 forces one full recovery copy of the hub database at the
+  next `ohya setup` after the upgrade.
+
+## Gotchas
+
+- `migrate_released_test.go` needs no edit. Its released list stops at
+  schema 8, so it exercises the 8 to 9 upgrade.
+- `sources.file_identity` is declared and documented, but no code
+  writes it. It is recorded in NOTES.md for a later schema change.
