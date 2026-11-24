@@ -199,6 +199,11 @@ clause is what the property means.
 - **Registered sources.** Every source exists at the hub before its first
   batch. The registration step is T017: the 'R' frame of `internal/hubsync`
   performs it, bound to the authenticated device, and its tests cover it.
+  The uploader may probe the hub cursor of a source before the registration;
+  the hub answers such a probe with `CodeUnknownSource`, and no batch comes
+  before the registration. The keepalive of an idle connection is a `caps`
+  exchange, not a sync action: it changes no checkpoint, batch, or
+  acknowledgment.
 - **Fixed ownership.** Each source's device is fixed. Authentication,
   spoofing, revocation, and ownership binding are the authorization model
   (`Auth.tla`, below), not this one.

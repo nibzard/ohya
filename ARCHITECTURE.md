@@ -361,16 +361,19 @@ and a record above the size limit stops its source locally instead of closing
 the connection. Only a hub acknowledgment moves the checkpoint
 (`watch.Acknowledge`): a timeout, a reset, a busy hub or a lost
 acknowledgment leaves it in place, and `Run` reconnects with capped
-exponential backoff. On every new connection each source is registered and
-its hub cursor probed with an empty batch: a hub cursor ahead of the
+exponential backoff. On every new connection the uploader probes the hub
+cursor of each source that has a checkpoint with an empty batch. A source
+that the hub does not know is registered and probed again; a source without
+a checkpoint is registered first. A hub cursor ahead of the
 checkpoint is a lost acknowledgment and is persisted without resending; one
 behind it is a cursor regression, answered by `watch.Rewind` and a replay of
 the retained file, or reported as an unrecoverable gap when the file is gone
 or changed. Each pass first checks, without blocking, that an idle
 connection is still open, so a hub restart is noticed even when nothing is
-pending. The uploader's checkpoint state must be dedicated to one hub: its
-cursors are that hub's acknowledgments. `ohya join` (T034) runs it, one
-instance per agent over the Tailcat device node.
+pending, and a connection that is idle for 3 minutes gets one keepalive
+frame before the pass. The uploader's checkpoint state must be dedicated to
+one hub: its cursors are that hub's acknowledgments. `ohya join` (T034) runs
+it, one instance per agent over the Tailcat device node.
 
 Implemented (T036): the same connection carries the device-facing read and
 annotate path ([ADR 0003](docs/adr/0003-remote-query-annotate.md)). Two

@@ -83,7 +83,8 @@ sourceWorkspace = 'F' ver(1) devLen(2) dev srcLen(2) src pathLen(4) path
   (`CapSourceWorkspace`). The mask must be nonzero, and a hub supporting
   nothing offered answers with zero. An old hub answers `caps` with `CodeMalformed` like any
   unknown marker, which is how a device detects it and falls back cleanly; an
-  old device sends no `caps` frame and is unaffected.
+  old device sends no `caps` frame and is unaffected. The uploader also sends
+  one `caps` frame as a keepalive on an idle connection ("Device side").
 - `diagnostics` (`G`, 1-byte format version `1`) requests cached hub aggregate
   status on a short-lived authenticated connection after negotiating
   `CapRemoteStatus`. `diagnosticsRes` (`g`) replies with at most 256 KiB of
@@ -181,6 +182,8 @@ String fields with a 2-byte length must not be empty, except `repo` in `workspac
   establish an identity; the `Authenticator` derives it.
 - The endpoint serves at most 16 connections by default. The next one gets
   `CodeBusy` and closes.
+- The hub closes a connection that sends no frame for 5 minutes
+  (`hubsync.DefaultIdleTimeout`). The read deadline is set before each frame.
 - Frames on one connection are strictly sequential, so a connection holds at
   most one decoded frame in memory. With a `SessionAuthorizer`, the endpoint
   checks the registry before it processes each frame. A revocation closes the
@@ -241,8 +244,14 @@ The uploader (`internal/uploader`) implements the `SendBatch` and
   unflushed acknowledgment, equivalent to one that never reached the
   device, and the retained file replays it.
 - Offline catch-up needs no queue, because the retained source files are the
-  backlog. On every new connection, each source is registered and probed with
-  an empty batch. A hub cursor ahead of the checkpoint is a lost
+  backlog. On every new connection, the uploader prepares each source once. A
+  source with an acknowledged checkpoint is probed first with an empty batch.
+  The hub cursor in the answer shows that the hub knows the source, and no
+  registration follows. `CodeUnknownSource` means that the hub has no row for
+  the source, for example after the hub was set up again: the uploader
+  registers the source and probes again. A source without a checkpoint, and a
+  file that was renamed, is registered first and probed after the
+  acknowledgment. A hub cursor ahead of the checkpoint is a lost
   acknowledgment and is persisted. A hub cursor behind it is a regression,
   for example after a backup restore: `watch.Rewind` replays the retained
   file, or the uploader reports an unrecoverable gap when the file is gone or
@@ -306,6 +315,16 @@ The uploader (`internal/uploader`) implements the `SendBatch` and
 - Before each pass, a non-blocking read checks that an idle connection is
   still open. The hub never sends unsolicited frames, so a closed connection
   means a hub restart. This is how an idle device notices a restored hub.
+- A connection that is still open after 3 minutes without an exchange
+  (`uploader.DefaultKeepaliveInterval`) receives one `caps` frame before the
+  pass, and the `welcome` proves that it is open. The hub closes an idle
+  connection after 5 minutes, so the keepalive holds one connection open from
+  pass to pass. An idle device sends one frame in 3 minutes. It does not
+  register and probe each source at each pass, and a pass with nothing pending
+  makes no other exchange. A keepalive that fails ends the connection, and the
+  pass connects again with the backoff below. A hub that refuses the `caps`
+  frame is old (see the capability bullet above): the uploader reconnects in
+  the same way and sends no keepalive for the rest of the process.
 - After it connects, and after a pass that inserted events, the uploader
   runs the workspace exchange: it sends its observations, resolves the
   returned paths with `workspace.Resolve`, and repeats until no new path

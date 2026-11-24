@@ -238,8 +238,12 @@ How to use this file:
     detector. `make tla` was not rerun: neither side changed `tla/`. The
     Swift app changes of the remote were not built here: this VM has no
     Xcode.
-  - Open: `docs/sync-protocol.md` describes neither the keepalive
-    (`9d86d67`, 3 minutes) nor the probe before the registration.
+  - `docs/sync-protocol.md`, ARCHITECTURE.md, and `tla/README.md` describe
+    the keepalive (`9d86d67`, 3 minutes) and the probe before the
+    registration (2026-11-25). The hub closes a connection that sends no
+    frame for 5 minutes, and an idle uploader sends one `caps` frame in
+    3 minutes. A source with a checkpoint is probed first and registered
+    only when the hub answers `CodeUnknownSource`.
 
 - Antigravity workspace (2026-11-24, ADR 0018; `c220c9e`, `ed9b421`,
   `d66bfc6`, `2812eb5`, `5c62866`): Antigravity transcripts carry no
