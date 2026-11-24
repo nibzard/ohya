@@ -1,0 +1,58 @@
+# Design: the Antigravity workspace lookup
+
+## Problem
+
+The device must learn the workspace of an Antigravity conversation
+from a file that Antigravity owns and does not document. The parser
+must stay file-free, and the lookup must not disturb Antigravity.
+
+## Approach
+
+- The lookup is a closure in cmd/ohya, built once per process. The
+  uploader and the ingestor take it as a function. internal/antigravity
+  stays file-free (ADR 0009) and internal/uploader stays free of
+  Antigravity knowledge.
+- The index is opened with `immutable=1`. Checked on 2026-11-24 with
+  a temporary database: while a writer connection is open, such an
+  open reads no row that is only in the write-ahead log; after the
+  writer closes, it reads all rows, creates no `-wal` or `-shm` file,
+  and leaves the file bytes unchanged; a missing file is an error and
+  creates nothing. So the lookup can miss a conversation that
+  Antigravity has not checkpointed, and it cannot block or alter the
+  index. With `ohya ingest` a source without a result is looked up
+  again in a pass that inserted its events. With `ohya join` it is
+  looked up again on each new connection.
+- The index is opened for each lookup and closed at once. A held
+  connection would keep a file of another program open for the life
+  of the process, and the lookups are few: one per source.
+- An error of the lookup is reported once per process. One unreadable
+  index is one problem, and the list of sources without a workspace
+  can be long.
+- A `file` URI is decoded with `net/url`, so `%20` becomes a space and
+  the repository resolver finds the `.git` directory. A URI with
+  another scheme or host, a relative path, a path over 4,096 bytes,
+  or invalid UTF-8 is skipped, because the hub refuses such a path.
+- The ingestor sets `workspacesDue` when the backfill sets a
+  workspace. Such a pass has no new event, and without the flag the
+  repository exchange would wait for the next event of any source.
+- A failed `SetSourceWorkspace` is reported once per source. Its cause
+  does not change between passes, and the list of sources returns
+  that source on each pass.
+
+## Premise checked on the live hub
+
+On 2026-11-24, 10 of 8,600 Antigravity events contain the text
+`Command Working Directory`. All are `planner_response`, `generic`, or
+`checkpoint` records of one conversation. None is a
+system message, so the parser finds no `cwd` in any record.
+
+## Effect on an upgraded installation
+
+- The first `ohya ingest` pass of a device fills its old Antigravity
+  sources.
+- With `ohya join` an old source gets its workspace on its next
+  connection. The MacBook sends its five when its ohya is upgraded.
+- 25 of the 68 conversation directories on the hub machine are gone.
+  Their sessions get a `cwd` and no `repo`, which is correct.
+- Schema 9 costs one full recovery copy of the hub database at the
+  next `ohya setup`.
