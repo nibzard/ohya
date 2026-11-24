@@ -1,0 +1,3 @@
+Decision of the owner on 2026-11-24 for v0.8.0 ("do 2-4", item 2): migration 009 is still unreleased, so it takes the two schema items that NOTES.md had deferred, at no extra recovery copy.
+
+The numbers come from a rehearsal on a read-only copy of the live hub (store.Backup, 18.15 GB, deleted afterwards): the copy took 11 min 21 s, the migration 3 min 41 s, and the doctor query went from 4 min 52 s without the index to 0.18 s with it. The installed v0.7.1 binary read the migrated copy, because a reader does not verify the schema history; only a query that names the dropped column fails.
