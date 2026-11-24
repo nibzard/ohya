@@ -11,3 +11,5 @@ only. The section "Secret scan" now has the steps from a scan to a
 purge, with the rule to rotate the credential first.
 
 Documentation only; no code change.
+
+Cherry-pick of c11ef2b for the branch release/v0.7.1 (v0.7.1). The note above was written for the original commit.
