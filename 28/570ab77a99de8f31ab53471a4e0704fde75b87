@@ -1,0 +1,14 @@
+# Context
+
+The session that made the commits of 2026-11-24 deleted a file that was
+not its own. A scratch cleanup listed throwaway databases and a build in
+`/tmp`, but the command ran with relative paths while the shell stood in
+the repository root. `rm -f` removed `ohya` there and reported nothing.
+
+Checks after the mistake: the systemd user units, the MCP configurations
+of Claude Code, Codex, pi, and Antigravity, and the running processes
+all use `/home/agent/.local/bin/ohya`; `PATH` does not contain the
+current directory; no file of the deleted size exists on the disk.
+
+The listing of the root in an earlier transcript is the only record of
+the file: 50,636,568 bytes, 23 November 2026 at 13:13, mode 775.
