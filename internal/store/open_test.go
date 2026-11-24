@@ -3,10 +3,15 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
+	"time"
+
+	sqlite3 "github.com/mattn/go-sqlite3"
 )
 
 type queryer interface {
@@ -138,6 +143,106 @@ func TestOpenAppliesRealMigrationsAndReopensCleanly(t *testing.T) {
 	}
 	if err := hub.Writer().QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&versions); err != nil || versions != wantVersions {
 		t.Fatalf("applied migrations after reopen = %d, %v; want %d", versions, err, wantVersions)
+	}
+}
+
+func TestConcurrentOpenAppliesEachMigrationOnce(t *testing.T) {
+	want, err := SchemaVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for round := 0; round < 6; round++ {
+		path := filepath.Join(t.TempDir(), "hub.db")
+		const openers = 6
+		start := make(chan struct{})
+		errs := make([]error, openers)
+		var wg sync.WaitGroup
+		for i := range errs {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				<-start
+				db, err := Open(context.Background(), path)
+				if err != nil {
+					errs[i] = err
+					return
+				}
+				errs[i] = db.Close()
+			}(i)
+		}
+		close(start)
+		wg.Wait()
+		for i, err := range errs {
+			if err != nil {
+				t.Fatalf("round %d: opener %d: %v", round, i, err)
+			}
+		}
+		hub, err := Open(context.Background(), path)
+		if err != nil {
+			t.Fatalf("round %d: reopen: %v", round, err)
+		}
+		var versions, newest int
+		err = hub.Writer().QueryRow(`SELECT count(*), coalesce(max(version), 0) FROM schema_migrations`).Scan(&versions, &newest)
+		hub.Close()
+		if err != nil || versions != want || newest != want {
+			t.Fatalf("round %d: applied = %d through %d, %v; want %d through %d", round, versions, newest, err, want, want)
+		}
+	}
+}
+
+func busyError() error {
+	return sqlite3.Error{Code: sqlite3.ErrBusy}
+}
+
+func TestRetryBusyRepeatsABusyAttempt(t *testing.T) {
+	attempts := 0
+	err := retryBusy(context.Background(), time.Second, func() error {
+		attempts++
+		if attempts < 3 {
+			return busyError()
+		}
+		return nil
+	})
+	if err != nil || attempts != 3 {
+		t.Fatalf("err = %v after %d attempts, want nil after 3", err, attempts)
+	}
+}
+
+func TestRetryBusyReturnsOtherErrorsAtOnce(t *testing.T) {
+	want := errors.New("store: migration 002_bad: no such table: missing")
+	attempts := 0
+	err := retryBusy(context.Background(), time.Second, func() error {
+		attempts++
+		return want
+	})
+	if !errors.Is(err, want) || attempts != 1 {
+		t.Fatalf("err = %v after %d attempts, want the first error after 1", err, attempts)
+	}
+}
+
+func TestRetryBusyGivesUpAfterTheWait(t *testing.T) {
+	attempts := 0
+	started := time.Now()
+	err := retryBusy(context.Background(), 150*time.Millisecond, func() error {
+		attempts++
+		return busyError()
+	})
+	if !busyDatabase(err) || attempts < 2 || time.Since(started) < 150*time.Millisecond {
+		t.Fatalf("err = %v after %d attempts in %s, want the busy error after a 150 ms wait", err, attempts, time.Since(started))
+	}
+}
+
+func TestRetryBusyStopsWhenTheContextEnds(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	attempts := 0
+	err := retryBusy(ctx, time.Second, func() error {
+		attempts++
+		cancel()
+		return busyError()
+	})
+	if !errors.Is(err, context.Canceled) || attempts != 1 {
+		t.Fatalf("err = %v after %d attempts, want context.Canceled after 1", err, attempts)
 	}
 }
 

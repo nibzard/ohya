@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"embed"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/fs"
 	"path"
@@ -124,7 +125,7 @@ func migrate(ctx context.Context, db *sql.DB, fsys fs.FS) error {
 			return fmt.Errorf("store: migration %03d is applied but missing from the binary; applied migrations must not be deleted", version)
 		}
 		if checksum != m.checksum {
-			return fmt.Errorf("store: migration %03d_%s changed after being applied; applied migrations are immutable", version, m.name)
+			return errMigrationChanged(m)
 		}
 		if version > newest {
 			newest = version
@@ -166,22 +167,54 @@ func appliedMigrations(ctx context.Context, db *sql.DB) (map[int]string, error) 
 }
 
 func applyMigration(ctx context.Context, db *sql.DB, m migration) error {
-	tx, err := db.BeginTx(ctx, nil)
+	conn, err := db.Conn(ctx)
 	if err != nil {
+		return fmt.Errorf("store: migration %03d_%s: connect: %w", m.version, m.name, err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
 		return fmt.Errorf("store: migration %03d_%s: begin: %w", m.version, m.name, err)
 	}
-	if _, err := tx.ExecContext(ctx, m.script); err != nil {
-		_ = tx.Rollback()
-		return fmt.Errorf("store: migration %03d_%s: %w", m.version, m.name, err)
+	committed, err := commitMigration(ctx, conn, m)
+	if err != nil || !committed {
+		_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
 	}
-	if _, err := tx.ExecContext(ctx,
+	return err
+}
+
+func commitMigration(ctx context.Context, conn *sql.Conn, m migration) (bool, error) {
+	recorded, err := migrationRecorded(ctx, conn, m)
+	if err != nil || recorded {
+		return false, err
+	}
+	if _, err := conn.ExecContext(ctx, m.script); err != nil {
+		return false, fmt.Errorf("store: migration %03d_%s: %w", m.version, m.name, err)
+	}
+	if _, err := conn.ExecContext(ctx,
 		`INSERT INTO schema_migrations (version, name, checksum, applied_at_ms) VALUES (?, ?, ?, ?)`,
 		m.version, m.name, m.checksum, time.Now().UnixMilli()); err != nil {
-		_ = tx.Rollback()
-		return fmt.Errorf("store: migration %03d_%s: record: %w", m.version, m.name, err)
+		return false, fmt.Errorf("store: migration %03d_%s: record: %w", m.version, m.name, err)
 	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("store: migration %03d_%s: commit: %w", m.version, m.name, err)
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return false, fmt.Errorf("store: migration %03d_%s: commit: %w", m.version, m.name, err)
 	}
-	return nil
+	return true, nil
+}
+
+func migrationRecorded(ctx context.Context, conn *sql.Conn, m migration) (bool, error) {
+	var checksum string
+	err := conn.QueryRowContext(ctx, `SELECT checksum FROM schema_migrations WHERE version = ?`, m.version).Scan(&checksum)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("store: migration %03d_%s: read schema_migrations: %w", m.version, m.name, err)
+	case checksum != m.checksum:
+		return false, errMigrationChanged(m)
+	}
+	return true, nil
+}
+
+func errMigrationChanged(m migration) error {
+	return fmt.Errorf("store: migration %03d_%s changed after being applied; applied migrations are immutable", m.version, m.name)
 }

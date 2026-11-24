@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	sqlite3 "github.com/mattn/go-sqlite3"
 	"github.com/nibzard/ohya/internal/observe"
@@ -16,6 +17,10 @@ import (
 const synchronousFull = 2
 
 const busyTimeoutMs = 5000
+
+const busyTimeout = time.Duration(busyTimeoutMs) * time.Millisecond
+
+const openBusyPause = 20 * time.Millisecond
 
 type DB struct {
 	path     string
@@ -45,11 +50,7 @@ func Open(ctx context.Context, path string, opts ...OpenOption) (*DB, error) {
 	}
 	writer.SetMaxOpenConns(1)
 	writer.SetMaxIdleConns(1)
-	if err := verifyWriter(ctx, writer); err != nil {
-		_ = writer.Close()
-		return nil, err
-	}
-	if err := migrate(ctx, writer, migrationsFS); err != nil {
+	if err := prepareWriter(ctx, writer); err != nil {
 		_ = writer.Close()
 		return nil, err
 	}
@@ -58,6 +59,47 @@ func Open(ctx context.Context, path string, opts ...OpenOption) (*DB, error) {
 		opt(d)
 	}
 	return d, nil
+}
+
+func prepareWriter(ctx context.Context, writer *sql.DB) error {
+	return retryBusy(ctx, busyTimeout, func() error {
+		if err := verifyWriter(ctx, writer); err != nil {
+			return err
+		}
+		return migrate(ctx, writer, migrationsFS)
+	})
+}
+
+func retryBusy(ctx context.Context, wait time.Duration, attempt func() error) error {
+	deadline := time.Time{}
+	for {
+		started := time.Now()
+		err := attempt()
+		if err == nil || !busyDatabase(err) {
+			return err
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if deadline.IsZero() {
+			deadline = started.Add(wait)
+		}
+		if !time.Now().Before(deadline) {
+			return err
+		}
+		timer := time.NewTimer(openBusyPause)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func busyDatabase(err error) bool {
+	outcome, retryable := sqliteOutcome(err)
+	return retryable && outcome == "busy"
 }
 
 func sqliteOutcome(err error) (string, bool) {
