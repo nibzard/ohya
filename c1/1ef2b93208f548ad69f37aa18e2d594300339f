@@ -1,0 +1,13 @@
+Documentation of record for the pull-only rule. The owner decided on
+2026-11-24 that ohya installs no hooks and injects nothing into an
+agent session: the user decides when an agent uses the memory. A
+session-start index (candidate action 3 in
+/notes/2026-11-24-claude-mem-vs-ohya.md) was declined for that reason.
+
+docs/reference.md also corrects two statements. Only the MCP server
+writes usage records: the command line commands pass no usage sink
+(cmd/ohya/recall.go, openRecallBackend), so ohya usage counts MCP calls
+only. The section "Secret scan" now has the steps from a scan to a
+purge, with the rule to rotate the credential first.
+
+Documentation only; no code change.
