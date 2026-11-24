@@ -1199,21 +1199,25 @@ func TestCompressionDisabledUploadsPlainFrames(t *testing.T) {
 }
 
 type oldHub struct {
-	t          *testing.T
-	ln         net.Listener
-	mu         sync.Mutex
-	conns      map[net.Conn]struct{}
-	refused    atomic.Int32
-	plain      atomic.Int32
-	compressed atomic.Int32
+	t               *testing.T
+	caps            hubsync.Capabilities
+	refuseWorkspace atomic.Bool
+	ln              net.Listener
+	mu              sync.Mutex
+	conns           map[net.Conn]struct{}
+	order           []byte
+	offered         atomic.Uint32
+	refused         atomic.Int32
+	plain           atomic.Int32
+	compressed      atomic.Int32
 }
 
-func serveOldHub(t *testing.T) *oldHub {
+func serveOldHub(t *testing.T, caps hubsync.Capabilities) *oldHub {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := &oldHub{t: t, ln: ln, conns: map[net.Conn]struct{}{}}
+	h := &oldHub{t: t, caps: caps, ln: ln, conns: map[net.Conn]struct{}{}}
 	t.Cleanup(func() { ln.Close() })
 	go func() {
 		for {
@@ -1242,11 +1246,27 @@ func (h *oldHub) kick() {
 	}
 }
 
-func (h *oldHub) serve(c net.Conn) {
-	defer c.Close()
+func (h *oldHub) markers() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return string(h.order)
+}
+
+func (h *oldHub) saw(marker byte) {
+	h.mu.Lock()
+	h.order = append(h.order, marker)
+	h.mu.Unlock()
+}
+
+func (h *oldHub) forget(c net.Conn) {
 	h.mu.Lock()
 	delete(h.conns, c)
 	h.mu.Unlock()
+}
+
+func (h *oldHub) serve(c net.Conn) {
+	defer c.Close()
+	defer h.forget(c)
 	br := bufio.NewReader(c)
 	hello, _, err := hubsync.ReadAuthFrame(br)
 	if err != nil || hello == nil {
@@ -1258,23 +1278,34 @@ func (h *oldHub) serve(c net.Conn) {
 		if err != nil {
 			return
 		}
-		if head[0] == 'V' {
+		if head[0] == 'V' && h.caps == 0 {
 			h.refused.Add(1)
 			_ = hubsync.WriteError(c, hubsync.CodeMalformed,
 				fmt.Sprintf("hubsync: bad frame marker %q", head[0]))
 			return
 		}
-		if head[0] == 'Z' {
+		if head[0] == 'Z' && h.caps&hubsync.CapZstdBatches == 0 {
 			h.compressed.Add(1)
 			return
 		}
+		marker := head[0]
 		frame, err := hubsync.ReadFrame(br)
 		if err != nil {
 			return
 		}
+		h.saw(marker)
 		switch {
 		case frame.Registration != nil:
 			_ = hubsync.WriteAck(c, hubsync.Ack{})
+		case frame.SourceWorkspace != nil:
+			if h.refuseWorkspace.Load() {
+				_ = hubsync.WriteError(c, hubsync.CodeRejected, "hubsync: injected refusal")
+			} else {
+				_ = hubsync.WriteAck(c, hubsync.Ack{})
+			}
+		case frame.Capabilities != nil:
+			h.offered.Store(uint32(*frame.Capabilities))
+			_ = hubsync.WriteWelcome(c, *frame.Capabilities&h.caps)
 		case frame.Batch != nil:
 			b := frame.Batch
 			if len(b.Records) > 0 {
@@ -1291,7 +1322,7 @@ func (h *oldHub) serve(c net.Conn) {
 
 func TestOldHubFallsBackToPlainFrames(t *testing.T) {
 	f := newFixture(t, Options{})
-	old := serveOldHub(t)
+	old := serveOldHub(t, 0)
 	f.dialer.point(old.ln.Addr().String())
 	a := filepath.Join(f.dir, "a.jsonl")
 	one := line(sessA, "one")

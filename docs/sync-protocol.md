@@ -264,8 +264,9 @@ The uploader (`internal/uploader`) implements the `SendBatch` and
   file whose observed end passed its acknowledged cursor, and a deleted file
   with unsent bytes. Each loss and gap is reported once.
 - After the hello, the uploader offers its capabilities with one `caps`
-  frame and compresses data batches with `zbatch` while the hub's `welcome`
-  offers it ([ADR 0014](adr/0014-zstd-compressed-batch-upload.md)). A hub
+  frame (zstd batches and source workspaces) and compresses data batches
+  with `zbatch` while the hub's `welcome` offers it
+  ([ADR 0014](adr/0014-zstd-compressed-batch-upload.md)). A hub
   that refuses the offer with `CodeMalformed` or `CodeVersion` is old: the
   uploader marks it plain for the rest of the process, reconnects once with
   a plain hello, and never offers again. The capability changes no
@@ -276,10 +277,23 @@ The uploader (`internal/uploader`) implements the `SendBatch` and
   no mixed pair ever exchanges a compressed frame. `ohya mcp --remote` and
   pairing send the plain hello and no `caps` frame; remote queries and
   annotate stay plain in protocol version 1. Setting the environment
-  variable `OHYA_UPLOAD_COMPRESSION=off` in the joining process suppresses
-  the `caps` offer for its lifetime, so the device sends plain frames even
-  against a compression-capable hub — the escape hatch for diagnosis and
-  A/B measurement, the same behavior an old device shows.
+  variable `OHYA_UPLOAD_COMPRESSION=off` in the joining process removes the
+  zstd bit from the `caps` offer for its lifetime, so the device sends plain
+  frames even against a compression-capable hub — the escape hatch for
+  diagnosis and A/B measurement. A process that reports no source workspace
+  then sends no `caps` offer at all, the same behavior an old device shows.
+- When the joining process has a workspace lookup
+  (`uploader.Options.SourceWorkspace`), the uploader looks the workspace of
+  a source up once per connection, after the hub acknowledged the
+  registration and before the cursor probe. It sends one `sourceWorkspace`
+  frame only when the hub's `welcome` offered `CapSourceWorkspace`. The
+  hub's acknowledgment counts for the rest of the process, so a source is
+  told once. A source without a workspace is looked up again on each new
+  connection and never on each pass. A hub error for the frame is reported
+  once per connection and never blocks the batches of the source. A
+  transport error ends the pass like any other frame does. A hub that
+  offers no `CapSourceWorkspace` gets no frame, and the uploader reports
+  that once per process.
 - Each exchange has a 60 s timeout. Failed passes reconnect with backoff from
   1 s doubling up to 1 min. `Run` stops only on `ErrUnauthorized` (the
   credential was refused, for example after revocation), `ErrIncompatible`

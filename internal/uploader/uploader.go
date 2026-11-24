@@ -47,15 +47,16 @@ func compressionDisabled() bool {
 type Dialer func(ctx context.Context) (net.Conn, error)
 
 type Options struct {
-	Agent          string
-	RequestTimeout time.Duration
-	Reconnect      hubsync.RetryPolicy
-	Interval       time.Duration
-	Log            io.Writer
-	Resolve        workspace.Resolver
-	Observer       observe.Observer
-	Events         observe.EventSink
-	Excluded       func(path string) bool
+	Agent           string
+	RequestTimeout  time.Duration
+	Reconnect       hubsync.RetryPolicy
+	Interval        time.Duration
+	Log             io.Writer
+	Resolve         workspace.Resolver
+	SourceWorkspace func(sourcePath string) (string, bool)
+	Observer        observe.Observer
+	Events          observe.EventSink
+	Excluded        func(path string) bool
 }
 
 type Stats struct {
@@ -81,11 +82,13 @@ type Uploader struct {
 	seen         map[string]int64
 	lossReported map[string]bool
 	gapReported  map[string]int64
+	sourceTold   map[string]bool
 	offline      bool
 	advances     uint32
 
-	hubCaps hubsync.Capabilities
-	capsOff bool
+	hubCaps            hubsync.Capabilities
+	capsOff            bool
+	sourceWorkspaceOff bool
 
 	workspacesDue bool
 	workspacesOff bool
@@ -149,6 +152,7 @@ func New(w *watch.Watcher, cred device.Credential, dial Dialer, opts Options) (*
 		ready:  map[string]bool{}, blocked: map[string]bool{},
 		stops: map[string]stopMark{}, idle: map[string]stopMark{}, seen: map[string]int64{},
 		lossReported: map[string]bool{}, gapReported: map[string]int64{},
+		sourceTold: map[string]bool{},
 	}, nil
 }
 
@@ -311,6 +315,7 @@ func (u *Uploader) noteLoss(o watch.Outcome) (missingAtStartup bool) {
 		delete(u.blocked, old)
 		delete(u.idle, old)
 		delete(u.ready, old)
+		delete(u.sourceTold, old)
 		delete(u.gapReported, old)
 	case o.Missing:
 		if u.lossReported[o.SourceID] {
@@ -463,6 +468,9 @@ func (u *Uploader) prepare(ctx context.Context, o watch.Outcome) (int64, bool, e
 	if perr != nil {
 		return 0, false, u.sourceRefused(o, perr)
 	}
+	if err := u.sendSourceWorkspace(ctx, o); err != nil {
+		return 0, false, err
+	}
 	hub, perr, err := u.probe(ctx, o.SourceID, o.Cursor)
 	if err != nil {
 		return 0, false, err
@@ -472,6 +480,44 @@ func (u *Uploader) prepare(ctx context.Context, o watch.Outcome) (int64, bool, e
 	}
 	cursor, ok := u.reconcile(o, hub)
 	return cursor, ok, nil
+}
+
+func (u *Uploader) sendSourceWorkspace(ctx context.Context, o watch.Outcome) error {
+	if u.opts.SourceWorkspace == nil || u.sourceTold[o.SourceID] {
+		return nil
+	}
+	path, ok := u.opts.SourceWorkspace(o.Path)
+	if !ok {
+		return nil
+	}
+	if u.hubCaps&hubsync.CapSourceWorkspace == 0 {
+		if !u.sourceWorkspaceOff {
+			u.sourceWorkspaceOff = true
+			u.logf("the hub does not accept source workspaces, so sessions without a working directory stay without one until the hub is upgraded (first: %s)", o.Path)
+		}
+		return nil
+	}
+	var frame bytes.Buffer
+	err := hubsync.WriteSourceWorkspace(&frame, hubsync.SourceWorkspace{
+		DeviceID: u.credential.DeviceID, SourceID: o.SourceID, Path: path})
+	if err != nil {
+		u.logf("%s: source %s has a working directory the wire does not carry: %v", o.Path, o.SourceID, err)
+		return nil
+	}
+	_, perr, err := u.exchange(ctx, func(w io.Writer) error {
+		_, err := w.Write(frame.Bytes())
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	if perr != nil {
+		u.logf("%s: the hub did not store the working directory of source %s, and it is sent again on the next connection: %v",
+			o.Path, o.SourceID, perr)
+		return nil
+	}
+	u.sourceTold[o.SourceID] = true
+	return nil
 }
 
 func (u *Uploader) probe(ctx context.Context, sourceID string, at int64) (int64, *hubsync.Error, error) {
@@ -640,10 +686,17 @@ func (u *Uploader) connect(ctx context.Context) error {
 		if err := u.dialHello(ctx); err != nil {
 			return err
 		}
-		if u.capsOff || compressionDisabled() {
+		if u.capsOff {
 			return nil
 		}
-		caps, perr, err := u.negotiate(ctx)
+		offer := hubsync.CapZstdBatches | hubsync.CapSourceWorkspace
+		switch {
+		case compressionDisabled() && u.opts.SourceWorkspace == nil:
+			return nil
+		case compressionDisabled():
+			offer = hubsync.CapSourceWorkspace
+		}
+		caps, perr, err := u.negotiate(ctx, offer)
 		if err != nil {
 			return err
 		}
@@ -687,7 +740,7 @@ func (u *Uploader) dialHello(ctx context.Context) error {
 	return nil
 }
 
-func (u *Uploader) negotiate(ctx context.Context) (hubsync.Capabilities, *hubsync.Error, error) {
+func (u *Uploader) negotiate(ctx context.Context, offer hubsync.Capabilities) (hubsync.Capabilities, *hubsync.Error, error) {
 	c := u.conn
 	deadline := time.Now().Add(u.opts.RequestTimeout)
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
@@ -696,7 +749,7 @@ func (u *Uploader) negotiate(ctx context.Context) (hubsync.Capabilities, *hubsyn
 	_ = c.c.SetDeadline(deadline)
 	stop := context.AfterFunc(ctx, func() { _ = c.c.SetDeadline(time.Unix(1, 0)) })
 	defer stop()
-	if err := hubsync.WriteCapabilities(c.c, hubsync.CapZstdBatches); err != nil {
+	if err := hubsync.WriteCapabilities(c.c, offer); err != nil {
 		_ = c.c.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 		if _, perr, rerr := hubsync.ReadReply(c.br); rerr == nil && perr != nil {
 			u.Close()
