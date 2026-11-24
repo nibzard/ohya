@@ -1,0 +1,36 @@
+# Design: Left boundary on the token patterns
+
+## Problem
+Each token pattern matched its prefix inside other strings. A sql
+result changed "task-add-device-revocation-regression-tests" to
+"ta[redacted:openai-api-key]". On the live hub most hits of the
+openai-api-key pattern sat inside identifiers and encoded data, so the
+counts of ohya secrets scan were too high.
+
+## Approach
+The six token patterns now start with a boundary group: the start of
+the text, or a character that is not a letter, a digit, a hyphen, or an
+underscore. private-key-block and env-assignment are unchanged.
+
+## Key Trade-offs
+- Go regexp has no lookbehind. The boundary character stays in the
+  output through the keep list of each pattern.
+- A key that is glued to a letter, a digit, a hyphen, or an underscore
+  is no longer redacted. A key in use is sent as one token after a
+  separator, so the risk is accepted and stated in ADR 0015.
+- An identifier that starts with a key prefix at a boundary is still
+  redacted, for example "sk-1234-add-login-flow".
+- Scan counts from an older build are not comparable with counts from
+  this change on.
+
+## Evidence
+Scan of the live hub on 2026-11-24, counts only, no value read. Of the
+4,714 hits of the openai-api-key pattern, 4,243 sat inside another
+string: 1,479 in lowercase names such as "task-...", 2,764 in long
+mixed-case runs (2,658 events in Codex transcripts, 7 in Claude Code).
+A mirror of the new table over the same events drops the six patterns
+from 5,223 hits to 868.
+
+## References
+- docs/adr/0015-egress-secret-redaction.md, amendment of 2026-11-24
+- NOTES.md, "Egress secret redaction"
