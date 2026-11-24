@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nibzard/ohya/internal/antigravity"
 	"github.com/nibzard/ohya/internal/device"
 	"github.com/nibzard/ohya/internal/hubsync"
 	"github.com/nibzard/ohya/internal/observe"
@@ -200,13 +201,18 @@ func runJoin(ctx context.Context, o joinOptions) error {
 		agent := root.agent
 		observer := telem.observer()
 		discover, excluded := joinDiscover(dirs, agent, o.excludes, o.allowEmpty, observer, o.stderr)
+		var sourceWorkspace func(string) (string, bool)
+		if root.agent == antigravity.AgentName {
+			sourceWorkspace = antigravitySourceWorkspace(root.dirs[0].dir, o.stderr)
+		}
 		up, err := uploader.New(w, cred, dial, uploader.Options{
-			Agent:    root.agent,
-			Interval: o.interval,
-			Observer: telem.observer(),
-			Events:   telem.eventsSink(),
-			Log:      o.stderr,
-			Excluded: excluded,
+			Agent:           root.agent,
+			Interval:        o.interval,
+			Observer:        telem.observer(),
+			Events:          telem.eventsSink(),
+			Log:             o.stderr,
+			Excluded:        excluded,
+			SourceWorkspace: sourceWorkspace,
 		})
 		if err != nil {
 			return err

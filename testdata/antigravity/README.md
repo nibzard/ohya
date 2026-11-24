@@ -12,12 +12,19 @@ against installed Antigravity CLI (`agy`) 1.5.14 (40 conversations, 5,235 lines)
   `messages/`.
 - Files are append-only JSONL with monotonically increasing `step_index` and
   RFC 3339 UTC `created_at` timestamps.
+- Conversation index: `<parent of the brain root>/conversation_summaries.db`,
+  table `conversation_summaries(conversation_id PRIMARY KEY, workspace_uris)`,
+  where `workspace_uris` is a JSON list of `file://` URIs. ohya reads it with
+  `immutable=1` to learn the workspace of a conversation, which becomes the
+  `cwd` of a session when its records carry none. The parser itself reads no
+  file ([ADR 0018](../../docs/adr/0018-device-observed-source-workspace.md)).
 
 ## Normalization rules
 
 - Native session ID: `<conversation-id>` derived from the source path
   (`Options.SourcePath`), falling back to `ohya-synthetic:<SourceScope>` when
-  no path pattern matches.
+  no path pattern matches. The same ID is the `conversation_id` key of the
+  conversation index.
 - `USER_INPUT` (`role=user`): inner text of `<USER_REQUEST>...</USER_REQUEST>`
   sets both `text` and `prompt` (`sessions.first_prompt`), trimming the trailing
   `<ADDITIONAL_METADATA>` envelope.

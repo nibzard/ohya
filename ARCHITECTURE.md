@@ -405,6 +405,17 @@ write-once in `workspaces` and fills the NULL `sessions.repo` values.
 runs the same `workspace.Sync` loop against its own database.
 Re-derivation reads the stored observations, so it stays file-free.
 
+Antigravity transcripts carry no `cwd`, so a session of that agent takes
+the workspace of its source ([ADR 0018](docs/adr/0018-device-observed-source-workspace.md)).
+The rule: the `cwd` of a session is its first record `cwd`, else the
+workspace of a source that holds its events. The device reads the
+workspace of a conversation from the Antigravity index next to the brain
+root, with `immutable=1`, and reports it in the `sourceWorkspace` frame.
+The hub stores the first path of a source write-once in
+`sources.workspace_path`, fills the sessions of the source that have no
+`cwd`, and lets the repository exchange run as for any other `cwd`. The
+parser stays unchanged and file-free.
+
 Implemented (T034; moved to the Tailcat address transport in T122): the
 deployment commands. `ohya serve` runs the hub: on the first start it
 creates the transport identity — node key, pre-shared key, and selected

@@ -172,8 +172,12 @@ left by a killed run is removed on the next run.
 ## Purge and recovery points
 
 Migration 008 (`purged_sources`, [ADR 0013](adr/0013-owner-scoped-session-purge.md))
-is schema-only, but the next `ohya setup` run after the upgrade takes one
-more full recovery copy, so the cost above applies once per hub. Beyond that:
+and migration 009 (`workspace_path` of a source,
+[ADR 0018](adr/0018-device-observed-source-workspace.md)) are schema-only,
+but the next `ohya setup` run after each of these upgrades takes one more
+full recovery copy, because the schema of the database is behind the build.
+So the cost above applies once per hub and per migration. Check the free
+space before you upgrade. Beyond that:
 
 - `ohya purge` frees pages but does not shrink the database file; the freed
   pages are reused by later writes. Shrinking needs an operator-run VACUUM,

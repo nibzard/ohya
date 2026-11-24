@@ -166,7 +166,14 @@ or `~/.pi/agent/sessions` (override with `--pi-root`), and the Antigravity
 moves ended rollouts into `archived_sessions`, so both directories are default
 roots; `ohya join` watches the same roots. It stores everything in
 `~/.ohya/hub.db` (override with `--db`; the state directory defaults to the
-database directory and can be set with `--state`). A default directory that
+database directory and can be set with `--state`). Antigravity records carry
+no working directory, so `ohya ingest` and `ohya join` read the workspace of
+a conversation from the index of Antigravity, `conversation_summaries.db`
+next to the brain root, and it becomes the working directory of the sessions
+of that conversation
+([ADR 0018](adr/0018-device-observed-source-workspace.md)). A missing or
+unreadable index is reported once per process, and the sessions then stay
+without a working directory. A default directory that
 does not exist holds no sessions, so an agent you do not use costs nothing.
 A directory you pass must exist. An empty value (`--claude-root ''`,
 `--codex-root ''`, `--pi-root ''`, `--antigravity-root ''`) is the per-machine

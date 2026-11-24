@@ -119,6 +119,9 @@ func runIngest(ctx context.Context, o ingestOptions) error {
 			return err
 		}
 		runners[i] = newIngestor(hub, w, root.agent, deviceID, o.maxRecordBytes, o.excludes, o.stderr, o.observer, o.events)
+		if root.agent == antigravity.AgentName {
+			runners[i].sourceWorkspace = antigravitySourceWorkspace(root.dirs[0].dir, o.stderr)
+		}
 	}
 	var excludedByAgent map[string]int
 	if len(o.excludes) > 0 {
@@ -213,6 +216,9 @@ type ingestor struct {
 	tails           map[string]int64
 	registered      map[string]string
 	purged          map[string]bool
+	sourceWorkspace func(sourcePath string) (string, bool)
+	workspaceTried  map[string]bool
+	workspaceFailed map[string]bool
 	workspacesDue   bool
 }
 
@@ -234,6 +240,7 @@ func newIngestor(hub *store.DB, w *watch.Watcher, agent, deviceID string, maxRec
 		maxRecordBytes: maxRecordBytes, excludes: excludes, stderr: stderr, observer: observer, events: events, reported: map[string]int64{},
 		missingReported: map[string]bool{}, present: map[string]bool{}, noProgress: map[string]noProgressMark{}, tails: map[string]int64{},
 		registered: map[string]string{}, purged: map[string]bool{}, workspacesDue: true,
+		workspaceTried: map[string]bool{}, workspaceFailed: map[string]bool{},
 	}
 }
 
@@ -306,6 +313,7 @@ func (r *ingestor) poll(ctx context.Context, dirs []agentDir, allowEmpty bool) (
 	var stats passStats
 	stats.excluded = len(excluded)
 	pendingComplete := int64(0)
+	grew := map[string]bool{}
 	var missingAtStartup []string
 	for _, o := range outcomes {
 		if ctx.Err() != nil {
@@ -411,6 +419,9 @@ func (r *ingestor) poll(ctx context.Context, dirs []agentDir, allowEmpty bool) (
 			r.tails[o.SourceID] = o.End - committed
 		}
 		stats.inserted += inserted
+		if inserted > 0 {
+			grew[o.SourceID] = true
+		}
 		if err := r.watcher.Acknowledge(o.Path, o.SourceID, committed); err != nil {
 			r.reportSource(o.Path, err)
 			r.observer.Add("ingest_failures", 1, "checkpoint")
@@ -445,10 +456,44 @@ func (r *ingestor) poll(ctx context.Context, dirs []agentDir, allowEmpty bool) (
 		return stats, err
 	}
 	r.observer.Observe("ingest_checkpoint_duration", time.Since(checkpointStart))
+	if r.sourceWorkspace != nil && ctx.Err() == nil && r.fillSourceWorkspaces(ctx, grew) {
+		r.workspacesDue = true
+	}
 	if ctx.Err() == nil && (r.workspacesDue || stats.inserted > 0) {
 		r.observeWorkspaces(ctx)
 	}
 	return stats, nil
+}
+
+func (r *ingestor) fillSourceWorkspaces(ctx context.Context, grew map[string]bool) bool {
+	sources, err := r.hub.SourcesWithoutWorkspace(ctx, r.deviceID, r.agent)
+	if err != nil {
+		if ctx.Err() == nil {
+			fmt.Fprintf(r.stderr, "ohya: %s: sources without a working directory, retrying next pass: %v\n", r.agent, err)
+		}
+		return false
+	}
+	set := false
+	for _, s := range sources {
+		if r.workspaceTried[s.ID] && !grew[s.ID] {
+			continue
+		}
+		r.workspaceTried[s.ID] = true
+		path, ok := r.sourceWorkspace(s.Path)
+		if !ok {
+			continue
+		}
+		err := r.hub.SetSourceWorkspace(ctx, r.deviceID, s.ID, path)
+		switch {
+		case err == nil:
+			set = true
+		case r.workspaceFailed[s.ID]:
+		default:
+			r.workspaceFailed[s.ID] = true
+			r.reportSource(s.Path, fmt.Errorf("set the working directory %s: %w", path, err))
+		}
+	}
+	return set
 }
 
 func (r *ingestor) observeWorkspaces(ctx context.Context) {

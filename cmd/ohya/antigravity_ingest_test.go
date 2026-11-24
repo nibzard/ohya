@@ -62,6 +62,7 @@ func TestAntigravityIngestEndToEndAndSearch(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(logsDir, "transcript.jsonl"), []byte("ignored compact\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	writeConversationIndex(t, filepath.Join(root, conversationIndex))
 
 	dbPath := filepath.Join(root, "hub.db")
 	stateDir := filepath.Join(root, "state")
