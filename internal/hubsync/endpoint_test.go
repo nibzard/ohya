@@ -757,15 +757,15 @@ func TestCapabilityNegotiationAnswersWelcome(t *testing.T) {
 
 	negotiating := dial(t, s.addr)
 	negotiating.deadline()
-	if err := WriteCapabilities(negotiating.conn, CapZstdBatches|Capabilities(1<<15)); err != nil {
+	if err := WriteCapabilities(negotiating.conn, CapZstdBatches|CapSourceWorkspace|Capabilities(1<<15)); err != nil {
 		t.Fatal(err)
 	}
 	caps, perr, err := ReadWelcome(negotiating.br)
 	if err != nil || perr != nil {
 		t.Fatalf("welcome = %+v, %v", perr, err)
 	}
-	if caps != CapZstdBatches {
-		t.Fatalf("welcome caps = %b; want only %b for a hub without the offered bit", caps, CapZstdBatches)
+	if want := CapZstdBatches | CapSourceWorkspace; caps != want {
+		t.Fatalf("welcome caps = %b; want %b, the offered bits that this hub honors", caps, want)
 	}
 	mustRegisterVia(t, negotiating, deviceA, "src-1", "/a.jsonl")
 

@@ -48,6 +48,7 @@ workspaces   = 'W' ver(1) devLen(2) dev agentLen(2) agent count(2)
                  count * [ pathLen(2) path repoLen(2) repo ]
 pending      = 'D' ver(1) applied(8) unchanged(8) ignored(8) count(2)
                  count * [ pathLen(2) path ]
+sourceWorkspace = 'F' ver(1) devLen(2) dev srcLen(2) src pathLen(4) path
 ```
 
 - `registration` announces one source before its first batch: the source ID
@@ -78,8 +79,9 @@ pending      = 'D' ver(1) applied(8) unchanged(8) ignored(8) count(2)
   intersection of the offer and the hub's support. Bit 0 (`0x0001`) is zstd
   batch compression; bit 1 (`0x0002`) is remote hub status aggregates
   (`CapRemoteStatus`, advertised only when the hub enables its diagnostics
-  provider). The mask must be nonzero, and a hub supporting nothing offered
-  answers with zero. An old hub answers `caps` with `CodeMalformed` like any
+  provider); bit 2 (`0x0004`) is the `sourceWorkspace` frame
+  (`CapSourceWorkspace`). The mask must be nonzero, and a hub supporting
+  nothing offered answers with zero. An old hub answers `caps` with `CodeMalformed` like any
   unknown marker, which is how a device detects it and falls back cleanly; an
   old device sends no `caps` frame and is unaffected.
 - `diagnostics` (`G`, 1-byte format version `1`) requests cached hub aggregate
@@ -91,8 +93,9 @@ pending      = 'D' ver(1) applied(8) unchanged(8) ignored(8) count(2)
   transcripts. Per-frame authorization and revocation apply; the hub enforces
   a 5 s deadline, 2 concurrent diagnostic requests globally, and a 10 s
   per-device rate limit (`CodeBusy` on excess).
-- `ack` acknowledges a registration or a batch. The hub writes it only after
-  the durable commit. `cursor` is the committed cursor, and `inserted`
+- `ack` acknowledges a registration, a source workspace, or a batch. The hub
+  writes it only after the durable commit. `cursor` is the committed cursor,
+  and `inserted`
   counts only new events, so a replayed batch reports 0. `status` 1 means
   the parser refused a record: the valid prefix before `stopOffset`
   committed, and `stop` holds the parser's diagnostic.
@@ -114,6 +117,16 @@ pending      = 'D' ver(1) applied(8) unchanged(8) ignored(8) count(2)
   agent whose sessions have no repository and no observation yet. The hub
   ignores an observation for a path that is not a `cwd` of the device's
   sessions, and rejects the frame when a `repo` is not in normalized form.
+- `sourceWorkspace` carries the workspace of one registered source
+  ([ADR 0018](adr/0018-device-observed-source-workspace.md)): the device, the
+  source ID, and a path with the bound of a registration path. The hub takes
+  the device from the authenticated connection, and the frame must name it.
+  The hub maps the frame onto `store.SetSourceWorkspace`, which stores the
+  first path of a source and ignores each later path, and answers with `ack`.
+  A device sends the frame only after the hub's `welcome` offered
+  `CapSourceWorkspace`, so the supported upgrade order is hub first: a hub
+  without the bit gets no frame, and the sessions of the device that carry
+  no working directory stay without one until the hub is upgraded.
 
 ## Bounds
 
@@ -152,7 +165,7 @@ String fields with a 2-byte length must not be empty, except `repo` in `workspac
 | `CodeVersion` | 2 | Unsupported protocol version | Closes |
 | `CodeMalformed` | 3 | Undecodable frame | Closes |
 | `CodeTooLarge` | 4 | A record or batch above its bound | Closes |
-| `CodeRejected` | 5 | Deterministic rejection: a gap ahead of the cursor, conflicting content, invalid boundaries, a purged source ([ADR 0013](adr/0013-owner-scoped-session-purge.md)), or a denied query | Stays open |
+| `CodeRejected` | 5 | Deterministic rejection: a gap ahead of the cursor, conflicting content, invalid boundaries, a purged source ([ADR 0013](adr/0013-owner-scoped-session-purge.md)), a source workspace that fails its checks, or a denied query | Stays open |
 | `CodeOwnership` | 6 | The source belongs to another device | Stays open |
 | `CodeUnknownSource` | 7 | The hub never registered the source | Stays open |
 | `CodeUnsupported` | 8 | The hub has no parser for the agent | Stays open |
@@ -203,6 +216,11 @@ String fields with a 2-byte length must not be empty, except `repo` in `workspac
 - A `workspaces` frame that names another device closes the connection, like
   a batch. An unknown agent gets `CodeUnsupported` and a value that is not
   in normalized form gets `CodeRejected`; both stay open.
+- A `sourceWorkspace` frame that names another device closes the connection,
+  like a batch. A source that the hub never registered gets
+  `CodeUnknownSource`, a source of another device gets `CodeOwnership`, and a
+  purged source or a path that fails the workspace checks gets
+  `CodeRejected`. For these three the connection stays open.
 - Query and annotate outcomes are always answered in band, and the connection
   stays open. Policy and input rejections map to `CodeRejected`, contention
   to `CodeBusy`, and other failures to `CodeInternal`.

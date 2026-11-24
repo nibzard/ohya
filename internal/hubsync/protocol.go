@@ -45,34 +45,34 @@ const (
 )
 
 const (
-	markerRegistration   = 'R'
-	markerBatch          = 'B'
-	markerAck            = 'A'
-	markerError          = 'E'
-	markerHello          = 'H'
-	markerPair           = 'P'
-	markerCredential     = 'C'
-	markerQuery          = 'Q'
-	markerQueryResult    = 'S'
-	markerAnnotate       = 'N'
-	markerAnnotateRes    = 'K'
-	markerWorkspaces     = 'W'
-	markerPending        = 'D'
-	markerCaps           = 'V'
-	markerWelcome        = 'v'
-	markerZBatch         = 'Z'
-	markerDiagnostics    = 'G'
-	markerDiagnosticsRes = 'g'
+	markerRegistration    = 'R'
+	markerBatch           = 'B'
+	markerAck             = 'A'
+	markerError           = 'E'
+	markerHello           = 'H'
+	markerPair            = 'P'
+	markerCredential      = 'C'
+	markerQuery           = 'Q'
+	markerQueryResult     = 'S'
+	markerAnnotate        = 'N'
+	markerAnnotateRes     = 'K'
+	markerWorkspaces      = 'W'
+	markerPending         = 'D'
+	markerCaps            = 'V'
+	markerWelcome         = 'v'
+	markerZBatch          = 'Z'
+	markerDiagnostics     = 'G'
+	markerDiagnosticsRes  = 'g'
+	markerSourceWorkspace = 'F'
 )
 
 type Capabilities uint16
 
 const (
-	CapZstdBatches  Capabilities = 1 << 0
-	CapRemoteStatus Capabilities = 1 << 1
+	CapZstdBatches     Capabilities = 1 << 0
+	CapRemoteStatus    Capabilities = 1 << 1
+	CapSourceWorkspace Capabilities = 1 << 2
 )
-
-var hubCapabilities = CapZstdBatches | CapRemoteStatus
 
 const batchRecordFrameBytes = 12
 
@@ -152,6 +152,12 @@ type Registration struct {
 	Path     string
 }
 
+type SourceWorkspace struct {
+	DeviceID string
+	SourceID string
+	Path     string
+}
+
 type Record struct {
 	Offset int64
 	JSON   []byte
@@ -204,13 +210,14 @@ type WorkspacesReply struct {
 }
 
 type Frame struct {
-	Registration *Registration
-	Batch        *Batch
-	Capabilities *Capabilities
-	Query        *Query
-	Annotate     *Annotate
-	Workspaces   *Workspaces
-	Diagnostics  *DiagnosticsRequest
+	Registration    *Registration
+	Batch           *Batch
+	Capabilities    *Capabilities
+	Query           *Query
+	Annotate        *Annotate
+	Workspaces      *Workspaces
+	Diagnostics     *DiagnosticsRequest
+	SourceWorkspace *SourceWorkspace
 }
 
 type frameReader struct {
@@ -303,6 +310,12 @@ func ReadFrame(r io.Reader) (Frame, error) {
 			return Frame{}, err
 		}
 		return Frame{Registration: reg}, nil
+	case markerSourceWorkspace:
+		sw, err := readSourceWorkspace(fr)
+		if err != nil {
+			return Frame{}, err
+		}
+		return Frame{SourceWorkspace: sw}, nil
 	case markerBatch:
 		b, err := readBatch(fr)
 		if err != nil {
@@ -366,19 +379,40 @@ func readRegistration(fr *frameReader) (*Registration, error) {
 	if reg.Agent, err = fr.str16(maxAgentLen, "agent name"); err != nil {
 		return nil, err
 	}
+	if reg.Path, err = readPath(fr); err != nil {
+		return nil, err
+	}
+	return &reg, nil
+}
+
+func readSourceWorkspace(fr *frameReader) (*SourceWorkspace, error) {
+	var sw SourceWorkspace
+	var err error
+	if sw.DeviceID, err = fr.str16(maxDeviceIDLen, "device ID"); err != nil {
+		return nil, err
+	}
+	if sw.SourceID, err = fr.str16(maxSourceIDLen, "source ID"); err != nil {
+		return nil, err
+	}
+	if sw.Path, err = readPath(fr); err != nil {
+		return nil, err
+	}
+	return &sw, nil
+}
+
+func readPath(fr *frameReader) (string, error) {
 	pathLen, err := fr.u32()
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	path, err := fr.bytes(pathLen, maxPathLen, "path")
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	if len(path) == 0 {
-		return nil, fmt.Errorf("hubsync: frame has an empty path")
+		return "", fmt.Errorf("hubsync: frame has an empty path")
 	}
-	reg.Path = string(path)
-	return &reg, nil
+	return string(path), nil
 }
 
 func readBatchHead(fr *frameReader) (*Batch, uint32, error) {
@@ -820,23 +854,32 @@ func WriteWorkspacesReply(w io.Writer, r WorkspacesReply) error {
 	return nil
 }
 
-func WriteRegistration(w io.Writer, r Registration) error {
-	for _, f := range []struct {
-		value string
-		max   int
-		what  string
-	}{
-		{r.DeviceID, maxDeviceIDLen, "device ID"},
-		{r.SourceID, maxSourceIDLen, "source ID"},
-		{r.Agent, maxAgentLen, "agent name"},
-		{r.Path, maxPathLen, "path"},
-	} {
+type boundedField struct {
+	value string
+	max   int
+	what  string
+}
+
+func checkFields(frame string, fields []boundedField) error {
+	for _, f := range fields {
 		if f.value == "" {
-			return fmt.Errorf("hubsync: registration has an empty %s", f.what)
+			return fmt.Errorf("hubsync: %s has an empty %s", frame, f.what)
 		}
 		if len(f.value) > f.max {
 			return fmt.Errorf("%w: %s length %d exceeds %d", ErrTooLarge, f.what, len(f.value), f.max)
 		}
+	}
+	return nil
+}
+
+func WriteRegistration(w io.Writer, r Registration) error {
+	if err := checkFields("registration", []boundedField{
+		{r.DeviceID, maxDeviceIDLen, "device ID"},
+		{r.SourceID, maxSourceIDLen, "source ID"},
+		{r.Agent, maxAgentLen, "agent name"},
+		{r.Path, maxPathLen, "path"},
+	}); err != nil {
+		return err
 	}
 	head := []byte{markerRegistration, ProtocolVersion}
 	head = appendLen16(head, r.DeviceID)
@@ -845,12 +888,31 @@ func WriteRegistration(w io.Writer, r Registration) error {
 	head = append(head, r.SourceID...)
 	head = appendLen16(head, r.Agent)
 	head = append(head, r.Agent...)
-	var l [4]byte
-	binary.BigEndian.PutUint32(l[:], uint32(len(r.Path)))
-	head = append(head, l[:]...)
+	head = binary.BigEndian.AppendUint32(head, uint32(len(r.Path)))
 	head = append(head, r.Path...)
 	if _, err := w.Write(head); err != nil {
 		return fmt.Errorf("hubsync: write registration: %w", err)
+	}
+	return nil
+}
+
+func WriteSourceWorkspace(w io.Writer, sw SourceWorkspace) error {
+	if err := checkFields("source workspace", []boundedField{
+		{sw.DeviceID, maxDeviceIDLen, "device ID"},
+		{sw.SourceID, maxSourceIDLen, "source ID"},
+		{sw.Path, maxPathLen, "path"},
+	}); err != nil {
+		return err
+	}
+	head := []byte{markerSourceWorkspace, ProtocolVersion}
+	head = appendLen16(head, sw.DeviceID)
+	head = append(head, sw.DeviceID...)
+	head = appendLen16(head, sw.SourceID)
+	head = append(head, sw.SourceID...)
+	head = binary.BigEndian.AppendUint32(head, uint32(len(sw.Path)))
+	head = append(head, sw.Path...)
+	if _, err := w.Write(head); err != nil {
+		return fmt.Errorf("hubsync: write source workspace: %w", err)
 	}
 	return nil
 }

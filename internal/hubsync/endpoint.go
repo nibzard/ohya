@@ -266,6 +266,8 @@ func (e *Endpoint) serveConn(ctx context.Context, session *connSession) {
 		switch {
 		case frame.Registration != nil:
 			closeConn = e.handleRegistration(ctx, session, deviceID, *frame.Registration)
+		case frame.SourceWorkspace != nil:
+			closeConn = e.handleSourceWorkspace(ctx, session, deviceID, *frame.SourceWorkspace)
 		case frame.Batch != nil:
 			closeConn = e.handleBatch(ctx, session, deviceID, *frame.Batch)
 		case frame.Capabilities != nil:
@@ -305,6 +307,25 @@ func (e *Endpoint) handleRegistration(ctx context.Context, w io.Writer, deviceID
 	storeStart := time.Now()
 	err := Retry(ctx, e.opts.Retry, permanentStoreError, func() error {
 		return e.db.RegisterSource(ctx, reg.SourceID, deviceID, reg.Agent, reg.Path)
+	})
+	e.observer.Observe("hub_store_duration", time.Since(storeStart))
+	if err != nil {
+		e.observer.Add("hub_failures", 1, "commit")
+		_ = WriteError(w, storeErrorCode(err), err.Error())
+		return false
+	}
+	return WriteAck(w, Ack{}) != nil
+}
+
+func (e *Endpoint) handleSourceWorkspace(ctx context.Context, w io.Writer, deviceID string, sw SourceWorkspace) bool {
+	if sw.DeviceID != deviceID {
+		_ = WriteError(w, CodeAuth, fmt.Sprintf(
+			"source workspace names device %s, but the connection belongs to %s", sw.DeviceID, deviceID))
+		return true
+	}
+	storeStart := time.Now()
+	err := Retry(ctx, e.opts.Retry, permanentStoreError, func() error {
+		return e.db.SetSourceWorkspace(ctx, deviceID, sw.SourceID, sw.Path)
 	})
 	e.observer.Observe("hub_store_duration", time.Since(storeStart))
 	if err != nil {
@@ -380,7 +401,7 @@ func (e *Endpoint) handleBatch(ctx context.Context, w io.Writer, deviceID string
 }
 
 func (e *Endpoint) capabilities() Capabilities {
-	caps := CapZstdBatches
+	caps := CapZstdBatches | CapSourceWorkspace
 	if e.diagnostics != nil {
 		caps |= CapRemoteStatus
 	}
@@ -638,6 +659,7 @@ func (e *Endpoint) normalize(b Batch, st store.SourceState) (prefix []store.Even
 func permanentStoreError(err error) bool {
 	return errors.Is(err, store.ErrBatchRejected) ||
 		errors.Is(err, store.ErrObservationRejected) ||
+		errors.Is(err, store.ErrSourceWorkspaceRejected) ||
 		errors.Is(err, store.ErrSourceOwnership) ||
 		errors.Is(err, store.ErrSourceNotRegistered) ||
 		errors.Is(err, store.ErrSourcePurged)
@@ -650,7 +672,7 @@ func storeErrorCode(err error) ErrorCode {
 	case errors.Is(err, store.ErrSourceNotRegistered):
 		return CodeUnknownSource
 	case errors.Is(err, store.ErrBatchRejected), errors.Is(err, store.ErrObservationRejected),
-		errors.Is(err, store.ErrSourcePurged):
+		errors.Is(err, store.ErrSourceWorkspaceRejected), errors.Is(err, store.ErrSourcePurged):
 		return CodeRejected
 	default:
 		return CodeInternal

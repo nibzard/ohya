@@ -442,6 +442,12 @@ func FuzzReadFrame(f *testing.F) {
 		f.Fatal(err)
 	}
 	f.Add(buf.Bytes())
+	buf.Reset()
+	if err := WriteSourceWorkspace(&buf, SourceWorkspace{DeviceID: testDevice, SourceID: testSource,
+		Path: "/brain/conversations/c1/.system_generated/logs/transcript_full.jsonl"}); err != nil {
+		f.Fatal(err)
+	}
+	f.Add(buf.Bytes())
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		frame, err := ReadFrame(bytes.NewReader(data))
@@ -462,6 +468,8 @@ func FuzzReadFrame(f *testing.F) {
 			err = WriteAnnotate(&out, frame.Annotate.Request)
 		case frame.Workspaces != nil:
 			err = WriteWorkspaces(&out, *frame.Workspaces)
+		case frame.SourceWorkspace != nil:
+			err = WriteSourceWorkspace(&out, *frame.SourceWorkspace)
 		}
 		if err != nil {
 			return
@@ -475,7 +483,8 @@ func FuzzReadFrame(f *testing.F) {
 			(frame.Capabilities == nil) != (again.Capabilities == nil) ||
 			(frame.Query == nil) != (again.Query == nil) ||
 			(frame.Annotate == nil) != (again.Annotate == nil) ||
-			(frame.Workspaces == nil) != (again.Workspaces == nil) {
+			(frame.Workspaces == nil) != (again.Workspaces == nil) ||
+			(frame.SourceWorkspace == nil) != (again.SourceWorkspace == nil) {
 			t.Fatal("frame kind changed across the round trip")
 		}
 	})
