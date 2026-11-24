@@ -1,0 +1,36 @@
+# Design: Three outcomes for the deep FTS check
+
+## Problem
+ohya doctor --deep reported each error as "events_fts failed the FTS5
+integrity-check", with the remedy to restore the database from a
+backup. The check copies the database to a temporary file under TMPDIR
+first. A full disk or a missing TMPDIR therefore produced the same
+finding as a corrupt index. The help text and four documents also said
+that the check runs in memory.
+
+## Approach
+The finding reports what happened. checkFTSIndex measures the free
+space under TMPDIR with the rule that ohya setup uses for a recovery
+point, and refuses with the bytes that the check needs and the bytes
+that are free. An error that wraps ErrFTSIndexInconsistent keeps the
+remedy to restore a backup. Each other error reports that the deep
+check could not run, with the cause.
+
+## Key Trade-offs
+- One space rule for both callers: MeasureCopySpace in internal/setup.
+  The copy needs the database, its WAL, 10 percent, and a 64 MiB
+  margin.
+- The guard reads the sizes before the copy. A disk that fills during
+  the copy still gives "could not run" with the SQLite error, not the
+  remedy to restore a backup.
+- The hub keeps running during the check: WAL mode and one read
+  snapshot (commit 3bf3d50).
+
+## Evidence
+Live hub, 2026-11-24: an 18.1 GB database, 24 min 45 s, 78 GiB free
+after the run, fts_index ok.
+
+## References
+- commit 3bf3d50 (copy snapshot)
+- /notes/2026-11-24-stepped-copy-restarts.md
+- DB.md "Inspection", docs/reference.md "ohya doctor"
