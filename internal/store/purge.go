@@ -142,6 +142,7 @@ type PurgedSourceInfo struct {
 	Cursor        int64
 	NativeID      string
 	FirstNativeID string
+	Workspace     string
 	Scope         string
 	PurgedAtMS    int64
 }
@@ -157,11 +158,13 @@ func msRFC3339(ms int64) string {
 
 func readPurged(ctx context.Context, q purgeQuerier, id string) (PurgedSourceInfo, error) {
 	var p PurgedSourceInfo
-	var native, firstNative sql.NullString
+	var native, firstNative, workspace sql.NullString
 	err := q.QueryRowContext(ctx,
-		`SELECT source_id, device_id, agent, path, cursor_bytes, native_id, first_native_id, scope, purged_at_ms
+		`SELECT source_id, device_id, agent, path, cursor_bytes, native_id, first_native_id, workspace_path,
+		        scope, purged_at_ms
 		 FROM purged_sources WHERE source_id = ?`, id).
-		Scan(&p.SourceID, &p.DeviceID, &p.Agent, &p.Path, &p.Cursor, &native, &firstNative, &p.Scope, &p.PurgedAtMS)
+		Scan(&p.SourceID, &p.DeviceID, &p.Agent, &p.Path, &p.Cursor, &native, &firstNative, &workspace,
+			&p.Scope, &p.PurgedAtMS)
 	if errors.Is(err, sql.ErrNoRows) {
 		return PurgedSourceInfo{}, nil
 	}
@@ -170,6 +173,7 @@ func readPurged(ctx context.Context, q purgeQuerier, id string) (PurgedSourceInf
 	}
 	p.NativeID = native.String
 	p.FirstNativeID = firstNative.String
+	p.Workspace = workspace.String
 	return p, nil
 }
 
@@ -345,11 +349,12 @@ func (d *DB) purgeOneSource(ctx context.Context, src PurgeSource, selected map[s
 		deviceID, agent, path string
 		cursorBytes           int64
 		firstNative           sql.NullString
+		workspace             sql.NullString
 	)
 	err = tx.QueryRowContext(ctx,
-		`SELECT device_id, agent, path, cursor_bytes, first_native_id
+		`SELECT device_id, agent, path, cursor_bytes, first_native_id, workspace_path
 		 FROM sources WHERE id = ?`, src.ID).
-		Scan(&deviceID, &agent, &path, &cursorBytes, &firstNative)
+		Scan(&deviceID, &agent, &path, &cursorBytes, &firstNative, &workspace)
 	if errors.Is(err, sql.ErrNoRows) {
 		return -1, nil
 	}
@@ -429,9 +434,10 @@ func (d *DB) purgeOneSource(ctx context.Context, src PurgeSource, selected map[s
 	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO purged_sources
-		   (source_id, device_id, agent, path, cursor_bytes, native_id, first_native_id, scope, purged_at_ms)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		src.ID, deviceID, agent, path, cursorBytes, native, first, scope, nowMS); err != nil {
+		   (source_id, device_id, agent, path, cursor_bytes, native_id, first_native_id, workspace_path,
+		    scope, purged_at_ms)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		src.ID, deviceID, agent, path, cursorBytes, native, first, workspace, scope, nowMS); err != nil {
 		return -1, fmt.Errorf("store: purge source %s: record tombstone: %w", src.ID, err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -537,9 +543,10 @@ func (d *DB) ReallowSource(ctx context.Context, id string) (info PurgedSourceInf
 		firstNative = p.NativeID
 	}
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO sources (id, device_id, agent, path, cursor_bytes, first_native_id, updated_at_ms)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		p.SourceID, p.DeviceID, p.Agent, p.Path, p.Cursor, firstNative, time.Now().UnixMilli()); err != nil {
+		`INSERT INTO sources (id, device_id, agent, path, cursor_bytes, first_native_id, workspace_path, updated_at_ms)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.SourceID, p.DeviceID, p.Agent, p.Path, p.Cursor, firstNative, nullString(p.Workspace),
+		time.Now().UnixMilli()); err != nil {
 		return PurgedSourceInfo{}, fmt.Errorf("store: reallow %s: restore source: %w", id, err)
 	}
 	if err := tx.Commit(); err != nil {

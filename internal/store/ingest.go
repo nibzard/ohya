@@ -219,9 +219,10 @@ func (d *DB) Ingest(ctx context.Context, b Batch) (res IngestResult, err error) 
 
 	var cursor int64
 	var deviceID, agent string
+	var sourceWorkspace sql.NullString
 	err = tx.QueryRowContext(ctx,
-		`SELECT cursor_bytes, device_id, agent FROM sources WHERE id = ?`, b.SourceID).
-		Scan(&cursor, &deviceID, &agent)
+		`SELECT cursor_bytes, device_id, agent, workspace_path FROM sources WHERE id = ?`, b.SourceID).
+		Scan(&cursor, &deviceID, &agent, &sourceWorkspace)
 	if errors.Is(err, sql.ErrNoRows) {
 		purged, perr := readPurged(ctx, tx, b.SourceID)
 		if perr != nil {
@@ -272,7 +273,7 @@ func (d *DB) Ingest(ctx context.Context, b Batch) (res IngestResult, err error) 
 		return IngestResult{}, err
 	}
 	for _, sid := range sortedSessionIDs(deltas) {
-		if err := applySessionDelta(ctx, tx, sid, deltas[sid], b.SourceID); err != nil {
+		if err := applySessionDelta(ctx, tx, sid, deltas[sid], b.SourceID, sourceWorkspace.String); err != nil {
 			return IngestResult{}, err
 		}
 	}
@@ -517,7 +518,7 @@ func (ref promptRef) before(other promptRef) bool {
 		(ref.SourceID == other.SourceID && ref.SourceOffset < other.SourceOffset)
 }
 
-func applySessionDelta(ctx context.Context, tx *sql.Tx, sid string, d *sessionDelta, sourceID string) error {
+func applySessionDelta(ctx context.Context, tx *sql.Tx, sid string, d *sessionDelta, sourceID, sourceWorkspace string) error {
 	var (
 		count       int
 		deviceID    string
@@ -544,8 +545,13 @@ func applySessionDelta(ctx context.Context, tx *sql.Tx, sid string, d *sessionDe
 	if d.hasMax && (!last.Valid || d.maxMS > last.Int64) {
 		last = sql.NullInt64{Int64: d.maxMS, Valid: true}
 	}
-	if !cwd.Valid && d.cwd != "" {
-		cwd = sql.NullString{String: d.cwd, Valid: true}
+	if !cwd.Valid {
+		switch {
+		case d.cwd != "":
+			cwd = sql.NullString{String: d.cwd, Valid: true}
+		case sourceWorkspace != "":
+			cwd = sql.NullString{String: sourceWorkspace, Valid: true}
+		}
 	}
 	if !branch.Valid && d.branch != "" {
 		branch = sql.NullString{String: d.branch, Valid: true}

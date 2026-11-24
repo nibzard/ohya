@@ -17,7 +17,11 @@ directory, and the `sessions (device_id, cwd)` index (see "Repository
 derivation");
 [008_purged_sources.sql](internal/store/migrations/008_purged_sources.sql)
 adds `purged_sources`, the tombstones of owner-purged sources (see
-"Source lifecycle" and [ADR 0013](docs/adr/0013-owner-scoped-session-purge.md)).
+"Source lifecycle" and [ADR 0013](docs/adr/0013-owner-scoped-session-purge.md));
+[009_source_workspace.sql](internal/store/migrations/009_source_workspace.sql)
+adds `workspace_path` to `sources` and `purged_sources`, the device-observed
+workspace of a source (see "Repository derivation" and
+[ADR 0018](docs/adr/0018-device-observed-source-workspace.md)).
 Do not duplicate the DDL here.
 Databases ship with releases: v0.1.0 and v0.1.1 ship schema 6, v0.1.2 and
 v0.2.0 ship schema 7, and v0.3.0, v0.4.0, v0.5.0, v0.5.1, v0.6.0, v0.6.1, and v0.7.0 ship schema 8
@@ -76,7 +80,7 @@ writer.
 | Table | Meaning |
 |---|---|
 | `sessions` | Device/agent/native session identity and observed aggregates |
-| `sources` | File incarnation and authoritative committed byte cursor |
+| `sources` | File incarnation, authoritative committed byte cursor, and device-observed workspace |
 | `events` | One immutable original JSONL record and normalized searchable fields |
 | `session_token_usage` | Token counts of one API response, keyed by session and message ID |
 | `event_annotations` | Agent-written JSON values keyed by event, namespace, key and writer |
@@ -100,7 +104,8 @@ registered --ohya purge --apply--> purged --ohya sources reallow--> registered (
   row — and wrote a `purged_sources` tombstone carrying the source identity,
   device, agent, path, the authoritative committed cursor read inside the
   purge transaction, the purged session's native ID, the source's offset-0
-  `first_native_id`, the purge scope, and the timestamp. `purged_sources` is
+  `first_native_id`, the source's `workspace_path` when it has one, the
+  purge scope, and the timestamp. `purged_sources` is
   denied to the MCP `sql` tool by default (`EngineOptions.DenyTables`).
   Registration and batches for the tombstoned source ID are refused
   deterministically with the purge date and the `ohya sources reallow` remedy
@@ -108,8 +113,8 @@ registered --ohya purge --apply--> purged --ohya sources reallow--> registered (
   source ID from being re-registered, exactly as ownership did while the row
   lived.
 - **registered again**: reallow deletes the tombstone and restores the
-  source row with `cursor_bytes` and `first_native_id` from the tombstone
-  (so header-first parsers such as Codex and Pi can resume and re-derive past
+  source row with `cursor_bytes`, `first_native_id`, and `workspace_path`
+  from the tombstone (so header-first parsers such as Codex and Pi can resume and re-derive past
   offset 0 after their offset-0 event was evicted). Because a running
   `ohya join` caches refused sources for its process lifetime, restart
   `ohya join` on the device after reallow; its probe finds the hub cursor at
@@ -172,6 +177,23 @@ while the path keeps its case. A host other than a DNS-style name or a
 bracketed IPv6 address, an empty path, or a path with whitespace or control
 characters yields no repository. The result normalizes to itself, and the
 hub rejects an observation whose value does not.
+
+**The workspace of a source** sets `cwd` when the records of a session carry
+none ([ADR 0018](docs/adr/0018-device-observed-source-workspace.md)). The
+rule: the `cwd` of a session is the first non-empty record `cwd`, else the
+workspace of a source that holds the events of the session. Antigravity
+records carry no directory, so its sessions depend on this input.
+
+`sources.workspace_path` is write-once, and only the device that owns the
+source sets it: with `store.SetSourceWorkspace` or with the
+`sourceWorkspace` frame ([sync-protocol](docs/sync-protocol.md)). The first
+path stays. The same path again is a no-op, and a different path is ignored.
+Setting it fills `cwd`, and the repository of a known `workspaces` row, for
+the sessions of the source that have no `cwd`. Ingestion and re-derivation
+apply the rule again for later events, so a session that a later batch or a
+rebuilt native ID creates also gets the workspace. A purge keeps the value
+in the tombstone, and reallow restores it. `store.SourcesWithoutWorkspace`
+lists, per device and agent, the sources that have no workspace.
 
 Never decode the Claude Code project directory name, because it is lossy.
 Parsers never read the filesystem: git discovery happens on the device, as

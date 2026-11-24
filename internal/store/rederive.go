@@ -37,6 +37,7 @@ type rebuiltSession struct {
 
 	sessionDelta
 
+	workspace string
 	promptRef promptRef
 }
 
@@ -158,6 +159,7 @@ type rederiveSource struct {
 	device      string
 	path        string
 	firstNative string
+	workspace   string
 }
 
 type storedEvent struct {
@@ -170,19 +172,20 @@ const rederiveChunk = 128
 
 func rederiveAgent(ctx context.Context, tx *sql.Tx, p ParserDeriver, states map[string]*rebuiltSession) (int, error) {
 	srcRows, err := tx.QueryContext(ctx,
-		`SELECT id, device_id, path, first_native_id FROM sources WHERE agent = ? ORDER BY id`, p.Agent)
+		`SELECT id, device_id, path, first_native_id, workspace_path FROM sources WHERE agent = ? ORDER BY id`, p.Agent)
 	if err != nil {
 		return 0, fmt.Errorf("store: re-derive agent %s: list sources: %w", p.Agent, err)
 	}
 	var sources []rederiveSource
 	for srcRows.Next() {
 		var s rederiveSource
-		var firstNative sql.NullString
-		if err := srcRows.Scan(&s.id, &s.device, &s.path, &firstNative); err != nil {
+		var firstNative, workspace sql.NullString
+		if err := srcRows.Scan(&s.id, &s.device, &s.path, &firstNative, &workspace); err != nil {
 			srcRows.Close()
 			return 0, fmt.Errorf("store: re-derive agent %s: read source: %w", p.Agent, err)
 		}
 		s.firstNative = firstNative.String
+		s.workspace = workspace.String
 		sources = append(sources, s)
 	}
 	if err := srcRows.Err(); err != nil {
@@ -333,6 +336,9 @@ func rewriteEvent(ctx context.Context, tx *sql.Tx, src rederiveSource, p ParserD
 		states[sid] = st
 	}
 	st.add(&ev)
+	if st.workspace == "" {
+		st.workspace = src.workspace
+	}
 	ref := promptRef{SourceID: src.id, SourceOffset: ev.Offset}
 	if ev.Prompt != "" && (st.prompt == nil || ref.before(st.promptRef)) {
 		st.prompt = &ev
@@ -350,10 +356,14 @@ func finalizeSession(ctx context.Context, tx *sql.Tx, st *rebuiltSession) error 
 		`SELECT metadata, device_id FROM sessions WHERE id = ?`, st.id).Scan(&metadata, &deviceID); err != nil {
 		return fmt.Errorf("store: re-derive session %s: read metadata: %w", st.id, err)
 	}
+	cwd := st.cwd
+	if cwd == "" {
+		cwd = st.workspace
+	}
 	repo := sql.NullString{String: st.repo, Valid: st.repo != ""}
-	if !repo.Valid && st.cwd != "" {
+	if !repo.Valid && cwd != "" {
 		var err error
-		if repo, err = workspaceRepo(ctx, tx, deviceID, st.cwd); err != nil {
+		if repo, err = workspaceRepo(ctx, tx, deviceID, cwd); err != nil {
 			return fmt.Errorf("store: re-derive session %s: read workspace repository: %w", st.id, err)
 		}
 	}
@@ -391,7 +401,7 @@ func finalizeSession(ctx context.Context, tx *sql.Tx, st *rebuiltSession) error 
 		   cwd = ?, branch = ?, repo = ?, model = ?, first_prompt = ?, metadata = ?
 		 WHERE id = ?`,
 		st.count, started, last,
-		nullString(st.cwd), nullString(st.branch), repo, nullString(st.model),
+		nullString(cwd), nullString(st.branch), repo, nullString(st.model),
 		firstPrompt, string(encodedMetadata), st.id); err != nil {
 		return fmt.Errorf("store: re-derive session %s: update aggregates: %w", st.id, err)
 	}

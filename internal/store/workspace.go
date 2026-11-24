@@ -105,17 +105,24 @@ func observeWorkspace(ctx context.Context, tx *sql.Tx, deviceID string, o worksp
 }
 
 func validObservation(o workspace.Observation) error {
-	switch {
-	case o.Path == "":
-		return fmt.Errorf("store: observe workspace: empty path: %w", ErrObservationRejected)
-	case len(o.Path) > MaxWorkspacePathBytes:
-		return fmt.Errorf("store: observe workspace: path of %d bytes exceeds %d: %w",
-			len(o.Path), MaxWorkspacePathBytes, ErrObservationRejected)
-	case !utf8.ValidString(o.Path) || strings.ContainsRune(o.Path, 0):
-		return fmt.Errorf("store: observe workspace: path is not valid text: %w", ErrObservationRejected)
-	case o.Repo != "" && workspace.NormalizeRemote(o.Repo) != o.Repo:
+	if err := workspacePathProblem(o.Path); err != nil {
+		return fmt.Errorf("store: observe workspace: %v: %w", err, ErrObservationRejected)
+	}
+	if o.Repo != "" && workspace.NormalizeRemote(o.Repo) != o.Repo {
 		return fmt.Errorf("store: observe workspace %q: repository %q is not in normalized form: %w",
 			o.Path, o.Repo, ErrObservationRejected)
+	}
+	return nil
+}
+
+func workspacePathProblem(path string) error {
+	switch {
+	case path == "":
+		return errors.New("empty path")
+	case len(path) > MaxWorkspacePathBytes:
+		return fmt.Errorf("path of %d bytes exceeds %d", len(path), MaxWorkspacePathBytes)
+	case !utf8.ValidString(path) || strings.ContainsRune(path, 0):
+		return errors.New("path is not valid text")
 	}
 	return nil
 }
