@@ -50,3 +50,5 @@ offer parameter since `2812eb5`. The merged tree did not compile.
 - The Swift app changes of `origin/main` were not built here.
 - `docs/sync-protocol.md` describes neither the keepalive nor the probe
   before the registration.
+
+A third run without the test cache passed on main after the fast-forward (cmd/ohya in 239 s).
