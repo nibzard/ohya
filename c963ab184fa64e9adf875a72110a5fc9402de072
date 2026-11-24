@@ -59,3 +59,5 @@ as load, it failed in the first run.
   DB.md states.
 
 Two full runs of make check without the test cache (GOFLAGS=-count=1) passed on the final tree, with cmd/ohya in 233 s and in 296 s. Before the fix, 6 of 10 full runs failed on the same day.
+
+Cherry-pick of 2ff0478 for the branch release/v0.7.1 (v0.7.1). The note above was written for the original commit.
