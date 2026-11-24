@@ -46,3 +46,5 @@ only the usage record and the usage report. On a deadline,
   pattern with the CTE ends at once.
 - docs/performance.md, "In-process benchmark deltas", update of
   2026-11-24.
+
+Cherry-pick of 254d0f4 for the branch release/v0.7.1 (v0.7.1). The note above was written for the original commit.
