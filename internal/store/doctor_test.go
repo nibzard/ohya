@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/mattn/go-sqlite3"
 )
 
 func rawSQLite(t *testing.T, path string) *sql.DB {
@@ -118,8 +118,13 @@ func TestFTSIndexConsistentDetectsCorruption(t *testing.T) {
 	if _, err := w.Writer().Exec(`INSERT INTO events_fts(events_fts) VALUES ('delete-all')`); err != nil {
 		t.Fatal(err)
 	}
-	if err := ro.FTSIndexConsistent(context.Background()); err == nil {
-		t.Fatal("corrupt index passed the integrity-check")
+	err = ro.FTSIndexConsistent(context.Background())
+	if !errors.Is(err, ErrFTSIndexInconsistent) {
+		t.Fatalf("corrupt index reported %v; want ErrFTSIndexInconsistent", err)
+	}
+	var sqliteErr sqlite3.Error
+	if !errors.As(err, &sqliteErr) || sqliteErr.Code != sqlite3.ErrCorrupt {
+		t.Fatalf("corrupt index reported %v; want the SQLite corrupt code", err)
 	}
 	if err := w.Close(); err != nil {
 		t.Fatal(err)

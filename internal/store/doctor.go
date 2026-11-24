@@ -13,6 +13,8 @@ import (
 
 var ErrNoSchemaMigrations = errors.New("store: no schema_migrations table; the database is not an ohya hub database")
 
+var ErrFTSIndexInconsistent = errors.New("store: events_fts differs from the events table")
+
 func (d *DB) AppliedSchemaVersion(ctx context.Context) (version int, found bool, err error) {
 	var name string
 	err = d.readers.QueryRowContext(ctx,
@@ -125,6 +127,10 @@ func (d *DB) FTSIndexConsistent(ctx context.Context) error {
 	}
 	if _, err := dst.ExecContext(ctx,
 		`INSERT INTO events_fts(events_fts, rank) VALUES ('integrity-check', 1)`); err != nil {
+		var sqliteErr sqlite3.Error
+		if errors.As(err, &sqliteErr) && sqliteErr.Code == sqlite3.ErrCorrupt {
+			return fmt.Errorf("%w: %w", ErrFTSIndexInconsistent, err)
+		}
 		return fmt.Errorf("store: events_fts integrity-check: %w", err)
 	}
 	return nil

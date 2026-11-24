@@ -404,6 +404,11 @@ time grows with the database size. The `rank` comparison expects an index entry 
 row, and this schema leaves text-less events unindexed, so the check first drops the delete trigger
 on the copy and removes the text-less rows.
 
+The check has three outcomes. `ok`: the index agrees with `events`. An index that disagrees
+returns `store.ErrFTSIndexInconsistent`, and the finding says to restore a backup. Free space
+below the need, or any other error, gives a finding that says the deep check did not run, with
+the cause.
+
 `count(*)` on the external-content `events_fts` table reads the content table, not the index. To
 enumerate indexed documents, query through `MATCH`.
 
