@@ -8,3 +8,5 @@ finding. TestMeasureCopySpace pins the rule with a sparse 5 TiB file.
 
 Found on 2026-11-24 during a read-only analysis of the live hub.
 Verified: go test ./internal/setup and make check.
+
+Cherry-pick of 0107da4 for the branch release/v0.7.1 (v0.7.1). The note above was written for the original commit.
