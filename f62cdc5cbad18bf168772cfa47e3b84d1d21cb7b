@@ -1,0 +1,52 @@
+# Design: the workspace frame of a known source
+
+## Problem
+
+The 17 commits of 2026-11-24 sat on `f115b69`. `origin/main` had nine
+more commits (the v0.7.0 release work), and two of them meet in
+`internal/uploader/uploader.go`.
+
+`9d86d67` changed `prepare`: a source with a cursor gets a probe
+first, and only a source that the hub does not know is registered.
+`2812eb5` sent the `sourceWorkspace` frame after the registration
+acknowledgment. On the merged tree a known source never reached that
+line. After an upgrade every existing source is known, so no existing
+Antigravity source would send its workspace. A lookup that found
+nothing at the first sync was never repeated.
+
+Three tests of `2812eb5` failed on the merged tree before the fix, for
+example "frames after a reconnect = VRFBBWVBB; want VRFBBWVRBB".
+
+`9d86d67` also added a keepalive that calls `negotiate`, which has an
+offer parameter since `2812eb5`. The merged tree did not compile.
+
+## Approach
+
+- The frame is sent when the hub confirms the source: after the
+  registration of a new source, or after the probe of a known source.
+  Both paths end in `resume`, and the frame always comes before the
+  next batch.
+- The cost for a known source is one round trip, and only when the
+  lookup finds a path. A source that the hub stored is not looked up
+  again in the process.
+- `offer` holds the capability offer in one place, for the connection
+  and for the keepalive.
+- A merge commit holds the fix, so that each commit on `main` passes
+  `make check`. A red merge with a later fix would break bisect for one
+  commit.
+- `main` moves by fast-forward only, so each hash in NOTES.md stays
+  valid.
+
+## Measurements
+
+- `GOFLAGS=-count=1 make check` on the merged tree: passed twice, with
+  `cmd/ohya` in 258 s and in 251 s.
+- `internal/uploader` and `internal/hubsync` with the race detector:
+  passed.
+
+## Limits
+
+- `make tla` was not rerun: neither side changed `tla/`.
+- The Swift app changes of `origin/main` were not built here.
+- `docs/sync-protocol.md` describes neither the keepalive nor the probe
+  before the registration.
