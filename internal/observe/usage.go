@@ -258,6 +258,7 @@ var FunctionCatalogue = []string{
 	"json_extract",
 	"json_valid",
 	"length",
+	"like",
 	"lower",
 	"ltrim",
 	"match",

@@ -142,8 +142,8 @@ func TestNormalizeReads(t *testing.T) {
 }
 
 func TestNormalizeFunctions(t *testing.T) {
-	got := NormalizeFunctions([]string{"bm25", "custom_function", "snippet"})
-	want := []string{"bm25", "other", "snippet"}
+	got := NormalizeFunctions([]string{"bm25", "custom_function", "like", "LIKE", "snippet"})
+	want := []string{"bm25", "like", "other", "snippet"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("NormalizeFunctions = %v, want %v", got, want)
 	}
