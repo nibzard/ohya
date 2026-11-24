@@ -1,7 +1,7 @@
 # Release and recovery operations
 
-The newest release is v0.7.0, published on 2026-11-23 from commit `60eb331`
-after the full candidate matrix passed; its macOS archives are unsigned and
+The newest release is v0.7.1, published on 2026-11-24 from commit `08b3538`
+after all eight candidate jobs passed; its macOS archives are unsigned and
 its menu bar app DMG is ad-hoc signed. Apple signing and
 notarization must pass before a signed public release. Generated candidates
 are not qualified releases merely because packaging succeeds.
@@ -303,6 +303,19 @@ space before you upgrade. Beyond that:
   upgrade showed that v0.6.1 marks the healthy setup statuses `running`,
   `ready`, and `not needed` with the warning mark; the fix is on `main` for
   the next release.
+- v0.7.1 (commit `08b3538`, dirty=false) was published on 2026-11-24 after
+  all eight candidate jobs passed on one run (run 45499259636) and local
+  `make check` + `make tla` passed with zero errors on the release commit.
+  It is a patch release on schema 8: an upgrade from v0.3.0 or later runs
+  no migration and needs no recovery copy. It holds the fixes of 2026-11-24
+  and not the schema 9 change, so it was cut from the branch
+  `release/v0.7.1`, which starts at `5f2d015` with eleven cherry-picks;
+  `main` already carried schema 9. The released installer upgraded the
+  linux-amd64 hub host from v0.7.0 in 14 s with exit 0: `backup: not
+  needed`, both services running, and `ohya doctor` exited 0 with 20 ok
+  checks after 144 s. The macOS arm64 job queued for about eight minutes
+  for lack of capacity and then ran; no rerun was needed. Not done: this
+  DMG was not opened on a Mac.
 - The installer refuses to replace an executable whose digest matches neither
   its receipt entry nor the previous one ("installed executable has changed;
   preserve it"). A copy installed by hand outside `install.sh` triggers this

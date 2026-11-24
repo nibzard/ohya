@@ -151,11 +151,11 @@ How to use this file:
 
 - Hub fixes 2026-11-24 (plan approved by the owner: correctness, error
   text of the pull path, and documents; no hooks and no injection into a
-  session, see PRODUCT.md "Pull, never push"). All on `main`, none
-  released. The commits were made on a stale base and sit on top of
-  `origin/main` since the merge `f62cdc5` (see "Integration 2026-11-24").
-  The first two groups need no schema change; the Antigravity workspace
-  is schema 9.
+  session, see PRODUCT.md "Pull, never push"). The commits were made on a
+  stale base and sit on top of `origin/main` since the merge `f62cdc5`
+  (see "Integration 2026-11-24"). The first two groups need no schema
+  change and are released in v0.7.1; the Antigravity workspace is schema 9
+  and is on `main` only.
   - Redaction (`41cc624`): the six prefix patterns start with a left
     boundary that stays in the output, so `task-`, `desk-`, `disk-`,
     `ask-`, and `risk-` identifiers stay whole. Accepted risk, recorded in
@@ -183,8 +183,38 @@ How to use this file:
     once, and `store.Open` repeats its attempt on a busy error. This is
     the fix of the `TestHubSetupTwoStepFlow` failure (see its entry
     below, under "TestTimeoutRetries").
-  - Open: the released-schema lists in DB.md stop at v0.7.0 until the
-    next release.
+  - The released-schema lists in DB.md name v0.7.1 since `5fcd091`.
+
+- v0.7.1 release (2026-11-24, 22:40:31Z; the tag points to `08b3538` on
+  the branch `release/v0.7.1`, which starts at `5f2d015` with eleven
+  cherry-picks): candidate run 45499259636 passed all eight jobs on one
+  run; the macOS arm64 job queued for about eight minutes for lack of
+  capacity. Before the tag: four checksums, four `candidate.*.txt` files
+  (revision `08b3538`, `dirty=false`), and the native library reports
+  were verified, and the downloaded `install.sh` differed from the commit
+  only in the pinned version. Six assets, as for v0.7.0. The released
+  installer upgraded the hub from v0.7.0 in 14 s: `backup: not needed`
+  (schema 8 on both sides), `service` and `hub-service` running, four
+  clients unchanged, `ohya doctor` 20 ok (exit 0) after 144 s without
+  `--deep`, and `ohya status` on v0.7.1. The MacBook synced again at
+  22:57:48Z, 13 minutes after the hub restart. Each `--hub` run issues a
+  join code that expires after 15 minutes; the installer output went to a
+  private file, which was deleted after a redacted read. Not done: the
+  DMG was not opened on a Mac.
+  - The dry run of an upgrade must use the extracted binary of the new
+    release. The installed v0.7.0 answered `ohya install --version
+    v0.7.1 --hub --dry-run --json` with "installer release identity
+    v0.7.0 differs from requested v0.7.1".
+  - Two full checks (`GOFLAGS=-count=1 make check`) of `main` at
+    `5fcd091` each failed one timing test, and the release commit
+    `08b3538` passed its own two checks before the tag. The first run
+    failed `TestTransportReporting` (`protocol_compatible = <nil>; want
+    true`, 536 s) while an 18 GB copy and the test run loaded the disk.
+    The second failed `TestIdleKeepalivePreventsReconnectProbeStorm` (4
+    extra round trips) under the load of the parallel suite and passed
+    `cmd/ohya` in 374 s. Each test passed 60 times alone. The keepalive
+    test has a known cause and a fix on `main`; see its entry below,
+    under "TestTimeoutRetries".
 
 - Integration 2026-11-24 (merge `f62cdc5`): the 17 commits of this day
   were made on `f115b69`, nine commits behind `origin/main` (the v0.7.0
