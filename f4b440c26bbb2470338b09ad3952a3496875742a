@@ -1,0 +1,15 @@
+# Design: margins of the keepalive test
+
+## Problem
+The test proves that a keepalive holds an idle connection open past the idle timeout of the hub. Its timings were 40 ms (keepalive), 140 ms (hub idle timeout), and 320 ms (idle window). A pass that stalled for more than about 75 ms made the keepalive late, the hub closed the connection, and the next pass reconnected (hello plus one probe per source = the four extra round trips).
+
+## Approach
+Keep the structure of the test. Raise the hub idle timeout to 2 s and the idle window to 2.5 s. The window stays 500 ms longer than the timeout, so a missing keepalive still shows as a reconnect: checked with a keepalive interval of 30 s, which fails with the same four round trips.
+
+## Key Trade-offs
+- The test takes 2.5 s instead of 0.4 s.
+- A stall tolerance of about 1.9 s instead of 75 ms. An injected clock would remove real time from the test, but the uploader reads time.Now directly and the change was not worth a refactor for one test.
+
+## References
+- NOTES.md: entry TestIdleKeepalivePreventsReconnectProbeStorm, and the guideline at TestTimeoutRetries.
+- Production values are unchanged: keepalive 3 minutes, hub idle timeout 5 minutes.
