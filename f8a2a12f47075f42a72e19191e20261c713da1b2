@@ -44,3 +44,5 @@ the last step ends, then rolls back. Both copy loops call it.
 - /notes/2026-11-16-vm-hang-ohya-workspaces-migration.md
 - docs/adr/0008-integrated-setup.md, "Recovery points"
 - SQLite backup documentation, sqlite3-binding.c lines 10066-10075
+
+Cherry-pick of 3bf3d50 for the branch release/v0.7.1 (v0.7.1). The note above was written for the original commit.
