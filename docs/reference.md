@@ -537,7 +537,7 @@ already-stopped service as an idempotent no-op (`changed: false`).
 
 ### Usage records
 
-Every `sql` and `annotate` call writes one usage record to
+Every `sql` and `annotate` call through the MCP server writes one usage record to
 `<state>/observe/<instance>/usage.jsonl` — one record on the machine that
 runs the call, and a second, client-side record on the machine that asked
 for it. A joined device's remote calls are recorded by the hub, with the
@@ -567,7 +567,10 @@ literals, paths, transcript content, annotation values, or error messages,
 on either side of a remote call. The writer is a bounded asynchronous
 queue: full queues drop and count records rather than block a call, files
 rotate at 8 MiB with two rotated files kept, directories are `0700` and
-files `0600`, and nothing is written on the query path itself.
+files `0600`, and nothing is written on the query path itself. The command
+line commands `ohya sql`, `ohya search`, `ohya show`, and `ohya sessions`
+share the query engine without a usage sink, so they write no record. For
+that reason `ohya usage` counts MCP calls only.
 
 ### The usage report
 
@@ -636,8 +639,24 @@ migrates it) and pages through events in id order, so it is safe to run on
 a live hub. It is best effort: a fixed table without a classifier finds
 only the shapes it knows, so a clean report is not proof that no secret is
 stored. Redaction and scanning change nothing on disk; removing stored
-secret material stays a separate owner action, for example `ohya purge`
-with its selectors.
+secret material stays a separate owner action. To remove a credential that
+the scan found:
+
+1. Rotate the credential. A purge removes the stored record. It does not
+   revoke the credential.
+2. Find the session in the scan output, for example `claude-code:dev1:sess-1`.
+   Remove the first two fields. The rest is the native id, even when it
+   contains colons.
+3. Run `ohya purge --agent claude-code --session <native-id>`. The command
+   prints the plan and deletes nothing.
+4. Add `--apply` to delete the session, its events, and each source that
+   holds its events.
+
+The transcript file in the agent's directory on the device keeps the
+credential. Remove it there when the credential must leave the disk. The
+purged bytes do not return when you re-admit a source with `ohya sources
+reallow`. A recovery copy that was made before the purge still holds the
+purged data.
 
 ## Local observability
 

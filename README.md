@@ -355,6 +355,8 @@ Register the MCP server in your agent, for example in Claude Code:
 }
 ```
 
+ohya installs no hooks and injects nothing into an agent session. The agent uses the memory only when the user asks for it.
+
 </details>
 
 ## Commands
