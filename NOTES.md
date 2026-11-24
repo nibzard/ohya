@@ -306,6 +306,28 @@ How to use this file:
   - Tests: the query and its plan in `internal/store/doctor_test.go`,
     and the columns of `sources` and the plan after each released
     upgrade in `migrate_released_test.go`.
+  - `ohya setup` applies the pending migrations after the recovery point
+    and before it changes a service file (ADR 0008, "Recovery points"),
+    and reports `schema: updated` or `schema: failed` with the cause.
+    A `Type=simple` service is active before its first open of the
+    database ends, the hub probe of setup allows 30 s, and an open that
+    finds the database busy gives up after one busy timeout of 5 s. A
+    migration inside a starting service therefore outlasts both limits
+    on this hub. That failure of the old flow follows from the code and
+    from the held-transaction check in the next bullet; it was not
+    reproduced with a real migration.
+  - Checked with a held write transaction and a pending 009: a second
+    writer open failed after 5.0 s with `store: migration
+    009_source_workspace: begin: database is locked`. A read-only open
+    and its query worked at once. So a new `ohya mcp` process that
+    starts during the migration of a hub fails, and that agent has no
+    memory tools until its MCP server restarts. Processes that are
+    already open keep their access. Plan the upgrade of a large hub for
+    a time when no agent starts a session, or decide on a longer wait of
+    `store.Open` (the open question at TestHubSetupTwoStepFlow below).
+  - Tests in `internal/setup`: the migration runs before the first
+    service command; setup stops before the service file when the
+    migration fails; a database without a schema stays with the service.
 
 - A stray build was deleted by mistake (2026-11-24, 22:23): a scratch
   cleanup ran `rm -f` with relative paths while the shell stood in the

@@ -60,6 +60,13 @@ func configureOwnedService(ctx context.Context, o Options, service Service, comp
 			results = append(results, recovery)
 		}
 	}
+	if err == nil && withRecovery {
+		var migration Result
+		migration, err = migrateDatabase(ctx, o)
+		if migration.Component != "" {
+			results = append(results, migration)
+		}
+	}
 	if err == nil {
 		result.Changed, err = ApplyFile(service.Path, receipt, service.Content)
 	}

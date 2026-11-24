@@ -50,7 +50,11 @@ Upgrade policy:
    rolls back completely; the next run resumes at the first pending version. The transaction takes the
    write lock first and reads `schema_migrations` again. Two processes that open the same database at
    the same time, such as the memory service and the hub service, then apply each migration once: the
-   second process waits for the first and finds the migration recorded.
+   second process waits for the first and finds the migration recorded. `ohya setup` applies the
+   pending migrations itself after the recovery point and before it starts the memory service
+   ([ADR 0008](docs/adr/0008-integrated-setup.md), "Recovery points"), so that no migration runs
+   inside a starting service. It does so only for a database whose recorded schema it can
+   read; any other file is left to the service.
 3. Every open verifies applied history. A checksum mismatch, a migration missing from the binary, or a
    new file numbered below the newest applied version is an error, never a silent upgrade.
 4. Migration file names match `NNN_name.sql` with a unique three-digit version. `store.SchemaVersion`

@@ -161,6 +161,18 @@ one database in pages:
   from a measurement with a current build. Schedule migrations on slow disks
   for idle time; while the copy runs, setup holds the setup lock and owned
   ingestion is stopped.
+- Measured with a current build (2026-11-24): a 16.9 GiB hub copied in
+  11 min 21 s on the VM above, while a test run loaded the disk (26 to 71
+  MiB/s). Ingestion was stopped for that time.
+
+After the copy, setup applies the pending migrations itself, before it
+changes a service file ([ADR 0008](adr/0008-integrated-setup.md), "Recovery
+points"). The migration has no time limit and adds to the stop of ingestion:
+migration 009 took 3 min 41 s on a copy of that hub. While the migration
+runs, a process that opens the database with a writer fails after one busy
+timeout (5 s) with `database is locked`, including a new `ohya mcp` process.
+Processes that are already open keep their access. Plan the upgrade of a
+large hub for a time when no agent starts a session.
 
 Setup reports the estimated copy size before starting and a progress line on
 stderr at every further 10 percent of the copy. A copy whose average rate

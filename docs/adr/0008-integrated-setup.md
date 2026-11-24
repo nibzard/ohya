@@ -129,6 +129,26 @@ copy, because no checkpoint can pass the held read transaction. The next
 checkpoint reclaims that space. The FTS check of `ohya doctor --deep` copies
 the database with the same loop (`DB.md`, "Inspection").
 
+Setup applies the pending migrations (2026-11-25). After the recovery point
+and before it changes the service file, setup opens the database once with
+the writer when the recorded schema is behind the schema of the build.
+`store.Open` then applies the migrations while ingestion is stopped. Setup
+reports `schema: updated` with the two versions. A failed migration stops
+setup with its cause, before the service file changes and with the recovery
+point in place.
+
+The reason is the hub probe. A started service counts as ready as soon as
+its process runs (`Type=simple`), so the readiness wait of 12 s does not
+cover a migration that runs inside the service. After the services start,
+setup gives the hub 30 s to answer through its relay, and an open that finds
+the database busy gives up after one busy timeout of 5 s. Migration 009
+builds an index over `events`. On a copy of a hub with 2.9 million events
+that took 3 min 41 s, so a migration inside a starting service outlasts both
+limits. Setup migrates only a database whose recorded schema it can read.
+Any other file is left to the service, as before. With `--no-service`, setup
+starts no service, and the first writer that opens the database applies the
+migrations.
+
 Owned ingestion is stopped before the recovery point, including on a setup
 rerun with unchanged service settings. External writers do not invalidate the
 online snapshot. Setup does not proceed to database opening when backup or
@@ -320,7 +340,8 @@ changes. Backups stay beside the client receipts and remain after uninstall.
 They support selective recovery without replacing later user settings.
 
 Service ownership is checked before stopping a loaded service. Setup saves the
-SQLite recovery point before changing its service file. A failed attempt
+SQLite recovery point and applies the pending migrations before changing its
+service file. A failed attempt
 restores the prior owned service configuration and restarts it under a bounded
 cleanup context. It reports both the original error and any recovery failure.
 This does not restore an older database or executable.

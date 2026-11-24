@@ -2,7 +2,9 @@ package setup
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -351,6 +353,196 @@ func TestSetupRemovesAbandonedRecoveryStaging(t *testing.T) {
 	}
 	if points := recoveryPoints(t, o.Clients.State); len(points) != 1 {
 		t.Fatalf("recovery points = %v", points)
+	}
+}
+
+func rewindToSchema8(t *testing.T, database string) {
+	t.Helper()
+	hub, err := store.Open(context.Background(), database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hub.Close()
+	for _, q := range []string{
+		`DROP INDEX events_source_parser_version`,
+		`ALTER TABLE sources DROP COLUMN workspace_path`,
+		`ALTER TABLE sources ADD COLUMN file_identity TEXT`,
+		`ALTER TABLE purged_sources DROP COLUMN workspace_path`,
+		`DELETE FROM schema_migrations WHERE version = 9`,
+	} {
+		if _, err := hub.Writer().Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func components(report Report) []string {
+	out := make([]string, 0, len(report.Results))
+	for _, r := range report.Results {
+		out = append(out, r.Component)
+	}
+	return out
+}
+
+func serviceOptionsWithDatabase(t *testing.T) Options {
+	t.Helper()
+	o := engineOptions(t)
+	o.NoService = false
+	o.NoAgents = true
+	o.Database = filepath.Join(o.Clients.State, "hub.db")
+	o.LoadedService = func(context.Context, []string) error { return errors.New("not loaded") }
+	if err := os.MkdirAll(o.Clients.State, 0700); err != nil {
+		t.Fatal(err)
+	}
+	return o
+}
+
+func TestSetupMigratesTheDatabaseBeforeItStartsTheService(t *testing.T) {
+	o := serviceOptionsWithDatabase(t)
+	rewindToSchema8(t, o.Database)
+	want, err := store.SchemaVersion()
+	if err != nil || want < 9 {
+		t.Fatalf("schema of this build = %d, %v; want 9 or later", want, err)
+	}
+	var schemaWhenCommandRan []bool
+	o.RunService = func(ctx context.Context, _ []string) error {
+		current, err := store.SchemaCurrent(ctx, o.Database)
+		if err != nil {
+			t.Errorf("a service command ran against a database that cannot be read: %v", err)
+		}
+		schemaWhenCommandRan = append(schemaWhenCommandRan, current)
+		return nil
+	}
+	var progress []string
+	o.Progress = func(line string) { progress = append(progress, line) }
+
+	report, err := Run(context.Background(), o)
+	if err != nil || !report.Complete() {
+		t.Fatalf("setup = %+v %v", report, err)
+	}
+	if got := components(report); !slices.Equal(got, []string{"backup", "schema", "service", "memory"}) {
+		t.Fatalf("results of the first run = %s; want backup, schema, service, memory", strings.Join(got, ", "))
+	}
+	if r := report.Results[0]; r.Status != "saved" || !r.Changed {
+		t.Fatalf("backup = %+v", r)
+	}
+	if r := report.Results[1]; r.Status != "updated" || !r.Changed || r.Detail != fmt.Sprintf("database schema 8 is now %d", want) {
+		t.Fatalf("schema = %+v", r)
+	}
+	if !slices.ContainsFunc(progress, func(line string) bool {
+		return strings.HasPrefix(line, "migrating the database from schema 8 to ")
+	}) {
+		t.Fatalf("progress = %q", progress)
+	}
+	point, err := sql.Open("sqlite3", report.Results[0].Detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var held int
+	if err := point.QueryRow(`SELECT max(version) FROM schema_migrations`).Scan(&held); err != nil || held != 8 {
+		t.Fatalf("the recovery point holds schema %d, %v; want the schema before the migration", held, err)
+	}
+	if err := point.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err = Run(context.Background(), o)
+	if err != nil || !report.Complete() {
+		t.Fatalf("second setup = %+v %v", report, err)
+	}
+	if got := components(report); !slices.Equal(got, []string{"backup", "service", "memory"}) {
+		t.Fatalf("results of the second run = %s; want backup, service, memory", strings.Join(got, ", "))
+	}
+	if r := report.Results[0]; r.Status != "not needed" || r.Changed {
+		t.Fatalf("backup of the second run = %+v", r)
+	}
+	if len(schemaWhenCommandRan) == 0 {
+		t.Fatal("no service command ran")
+	}
+	for i, current := range schemaWhenCommandRan {
+		if !current {
+			t.Fatalf("service command %d ran before the database had the schema of this build", i)
+		}
+	}
+}
+
+func TestSetupStopsBeforeTheServiceWhenTheMigrationFails(t *testing.T) {
+	o := serviceOptionsWithDatabase(t)
+	rewindToSchema8(t, o.Database)
+	blocker, err := sql.Open("sqlite3", o.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := blocker.Exec(`CREATE TABLE events_source_parser_version (x)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := blocker.Close(); err != nil {
+		t.Fatal(err)
+	}
+	service, err := ServicePlan("linux", o.Clients.Home, o.Clients.State, o.Clients.Binary, o.ServiceArgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commands := 0
+	o.RunService = func(context.Context, []string) error { commands++; return nil }
+
+	report, err := Run(context.Background(), o)
+	if err != nil || report.Complete() {
+		t.Fatalf("a failed migration did not stop setup: %+v %v", report, err)
+	}
+	got := components(report)
+	if len(got) != 3 || got[0] != "backup" || report.Results[0].Status != "saved" ||
+		got[1] != "schema" || report.Results[1].Status != "failed" ||
+		!strings.Contains(report.Results[1].Detail, "database migration failed: ") {
+		t.Fatalf("results = %+v", report.Results)
+	}
+	if commands != 0 {
+		t.Fatalf("%d service commands ran after a failed migration", commands)
+	}
+	if _, err := os.Stat(service.Path); !os.IsNotExist(err) {
+		t.Fatalf("the service file changed after a failed migration: %v", err)
+	}
+	current, err := store.SchemaCurrent(context.Background(), o.Database)
+	if err != nil || current {
+		t.Fatalf("database schema current = %v, %v after a failed migration", current, err)
+	}
+	if points := recoveryPoints(t, o.Clients.State); len(points) != 1 {
+		t.Fatalf("recovery points = %v; want the point that was saved before the attempt", points)
+	}
+}
+
+func TestSetupLeavesADatabaseWithoutASchemaToTheService(t *testing.T) {
+	o := serviceOptionsWithDatabase(t)
+	foreign, err := sql.Open("sqlite3", o.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{`PRAGMA journal_mode = WAL`, `CREATE TABLE other (x)`} {
+		if _, err := foreign.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := foreign.Close(); err != nil {
+		t.Fatal(err)
+	}
+	o.RunService = func(context.Context, []string) error { return nil }
+	report, err := Run(context.Background(), o)
+	if err != nil || !report.Complete() {
+		t.Fatalf("setup = %+v %v", report, err)
+	}
+	if got := components(report); !slices.Equal(got, []string{"backup", "service", "memory"}) {
+		t.Fatalf("results = %s; want backup, service, memory", strings.Join(got, ", "))
+	}
+	after, err := sql.Open("sqlite3", o.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer after.Close()
+	for table, want := range map[string]int{"other": 1, "schema_migrations": 0} {
+		var found int
+		if err := after.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name = ?`, table).Scan(&found); err != nil || found != want {
+			t.Fatalf("table %s in the database after setup = %d, %v; want %d", table, found, err, want)
+		}
 	}
 }
 

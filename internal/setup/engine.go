@@ -479,6 +479,44 @@ func recoveryPoint(ctx context.Context, o Options) (Result, error) {
 	return result, nil
 }
 
+func migrateDatabase(ctx context.Context, o Options) (Result, error) {
+	from, found := appliedSchemaVersion(ctx, o.Database)
+	if !found {
+		return Result{}, nil
+	}
+	want, err := store.SchemaVersion()
+	if err != nil {
+		return Result{}, err
+	}
+	if from == want {
+		return Result{}, nil
+	}
+	o.progress(fmt.Sprintf("migrating the database from schema %d to %d…", from, want))
+	hub, err := store.Open(ctx, o.Database)
+	if err != nil {
+		return Result{Component: "schema", Status: "failed", Detail: "database migration failed: " + err.Error()}, err
+	}
+	defer hub.Close()
+	return Result{Component: "schema", Status: "updated", Changed: true,
+		Detail: fmt.Sprintf("database schema %d is now %d", from, want)}, nil
+}
+
+func appliedSchemaVersion(ctx context.Context, database string) (int, bool) {
+	if database == "" {
+		return 0, false
+	}
+	ro, err := store.OpenReadOnly(database)
+	if err != nil {
+		return 0, false
+	}
+	defer ro.Close()
+	version, found, err := ro.AppliedSchemaVersion(ctx)
+	if err != nil {
+		return 0, false
+	}
+	return version, found
+}
+
 func recoveryProgress(o Options) func(done, total int64) {
 	lastDecile := 0
 	return func(done, total int64) {

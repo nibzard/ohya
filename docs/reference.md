@@ -922,6 +922,9 @@ Before local setup restarts ingestion or opens an existing database whose
 schema is older or newer than this build, it saves an owner-only SQLite
 recovery copy under `STATE/setup/backups/recovery-*/hub.db`. When the schema
 already matches, setup reports `backup: not needed` and makes no copy.
+After the copy, setup applies the pending migrations before it starts the
+memory service and reports `schema: updated`. With `--no-service`, the first
+command that opens the database with a writer applies them.
 The copy includes committed WAL data. Setup stops if it cannot make the copy.
 Setup keeps the two newest recovery copies; uninstall preserves them. A database copy is not
 a complete backup of device state and checkpoints. Stop all writers and
