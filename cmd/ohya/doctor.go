@@ -40,7 +40,7 @@ var doctorSpec = commandSpec{
 	description: "Checks state outside the read-only sql tool's reach: the database schema against this build's migrations, stored parser output versions this build's rederive refuses, the FTS5 integrity of events_fts with --deep, stopped sources in the local watch state (ADR 0004), the device identity, and — when the state directory holds a pairing credential — that the saved hub address is present and readable. A state directory with an owned ohya serve service also reports whether the hub identity exists. A user unit that starts this binary as the hub (ohya serve) has its ExecStart checked against this build's serve flags and its running process checked for a replaced executable: a unit this build cannot start, or a service still running a binary that was replaced on disk, is an error. " +
 		"On a paired device, doctor also dials the hub through the tailcat transport and reports whether it answers, the path type (direct or relay), the relay region, the round-trip time, and the compatibility of sync protocol versions; a value the transport library does not report is printed as unknown, and the hub address itself never appears.\n" +
 		"Doctor opens the database read-only: it never migrates, repairs, or re-derives, and prints no transcript content or secrets.\n" +
-		"The --deep check copies the database into memory, so it takes time and memory in proportion to the database size.\n" +
+		"The --deep check copies the database to a temporary file under TMPDIR. It needs free disk a little more than the database size, and it takes time in proportion to the database size.\n" +
 		"Every finding carries a severity and a one-line remedy. Exit codes: 0 when no finding is an error, 1 otherwise; warnings do not fail. A joined device checks its own state with --state ~/.ohya/join.",
 	examples: []string{"ohya doctor", "ohya doctor --state ~/.ohya/join"},
 }
@@ -93,7 +93,7 @@ func runDoctorCommandWith(args []string, stdout, stderr io.Writer, rt doctorRunt
 		"state `directory` to inspect: device identity, pairing credential, source checkpoints; defaults to the database directory")
 	maxRecordBytes := c.fs.Int64("max-record-bytes", claudecode.DefaultMaxRecordBytes,
 		"record size `bound` the stop check parses with; pass the bound ingestion last ran with (docs/adr/0004)")
-	deep := c.fs.Bool("deep", false, "also verify events_fts against the events table; copies the database into memory")
+	deep := c.fs.Bool("deep", false, "also verify events_fts against the events table; copies the database to a temporary file under TMPDIR")
 	asJSON := c.fs.Bool("json", false, "print one JSON object instead of the text findings (docs/adr/0005)")
 	if err := c.parse(args, stdout); err != nil {
 		return err
@@ -227,7 +227,12 @@ func runDoctor(ctx context.Context, o doctorOptions) ([]finding, *doctorTranspor
 		defer hub.Close()
 		findings = append(findings, checkSchema(ctx, hub, o.dbPath, binSchema)...)
 		findings = append(findings, checkParserVersions(ctx, hub)...)
-		findings = append(findings, checkFTSIndex(ctx, hub, o.deep)...)
+		if o.deep {
+			findings = append(findings, checkFTSIndex(ctx, o.dbPath, hub.FTSIndexConsistent)...)
+		} else {
+			findings = append(findings, finding{Check: "fts_index", Severity: sevOK,
+				Detail: "events_fts integrity-check skipped; run ohya doctor --deep to verify it"})
+		}
 	}
 	if o.remote {
 		findings = append(findings, checkUploadCheckpoints(o.stateDir)...)
@@ -311,15 +316,30 @@ func checkParserVersions(ctx context.Context, hub *store.DB) []finding {
 	return []finding{{Check: "parser_versions", Severity: sevOK, Detail: detail}}
 }
 
-func checkFTSIndex(ctx context.Context, hub *store.DB, deep bool) []finding {
-	if !deep {
-		return []finding{{Check: "fts_index", Severity: sevOK,
-			Detail: "events_fts integrity-check skipped; run ohya doctor --deep to verify it"}}
-	}
-	if err := hub.FTSIndexConsistent(ctx); err != nil {
+func checkFTSIndex(ctx context.Context, database string, check func(context.Context) error) []finding {
+	const couldNotRun = "deep check could not run"
+	const retry = "then run ohya doctor --deep again"
+	space, err := setup.MeasureCopySpace(database, os.TempDir())
+	if err != nil {
 		return []finding{{Check: "fts_index", Severity: sevError,
-			Detail: fmt.Sprintf("events_fts failed the FTS5 integrity-check: %v", err),
-			Remedy: "restore the database from a backup; ohya rederive rebuilds events_fts after a parser upgrade"}}
+			Detail: fmt.Sprintf("%s: it cannot measure the free space under %s: %v", couldNotRun, os.TempDir(), err),
+			Remedy: "check the --db path and the TMPDIR directory, " + retry}}
+	}
+	if space.Free < space.Required {
+		return []finding{{Check: "fts_index", Severity: sevError,
+			Detail: fmt.Sprintf("deep check did not run: it needs about %s free under %s and %s is free",
+				setup.FormatBytes(int64(space.Required)), os.TempDir(), setup.FormatBytes(int64(space.Free))),
+			Remedy: "free disk space, or set TMPDIR to a filesystem with more room, " + retry}}
+	}
+	if err := check(ctx); err != nil {
+		if errors.Is(err, store.ErrFTSIndexInconsistent) {
+			return []finding{{Check: "fts_index", Severity: sevError,
+				Detail: fmt.Sprintf("events_fts failed the FTS5 integrity-check: %v", err),
+				Remedy: "restore the database from a backup; ohya rederive rebuilds events_fts after a parser upgrade"}}
+		}
+		return []finding{{Check: "fts_index", Severity: sevError,
+			Detail: fmt.Sprintf("%s: %v", couldNotRun, err),
+			Remedy: "read the error above; the check copies the database under " + os.TempDir() + ", so check the free space there, " + retry}}
 	}
 	return []finding{{Check: "fts_index", Severity: sevOK,
 		Detail: "events_fts passes the FTS5 integrity-check"}}
