@@ -62,6 +62,21 @@ func TestQueryRedactsSecretShapedValues(t *testing.T) {
 	}
 }
 
+func TestQueryLeavesOrdinaryIdentifiersAlone(t *testing.T) {
+	hub, readers := openSeededHub(t)
+	const identifier = "task-add-device-revocation-regression-tests"
+	if _, err := hub.Writer().Exec(
+		`INSERT INTO events(id,session_id,source_id,source_offset,time_ms,kind,role,text,raw_json)
+		 VALUES(3,'claude:dev1:sess-1','src-1',100,3000,'message','user',` + quoteSQL(identifier) + `,'{}')`); err != nil {
+		t.Fatal(err)
+	}
+	e := NewEngine(readers, hub.Writer(), EngineOptions{WriterID: "dev1"})
+	r := mustQuery(t, e, `SELECT text FROM events WHERE id = 3`)
+	if got, _ := r.Rows[0][0].(string); got != identifier || r.Redactions != 0 {
+		t.Fatalf("identifier came back as %q with %d redactions; want the identifier and 0", got, r.Redactions)
+	}
+}
+
 func TestQueryRedactionServesThroughTheMcpTool(t *testing.T) {
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 	hub, readers := openSeededHub(t)

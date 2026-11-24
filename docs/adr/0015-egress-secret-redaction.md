@@ -102,3 +102,51 @@ round-trip test carries a non-zero count to pin the decode/encode path.
 - **Denying queries that match secrets in SQLite**: the match must happen
   on decoded text, after it leaves SQLite; inside SQLite it would need a
   UDF and re-implement the table in SQL.
+
+## Amendment (2026-11-24): left boundary on prefix patterns
+
+The six token patterns now require a boundary before the prefix: the start
+of the text, or a character that is not a letter, a digit, a hyphen, or an
+underscore (`(^|[^A-Za-z0-9_-])`). Go `regexp` has no lookbehind, so each
+pattern keeps that character in the output. `private-key-block` and
+`env-assignment` are unchanged.
+
+Problem. Each token pattern matched its prefix inside other strings.
+`SELECT 'task-add-device-revocation-regression-tests' AS x` returned
+`ta[redacted:openai-api-key]`. A `sql` result was wrong, and the counts of
+`ohya secrets scan` were too high. The scan of the live hub on 2026-11-24
+shows the size of the defect. The rows were counted by shape. No value was
+read.
+
+| Pattern | Hits before | Inside another string | Hits after |
+|---|---|---|---|
+| `openai-api-key` | 4,714 | 4,243 | 471 |
+| `google-api-key` | 92 | 64 | 28 |
+| `aws-access-key-id` | 237 | 31 | 206 |
+| `github-token` | 46 | 15 | 31 |
+| `slack-token` | 28 | 2 | 26 |
+
+The column "hits after" comes from a mirror of the new table over the same
+events. The six patterns drop from 5,223 hits to 868.
+
+Of the 4,243 hits of `openai-api-key` inside another string, 1,479 are in
+lowercase runs, names such as `task-…` and `disk-…`. The other 2,764 are in
+long mixed-case runs. Almost all of those are in Codex transcripts: 2,658
+events against 7 in Claude Code. The hits of the other patterns sit between
+`+`, `/`, `"`, and `=` characters. That is the shape of identifiers and
+encoded data, not the shape of a key in use. A key is sent as one token
+after a separator.
+
+Consequences:
+
+- A key that is glued to a letter, a digit, a hyphen, or an underscore is
+  no longer redacted.
+- An identifier that starts with a key prefix at a boundary is still
+  redacted, for example `sk-1234-add-login-flow`. That over-redaction is
+  accepted, as before.
+- A result no longer changes inside encoded data. Before this change, the
+  part of such data from `sk-` on became a marker.
+- The scan counts of the six token patterns are lower. A count from an
+  older build is not comparable with a count from this change on.
+- A stored event is not changed. To remove a secret from the hub, purge the
+  session (`docs/reference.md`, "Secret scan").
