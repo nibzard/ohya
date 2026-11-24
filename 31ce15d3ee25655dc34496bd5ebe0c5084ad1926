@@ -1,0 +1,20 @@
+# Design: setup applies pending migrations
+
+## Problem
+With a migration inside a starting service, setup continues while the migration runs. On a hub the hub service then opens the database behind that migration: its open gives up after one busy timeout of 5 s, and the relay probe of setup allows 30 s. Migration 009 builds an index over `events` and takes minutes on a large hub, so the upgrade would report a failed hub.
+
+## Approach
+After the recovery point and before it changes a service file, setup opens the database once with the writer when the recorded schema is behind the schema of the build. `store.Open` applies the migrations. Setup reports `schema: updated` or `schema: failed` with the cause. The step uses the existing status `updated`, which the CLI and the macOS app already show as a success, so no renderer changed.
+
+## Key Trade-offs
+- The migration has no time limit in setup. Ingestion is stopped for the copy and the migration: about 15 minutes on a 17 GiB hub.
+- A new `ohya mcp` process that starts during the migration still fails with `database is locked`. A longer wait of `store.Open` is an open decision of the owner (NOTES.md, TestHubSetupTwoStepFlow).
+- Setup migrates only a database whose recorded schema it can read. A file without an ohya schema, or not in WAL mode, is left to the service as before, because `store.Open` on such a file could change it in ways that setup does not own.
+
+## Alternatives Considered
+- A longer readiness wait or a longer hub probe: hides the cause and keeps the two service processes in the race. Rejected.
+- Stop the hub service for the migration too: makes the hub unavailable for minutes; devices already retry with backoff. Not needed, readers are not blocked by a writer in WAL mode.
+- `Type=exec` or a health socket for the units: a larger change of the service templates for all platforms. Deferred.
+
+## References
+- ADR 0008, "Recovery points"; docs/release-operations.md, "Recovery point cost"; NOTES.md, "Schema 9 upgrade path".
