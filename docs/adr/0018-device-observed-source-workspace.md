@@ -81,8 +81,9 @@ the device side:
   pass. It lists `store.SourcesWithoutWorkspace`, looks each source up, and
   calls `store.SetSourceWorkspace`. It retries a source without a result only
   in a pass that inserted events of that source.
-- A joined device sends the frame after the registration acknowledgment and
-  before the first batch of the source.
+- A joined device sends the frame when the hub confirms the source, and
+  always before the next batch: after the registration acknowledgment of a
+  new source, or after the cursor probe of a source that the hub knows.
 
 ## Consequences
 

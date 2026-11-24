@@ -89,7 +89,7 @@ jobs:
           if-no-files-found: error
   macos-app:
     needs: [native, resolve]
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -98,20 +98,23 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: candidate-darwin-arm64
-          path: native/arm64
+          path: ${{ runner.temp }}/native/arm64
       - uses: actions/download-artifact@v8
         with:
           name: candidate-darwin-amd64
-          path: native/amd64
+          path: ${{ runner.temp }}/native/amd64
       - name: Build the universal app disk image
         env:
           CANDIDATE_VERSION: ${{ inputs.version }}
         run: |
+          native="$RUNNER_TEMP/native"
           for arch in arm64 amd64; do
-            tar -xzf "native/$arch/ohya_${CANDIDATE_VERSION}_darwin_${arch}.tar.gz" -C "native/$arch" ohya
+            tar -xzf "$native/$arch/ohya_${CANDIDATE_VERSION}_darwin_${arch}.tar.gz" -C "$native/$arch" ohya
           done
+          test -z "$(git status --porcelain)"
           macos/OhyaMenuBar/scripts/package-app.sh --version "$CANDIDATE_VERSION" \
-            --ohya-arm64 native/arm64/ohya --ohya-amd64 native/amd64/ohya --out dist
+            --ohya-arm64 "$native/arm64/ohya" --ohya-amd64 "$native/amd64/ohya" --out dist
+          grep -qx 'dirty=false' dist/candidate.macos-app.txt
       - name: Verify the disk image contents
         env:
           CANDIDATE_VERSION: ${{ inputs.version }}

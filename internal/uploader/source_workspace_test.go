@@ -33,11 +33,41 @@ func TestSourceWorkspacePrecedesTheFirstBatch(t *testing.T) {
 	old.kick()
 	appendFile(t, a, line(sessA, "two"))
 	f.mustSync()
-	if got, want := old.markers(), "VRFBBWVRBB"; got != want {
-		t.Fatalf("frames after a reconnect = %s; want %s, with no second workspace frame", got, want)
+	if got, want := old.markers(), "VRFBBWVBB"; got != want {
+		t.Fatalf("frames after a reconnect = %s; want %s: the hub knows the source, so it gets no registration and no second workspace frame", got, want)
 	}
 	if lookups != 1 {
 		t.Fatalf("lookups = %d, want 1: a source the hub stored is not looked up again in this process", lookups)
+	}
+}
+
+func TestSourceWorkspaceFollowsTheProbeOfAKnownSource(t *testing.T) {
+	found := false
+	f := newFixture(t, Options{SourceWorkspace: func(string) (string, bool) {
+		return "/work/agy", found
+	}})
+	old := serveOldHub(t, hubsync.CapSourceWorkspace)
+	f.dialer.point(old.ln.Addr().String())
+	a := filepath.Join(f.dir, "a.jsonl")
+	writeFile(t, a, line(sessA, "one"))
+
+	f.mustSync()
+	if got := old.markers(); strings.Contains(got, "F") {
+		t.Fatalf("frames = %s; the index has no workspace for the source yet", got)
+	}
+
+	found = true
+	old.kick()
+	appendFile(t, a, line(sessA, "two"))
+	f.mustSync()
+	if got, want := old.markers(), "VRBBWVBFB"; got != want {
+		t.Fatalf("frames = %s; want %s: the workspace follows the probe of the source that the hub knows, and comes before the batch", got, want)
+	}
+
+	appendFile(t, a, line(sessA, "three"))
+	f.mustSync()
+	if got, want := old.markers(), "VRBBWVBFBB"; got != want {
+		t.Fatalf("frames = %s; want %s: a source that the hub stored gets no second frame", got, want)
 	}
 }
 
@@ -131,8 +161,8 @@ func TestSourceWorkspaceRefusalDoesNotBlockTheSource(t *testing.T) {
 	old.kick()
 	appendFile(t, a, line(sessA, "two"))
 	f.mustSync()
-	if got, want := old.markers(), "VRFBBWVRFBB"; got != want {
-		t.Fatalf("frames after a reconnect = %s; want %s: the frame is sent again", got, want)
+	if got, want := old.markers(), "VRFBBWVBFB"; got != want {
+		t.Fatalf("frames after a reconnect = %s; want %s: the frame is sent again, after the probe of the source that the hub knows", got, want)
 	}
 	if n := strings.Count(f.log.String(), "did not store the working directory"); n != 2 {
 		t.Fatalf("refusals reported = %d, want 2, one for each connection:\n%s", n, f.log)

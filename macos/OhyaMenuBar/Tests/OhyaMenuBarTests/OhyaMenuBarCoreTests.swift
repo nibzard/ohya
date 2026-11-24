@@ -187,4 +187,92 @@ final class OhyaMenuBarCoreTests: XCTestCase {
         XCTAssertEqual(DisplayFormat.shortID("0123456789abcdef"), "01234567")
         XCTAssertEqual(DisplayFormat.agentDisplayName("claude-code"), "Claude Code")
     }
+
+    func testRunnerErrorCopyableTextIncludesContext() {
+        let notFound = OhyaRunnerError.binaryNotFound(["/Users/dev/.local/bin/ohya", "/opt/homebrew/bin/ohya"])
+        XCTAssertTrue(notFound.copyableText.contains("/Users/dev/.local/bin/ohya"))
+        XCTAssertTrue(notFound.copyableText.contains("Install ohya"))
+
+        let failed = OhyaRunnerError.commandFailed(
+            code: "db_locked",
+            message: "database is locked",
+            hint: "Check running ohya processes.",
+            exitCode: 1
+        )
+        XCTAssertEqual(failed.copyableText, "[db_locked, exit 1] database is locked\nCheck running ohya processes.")
+
+        let timedOut = OhyaRunnerError.timedOut(command: ["status", "--json"], seconds: 10)
+        XCTAssertEqual(timedOut.copyableText, "ohya status --json timed out after 10s.")
+    }
+
+    func testCopyFormatterFormatsFindingsLogsSetupAndStatus() throws {
+        let finding = StatusFinding(
+            code: "sources_stopped",
+            severity: "warn",
+            evidence: "1 source stopped",
+            hint: "Run ohya doctor."
+        )
+        XCTAssertEqual(CopyFormatter.finding(finding), "[warn] sources_stopped: 1 source stopped\nRun ohya doctor.")
+
+        let setupJSON = """
+        {"results":[{"component":"service","status":"running","detail":""},{"component":"codex","status":"failed","detail":"skill not owned"}]}
+        """
+        let setupReport = try decoder.decode(SetupReport.self, from: Data(setupJSON.utf8))
+        XCTAssertEqual(
+            CopyFormatter.setupReport(setupReport),
+            "Setup incomplete\n- service: running\n- codex: failed — skill not owned"
+        )
+
+        let logEntry = LogEntry(
+            timeMS: 1763740000000,
+            instanceID: "abc12345def67890",
+            component: "ingest",
+            level: "error",
+            eventCode: "source_stopped",
+            outcome: "malformed_line"
+        )
+        XCTAssertEqual(
+            CopyFormatter.logs([logEntry]),
+            "2025-11-21T15:46:40Z ERROR ingest source_stopped (malformed_line) [abc12345]"
+        )
+
+        let doctorJSON = """
+        {"schema_version":1,"command":"ohya doctor","data":{"findings":[{"check":"db_schema","severity":"ok","detail":"schema 8","remedy":""},{"check":"stopped_sources","severity":"error","detail":"1 stopped source","remedy":"ohya doctor --max-record-bytes"}]},"error":null}
+        """
+        let doctor = try XCTUnwrap(decoder.decode(JSONEnvelope<DoctorData>.self, from: Data(doctorJSON.utf8)).data)
+        XCTAssertEqual(doctor.findings.count, 2)
+        XCTAssertEqual(doctor.findings[1].check, "stopped_sources")
+        XCTAssertEqual(doctor.findings[1].remedy, "ohya doctor --max-record-bytes")
+
+        let summary = StatusSummary(
+            iconState: .degraded,
+            topologyLabel: "Local",
+            isHub: false,
+            isRemote: false,
+            totalBacklogBytes: 2048,
+            stoppedSources: 1,
+            activeSources: 4,
+            warnings: [finding],
+            isPaused: false
+        )
+        let text = CopyFormatter.statusSummary(
+            version: VersionData(version: "v0.6.2", schema: 8),
+            binaryPath: "/Users/dev/.local/bin/ohya",
+            setupNeeded: false,
+            summary: summary,
+            status: nil,
+            doctor: doctor,
+            lastError: nil,
+            updateError: nil,
+            actionError: "service stop failed"
+        )
+        XCTAssertTrue(text.contains("ohya v0.6.2 (schema 8)"))
+        XCTAssertTrue(text.contains("Status: Local · Attention"))
+        XCTAssertTrue(text.contains("Binary: /Users/dev/.local/bin/ohya"))
+        XCTAssertTrue(text.contains("Action error: service stop failed"))
+        XCTAssertTrue(text.contains("[warn] sources_stopped: 1 source stopped"))
+        XCTAssertTrue(text.contains("[error] stopped_sources: 1 stopped source"))
+        XCTAssertTrue(text.contains("Remedy: ohya doctor --max-record-bytes"))
+        XCTAssertFalse(text.contains("db_schema"))
+    }
 }

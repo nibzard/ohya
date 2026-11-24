@@ -62,6 +62,7 @@ struct DevicesView: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
         .ohyaGlassControl(cornerRadius: 10)
@@ -90,9 +91,17 @@ struct DevicesView: View {
         }
 
         if let err = model.devicesError {
-            Text(err)
-                .font(.caption)
-                .foregroundStyle(.orange)
+            HStack(alignment: .top, spacing: 6) {
+                Text(err)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                Spacer(minLength: 4)
+                CopyFeedbackButton("Copy") {
+                    model.copyText(err)
+                }
+            }
         }
 
         if model.isLoadingDevices && model.devicesData == nil {
@@ -170,6 +179,7 @@ struct DevicesView: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
             }
+            .textSelection(.enabled)
             Spacer()
             if device.state == "paired" {
                 Button("Revoke") {
@@ -182,6 +192,11 @@ struct DevicesView: View {
             }
         }
         .padding(.vertical, 6)
+        .contextMenu {
+            Button("Copy Device ID") {
+                model.copyText(device.id, notice: "Device ID copied")
+            }
+        }
     }
 
     private func row(_ label: String, value: String) -> some View {

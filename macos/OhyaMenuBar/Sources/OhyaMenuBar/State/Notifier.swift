@@ -14,8 +14,12 @@ final class Notifier {
     func requestAuthorizationIfNeeded() async -> Bool {
         guard canUseUserNotifications else { return false }
         let center = UNUserNotificationCenter.current()
-        let settings = await center.notificationSettings()
-        switch settings.authorizationStatus {
+        let status = await withCheckedContinuation { (continuation: CheckedContinuation<UNAuthorizationStatus, Never>) in
+            center.getNotificationSettings { settings in
+                continuation.resume(returning: settings.authorizationStatus)
+            }
+        }
+        switch status {
         case .authorized, .provisional:
             return true
         case .notDetermined:

@@ -22,6 +22,7 @@ struct SettingsView: View {
                     Text(error)
                         .font(.caption)
                         .foregroundStyle(.red)
+                        .textSelection(.enabled)
                 }
 
                 Toggle("Notify on stopped sources or unexpected downtime", isOn: $model.notificationsEnabled)
@@ -43,6 +44,7 @@ struct SettingsView: View {
                         Text("\(version.version) (schema \(version.schema))")
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
                     }
                 }
             }

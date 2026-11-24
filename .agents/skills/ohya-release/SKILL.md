@@ -108,6 +108,12 @@ approval.
 - `gh run watch` piped through `tail` reports success on failure.
 - With no stable release, GitHub redirects `/releases/latest` to `/releases`,
   and `install.sh` reports a misleading version-format error.
+- GitHub can drop a queued macOS arm64 job ("not acquired by Runner ...
+  after multiple attempts"). Rerun only the failed jobs on the same run with
+  `gh run rerun <run-id> --failed`; the commit and artifacts stay the same.
+- Another process can clear the gitignored `dist/` during a long release.
+  Download the qualified artifacts outside the repository (for example
+  `/tmp/ohya-release-vX.Y.Z`), verify checksums there, and publish from it.
 - CI macOS runners are headless. They lack `resource coalition` and
   `jetsam coalition` blocks in `launchctl print`, so runner-green proves less
   than a real GUI Mac.

@@ -23,10 +23,17 @@ struct FirstRunView: View {
                 }
 
                 if let error = model.setupError {
-                    Label(error, systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(alignment: .top, spacing: 6) {
+                        Label(error, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                        Spacer(minLength: 4)
+                        CopyFeedbackButton("Copy") {
+                            model.copyText(error)
+                        }
+                    }
                 }
 
                 if model.isRunningSetup {
@@ -155,11 +162,18 @@ struct FirstRunView: View {
                     }
                 }
             }
+            .textSelection(.enabled)
             if !report.isComplete {
-                Button("Run Setup Again") {
-                    Task { await model.runSetup(joinCode: nil) }
+                HStack {
+                    Button("Run Setup Again") {
+                        Task { await model.runSetup(joinCode: nil) }
+                    }
+                    .disabled(model.isRunningSetup)
+                    Spacer()
+                    CopyFeedbackButton("Copy Report") {
+                        model.copyText(CopyFormatter.setupReport(report))
+                    }
                 }
-                .disabled(model.isRunningSetup)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

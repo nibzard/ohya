@@ -16,11 +16,18 @@ struct RecallView: View {
                 .padding(.horizontal, 14)
 
             if let error = model.recallError {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 14)
+                HStack(alignment: .top, spacing: 6) {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                    Spacer(minLength: 4)
+                    CopyFeedbackButton("Copy") {
+                        model.copyText(error)
+                    }
+                }
+                .padding(.horizontal, 14)
             }
 
             ScrollView {
@@ -274,6 +281,7 @@ struct RecallView: View {
                 }
             }
         }
+        .textSelection(.enabled)
         .padding(.top, 2)
     }
 

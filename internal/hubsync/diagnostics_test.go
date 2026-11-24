@@ -234,22 +234,40 @@ func TestDiagnosticsEndpointSuccessUnsupportedRateLimitAndConcurrency(t *testing
 		})
 		defer cleanup()
 
+		var releaseOnce sync.Once
+		releaseAll := func() { releaseOnce.Do(func() { close(release) }) }
 		var wg sync.WaitGroup
+		defer func() {
+			releaseAll()
+			wg.Wait()
+		}()
+
+		errCh := make(chan error, 2)
 		for range 2 {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
 				conn, err := net.Dial("tcp", addr)
 				if err != nil {
+					errCh <- err
 					return
 				}
 				c := NewRemoteClient(conn)
 				defer c.Close()
-				_, _ = c.Diagnostics(context.Background())
+				if _, err := c.Diagnostics(context.Background()); err != nil {
+					errCh <- err
+				}
 			}()
 		}
-		<-entered
-		<-entered
+		for range 2 {
+			select {
+			case <-entered:
+			case err := <-errCh:
+				t.Fatalf("concurrent diagnostics request failed before entering: %v", err)
+			case <-time.After(10 * time.Second):
+				t.Fatal("timed out waiting for concurrent diagnostics requests to enter")
+			}
+		}
 
 		conn3, err := net.Dial("tcp", addr)
 		if err != nil {
@@ -258,7 +276,7 @@ func TestDiagnosticsEndpointSuccessUnsupportedRateLimitAndConcurrency(t *testing
 		c3 := NewRemoteClient(conn3)
 		defer c3.Close()
 		_, err = c3.Diagnostics(context.Background())
-		close(release)
+		releaseAll()
 		wg.Wait()
 
 		var perr *Error

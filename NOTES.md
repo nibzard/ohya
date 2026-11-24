@@ -2632,7 +2632,7 @@ How to use this file:
     at the bundled copy, then delete the key.
 
 - Upgrade of a pre-Tailcat joined Mac to v0.6.1 (2026-11-23, observed on
-  this MacBook). Fixed on main: launchd bootout race (d8c875e), shared
+  this MacBook). Shipped in v0.7.0: launchd bootout race (d8c875e), shared
   skill directories through symlinks (0a98606), the dead-end hint for a
   paired device without `hub-address.json` (302069f), one counted line
   for sources already missing at startup (aa2c5ed), and backlog progress
@@ -2642,10 +2642,11 @@ How to use this file:
     invitation. A code pasted into a shell or chat stays live until its
     TTL. Consuming or revoking it changes the authorization state machine,
     so it needs a TLA+ update first.
-  - `ohya join CODE` takes the code only as an argument, which puts it into
-    shell history and `ps`; README lists `ohya join CODE` while INSTALL.md
-    says never to put the code in an argument. The hidden-code path exists
-    only in the installer (`--join`) and setup (`--join-code-env`).
+  - `ohya join CODE` puts a pasted code into shell history and `ps`.
+    `ohya join --join-code-env NAME`, the installer `--join` prompt, and the
+    menu bar app's Join a hub field keep it out (verified 2026-11-23:
+    `--join-code-env` exists on join since v0.6.1). README still lists
+    `ohya join CODE` as the join command.
   - A joined device needs two commands after an upgrade (`ohya join CODE`
     in the foreground, then `ohya setup`), and running both leaves two
     join processes on one state directory until setup replaces the

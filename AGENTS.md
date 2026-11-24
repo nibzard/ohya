@@ -16,7 +16,7 @@
 - Treat session content and SQL as untrusted; protect secrets, authenticate peers, and bound read-only queries.
 - Model-check changes to sync/authorization state machines with TLA+/TLC; record assumptions and invariants.
 - Add regression, parser, SQLite, and failure-path tests appropriate to each change; fuzz risky parsers.
-- Before finishing, run `gofmt` on changed Go files and `make check` (tests and vet use the required `sqlite_fts5` build tag).
+- Before finishing, run `gofmt` on changed Go files and `make check` (tests and vet use the required `sqlite_fts5` build tag); for Swift-only changes under `macos/OhyaMenuBar/`, run `xcrun swift test`, `xcrun swift build`, and `go run ./cmd/commentcheck` instead.
 - Update relevant docs, schema/migration notes, and ADRs alongside behavioral or architectural changes.
 - Avoid embeddings, mandatory AI classification, extra infrastructure, or new dependencies without evidence.
 - Preserve unrelated edits; never fabricate test results; report changes, checks run, and remaining risks.

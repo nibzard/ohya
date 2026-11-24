@@ -46,6 +46,7 @@ struct PurgeReviewSheet: View {
                             Divider().opacity(0.3)
                         }
                     }
+                    .textSelection(.enabled)
                 }
 
                 HStack {

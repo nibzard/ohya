@@ -1,7 +1,8 @@
 # Release and recovery operations
 
-The newest release is v0.6.1, published on 2026-11-23 from commit `bf50937`
-after the full candidate matrix passed; its macOS archives are unsigned. Apple signing and
+The newest release is v0.7.0, published on 2026-11-23 from commit `60eb331`
+after the full candidate matrix passed; its macOS archives are unsigned and
+its menu bar app DMG is ad-hoc signed. Apple signing and
 notarization must pass before a signed public release. Generated candidates
 are not qualified releases merely because packaging succeeds.
 
@@ -277,6 +278,18 @@ space before you upgrade. Beyond that:
   host end to end with exit 0, installed all four skills, restarted
   `ohya-serve.service`, and both `ohya doctor` (20/20 `ok`) and `ohya status`
   exited 0.
+- v0.7.0 (commit `60eb331`, dirty=false) was published on 2026-11-23 after
+  all eight candidate jobs passed (run 45265203682) and local `make check` +
+  `make tla` passed with zero errors. It is the first release with the menu
+  bar app: `Ohya_v0.7.0_macos.dmg` holds a universal app built with the
+  macOS 26.5 SDK (minimum macOS 15) and a universal `ohya` with the same
+  release identity as the archives. Schema stays 8. The released installer
+  upgraded a joined MacBook with exit 0, and `ohya doctor` reported 15 ok
+  checks. Not done before publication: opening this exact DMG on a clean Mac
+  and testing both first-run choices; earlier builds of the app passed that
+  test on a Mac with ohya installed. GitHub dropped queued macOS arm64 jobs
+  twice for lack of capacity; rerunning only the failed jobs on the same
+  commit recovered the run.
 - v0.6.1 (commit `bf50937`, dirty=false) was published on 2026-11-23 after
   the full hosted matrix passed (run 45180792640) and local `make check` +
   `make tla` passed with zero errors. v0.6.1 stays on schema 8 and changes

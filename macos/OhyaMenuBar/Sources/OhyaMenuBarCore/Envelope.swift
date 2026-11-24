@@ -256,7 +256,17 @@ public struct DoctorData: Decodable, Sendable, Equatable {
 }
 
 public struct DoctorFinding: Decodable, Sendable, Equatable {
+    public let check: String?
     public let severity: String
+    public let detail: String?
+    public let remedy: String?
+
+    public init(check: String? = nil, severity: String, detail: String? = nil, remedy: String? = nil) {
+        self.check = check
+        self.severity = severity
+        self.detail = detail
+        self.remedy = remedy
+    }
 }
 
 public struct DoctorTransport: Decodable, Sendable, Equatable {

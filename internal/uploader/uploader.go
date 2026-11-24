@@ -22,6 +22,8 @@ import (
 
 const DefaultRequestTimeout = 60 * time.Second
 
+const DefaultKeepaliveInterval = 3 * time.Minute
+
 const (
 	DefaultReconnectBase = time.Second
 	DefaultReconnectCap  = time.Minute
@@ -47,16 +49,17 @@ func compressionDisabled() bool {
 type Dialer func(ctx context.Context) (net.Conn, error)
 
 type Options struct {
-	Agent           string
-	RequestTimeout  time.Duration
-	Reconnect       hubsync.RetryPolicy
-	Interval        time.Duration
-	Log             io.Writer
-	Resolve         workspace.Resolver
-	SourceWorkspace func(sourcePath string) (string, bool)
-	Observer        observe.Observer
-	Events          observe.EventSink
-	Excluded        func(path string) bool
+	Agent             string
+	RequestTimeout    time.Duration
+	KeepaliveInterval time.Duration
+	Reconnect         hubsync.RetryPolicy
+	Interval          time.Duration
+	Log               io.Writer
+	Resolve           workspace.Resolver
+	SourceWorkspace   func(sourcePath string) (string, bool)
+	Observer          observe.Observer
+	Events            observe.EventSink
+	Excluded          func(path string) bool
 }
 
 type Stats struct {
@@ -128,6 +131,9 @@ func New(w *watch.Watcher, cred device.Credential, dial Dialer, opts Options) (*
 	}
 	if opts.RequestTimeout <= 0 {
 		opts.RequestTimeout = DefaultRequestTimeout
+	}
+	if opts.KeepaliveInterval == 0 {
+		opts.KeepaliveInterval = DefaultKeepaliveInterval
 	}
 	if opts.Reconnect.Base <= 0 {
 		opts.Reconnect.Base = DefaultReconnectBase
@@ -458,6 +464,18 @@ func (u *Uploader) syncSource(ctx context.Context, o watch.Outcome, stats *Stats
 }
 
 func (u *Uploader) prepare(ctx context.Context, o watch.Outcome) (int64, bool, error) {
+	if o.Cursor > 0 && o.RenamedFrom == "" {
+		hub, perr, err := u.probe(ctx, o.SourceID, o.Cursor)
+		if err != nil {
+			return 0, false, err
+		}
+		if perr == nil {
+			return u.resume(ctx, o, hub)
+		}
+		if perr.Code != hubsync.CodeUnknownSource {
+			return 0, false, u.sourceRefused(o, perr)
+		}
+	}
 	_, perr, err := u.exchange(ctx, func(w io.Writer) error {
 		return hubsync.WriteRegistration(w, hubsync.Registration{
 			DeviceID: u.credential.DeviceID, SourceID: o.SourceID, Agent: u.opts.Agent, Path: o.Path})
@@ -477,6 +495,14 @@ func (u *Uploader) prepare(ctx context.Context, o watch.Outcome) (int64, bool, e
 	}
 	if perr != nil {
 		return 0, false, u.sourceRefused(o, perr)
+	}
+	cursor, ok := u.reconcile(o, hub)
+	return cursor, ok, nil
+}
+
+func (u *Uploader) resume(ctx context.Context, o watch.Outcome, hub int64) (int64, bool, error) {
+	if err := u.sendSourceWorkspace(ctx, o); err != nil {
+		return 0, false, err
 	}
 	cursor, ok := u.reconcile(o, hub)
 	return cursor, ok, nil
@@ -663,8 +689,10 @@ func (u *Uploader) buildBatch(o watch.Outcome) (hubsync.Batch, *localStop, error
 }
 
 type conn struct {
-	c  net.Conn
-	br *bufio.Reader
+	c        net.Conn
+	br       *bufio.Reader
+	bw       *bufio.Writer
+	lastUsed time.Time
 }
 
 func (c *conn) alive() bool {
@@ -675,12 +703,38 @@ func (c *conn) alive() bool {
 	return errors.As(err, &ne) && ne.Timeout()
 }
 
+func (u *Uploader) needsKeepalive() bool {
+	return u.conn != nil && !u.capsOff && u.opts.KeepaliveInterval > 0 && time.Since(u.conn.lastUsed) >= u.opts.KeepaliveInterval
+}
+
+func (u *Uploader) keepalive(ctx context.Context) error {
+	_, perr, err := u.negotiate(ctx, u.offer())
+	if err != nil {
+		return err
+	}
+	if perr != nil {
+		u.Close()
+		if perr.Code != hubsync.CodeMalformed && perr.Code != hubsync.CodeVersion {
+			u.protocolFailure(perr)
+			return connError(perr)
+		}
+		u.capsOff = true
+		return ErrDisconnected
+	}
+	return nil
+}
+
 func (u *Uploader) connect(ctx context.Context) error {
 	if u.conn != nil {
-		if u.conn.alive() {
+		if !u.conn.alive() {
+			u.Close()
+		} else if !u.needsKeepalive() {
 			return nil
+		} else if err := u.keepalive(ctx); err == nil {
+			return nil
+		} else if !errors.Is(err, ErrDisconnected) {
+			return err
 		}
-		u.Close()
 	}
 	for {
 		if err := u.dialHello(ctx); err != nil {
@@ -689,14 +743,10 @@ func (u *Uploader) connect(ctx context.Context) error {
 		if u.capsOff {
 			return nil
 		}
-		offer := hubsync.CapZstdBatches | hubsync.CapSourceWorkspace
-		switch {
-		case compressionDisabled() && u.opts.SourceWorkspace == nil:
+		if compressionDisabled() && u.opts.SourceWorkspace == nil {
 			return nil
-		case compressionDisabled():
-			offer = hubsync.CapSourceWorkspace
 		}
-		caps, perr, err := u.negotiate(ctx, offer)
+		caps, perr, err := u.negotiate(ctx, u.offer())
 		if err != nil {
 			return err
 		}
@@ -714,6 +764,13 @@ func (u *Uploader) connect(ctx context.Context) error {
 	}
 }
 
+func (u *Uploader) offer() hubsync.Capabilities {
+	if compressionDisabled() {
+		return hubsync.CapSourceWorkspace
+	}
+	return hubsync.CapZstdBatches | hubsync.CapSourceWorkspace
+}
+
 func (u *Uploader) dialHello(ctx context.Context) error {
 	dctx, cancel := context.WithTimeout(ctx, u.opts.RequestTimeout)
 	defer cancel()
@@ -728,7 +785,12 @@ func (u *Uploader) dialHello(ctx context.Context) error {
 		u.observer.Add("upload_failures", 1, "connect")
 		return u.disconnected(ctx, err)
 	}
-	u.conn = &conn{c: c, br: bufio.NewReaderSize(c, 64<<10)}
+	u.conn = &conn{
+		c:        c,
+		br:       bufio.NewReaderSize(c, 64<<10),
+		bw:       bufio.NewWriterSize(c, 64<<10),
+		lastUsed: time.Now(),
+	}
 	u.hubCaps = 0
 	u.ready = map[string]bool{}
 	u.workspacesDue = true
@@ -766,6 +828,7 @@ func (u *Uploader) negotiate(ctx context.Context, offer hubsync.Capabilities) (h
 		u.observer.Add("upload_failures", 1, "read")
 		return 0, nil, u.disconnected(ctx, err)
 	}
+	c.lastUsed = time.Now()
 	return caps, perr, nil
 }
 
@@ -815,10 +878,10 @@ func (u *Uploader) roundTrip(ctx context.Context, write func(io.Writer) error, r
 	stop := context.AfterFunc(ctx, func() { _ = c.c.SetDeadline(time.Unix(1, 0)) })
 	defer stop()
 
-	bw := bufio.NewWriterSize(c.c, 64<<10)
-	err := write(bw)
+	c.bw.Reset(c.c)
+	err := write(c.bw)
 	if err == nil {
-		err = bw.Flush()
+		err = c.bw.Flush()
 	}
 	if err != nil {
 		_ = c.c.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
@@ -837,6 +900,7 @@ func (u *Uploader) roundTrip(ctx context.Context, write func(io.Writer) error, r
 		u.observer.Add("upload_failures", 1, "read")
 		return nil, u.disconnected(ctx, err)
 	}
+	c.lastUsed = time.Now()
 	if perr != nil {
 		switch perr.Code {
 		case hubsync.CodeAuth, hubsync.CodeVersion, hubsync.CodeMalformed, hubsync.CodeTooLarge, hubsync.CodeBusy:

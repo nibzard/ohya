@@ -284,16 +284,19 @@ The uploader (`internal/uploader`) implements the `SendBatch` and
   then sends no `caps` offer at all, the same behavior an old device shows.
 - When the joining process has a workspace lookup
   (`uploader.Options.SourceWorkspace`), the uploader looks the workspace of
-  a source up once per connection, after the hub acknowledged the
-  registration and before the cursor probe. It sends one `sourceWorkspace`
-  frame only when the hub's `welcome` offered `CapSourceWorkspace`. The
-  hub's acknowledgment counts for the rest of the process, so a source is
-  told once. A source without a workspace is looked up again on each new
-  connection and never on each pass. A hub error for the frame is reported
-  once per connection and never blocks the batches of the source. A
-  transport error ends the pass like any other frame does. A hub that
-  offers no `CapSourceWorkspace` gets no frame, and the uploader reports
-  that once per process.
+  a source up once per connection, when the hub confirms the source. A
+  source that the hub does not know is registered first, and the lookup
+  follows the acknowledged registration. A source that the hub knows gets a
+  cursor probe and no second registration, and the lookup follows that
+  probe. In both cases the frame comes before the next batch. It sends one
+  `sourceWorkspace` frame only when the hub's `welcome` offered
+  `CapSourceWorkspace`. The hub's acknowledgment counts for the rest of the
+  process, so a source is told once. A source without a workspace is looked
+  up again on each new connection and never on each pass. A hub error for
+  the frame is reported once per connection and never blocks the batches of
+  the source. A transport error ends the pass like any other frame does. A
+  hub that offers no `CapSourceWorkspace` gets no frame, and the uploader
+  reports that once per process.
 - Each exchange has a 60 s timeout. Failed passes reconnect with backoff from
   1 s doubling up to 1 min. `Run` stops only on `ErrUnauthorized` (the
   credential was refused, for example after revocation), `ErrIncompatible`
