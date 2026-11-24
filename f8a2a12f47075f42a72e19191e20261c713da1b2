@@ -1,0 +1,46 @@
+# Design: Hold one read snapshot for a stepped copy
+
+## Problem
+store.Backup (the recovery point before a migration) and
+store.FTSIndexConsistent (ohya doctor --deep) copied the hub database
+with sqlite3_backup_step in a loop and held no read transaction on the
+source between steps. SQLite opens a read transaction on the source
+only when a step finds none open, and closes it at the end of that
+step. A commit from another connection between two steps then makes
+the next step restart the copy at page 1 (sqlite3BackupRestart through
+pager_reset). On a hub that is written continuously, the copy can run
+until its deadline without finishing.
+
+## Approach
+copySnapshot in internal/store/backup.go begins a deferred transaction
+on the source connection and runs one real read, so that SQLite opens
+its read snapshot before the first step. It holds the transaction until
+the last step ends, then rolls back. Both copy loops call it.
+
+## Key Trade-offs
+- The hub always runs in WAL mode, so a held read transaction does not
+  block writers. The WAL grows by the writes made during the copy. In
+  rollback-journal mode the copy would block writers; verifyReader
+  refuses that mode.
+- go-sqlite3 v1.14.53 has no SessionResetter. When the rollback fails,
+  copySnapshot returns driver.ErrBadConn, so database/sql discards the
+  connection instead of returning it to the pool with an open
+  transaction.
+- The copy has no rate limit. It yields 1 ms after each 128 pages.
+
+## Evidence
+- Two regression tests hold a second connection that commits during
+  the copy. Before the fix: 1,377 steps and then the 30 s deadline
+  (Backup); 41,658 commits and then the deadline (FTSIndexConsistent).
+  After the fix: 0.23 s and 0.64 s.
+- Live hub, 2026-11-24: ohya doctor --deep passed in 24 min 45 s with
+  this commit while the hub services ran.
+- The recovery copy of 8.5 h on 2026-11-16 fits many restarts and one
+  last pass after the other writers stopped. That is an inference; no
+  log shows the restarts.
+
+## References
+- /notes/2026-11-24-stepped-copy-restarts.md (measurements, sources)
+- /notes/2026-11-16-vm-hang-ohya-workspaces-migration.md
+- docs/adr/0008-integrated-setup.md, "Recovery points"
+- SQLite backup documentation, sqlite3-binding.c lines 10066-10075
