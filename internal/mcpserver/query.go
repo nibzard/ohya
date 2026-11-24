@@ -131,9 +131,6 @@ func NewEngine(readers, writer *sql.DB, o EngineOptions) *Engine {
 func (e *Engine) Options() EngineOptions { return e.options }
 
 func (e *Engine) Query(ctx context.Context, query string) (Result, error) {
-	if !e.traced {
-		return e.query(ctx, query, nil)
-	}
 	origin := OriginFromContext(ctx)
 	trace := newQueryTrace()
 	start := time.Now()
@@ -142,10 +139,12 @@ func (e *Engine) Query(ctx context.Context, query string) (Result, error) {
 	trace.phases.TotalMS = elapsedMS(time.Since(start))
 	trace.mu.Unlock()
 	trace.finish()
-	if e.options.Usage != nil {
-		e.options.Usage.Record(trace.usageRecord(e, origin, result, err, nil))
+	if e.traced {
+		if e.options.Usage != nil {
+			e.options.Usage.Record(trace.usageRecord(e, origin, result, err, nil))
+		}
+		e.reportQuery(trace, result, err)
 	}
-	e.reportQuery(trace, result, err)
 	return result, err
 }
 
@@ -165,9 +164,7 @@ func (e *Engine) query(ctx context.Context, query string, trace *queryTrace) (Re
 		e.observer.Add("sql_busy_rejections", 1)
 		return Result{}, ErrBusy
 	}
-	if trace != nil {
-		trace.phases.AdmissionWaitMS = elapsedMS(time.Since(waitStart))
-	}
+	trace.phases.AdmissionWaitMS = elapsedMS(time.Since(waitStart))
 	e.enterQuery()
 	defer e.leaveQuery()
 	ctx, cancel := context.WithTimeout(ctx, e.options.Deadline)
@@ -179,13 +176,8 @@ func (e *Engine) query(ctx context.Context, query string, trace *queryTrace) (Re
 		return Result{}, fmt.Errorf("acquire reader: %w", err)
 	}
 	defer conn.Close()
-	if trace != nil {
-		trace.phases.ReaderWaitMS = elapsedMS(time.Since(readerStart))
-	}
-	authorize := e.authorize
-	if trace != nil {
-		authorize = trace.authorizer(e.authorize)
-	}
+	trace.phases.ReaderWaitMS = elapsedMS(time.Since(readerStart))
+	authorize := trace.authorizer(e.authorize)
 	if err := conn.Raw(func(c any) error {
 		sqliteConn, ok := c.(*sqlite3.SQLiteConn)
 		if !ok {
@@ -204,11 +196,9 @@ func (e *Engine) query(ctx context.Context, query string, trace *queryTrace) (Re
 
 	execStart := time.Now()
 	rows, err := conn.QueryContext(ctx, query)
-	if trace != nil {
-		trace.phases.FirstRowMS = elapsedMS(time.Since(execStart))
-	}
+	trace.phases.FirstRowMS = elapsedMS(time.Since(execStart))
 	if err != nil {
-		return Result{}, queryError(err, e.options.Deadline)
+		return Result{}, queryError(err, e.options.Deadline, trace)
 	}
 	defer rows.Close()
 
@@ -244,18 +234,14 @@ func (e *Engine) query(ctx context.Context, query string, trace *queryTrace) (Re
 		bytes += len(encoded)
 		result.Rows = append(result.Rows, row)
 	}
-	if trace != nil {
-		trace.phases.IterationMS = elapsedMS(time.Since(iterStart))
-		trace.resultBytes = int64(bytes)
-	}
+	trace.phases.IterationMS = elapsedMS(time.Since(iterStart))
+	trace.resultBytes = int64(bytes)
 	if err := rows.Err(); err != nil {
-		return Result{}, queryError(err, e.options.Deadline)
+		return Result{}, queryError(err, e.options.Deadline, trace)
 	}
 	result.RowCount = len(result.Rows)
 	result.Redactions = redactCells(result.Rows)
-	if trace != nil {
-		trace.rows = int64(result.RowCount)
-	}
+	trace.rows = int64(result.RowCount)
 	return result, nil
 }
 
@@ -332,9 +318,29 @@ func jsonValue(v any) any {
 	return v
 }
 
-func queryError(err error, deadline time.Duration) error {
+const hintLike = "this query used LIKE and read events; LIKE on a large table reads every row: " +
+	"filter session_id with = and search text with events_fts MATCH"
+
+const hintCount = "this query used count() and read events; a count reads every matching row: " +
+	"for the total read sum(event_count) FROM sessions, and for one session read sessions.event_count"
+
+const hintNarrow = "narrow the query: filter on an indexed column (session_id =, or a time_ms range " +
+	"inside one session) and select ids in a covering subquery before you read text or raw_json"
+
+func (t *queryTrace) deadlineHint() string {
+	switch {
+	case t.usedFunction("like") && t.readTable("events"):
+		return hintLike
+	case t.usedFunction("count") && t.readTable("events") && !t.readTable("events_fts"):
+		return hintCount
+	default:
+		return hintNarrow
+	}
+}
+
+func queryError(err error, deadline time.Duration, trace *queryTrace) error {
 	if errors.Is(err, context.DeadlineExceeded) {
-		return fmt.Errorf("%w (%s per call): %w", ErrDeadline, deadline, err)
+		return fmt.Errorf("%w (%s per call): %w; %s", ErrDeadline, deadline, err, trace.deadlineHint())
 	}
 	var serr sqlite3.Error
 	if errors.As(err, &serr) && serr.Code == sqlite3.ErrAuth {

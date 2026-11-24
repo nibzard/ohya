@@ -39,6 +39,7 @@ type queryTrace struct {
 	mu          sync.Mutex
 	closed      bool
 	reads       map[string]bool
+	tables      map[string]bool
 	functions   map[string]bool
 	fts         bool
 	phases      observe.UsagePhases
@@ -49,6 +50,7 @@ type queryTrace struct {
 func newQueryTrace() *queryTrace {
 	return &queryTrace{
 		reads:     map[string]bool{},
+		tables:    map[string]bool{},
 		functions: map[string]bool{},
 	}
 }
@@ -57,6 +59,7 @@ func (t *queryTrace) collect(op int, arg1, arg2 string) {
 	switch op {
 	case sqlite3.SQLITE_READ:
 		table := strings.ToLower(arg1)
+		t.tables[table] = true
 		if table == "events_fts" {
 			t.fts = true
 		}
@@ -88,6 +91,18 @@ func (t *queryTrace) authorizer(next func(int, string, string, string) int) func
 }
 
 func elapsedMS(d time.Duration) float64 { return float64(d.Nanoseconds()) / 1e6 }
+
+func (t *queryTrace) usedFunction(name string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.functions[name]
+}
+
+func (t *queryTrace) readTable(table string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.tables[table]
+}
 
 func (t *queryTrace) usageRecord(engine *Engine, origin Origin, result Result, err error, annotateOps *observe.AnnotateOps) observe.UsageRecord {
 	t.mu.Lock()
