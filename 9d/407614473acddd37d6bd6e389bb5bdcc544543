@@ -1,0 +1,27 @@
+# Context
+
+## Background
+The description of the `sql` tool has a cap of 8,000 bytes
+(`TestServerServesSQLTool`). The writer ID occurs two times in the
+prompt. The test used the writer ID "dev1". So the test measured 56
+bytes less than a release build, which has a 32-character device ID.
+
+## Why This Way
+- The recipes line said "filter session_id with =, never LIKE". It did
+  not say how to search text. "search text with MATCH" closes that gap
+  with 24 bytes and no new sentence. The prompt measures 7,907 bytes
+  with a 32-character writer ID, 93 bytes below the cap.
+- `ohya sql` passed a general remedy for `query_deadline`. The engine
+  error now names the cause (254d0f4). A second remedy would repeat or
+  contradict it. So the CLI passes an empty remedy and shows the engine
+  hint.
+
+## Gotchas
+- The cap test uses a 32-character writer ID. Do not shorten it. A
+  shorter ID hides bytes that a release build sends.
+- The performance note in docs/performance.md states only what was
+  measured: the engine without sinks. The other columns of that table
+  were not measured again.
+
+## Related
+- 254d0f4 (the hints in the engine)
