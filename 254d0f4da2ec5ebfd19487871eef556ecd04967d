@@ -1,0 +1,48 @@
+# Design: A deadline error names its cause
+
+## Problem
+A `sql` call that exceeded its deadline returned "execution deadline
+exceeded (5s per call): interrupted". On the live hub, 22 of 163
+recorded calls exceeded the deadline (2026-11-24). The authorizer
+callback sees each function and each column read. But the engine kept
+that record only when a usage sink, an observer, or an event sink was
+configured.
+
+## Approach
+The engine builds the query trace for each call. `e.traced` now gates
+only the usage record and the usage report. On a deadline,
+`queryError` appends one hint. The trace selects it:
+1. LIKE is used and `events` is read.
+2. count() is used, `events` is read, and `events_fts` is not read.
+3. Otherwise, the query is a wide read.
+
+## Key Trade-offs
+- The trace cannot see which column a LIKE tests. The authorizer
+  reports a function call without its arguments. So each hint states
+  only what the trace shows.
+- The LIKE rule comes first. A query can use LIKE and count()
+  together, as in `count(*) ... WHERE text LIKE ...`. LIKE is the more
+  expensive cause, and it has the more specific remedy.
+- The trace gained a set of table names. For `count(*)` the authorizer
+  reports one READ of `events` with an empty column name. The `reads`
+  map of the usage record skips that entry. Without the new set, the
+  count hint could not fire.
+- The general hint says "a time_ms range inside one session", not "a
+  time_ms range". Both indexes on `events` lead with `session_id`
+  (schema 8). So a time range alone is not indexed.
+- Cost, measured on an engine without sinks (300 iterations for each
+  benchmark): 12 to 44 more allocations and at most 2.1 KiB more for
+  each query. The differences in time were within noise.
+- The message stays below 1 KiB, the frame limit of the hub
+  (`maxMessageLen`). `ohya usage` matches "execution deadline exceeded"
+  in the first 512 characters of a result.
+
+## References
+- Tests: `TestQueryDeadlineErrorNamesItsCause` (three cases) and
+  `TestUsageRecordsLikeFunction`.
+- In the tests, the endless CTE must feed the LIKE pattern
+  (`'%' || c.n || '%'`). SQLite evaluates a term that depends only on
+  the outer table before it enters the inner loop. So a constant
+  pattern with the CTE ends at once.
+- docs/performance.md, "In-process benchmark deltas", update of
+  2026-11-24.
