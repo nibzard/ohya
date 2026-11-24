@@ -1,0 +1,3 @@
+Records the release that the hub already runs: v0.7.1 was published at 22:40:31Z on 2026-11-24 and the hub was upgraded with the released installer in the same session, before this commit. The record says what was verified (candidate run 45499259636, checksums, the installer upgrade) and what was not (the DMG was not opened on a Mac).
+
+The commit changes documents only. Two full checks of its parent 5fcd091 each failed one timing test under load; both are recorded here, and the keepalive test gets wider margins in the next commit on main. Reason for a separate commit on main instead of a line in the release notes: the notes of the repository are the durable record, and the release page cannot name the flaky checks usefully.
