@@ -39,7 +39,10 @@ Upgrade policy:
 1. Add a new `NNN_name.sql` with the next version number. Never edit, rename, renumber or delete a
    file that any database may already have applied.
 2. Each pending migration and its `schema_migrations` row commit in one transaction. A failed migration
-   rolls back completely; the next run resumes at the first pending version.
+   rolls back completely; the next run resumes at the first pending version. The transaction takes the
+   write lock first and reads `schema_migrations` again. Two processes that open the same database at
+   the same time, such as the memory service and the hub service, then apply each migration once: the
+   second process waits for the first and finds the migration recorded.
 3. Every open verifies applied history. A checksum mismatch, a migration missing from the binary, or a
    new file numbered below the newest applied version is an error, never a silent upgrade.
 4. Migration file names match `NNN_name.sql` with a unique three-digit version. `store.SchemaVersion`
@@ -68,10 +71,12 @@ it open while readers run: a read-only connection cannot create the database or 
 write-ahead log.
 
 The busy timeout is 5 s, so a lock held by another process, such as a backup tool, fails a statement
-only after that wait. Driver parameters with a leading underscore apply to every pooled connection;
-`mode=ro` reaches SQLite when it opens the file. `store.OpenReadOnly` serves `ohya doctor`: it opens
-an existing hub database in WAL mode with one read-only pool, applies no migrations, and has no
-writer.
+only after that wait. SQLite answers a few conflicts between two processes that open the same
+database at once without that wait. `store.Open` then repeats its attempt until one busy timeout has
+passed since the attempt that first failed. Driver parameters with a leading underscore apply to every
+pooled connection; `mode=ro` reaches SQLite when it opens the file. `store.OpenReadOnly` serves
+`ohya doctor`: it opens an existing hub database in WAL mode with one read-only pool, applies no
+migrations, and has no writer.
 
 | Table | Meaning |
 |---|---|

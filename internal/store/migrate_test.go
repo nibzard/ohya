@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 )
 
 func mapFS(files map[string]string) fstest.MapFS {
@@ -204,6 +205,86 @@ func TestMigrateFailedMigrationRollsBackCompletely(t *testing.T) {
 	}
 	if got := appliedVersions(t, db); len(got) != 3 {
 		t.Fatalf("applied versions = %v, want [1 2 3]", got)
+	}
+}
+
+func TestMigrateSkipsAMigrationThatAnotherConnectionRecorded(t *testing.T) {
+	db := openBareWriter(t)
+	files := map[string]string{
+		"migrations/001_one.sql": "CREATE TABLE a(x);",
+		"migrations/002_two.sql": "CREATE TABLE b(x); INSERT INTO a(x) VALUES (2);",
+	}
+	one := mapFS(map[string]string{"migrations/001_one.sql": files["migrations/001_one.sql"]})
+	if err := migrate(context.Background(), db, one); err != nil {
+		t.Fatal(err)
+	}
+	two, err := loadMigrations(mapFS(map[string]string{"migrations/002_two.sql": files["migrations/002_two.sql"]}))
+	if err != nil || len(two) != 1 {
+		t.Fatalf("load 002: %v (%d migrations)", err, len(two))
+	}
+	ctx := context.Background()
+	other, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	if _, err := other.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := other.ExecContext(ctx, two[0].script); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- applyMigration(ctx, db, two[0]) }()
+	select {
+	case err := <-done:
+		t.Fatalf("applyMigration returned %v while the other connection held its migration open", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+	if _, err := other.ExecContext(ctx,
+		`INSERT INTO schema_migrations (version, name, checksum, applied_at_ms) VALUES (?, ?, ?, ?)`,
+		two[0].version, two[0].name, two[0].checksum, time.Now().UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := other.ExecContext(ctx, `COMMIT`); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("applyMigration = %v, want the recorded migration to be skipped", err)
+	}
+	var rows int
+	if err := db.QueryRow(`SELECT count(*) FROM a`).Scan(&rows); err != nil || rows != 1 {
+		t.Fatalf("rows in a = %d, %v; want 1, so the seed of 002 ran once", rows, err)
+	}
+	if got := appliedVersions(t, db); len(got) != 2 || got[0] != 1 || got[1] != 2 {
+		t.Fatalf("applied versions = %v, want [1 2]", got)
+	}
+}
+
+func TestMigrateRejectsAMigrationThatAnotherConnectionRecordedDifferently(t *testing.T) {
+	db := openBareWriter(t)
+	files := map[string]string{
+		"migrations/001_one.sql": "CREATE TABLE a(x);",
+		"migrations/002_two.sql": "CREATE TABLE b(x);",
+	}
+	all, err := loadMigrations(mapFS(files))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := migrate(context.Background(), db, mapFS(map[string]string{"migrations/001_one.sql": files["migrations/001_one.sql"]})); err != nil {
+		t.Fatal(err)
+	}
+	two := all[1]
+	if _, err := db.Exec(`INSERT INTO schema_migrations (version, name, checksum, applied_at_ms) VALUES (?, ?, ?, ?)`,
+		two.version, two.name, "changed", 0); err != nil {
+		t.Fatal(err)
+	}
+	err = applyMigration(context.Background(), db, two)
+	if err == nil || !strings.Contains(err.Error(), "changed after being applied") {
+		t.Fatalf("err = %v, want the changed-after-applied rejection", err)
+	}
+	if tableExists(t, db, "b") {
+		t.Fatal("the migration ran over a recorded version")
 	}
 }
 
