@@ -1,8 +1,9 @@
 # Release and recovery operations
 
-The newest release is v0.7.1, published on 2026-11-24 from commit `08b3538`
-after all eight candidate jobs passed; its macOS archives are unsigned and
-its menu bar app DMG is ad-hoc signed. Apple signing and
+The newest release is v0.8.0, published on 2026-11-25 from commit `915df53`
+after all eight candidate jobs passed, the macOS Intel job on the rerun of the
+same run; its macOS archives are unsigned and its menu bar app DMG is ad-hoc
+signed. Apple signing and
 notarization must pass before a signed public release. Generated candidates
 are not qualified releases merely because packaging succeeds.
 
@@ -164,6 +165,10 @@ one database in pages:
 - Measured with a current build (2026-11-24): a 16.9 GiB hub copied in
   11 min 21 s on the VM above, while a test run loaded the disk (26 to 71
   MiB/s). Ingestion was stopped for that time.
+- Measured during the upgrade to v0.8.0 (2026-11-25) on the same VM: a
+  17.0 GiB recovery point took 11 min 43 s, then migration 009 took 3 min
+  50 s and grew the file by 120 MiB. Ingestion was stopped for 15 min 35 s,
+  and devices could not sync for about 15 min 37 s.
 
 After the copy, setup applies the pending migrations itself, before it
 changes a service file ([ADR 0008](adr/0008-integrated-setup.md), "Recovery
@@ -352,6 +357,23 @@ space before you upgrade. Beyond that:
   checks after 144 s. The macOS arm64 job queued for about eight minutes
   for lack of capacity and then ran; no rerun was needed. Not done: this
   DMG was not opened on a Mac.
+- v0.8.0 (commit `915df53`, dirty=false) was published on 2026-11-25 after
+  all eight candidate jobs passed on run 45709812198 and local `make check` +
+  `make tla` passed with zero errors on the release commit. It is the first
+  release on schema 9. Attempt 1 failed the macOS Intel job in `make check`:
+  `TestLargeFileUploadsInBoundedBatches` reached the 10 s request timeout of
+  its test fixture while other packages loaded the runner (the test ran
+  11.28 s). The rerun of that job on the same commit passed. The test now
+  uses the production request timeout. The released installer upgraded the
+  linux-amd64 hub host from v0.7.1 with exit 0 in 15 min 42 s: `backup:
+  saved`, `schema: updated` from 8 to 9, both services running, `hub:
+  ready`, `memory: ready`, and an `mcp-builds` warning for one `ohya mcp`
+  process of v0.7.0. `ohya doctor` exited 0 in under one second with 20 ok
+  checks and that `mcp_build` warning. The MacBook synced again 45 s after
+  the hub restart. On its first pass the ingest service set the working
+  directory of 68 of 74 Antigravity sessions, and 40 of them have a
+  repository. Not done: `ohya rederive` on the hub for Claude Code parser
+  output version 3, and opening this DMG on a Mac.
 - The installer refuses to replace an executable whose digest matches neither
   its receipt entry nor the previous one ("installed executable has changed;
   preserve it"). A copy installed by hand outside `install.sh` triggers this

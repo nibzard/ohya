@@ -97,7 +97,11 @@ How to use this file:
     The check first read `<state>/observe` only, so a joined device, whose
     MCP servers publish to `<state>/join/observe`, reported nothing. It
     now reads the observe directory of the state directory the doctor
-    examines.
+    examines. With v0.8.0 installed (2026-11-25, 22:45Z), one such
+    process remains: PID 555004, build `60eb331` of v0.7.0. `ohya setup`
+    reported it as an `mcp-builds` warning at the end of the upgrade, and
+    `ohya doctor` reports it as `mcp_build`. `/mcp` in that session
+    renews it.
   - The check compared the build revision only (fixed 2026-11-25). A
     development build with uncommitted changes was not reported when its
     revision was the one the doctor compared with. The check now compares
@@ -3078,6 +3082,8 @@ How to use this file:
   - Operator step, not done: `ohya rederive` on the live hub. It re-parses
     about 839k Claude Code rows (765k on the Linux device, 74k on the
     MacBook) and rebuilds `events_fts` across all agents in one transaction.
+    v0.8.0 is installed on the hub since 2026-11-25, 22:45Z, so the step
+    can run now.
   - Open: a blob with role `system` (tool additions, injected system text; 20
     of 2,477 blobs in the sample) is in no transcript message. That text is
     now in `raw_json` only. The recall bench (plan 003 R5) must show if a
@@ -3115,3 +3121,89 @@ How to use this file:
     repository of the sibling session nearest in time, on the same device and
     in the same directory. This needs a derivation change, a DB.md update,
     and `ohya rederive`.
+
+- v0.8.0 release (2026-11-25, 22:29:02Z; the tag points to `915df53` on
+  `main`, after `make check` with `GOFLAGS=-count=1` and `make tla` passed
+  on that commit): candidate run 45709812198 passed all eight jobs on its
+  second attempt. Attempt 1 failed the macOS Intel job in `make check` (see
+  "Time budgets of tests on loaded runners" below); `gh run rerun 45709812198
+  --failed` reran that job and the jobs that depend on it. Before the tag:
+  four checksums, four `candidate.*.txt` files (revision `915df53`,
+  `dirty=false`, `schema=9`, `parser.claude=3`), and the native library
+  reports were verified, and the downloaded `install.sh` differed from the
+  commit only in the pinned version. Six assets, as for v0.7.1; the
+  published assets were downloaded again and compared byte for byte. The
+  menu bar app has no change since v0.7.1; the branch
+  `menubar-session-tags` was merged after the tag (`6676d10`).
+  - The released installer upgraded the hub from v0.7.1 with exit 0 in
+    15 min 42 s: a 17.0 GB recovery point in 11 min 43 s, migration 009 in
+    3 min 50 s (`schema: updated`, "database schema 8 is now 9"), `backup:
+    saved` under `~/.ohya/setup/backups/recovery-2631208279/`, both
+    services running, `hub: ready`, `memory: ready`. The database grew by
+    120 MiB. `ohya doctor` exited 0 in under one second: 20 ok checks and
+    the `mcp_build` warning. The MacBook synced again 45 s after the hub
+    restart.
+  - Antigravity backfill on the live hub after the first pass of the new
+    ingest service: 74 sessions, 68 with a `cwd`, 40 with a `repo`, and 68
+    of 74 Antigravity sources have a workspace.
+  - Each `--hub` run issues a join code that expires after 15 minutes; the
+    installer output went to a private file, which was deleted after a
+    redacted read. Not done: `ohya rederive` on the hub, and the DMG was
+    not opened on a Mac.
+
+- Time budgets of tests on loaded runners (2026-11-25): two CI runs of this
+  day failed in timing tests.
+  - `TestLargeFileUploadsInBoundedBatches` (`internal/uploader`) failed in
+    candidate run 45709812198, attempt 1, on macos-15-intel: "Sync:
+    uploader: hub connection failed; unacknowledged bytes are sent again
+    after reconnecting: hubsync: read frame: read tcp ...: i/o timeout"
+    after 11.28 s. Cause: the fixture gives each request 10 s, and the
+    test sends two batches of up to 64 MiB to a hub that inserts them into
+    SQLite. The round trip took longer than 10 s while the other packages
+    of `go test ./...` loaded the runner. The same test takes 2 to 5 s
+    here. Reproduced with a throwaway proxy that delays the reply of the
+    hub to a batch by 11 s: with the old budget the test failed at
+    11.03 s with the same text, with the new budget it passed at 24.23 s.
+    Fix: the test uses `DefaultRequestTimeout` (60 s, the production
+    value) and a sync budget of two round trips. Open: 60 s was not
+    measured against a 64 MiB batch on a slow hub.
+  - `TestObserverReportsBusyRejectionAndActiveGauge`
+    (`internal/mcpserver/observer_test.go`) failed in CI run 45619526142 on
+    `8d8b1ef`, in `go test -race -p 2` on Linux: "second query error =
+    <nil>, want ErrBusy" after 5.06 s. The test is unchanged since
+    `996e0fe`, the next run on `main` passed, and it was not reproduced.
+    The loop fails only when the slow query does not hold its only slot
+    during the 5 s of the loop. How that can happen is not known.
+
+- menubar-session-tags (2026-11-25; `b7e31f1` and `fbce579` by the owner,
+  merged in `6676d10` after the v0.8.0 tag, so it is in no release): `ohya
+  status --json` reports `topology.device_id`, the hub reports its device
+  ID in the diagnostics frame, and the menu bar app labels each recalled
+  session as This Mac, Hub, or a device. CI run 45706558153 on the branch
+  passed `xcrun swift test`, `make check`, and `make build` on macOS. The
+  app was not opened on a Mac during the review. Review items, none a
+  blocker:
+  - On a paired device the uploader stores sessions under the device ID of
+    `credential.json`, and `ohya join` keeps that ID when `device.json` was
+    created again. `topology.device_id` reads `device.json`. The two are
+    equal after a normal join. They differ after `device.json` is deleted
+    and created again, which the remedy text of `device.ErrUnusable`, of
+    `ohya doctor`, and of the new finding suggests. In that state `ohya
+    status --json` reports the new ID, the sessions of this Mac are stored
+    under the old one, and the app labels them as another device. No check
+    compares the two files. Possible fix: a doctor check that compares
+    `device.json` with the credential and reports the mismatch, with a
+    remedy that names re-pairing.
+  - `docs/reference.md` says that the output of `ohya status` carries this
+    device's ID. Only `--json` does; the text report has no row for it and
+    none for the device ID of the hub.
+  - The device ID that the hub reports is the identity of `ohya serve`.
+    It equals the identity of `ohya ingest` only when both use one state
+    directory, which `ohya setup --hub` guarantees.
+  - `ohya status` grades an unusable `device.json` as `warn` and `ohya
+    doctor` as `error`. The exit code of status is the same for both.
+  - Swift: the "Hub reachable" row copies the layout of `row(_:value:)`,
+    and the color of the dot is written in two places. VoiceOver reads the
+    name of the symbol of a tag before its text.
+  - The two commit subjects have 57 and 65 characters, and their bodies
+    are not wrapped at 72. The commits were not changed.
