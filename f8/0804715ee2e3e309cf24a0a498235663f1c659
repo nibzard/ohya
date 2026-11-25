@@ -1,0 +1,12 @@
+# Context
+
+## Background
+A Markdown-only follow-up to b1559e9. The research note
+/notes/2026-11-25-timing-tests-on-loaded-runners.md holds the
+method and the sources. The measurement was made with Python's
+sqlite3 in an in-memory database on the hub VM; the Go binary uses
+its own SQLite, so its time can differ.
+
+## Gotchas
+No test reads NOTES.md, and commentcheck reads Go files only, so
+the make check of b1559e9 covers this tree.
