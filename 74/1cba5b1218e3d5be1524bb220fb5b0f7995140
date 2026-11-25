@@ -1,0 +1,35 @@
+# Context
+
+## Background
+The owner read the review of 2026-11-25 and asked to fix every open
+item. One was the store transaction that never waited for the write
+lock. The ingest journal had 1,508 "database is locked" lines in ten
+days, 1,494 of them in one hour.
+
+## Why This Way
+BEGIN IMMEDIATE is the remedy that the SQLite documentation names for
+a busy error in the middle of a transaction, and the registry database
+of this repository already uses it. The alternative, to retry a
+deferred transaction in the caller, would keep the race and add code
+at nine sites. PlanPurge moved to a reader pool in the same change,
+because an immediate transaction would hold the write lock for the
+whole plan.
+
+## Gotchas
+- A deferred transaction that fails at once costs no time. An
+  immediate transaction waits, so a read that shares the single writer
+  connection waits with it. The hub answers remote SQL through its
+  reader pool, so queries stay fast.
+- A canceled context does not end the wait. The driver calls
+  sqlite3_interrupt, but sqliteDefaultBusyCallback of SQLite 3.54.1
+  never reads the interrupt flag. A service that stops while it waits
+  for the lock can take 5 s longer.
+- The time of a test package on this VM swings with the disk load:
+  internal/store took 10 s and 49 s on the same commit. Compare two
+  trees in the same round before a timing difference is called a
+  regression.
+
+## Related
+- ee75894, the document correction that this change replaces in part
+- Research note: /notes/2026-11-24-concurrent-open-migration-race.md
+- internal/registry/registry.go uses the same DSN parameter
