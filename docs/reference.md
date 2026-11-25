@@ -868,6 +868,16 @@ under the retention rules above and never touches a live instance. Uninstall
 preserves memory, credentials, sessions, entries edited after setup, and the
 diagnostic files: `observe/` and the stderr startup logs survive an uninstall.
 
+Setup ends with one more result when a running `ohya mcp` process runs
+another build than the setup binary: `mcp-builds`, a warning. The result
+also appears in `--dry-run`. It does not change the exit code, because
+setup never stops a coding session. Reconnect the MCP server (`/mcp` in
+Claude Code) or start a new session. Setup reads the processes before it
+starts its own memory process, from the observe directory of the state
+that it configures (`<state>/join/observe` for a remote connection). Two
+builds are the same under the rule of the `mcp_build` check of `ohya
+doctor` above.
+
 Pi versions with native MCP use their user MCP settings. Pi 0.84.2 uses an
 owned compatibility extension; other versions without native MCP are reported
 as unsupported until verified. Remote

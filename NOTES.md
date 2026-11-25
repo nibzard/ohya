@@ -109,9 +109,18 @@ How to use this file:
     line of `buildIdentity` that reads the stamp has no test. It is the
     same comparison as `startTelemetry`, which writes the stamp into the
     snapshots.
-    Setup does not report them yet, although docs/installer-plan.md asks
-    for it. A setup result that is not complete would make setup exit
-    nonzero, so that needs its own design.
+  - An untracked file in the root makes each development build of the
+    tree uncommitted. The stray `erl_crash.dump` of 2026-11-22 (Erlang
+    28.4.1 of mise did not start) was moved out of the repository on
+    2026-11-25. That Erlang starts without a crash now.
+    Setup reports them since 2026-11-25, as docs/installer-plan.md asks.
+    The result `mcp-builds` has the status `warning`: it keeps the exit
+    code 0 and names the remedy, because setup never stops a coding
+    session. Setup reads the processes before it starts its own memory
+    process and from the observe directory of the state that it
+    configures. Tests: `TestSetupReportsMCPServersOfAnotherBuild` and
+    `TestSetupPrintsMCPServersOfAnotherBuildAfterARun`. Each of 9
+    mutation checks failed a test.
   - `sessions.repo` is NULL for 2,888 of 7,031 real sessions (41%): 1,071
     Claude Code looper-worktree sessions that started before 2026-11-16
     (paths first observed later, worktrees since deleted), 1,461 Codex

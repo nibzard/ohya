@@ -67,10 +67,12 @@ func stableBinaryPath(actual, invoked string) string {
 }
 
 type setupRuntime struct {
-	home     string
-	getenv   func(string) string
-	unsetenv func(string) error
-	runners  func() (func(context.Context, []string) error, func(context.Context, []string) error)
+	home          string
+	getenv        func(string) string
+	unsetenv      func(string) error
+	runners       func() (func(context.Context, []string) error, func(context.Context, []string) error)
+	buildRevision string
+	buildDirty    bool
 }
 
 func runSetupCommand(args []string, stdout, stderr io.Writer) error {
@@ -256,9 +258,14 @@ func runSetupCommandWith(args []string, stdout, stderr io.Writer, rt setupRuntim
 			printed++
 		}
 	}
+	revision, dirty := buildIdentity(rt.buildRevision, rt.buildDirty)
+	mcpBuilds := setupMCPBuilds(filepath.Join(dataState, "observe"), revision, dirty)
 	report, err := setup.Run(ctx, options)
 	if conflict := setupPathConflict(binary); conflict != nil {
 		report.Results = append(report.Results, *conflict)
+	}
+	if mcpBuilds != nil {
+		report.Results = append(report.Results, *mcpBuilds)
 	}
 	if err == nil && report.Complete() && *hubMode && !*dry {
 		invite, hubErr := finishHubSetup(absState, *ttl)

@@ -349,6 +349,14 @@ This does not restore an older database or executable.
 Setup reports when another ohya executable is selected by the current PATH.
 It keeps all service and client paths absolute and does not adopt that file.
 
+Setup also reports each running `ohya mcp` process that runs another build
+than the setup binary, as `docs/installer-plan.md` asks. The result
+`mcp-builds` is a warning: it keeps the exit code 0 and names the remedy,
+because setup never stops a coding session. Setup reads the observe
+snapshots before it starts its own memory process, so that process is not
+counted. The rule for two builds is the rule of the `mcp_build` check of
+doctor (`docs/reference.md`).
+
 ## Amendment (2026-11-25): a service waits for the write lock
 
 "Recovery points" states that an open which finds the database busy gives

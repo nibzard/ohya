@@ -192,7 +192,8 @@ that time, so plan the upgrade of a large hub for a quiet time.
 After the upgrade, agent sessions that were open keep their `ohya mcp`
 process on the old build until they reconnect the MCP server (`/mcp` in
 Claude Code) or a new session starts. `ohya doctor` reports each such
-process as an `mcp_build` warning.
+process as an `mcp_build` warning. `ohya setup` ends with the same report
+as an `mcp-builds` warning, so the upgrade command itself shows it.
 
 Setup reports the estimated copy size before starting and a progress line on
 stderr at every further 10 percent of the copy. A copy whose average rate
