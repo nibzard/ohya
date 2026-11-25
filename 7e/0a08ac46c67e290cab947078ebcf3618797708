@@ -1,0 +1,42 @@
+# Context
+
+## Background
+Migration 009 builds an index over events: 3 min 41 s on a copy of the
+hub with 2.9 million events. It holds the write lock for that time.
+Before this change, store.Open gave up after one busy timeout (5 s).
+ohya serve and the ingest service then exited, and a new ohya mcp
+process ended before its first tool call.
+
+## Why This Way
+- An up-to-date database needs no write lock to open. Measured: a
+  bounded open under a held BEGIN IMMEDIATE succeeded at once. Only a
+  pending migration, or a WAL recovery conflict between two processes
+  that open at once, waits. So the wait is an option for processes that
+  must survive a migration, not the default. One-shot commands and
+  ohya setup stay bounded, and their error now names the cause.
+- ohya mcp completes its handshake before the open, in a goroutine.
+  Claude Code does not retry the first connection of a stdio server;
+  the user has to reconnect it by hand. A server that answers with
+  "still opening" keeps that session usable after the migration.
+- report runs at most once per busy timeout (atMostEvery), so a log
+  gets one line per 5 s and not one line per 20 ms attempt.
+
+## Gotchas
+- A context cannot shorten one attempt: SQLite runs its busy handler
+  without a cancel. A process that stops during the wait exits up to
+  5 s later. Claude Code stops a stdio server with SIGINT, SIGTERM
+  after 100 ms, then SIGKILL after 400 ms more, so it kills such a
+  process. That is safe: the open holds no transaction, and a
+  migration is atomic. Source: code.claude.com/docs/en/mcp, read
+  2026-11-25.
+- The command tests hold the database with a connection in
+  locking_mode=EXCLUSIVE, which blocks each statement of another
+  connection. Only a close releases that lock; a rollback does not.
+- Mutation checks (ten): each reverted part failed its test: the
+  option flag, the report gate, the wait limit, the context check, the
+  5 s message, atMostEvery, the Opening deadline, the open error
+  exit, and the WaitForLock option of each service.
+
+## Related
+Research note: /notes/2026-11-24-concurrent-open-migration-race.md
+(2026-11-24 and 2026-11-25).
