@@ -245,6 +245,47 @@ func TestIngestBindsBatchToDevice(t *testing.T) {
 	}
 }
 
+func TestIngestRequestLogRecordsStayOutOfFTS(t *testing.T) {
+	hub := ingestHub(t)
+	mustRegister(t, hub, "aaa-reqlog", "/request-log.jsonl")
+	events, perr := parseFixture(t, "request-log.jsonl", "aaa-reqlog")
+	if perr != nil {
+		t.Fatalf("fixture did not parse cleanly: %v", perr)
+	}
+	res := mustIngest(t, hub, Batch{SourceID: "aaa-reqlog", Events: events})
+	if res.Inserted != 14 || res.Cursor != 5671 {
+		t.Fatalf("ingest = {inserted %d, cursor %d}; want {14, 5671}", res.Inserted, res.Cursor)
+	}
+
+	var blobs, withText int
+	if err := hub.Writer().QueryRow(
+		`SELECT count(*), coalesce(sum(text IS NOT NULL AND length(text) > 0), 0)
+		 FROM events WHERE kind = 'api-request-blob'`).Scan(&blobs, &withText); err != nil {
+		t.Fatal(err)
+	}
+	if blobs != 3 || withText != 0 {
+		t.Fatalf("api-request-blob rows = %d with text = %d; want 3 and 0", blobs, withText)
+	}
+
+	if _, err := hub.Writer().Exec(`INSERT INTO events_fts(events_fts) VALUES ('integrity-check')`); err != nil {
+		t.Fatalf("FTS integrity-check failed: %v", err)
+	}
+	tests := []struct {
+		term string
+		want int
+		why  string
+	}{
+		{term: "bravo", want: 1, why: "the tool result is indexed once; its api-request-blob copy is not"},
+		{term: "catalog", want: 1, why: "the tool_use record is indexed once; its api-request-blob copy is not"},
+		{term: "foxtrot", want: 0, why: "the term occurs only in a system api-request-blob"},
+	}
+	for _, tc := range tests {
+		if n := matchCount(t, hub, tc.term); n != tc.want {
+			t.Errorf("MATCH %s = %d, want %d (%s)", tc.term, n, tc.want, tc.why)
+		}
+	}
+}
+
 func TestIngestFixtureMainSession(t *testing.T) {
 	hub := ingestHub(t)
 	mustRegister(t, hub, "aaa-main", "/main-session.jsonl")

@@ -517,6 +517,127 @@ func TestParseRoleAndTimestampEdges(t *testing.T) {
 	}
 }
 
+func TestParseRequestLogRecords(t *testing.T) {
+	const native = "00000000-0000-4000-8000-0000000000c1"
+	const scope = "src-request-log"
+	data := fixture(t, "request-log.jsonl")
+	res, err := Parse(data, 0, Options{SourceScope: scope})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Records) != 14 || res.Cursor != 5671 {
+		t.Fatalf("got %d records, cursor %d; want 14 records, cursor 5671", len(res.Records), res.Cursor)
+	}
+	checkInvariants(t, data, 0, res)
+
+	kinds := []string{
+		"session-owner", "tools-used", "api-request-shape", "api-request",
+		"user", "assistant", "user", "api-request",
+		"api-request-blob", "api-request-blob", "api-request-blob",
+		"file-history-snapshot", "file-history-delta", "pr-link",
+	}
+	for i, r := range res.Records {
+		if r.Kind != kinds[i] {
+			t.Errorf("record %d kind = %q, want %q", i, r.Kind, kinds[i])
+		}
+		wantNative, wantSynthetic := native, false
+		if i == 11 || i == 12 {
+			wantNative, wantSynthetic = SyntheticNativeIDPrefix+scope, true
+		}
+		if r.Native != wantNative || r.Synthetic != wantSynthetic {
+			t.Errorf("record %d native = %q (synthetic %t), want %q (%t)", i, r.Native, r.Synthetic, wantNative, wantSynthetic)
+		}
+	}
+
+	for _, i := range []int{0, 1, 2, 3, 7, 8, 9, 10, 11, 12, 13} {
+		r := res.Records[i]
+		if r.Text != "" || r.ContentForm != "" || r.Role != "" || r.ToolName != "" ||
+			r.MessageID != "" || r.Model != "" || r.Usage != nil {
+			t.Errorf("record %d (%s) derives message fields: %+v", i, r.Kind, r)
+		}
+		if r.Metadata != "{}" {
+			t.Errorf("record %d (%s) metadata = %s, want {}", i, r.Kind, r.Metadata)
+		}
+	}
+	for _, i := range []int{0, 1, 8, 9, 10, 11} {
+		if r := res.Records[i]; r.HasTime || r.TimeMS != 0 {
+			t.Errorf("record %d (%s) time = (%t, %d), want no time", i, r.Kind, r.HasTime, r.TimeMS)
+		}
+	}
+	wantTime := map[int]int64{
+		2: ms(9, 0, 0, 100), 3: ms(9, 0, 0, 200), 7: ms(9, 0, 3, 500),
+		12: ms(9, 0, 4, 0), 13: ms(9, 0, 5, 0),
+	}
+	for i, want := range wantTime {
+		if r := res.Records[i]; !r.HasTime || r.TimeMS != want {
+			t.Errorf("record %d (%s) time = (%t, %d), want %d", i, r.Kind, r.HasTime, r.TimeMS, want)
+		}
+	}
+
+	if r := res.Records[4]; r.Text != "List the fixture sensors." || r.Role != "user" || r.ContentForm != "string" {
+		t.Errorf("prompt record: %+v", r)
+	}
+	tool := res.Records[5]
+	if tool.Text != `Read {"file_path":"/home/dev/fixture-project/catalog.txt"}` || tool.ToolName != "Read" ||
+		tool.MessageID != "msg_fixture_0011" || tool.Model != "fixture-model-v1" || tool.Usage == nil {
+		t.Errorf("tool_use record: %+v", tool)
+	}
+	if r := res.Records[6]; r.Text != "sensor list: alpha bravo charlie" || r.Role != "user" || r.ToolName != "" {
+		t.Errorf("tool result record: %+v", r)
+	}
+}
+
+func TestParseMessageIsReadForMessageRecordsOnly(t *testing.T) {
+	const message = `"message":{"role":"assistant","id":"m1","model":"fixture-model",` +
+		`"content":[{"type":"text","text":"leak"}],"usage":{"input_tokens":5,"output_tokens":1}}`
+	tests := []struct {
+		name string
+		line string
+		kind string
+	}{
+		{
+			name: "request blob",
+			line: `{"type":"api-request-blob","sessionId":"s1","hash":"h1",` + message + `}`,
+			kind: "api-request-blob",
+		},
+		{
+			name: "bookkeeping record",
+			line: `{"type":"cost-state","sessionId":"s1",` + message + `}`,
+			kind: "cost-state",
+		},
+		{
+			name: "unknown type",
+			line: `{"type":"brand-new-message","sessionId":"s1",` + message + `}`,
+			kind: "unknown",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := Parse([]byte(tc.line+"\n"), 0, Options{SourceScope: "s"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := res.Records[0]
+			if r.Kind != tc.kind {
+				t.Fatalf("kind = %q, want %q", r.Kind, tc.kind)
+			}
+			if r.Text != "" || r.ContentForm != "" || r.Role != "" || r.ToolName != "" ||
+				r.MessageID != "" || r.Model != "" || r.Usage != nil {
+				t.Errorf("record derives message fields: %+v", r)
+			}
+			md := metadataOf(t, r)
+			for _, key := range []string{"contentForm", "blocks"} {
+				if _, ok := md[key]; ok {
+					t.Errorf("metadata has %q: %v", key, md)
+				}
+			}
+			if _, observed := md["observedType"]; observed != (tc.kind == "unknown") {
+				t.Errorf("metadata = %v; observedType is present only for an unknown type", md)
+			}
+		})
+	}
+}
+
 func TestParseEmptyInput(t *testing.T) {
 	for _, data := range [][]byte{nil, {}} {
 		res, err := Parse(data, 7, Options{SourceScope: "s"})
@@ -543,7 +664,7 @@ func TestParseBaseOffset(t *testing.T) {
 }
 
 func TestParseIsDeterministic(t *testing.T) {
-	for _, name := range []string{"main-session.jsonl", "subagent-session.jsonl", "incomplete-tail.jsonl", "malformed-line.jsonl"} {
+	for _, name := range []string{"main-session.jsonl", "subagent-session.jsonl", "request-log.jsonl", "incomplete-tail.jsonl", "malformed-line.jsonl"} {
 		data := fixture(t, name)
 		first, err1 := Parse(data, 3, Options{SourceScope: "scope"})
 		second, err2 := Parse(data, 3, Options{SourceScope: "scope"})

@@ -2977,9 +2977,10 @@ How to use this file:
   - Operator step, not done: `ohya rederive` on the live hub. It re-parses
     about 837k Claude Code rows (764,604 on the Linux device, 72,906 on the
     MacBook) and rebuilds `events_fts` in one transaction.
-  - Open: a blob with role `system` (tool additions, injected system text) is
-    in no transcript message. That text is now in `raw_json` only. The recall
-    bench (plan 003 R5) must show if a search needs it.
+  - Open: a blob with role `system` (tool additions, injected system text; 20
+    of 2,477 blobs in the sample) is in no transcript message. That text is
+    now in `raw_json` only. The recall bench (plan 003 R5) must show if a
+    search needs it.
   - `internal/fixgen` generates no request-log records. Benchmark corpora lack
     the record types that make about 20% of the rows of a real 2.1.328 file.
 

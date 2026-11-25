@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -542,6 +543,56 @@ func TestReDeriveMatchesIngestionAcrossSources(t *testing.T) {
 	after := dumpHub(t, hub)
 	if stripVersions(before) != stripVersions(after) {
 		t.Fatalf("rebuild changed state:\n%s", diffSnip(before, after))
+	}
+}
+
+func TestReDeriveDropsRequestBlobText(t *testing.T) {
+	ctx := context.Background()
+	hub := ingestHub(t)
+	mustRegister(t, hub, "s1", "/s1.jsonl")
+
+	const previous = claudecode.OutputVersion - 1
+	message := mkEvent(0, rawUser("alpha bravo"))
+	message.Text = "alpha bravo"
+	message.ParserVersion = previous
+	blobRaw := `{"type":"api-request-blob","sessionId":"sess-1","hash":"` + strings.Repeat("a", 64) +
+		`","message":{"role":"user","content":[{"type":"text","text":"alpha bravo"}]}}`
+	blob := Event{
+		Offset: message.End, End: message.End + int64(len(blobRaw)) + 1, NativeID: "sess-1",
+		Kind: "unknown", Role: "user", Text: "alpha bravo", RawJSON: blobRaw,
+		Metadata:      `{"blocks":[{"type":"text"}],"contentForm":"array","observedType":"api-request-blob"}`,
+		ParserVersion: previous,
+	}
+	mustIngest(t, hub, Batch{SourceID: "s1", Events: []Event{message, blob}})
+	if n := matchCount(t, hub, "bravo"); n != 2 {
+		t.Fatalf("precondition: MATCH bravo = %d, want 2 (the message and its blob copy)", n)
+	}
+
+	res, err := hub.ReDerive(ctx, []ParserDeriver{claudeDeriver(claudecode.OutputVersion, nil)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Events != 2 {
+		t.Fatalf("re-derive walked %d events, want 2", res.Events)
+	}
+
+	var kind string
+	var text sql.NullString
+	var version int
+	if err := hub.Writer().QueryRow(
+		`SELECT kind, text, parser_version FROM events WHERE source_offset = ?`, blob.Offset).
+		Scan(&kind, &text, &version); err != nil {
+		t.Fatal(err)
+	}
+	if kind != "api-request-blob" || text.Valid || version != claudecode.OutputVersion {
+		t.Fatalf("blob row after re-derive = (%s, text valid %t, version %d); want (api-request-blob, false, %d)",
+			kind, text.Valid, version, claudecode.OutputVersion)
+	}
+	if n := matchCount(t, hub, "bravo"); n != 1 {
+		t.Fatalf("MATCH bravo = %d after re-derive, want 1 (the message only)", n)
+	}
+	if err := hub.FTSIndexConsistent(ctx); err != nil {
+		t.Fatalf("FTSIndexConsistent after re-derive: %v", err)
 	}
 }
 
