@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nibzard/ohya/internal/device"
 	"github.com/nibzard/ohya/internal/hubsync"
 	"github.com/nibzard/ohya/internal/observe"
 )
@@ -364,10 +365,14 @@ func TestHubDiagnosticsProviderExposesAggregatesWithoutPaths(t *testing.T) {
 	if err := os.WriteFile(dbPath, make([]byte, 4096), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	provider := hubDiagnosticsProvider{dbPath: dbPath}
+	hubDevice := strings.Repeat("ab", 16)
+	provider := hubDiagnosticsProvider{dbPath: dbPath, deviceID: hubDevice}
 	got, err := provider.RemoteStatus(context.Background())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got.Hub.DeviceID != hubDevice {
+		t.Fatalf("hub device ID = %q, want %q", got.Hub.DeviceID, hubDevice)
 	}
 	if got.FormatVersion != hubsync.DiagnosticsFormatVersion || got.StorageFiles["db"] != 4096 || got.Limits.MaxConns != hubsync.DefaultMaxConns {
 		t.Fatalf("diagnostics = %+v", got)
@@ -396,6 +401,10 @@ func TestStatusRemoteTopologyResolvesJoinState(t *testing.T) {
 	writeStatusFixture(t, joinState, strings.Repeat("9", 32), os.Getpid(), time.Second, func(s *observe.Snapshot) {
 		s.Instance.Roles = []string{"join"}
 	})
+	joinDevice, err := device.LoadOrCreate(joinState)
+	if err != nil {
+		t.Fatal(err)
+	}
 	data, err := buildStatus(context.Background(), statusOptions{
 		dbPath:     filepath.Join(dir, "hub.db"),
 		stateDir:   joinState,
@@ -411,6 +420,9 @@ func TestStatusRemoteTopologyResolvesJoinState(t *testing.T) {
 	}
 	if data.Topology.Mode != "remote" {
 		t.Errorf("mode = %s, want remote", data.Topology.Mode)
+	}
+	if data.Topology.DeviceID != joinDevice {
+		t.Errorf("device ID = %q, want the join identity %q", data.Topology.DeviceID, joinDevice)
 	}
 	if data.Storage.Location != "remote-hub" {
 		t.Errorf("a joined client must not report its old local database as the hub: %+v", data.Storage)
@@ -776,5 +788,45 @@ func TestStatusBeforeSetupNamesTheSetupStep(t *testing.T) {
 	envelope, raw, _ = runStatusForTest(t, statusArgs(dir, dbPath)...)
 	if findFinding(envelope.Data.Findings, "not_set_up") != nil {
 		t.Fatalf("a running instance is not a missing setup: %s", raw)
+	}
+}
+
+func TestStatusTopologyDeviceIdentity(t *testing.T) {
+	cases := []struct {
+		name        string
+		identity    string
+		wantFinding bool
+	}{
+		{name: "absent"},
+		{name: "unusable", identity: "{not json", wantFinding: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tc.identity != "" {
+				if err := os.WriteFile(filepath.Join(dir, device.FileName), []byte(tc.identity), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			data, err := buildStatus(context.Background(), statusOptions{
+				dbPath:     filepath.Join(dir, "hub.db"),
+				stateDir:   dir,
+				setupState: dir,
+				home:       dir,
+				nowMS:      func() int64 { return time.Now().UnixMilli() },
+				probePID:   func(int) string { return "running" },
+				loadedRun:  func(context.Context, []string) error { return nil },
+				checkRun:   func(context.Context, []string) error { return nil },
+			})
+			if err != nil {
+				t.Fatalf("buildStatus: %v", err)
+			}
+			if data.Topology.DeviceID != "" {
+				t.Errorf("device ID = %q, want empty", data.Topology.DeviceID)
+			}
+			if got := hasFindingCode(data.Findings, "device_identity_unusable", sevWarn); got != tc.wantFinding {
+				t.Errorf("device_identity_unusable finding = %v, want %v: %+v", got, tc.wantFinding, data.Findings)
+			}
+		})
 	}
 }

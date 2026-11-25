@@ -144,7 +144,7 @@ func runServe(ctx context.Context, o serveOptions) error {
 	})
 	endpoint, err := hubsync.NewEndpoint(hub, auth, hubsync.Options{
 		Remote:      engine,
-		Diagnostics: hubDiagnosticsProvider{dbPath: o.dbPath, telem: telem},
+		Diagnostics: hubDiagnosticsProvider{dbPath: o.dbPath, deviceID: deviceID, telem: telem},
 		Observer:    telem.observer(),
 	})
 	if err != nil {
@@ -171,8 +171,9 @@ func runServe(ctx context.Context, o serveOptions) error {
 }
 
 type hubDiagnosticsProvider struct {
-	dbPath string
-	telem  *telemetry
+	dbPath   string
+	deviceID string
+	telem    *telemetry
 }
 
 func (p hubDiagnosticsProvider) RemoteStatus(_ context.Context) (hubsync.RemoteStatus, error) {
@@ -181,6 +182,7 @@ func (p hubDiagnosticsProvider) RemoteStatus(_ context.Context) (hubsync.RemoteS
 	out := hubsync.RemoteStatus{
 		FormatVersion: hubsync.DiagnosticsFormatVersion,
 		Hub: hubsync.RemoteIdentity{
+			DeviceID: p.deviceID,
 			Version:  id.Version,
 			Revision: id.Revision,
 			Dirty:    id.Dirty,

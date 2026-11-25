@@ -35,6 +35,7 @@ type DiagnosticsRequest struct {
 }
 
 type RemoteIdentity struct {
+	DeviceID string         `json:"device_id,omitempty"`
 	Version  string         `json:"version"`
 	Revision string         `json:"revision"`
 	Dirty    string         `json:"dirty"`

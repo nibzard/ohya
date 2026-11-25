@@ -88,7 +88,8 @@ sourceWorkspace = 'F' ver(1) devLen(2) dev srcLen(2) src pathLen(4) path
 - `diagnostics` (`G`, 1-byte format version `1`) requests cached hub aggregate
   status on a short-lived authenticated connection after negotiating
   `CapRemoteStatus`. `diagnosticsRes` (`g`) replies with at most 256 KiB of
-  JSON carrying hub build identity, monotonic uptime, cached snapshot timestamp,
+  JSON carrying hub build identity, the hub's own device ID (optional; a hub
+  that predates the field omits it), monotonic uptime, cached snapshot timestamp,
   storage file sizes (without filesystem paths), resource readings, and
   configured bounds — never logs, source details, other devices, SQL, or
   transcripts. Per-frame authorization and revocation apply; the hub enforces
