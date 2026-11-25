@@ -1,0 +1,22 @@
+# Context
+
+## Background
+Candidate run 45709812198 for v0.8.0 failed on macos-15-intel in
+make check: TestLargeFileUploadsInBoundedBatches stopped at 11.28 s
+with "hubsync: read frame: read tcp ...: i/o timeout". The rerun of
+that job passed, and v0.8.0 was cut from 915df53. This fix came after
+the tag, because it changes a test only.
+
+## Why This Way
+The subject of the test is the batch bound, not a timeout. Its
+budget was the fixture default of 10 s for one request. The
+production default is 60 s. The test now names the production value
+and allows two round trips, one for each batch.
+
+## Gotchas
+- A first throwaway proxy delayed replies after 32 MiB from the
+  client. It delayed nothing: the test hub takes compressed batches,
+  and a batch of one repeated letter is a few KB on the wire. The
+  trigger that works is the zstd frame signature.
+- The budget of 60 s was not measured against a real slow hub.
+- make check with GOFLAGS=-count=1 passed on this tree.
