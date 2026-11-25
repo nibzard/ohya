@@ -1,0 +1,20 @@
+# Context
+
+## Background
+The owner pushed three commits from another machine on 2026-11-25
+(20:08 to 20:31) while four local commits waited for a push. The owner
+asked for a pull.
+
+## Why This Way
+A merge keeps the four local commits and their notes. A rebase would
+write new hashes for each of them and drop their notes, because
+notes.rewrite.rebase is not set here. The repository has merge
+commits before. The pull used --no-rebase --no-commit, so the full
+check ran on the merged tree before this commit. Result: exit 0,
+37 packages.
+
+## Gotchas
+- git pull without a strategy fails on this repository, because no
+  pull.rebase is set and the branches diverged.
+- Both sides changed DB.md and NOTES.md. git merged them without a
+  conflict; the merged passages were read before the commit.
