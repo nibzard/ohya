@@ -82,7 +82,21 @@ How to use this file:
     no observer (cmd/ohya/recall.go `openRecallBackend`), so `ohya usage`
     counts MCP calls only and the 40 sessions are a lower bound. A
     transcript search finds `ohya sql|search|show|sessions` mentions in
-    shell commands of at most 31 more sessions.
+    shell commands of at most 31 more sessions. Decision 2026-11-25: keep
+    this gap. A usage directory per CLI call does not work, because
+    `CleanStaleInstances` keeps only the last 8 stopped instances per role.
+    The two options were transcript evidence of shell calls in
+    `ohya usage`, or one shared append file for CLI records. Revisit when a
+    decision needs CLI counts. `--remote` CLI calls are already recorded
+    on the hub.
+  - Old MCP builds after an upgrade (2026-11-25): with v0.7.1 installed,
+    both `ohya mcp` processes of open Claude Code sessions still ran the
+    deleted v0.7.0 binary. MCP recall still cut `task-…` names and printed
+    the old deadline text, and `ohya status` showed them as running. The
+    `mcp_build` check of `ohya doctor` (`e1a6415`) now warns about them.
+    Setup does not report them yet, although docs/installer-plan.md asks
+    for it. A setup result that is not complete would make setup exit
+    nonzero, so that needs its own design.
   - `sessions.repo` is NULL for 2,888 of 7,031 real sessions (41%): 1,071
     Claude Code looper-worktree sessions that started before 2026-11-16
     (paths first observed later, worktrees since deleted), 1,461 Codex
