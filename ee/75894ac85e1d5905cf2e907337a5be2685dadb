@@ -1,0 +1,31 @@
+# Context
+
+## Background
+DB.md said that the busy timeout of 5 s makes a statement fail only
+after that wait. The release runbook said that a batch of the running
+hub service "fails after the same 5 s" during a migration. Neither was
+true for the transactions of the hub store.
+
+## Why This Way
+A probe with the bundled SQLite (driver v1.14.53) showed that a
+deferred transaction which reads before it writes gets "database is
+locked" at once, under a lock held for 300 ms and under one held for
+7 s. SQLite skips the busy handler for that change (lang_transaction,
+section 2.1). The hub then makes three attempts in 302 ms. The
+documents were corrected to the code on main, not the code to the
+documents: the transaction mode is a decision for the owner (NOTES.md,
+"Store transactions and the write lock").
+
+## Gotchas
+- The writer pool has one connection. A test that holds the write lock
+  must open a second pool on the same file. A connection taken from the
+  store's own pool blocks the store on the pool, not on the lock.
+- The ingest journal shows 1,508 locked lines since 2026-11-16, 1,494
+  of them in one hour on 2026-11-20. The journal does not name the
+  other writer.
+
+## Related
+- Research note: /notes/2026-11-24-concurrent-open-migration-race.md
+  (update of 2026-11-25)
+- cce0559, the other commit of this review
+- internal/registry/registry.go uses _txlock=immediate for this reason
