@@ -1,0 +1,5 @@
+Review of e1a6415 (2026-11-25). The check was wired to `filepath.Join(setupState, "observe")`. On a joined device, `ohya setup` registers the MCP servers with `--state <state>/join` (cmd/ohya/setup.go), and `ohya doctor` without flags examines `<state>/join`. The snapshots of those servers were invisible to the check, so the one joined device of the owner (the MacBook) would never get the warning.
+
+The regression test runs the doctor command for both layouts and prints nothing in the remote case before this commit. A test binary reports no build revision (`go test` stamps no VCS information), so `doctorRuntime.buildRevision` names the build to compare against; an empty value means this binary.
+
+Not changed: the check compares the revision only, so a dirty build of the same revision is not reported.
