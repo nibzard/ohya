@@ -25,6 +25,7 @@ func TestDeriversReproduceFreshParse(t *testing.T) {
 	}{
 		{agent: "claude-code", scope: "src-cc", fixture: "../../testdata/claude-code/main-session.jsonl"},
 		{agent: "claude-code", scope: "src-cc-sub", fixture: "../../testdata/claude-code/subagent-session.jsonl"},
+		{agent: "claude-code", scope: "src-cc-req", fixture: "../../testdata/claude-code/request-log.jsonl"},
 		{agent: "codex", scope: "src-cx", fixture: "../../testdata/codex/main-session.jsonl"},
 		{agent: "codex", scope: "src-cx-page", fixture: "../../testdata/codex/resumed-page.jsonl"},
 		{agent: "pi", scope: "src-pi", fixture: "../../testdata/pi/main-session.jsonl"},

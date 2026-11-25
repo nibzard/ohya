@@ -14,7 +14,7 @@ const AgentName = "claude-code"
 
 const SyntheticNativeIDPrefix = "ohya-synthetic:"
 
-const OutputVersion = 2
+const OutputVersion = 3
 
 const DefaultMaxRecordBytes = 32 << 20
 
@@ -24,6 +24,14 @@ var knownKinds = map[string]bool{
 	"atis-latch": true, "last-prompt": true, "ai-title": true,
 	"cost-state": true, "agent-name": true,
 	"started": true, "result": true, "launched": true, "failed": true,
+	"fork-context-ref": true,
+	"api-request":      true, "api-request-blob": true, "api-request-shape": true,
+	"session-owner": true, "tools-used": true, "pr-link": true,
+	"file-history-snapshot": true, "file-history-delta": true,
+}
+
+var messageKinds = map[string]bool{
+	"user": true, "assistant": true,
 }
 
 var toolBlockTypes = map[string]bool{
@@ -191,10 +199,10 @@ func parseRecord(line []byte, offset int64, o Options) (Record, error) {
 		md["apiBlockIndex"] = n
 	}
 
-	if msg, ok := obj["message"].(map[string]any); ok {
+	if msg, ok := obj["message"].(map[string]any); ok && messageKinds[rec.Kind] {
 		if r, ok := stringValue(msg, "role"); ok {
 			rec.Role = r
-		} else if rec.Kind == "user" || rec.Kind == "assistant" {
+		} else {
 			rec.Role = rec.Kind
 		}
 		if v, ok := stringValue(msg, "id"); ok {

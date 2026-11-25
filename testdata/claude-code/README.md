@@ -5,6 +5,8 @@ values are invented. The files contain no real transcripts.
 
 Verified against Claude Code 2.1.280 on 2026-11-13. The corpus held 2,646
 JSONL files under `~/.claude/projects/` (895 main sessions, about 1.9 GB).
+The request-log records were verified on 2026-11-25 against the record shapes
+that an ohya hub held from Claude Code 2.1.280, 2.1.328, and 2.1.331.
 
 ## Verified format
 
@@ -57,9 +59,35 @@ Bookkeeping records carry only `sessionId` and their own fields:
 - The first line of a main file is usually `queue-operation` or `mode`. The
   last line is usually `cost-state`, which holds session totals such as
   `totalCostUSD` and per-model `modelUsage`.
+- Request-log records, in the main session file. They occur with 2.1.328 and
+  2.1.331, and not with 2.1.280:
+  - `session-owner` holds `accountUuid` and `organizationUuid`. The line
+    repeats in one file.
+  - `tools-used` holds `tools`, an array of tool names.
+  - `api-request` describes one API request. It holds `id`, `timestamp`,
+    `version`, `querySource`, `shapeHash`, `params`, `keep`, `tail`,
+    `cacheControl`, `requestDigest`, and sometimes `base`, `cut`, and
+    `cutRequestDigest`. It has no `message`.
+  - `api-request-shape` holds `shapeHash`, `timestamp`, `version`, and
+    `shape` (`system` and `tools` arrays). A line can be large: up to 109 KB
+    in the sample.
+  - `api-request-blob` holds `hash`, 64 hexadecimal characters, and one copy
+    of an API message in `message`: `role` (`user`, `assistant`, or `system`)
+    and a `content` array. It has no `timestamp`, `uuid`, `cwd`,
+    `message.id`, `model`, or `usage`. Block types seen: `text`, `thinking`,
+    `tool_use`, `tool_result`, and `tool_addition`.
+- `pr-link` holds `prNumber`, `prUrl`, `prRepository`, and `timestamp`. Seen
+  in 2.1.280 sessions.
+- `file-history-snapshot` and `file-history-delta` hold file backup data
+  (`snapshot.trackedFileBackups`, `backup` with `backupFileName`, `version`,
+  `backupTime`, and `realParentDir`). They carry `messageId` and no
+  `sessionId`, so they land in the synthetic session of their source.
 
-Subagent files add `started`, `result`, `launched`, and `failed`. These carry
-`agentId` and a `key`, not `sessionId`.
+Subagent files add `started`, `result`, `launched`, `failed`, and
+`fork-context-ref`. The first four carry `agentId` and a `key`;
+`fork-context-ref` carries `agentId`, `parentSessionId`, `parentLastUuid`,
+and `contextLength`. None carries `sessionId`, so they land in the synthetic
+session of their source.
 
 ### Native session identity
 
@@ -107,8 +135,13 @@ monotonic. Do not sort by timestamp alone.
 - Kind: the message types `user`, `assistant`, `attachment`, and `system`;
   the bookkeeping types `queue-operation`, `mode`, `permission-mode`,
   `atis-latch`, `last-prompt`, `ai-title`, `cost-state`, and `agent-name`;
-  and the subagent types `started`, `result`, `launched`, and `failed`.
+  the subagent types `started`, `result`, `launched`, `failed`, and
+  `fork-context-ref`; the request-log types `api-request`, `api-request-blob`,
+  `api-request-shape`, `session-owner`, and `tools-used`; and the record
+  types `pr-link`, `file-history-snapshot`, and `file-history-delta`.
   Every other type is `unknown`.
+- Message: only a `user` or `assistant` record reads `message`. A record of
+  each other kind keeps `message` in `raw_json` only.
 - Role: `message.role`. A `user` or `assistant` record without one uses its
   type as the role.
 - Text: a string `message.content`, or from a content array the `text` and
@@ -116,7 +149,8 @@ monotonic. Do not sort by timestamp alone.
   `mcp_tool_use`; name from `name` or `tool_name`), and the result blocks
   (`tool_result`, `mcp_tool_result`; string content or their `text`
   sub-blocks). An `attachment` contributes `attachment.text`, and a
-  `system` record its string `content`.
+  `system` record its string `content`. Thus an `api-request-blob` copy
+  contributes no text and stays out of the search index.
 - Observations: `cwd`, `gitBranch`, `message.model`, `message.id` as the
   message ID, and `message.usage` as written.
 - Metadata: `uuid`, `parentUuid`, `isSidechain` (only when true), `agentId`,
@@ -176,6 +210,29 @@ from `main-session.jsonl`). It covers `started`, a two-record response, a
 | 4 | [1343, 2067) | `user` | `tool_result` plus `toolUseResult` |
 | 5 | [2067, 2789) | `assistant` | `text`, same ID and usage as line 3 |
 | 6 | [2789, 2956) | `result` | Subagent bookkeeping; 2,956 bytes total |
+
+### request-log.jsonl
+
+A main session slice in file order: three message records (a prompt, a
+`tool_use`, and its `tool_result`) and eleven bookkeeping records, among them
+three `api-request-blob` copies. Lines 12 and 13 carry no `sessionId`.
+
+| Line | Bytes | Kind | Notes |
+|---|---|---|---|
+| 1 | [0, 148) | `session-owner` | |
+| 2 | [148, 245) | `tools-used` | `Read`, `Bash` |
+| 3 | [245, 733) | `api-request-shape` | 09:00:00.100Z |
+| 4 | [733, 1370) | `api-request` | `keep` 0; 09:00:00.200Z |
+| 5 | [1370, 1767) | `user` | String prompt |
+| 6 | [1767, 2539) | `assistant` | `tool_use` `Read`, `msg_fixture_0011` |
+| 7 | [2539, 3215) | `user` | `tool_result` plus `toolUseResult` |
+| 8 | [3215, 3997) | `api-request` | `keep` 1, `base`, `cut`; 09:00:03.500Z |
+| 9 | [3997, 4291) | `api-request-blob` | Copy of the message of line 7 |
+| 10 | [4291, 4584) | `api-request-blob` | Role `system`: `text` and `tool_addition` |
+| 11 | [4584, 4902) | `api-request-blob` | Copy of the message of line 6 |
+| 12 | [4902, 5102) | `file-history-snapshot` | No `sessionId` |
+| 13 | [5102, 5446) | `file-history-delta` | No `sessionId`; 09:00:04.000Z |
+| 14 | [5446, 5671) | `pr-link` | 09:00:05.000Z; last line, 5,671 bytes total |
 
 ### incomplete-tail.jsonl
 
