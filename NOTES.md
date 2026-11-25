@@ -98,6 +98,17 @@ How to use this file:
     MCP servers publish to `<state>/join/observe`, reported nothing. It
     now reads the observe directory of the state directory the doctor
     examines.
+  - The check compared the build revision only (fixed 2026-11-25). A
+    development build with uncommitted changes was not reported when its
+    revision was the one the doctor compared with. The check now compares
+    the revision and the uncommitted flag. Two uncommitted builds of one
+    revision cannot be told apart, so the check reports them and says so.
+    Tests: `TestCheckMCPBuildsComparesUncommittedBuilds` and
+    `TestDoctorComparesUncommittedBuilds`. Each of 12 mutation checks
+    failed a test. Limit: a test binary carries no build stamp, so the
+    line of `buildIdentity` that reads the stamp has no test. It is the
+    same comparison as `startTelemetry`, which writes the stamp into the
+    snapshots.
     Setup does not report them yet, although docs/installer-plan.md asks
     for it. A setup result that is not complete would make setup exit
     nonzero, so that needs its own design.

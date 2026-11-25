@@ -15,7 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nibzard/ohya/internal/buildinfo"
 	"github.com/nibzard/ohya/internal/claudecode"
 	"github.com/nibzard/ohya/internal/device"
 	"github.com/nibzard/ohya/internal/events"
@@ -73,6 +72,7 @@ type doctorRuntime struct {
 	home          string
 	inspectRun    func(context.Context, []string) error
 	buildRevision string
+	buildDirty    bool
 }
 
 func runDoctorCommand(args []string, stdout, stderr io.Writer) error {
@@ -171,11 +171,8 @@ func runDoctorCommandWith(args []string, stdout, stderr io.Writer, rt doctorRunt
 		findings = append(findings, f)
 	}
 	findings = append(findings, checkHubUnits(context.Background(), home)...)
-	_, revision, _, _ := buildinfo.Identity()
-	if rt.buildRevision != "" {
-		revision = rt.buildRevision
-	}
-	findings = append(findings, checkMCPBuilds(filepath.Join(stateDir, "observe"), revision, time.Now().UnixMilli())...)
+	revision, dirty := buildIdentity(rt.buildRevision, rt.buildDirty)
+	findings = append(findings, checkMCPBuilds(filepath.Join(stateDir, "observe"), revision, dirty, time.Now().UnixMilli())...)
 	if *asJSON {
 		if err := printJSON(stdout, doctorSpec.name, doctorJSONData{Findings: findings, Transport: transport}); err != nil {
 			return err

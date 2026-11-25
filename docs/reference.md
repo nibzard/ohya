@@ -119,8 +119,13 @@ agent session started before an upgrade keeps the old build until the
 session reconnects its MCP server, because setup never stops coding
 sessions. The `mcp_build` check reads the observe snapshots of the state
 directory (`<state>/join/observe` on a joined device) and warns about each
-live `ohya mcp` process whose build revision differs from the doctor
-binary's. It names the PID and the build,
+live `ohya mcp` process whose build differs from the doctor binary's. Two
+builds are the same only when their revisions are equal and both are
+committed. A build with uncommitted changes is reported even at the
+revision of the doctor binary, because its code can differ. Two
+uncommitted builds of one revision cannot be told apart, so the warning
+then says that the process can also be the same build. It names the PID
+and the build,
 and its remedy is to reconnect the server (`/mcp` in Claude Code) or to
 start a new session. A process that has published no fresh snapshot
 (older than 30 s) or runs with `--observe off` is not counted.
