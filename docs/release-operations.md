@@ -171,8 +171,17 @@ points"). The migration has no time limit and adds to the stop of ingestion:
 migration 009 took 3 min 41 s on a copy of that hub. While the migration
 runs, a process that opens the database with a writer fails after one busy
 timeout (5 s) with `database is locked`, including a new `ohya mcp` process.
-Processes that are already open keep their access. Plan the upgrade of a
-large hub for a time when no agent starts a session.
+Processes that are already open can still read, but the migration holds
+the write lock: a batch that the running hub service (`ohya serve`) tries
+to commit fails after the same 5 s. The hub sends no acknowledgment for
+it, so the device keeps its checkpoint and sends the same bytes on a later
+pass ([sync protocol](sync-protocol.md)), and no event is lost.
+Plan the upgrade of a large hub for a time when no agent starts a session.
+
+After the upgrade, agent sessions that were open keep their `ohya mcp`
+process on the old build until they reconnect the MCP server (`/mcp` in
+Claude Code) or a new session starts. `ohya doctor` reports each such
+process as an `mcp_build` warning.
 
 Setup reports the estimated copy size before starting and a progress line on
 stderr at every further 10 percent of the copy. A copy whose average rate

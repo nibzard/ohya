@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nibzard/ohya/internal/buildinfo"
 	"github.com/nibzard/ohya/internal/claudecode"
 	"github.com/nibzard/ohya/internal/device"
 	"github.com/nibzard/ohya/internal/events"
@@ -37,7 +38,7 @@ var doctorSpec = commandSpec{
 	name:      "ohya doctor",
 	synopsis:  "run read-only health checks the sql tool cannot answer",
 	usageLine: "ohya doctor [flags]",
-	description: "Checks state outside the read-only sql tool's reach: the database schema against this build's migrations, stored parser output versions this build's rederive refuses, the FTS5 integrity of events_fts with --deep, stopped sources in the local watch state (ADR 0004), the device identity, and — when the state directory holds a pairing credential — that the saved hub address is present and readable. A state directory with an owned ohya serve service also reports whether the hub identity exists. A user unit that starts this binary as the hub (ohya serve) has its ExecStart checked against this build's serve flags and its running process checked for a replaced executable: a unit this build cannot start, or a service still running a binary that was replaced on disk, is an error. " +
+	description: "Checks state outside the read-only sql tool's reach: the database schema against this build's migrations, stored parser output versions this build's rederive refuses, the FTS5 integrity of events_fts with --deep, stopped sources in the local watch state (ADR 0004), the device identity, and — when the state directory holds a pairing credential — that the saved hub address is present and readable. A state directory with an owned ohya serve service also reports whether the hub identity exists. A user unit that starts this binary as the hub (ohya serve) has its ExecStart checked against this build's serve flags and its running process checked for a replaced executable: a unit this build cannot start, or a service still running a binary that was replaced on disk, is an error. A live ohya mcp process of this state directory that runs another build than this one is a warning: its agent session still gets that build until it reconnects the MCP server. " +
 		"On a paired device, doctor also dials the hub through the tailcat transport and reports whether it answers, the path type (direct or relay), the relay region, the round-trip time, and the compatibility of sync protocol versions; a value the transport library does not report is printed as unknown, and the hub address itself never appears.\n" +
 		"Doctor opens the database read-only: it never migrates, repairs, or re-derives, and prints no transcript content or secrets.\n" +
 		"The --deep check copies the database to a temporary file under TMPDIR. It needs free disk a little more than the database size, and it takes time in proportion to the database size.\n" +
@@ -169,6 +170,8 @@ func runDoctorCommandWith(args []string, stdout, stderr io.Writer, rt doctorRunt
 		findings = append(findings, f)
 	}
 	findings = append(findings, checkHubUnits(context.Background(), home)...)
+	_, revision, _, _ := buildinfo.Identity()
+	findings = append(findings, checkMCPBuilds(filepath.Join(setupState, "observe"), revision, time.Now().UnixMilli())...)
 	if *asJSON {
 		if err := printJSON(stdout, doctorSpec.name, doctorJSONData{Findings: findings, Transport: transport}); err != nil {
 			return err

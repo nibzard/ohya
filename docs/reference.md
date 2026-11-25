@@ -114,7 +114,15 @@ ExecStart runs this binary as `ohya serve`, whether or not setup wrote
 it: a unit whose serve arguments this build rejects, and a running
 service whose executable was replaced on disk, are errors that name the
 unit, the offending argument or process, and one remedy — the hub is one
-restart away from an outage in both cases.
+restart away from an outage in both cases. An `ohya mcp` process that an
+agent session started before an upgrade keeps the old build until the
+session reconnects its MCP server, because setup never stops coding
+sessions. The `mcp_build` check reads the observe snapshots of the state
+directory and warns about each live `ohya mcp` process whose build
+revision differs from the doctor binary's. It names the PID and the build,
+and its remedy is to reconnect the server (`/mcp` in Claude Code) or to
+start a new session. A process that has published no fresh snapshot
+(older than 30 s) or runs with `--observe off` is not counted.
 Every finding prints a severity (`ok`, `warn`, `error`) and a
 one-line remedy; `--json` prints the same findings in the
 [ADR 0005](adr/0005-json-output.md) envelope. Doctor is read-only: it
