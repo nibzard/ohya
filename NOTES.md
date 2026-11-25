@@ -493,7 +493,9 @@ How to use this file:
 - Claude Code parser normalization choices (2026-11-13, internal/claudecode; relevant to T006
   aggregates): searchable text per record concatenates block text in source order, and a
   tool_use block contributes `name + compact sorted-key JSON of input` (so commands and file
-  paths are searchable); bookkeeping records contribute no text. Role comes from message.role,
+  paths are searchable); bookkeeping records contribute no text, and only `user` and
+  `assistant` records read `message` (2026-11-25, see the request-log bullet at the end of
+  this file). Role comes from message.role,
   falling back to the record type for user/assistant; tool_name is set only for exactly one
   tool block. Only the `timestamp` field sets time_ms (cost-state `startTime` is ignored).
   Records missing sessionId get native ID `ohya-synthetic:<source-scope>` — subagent
@@ -634,7 +636,9 @@ How to use this file:
   "Repository derivation": normalized repository URL from the session's own
   records; Codex `session_meta.git.repository_url`, others NULL; re-derivation
   recomputes it; codex parser output version 2). Tool aggregates remain
-  deferred pending a query need.
+  deferred pending a query need. 2026-11-25: 274 historical sessions have a
+  NULL `repo` although a sibling session has one; see the bullet "Historical
+  sessions keep a NULL `repo`" at the end of this file (open decision).
 
 - Local slice wiring (2026-11-13, cmd/ohya, T007): the production
   record → store.Event adapters live in internal/events (moved out of
@@ -2953,3 +2957,54 @@ How to use this file:
     design, and `--json` exists.
   - The install output (`install.sh` through `ohya setup`) still mixes
     `ohya: …` lines with the new aligned rows.
+
+- Claude Code request-log records were indexed as text (found and fixed
+  2026-11-25, internal/claudecode, parser output version 3): Claude Code
+  2.1.328 and 2.1.331 write `api-request`, `api-request-blob`,
+  `api-request-shape`, `session-owner`, and `tools-used` records into the
+  main session file. 2.1.280 also writes `pr-link`, `file-history-snapshot`,
+  and `file-history-delta`. The hub stored all eight types as kind `unknown`.
+  An `api-request-blob` holds a copy of one API message in `message`, and the
+  parser read `message` for each kind. Thus each blob got a role and the full
+  text of its message in `events.text` and `events_fts`. Sample of 12 sessions
+  on the Linux device: blobs were about 20% of the rows, 17% of the raw bytes
+  (12.1 of 70 MB), and 38% of the indexed text (10.9 of 28.9 MB). Token totals
+  and first prompts were correct, because a blob has no `message.id`, `model`,
+  or `usage`.
+  - Fix: only `user` and `assistant` records read `message`. The eight types
+    are kinds now (`testdata/claude-code/README.md`, fixture
+    `request-log.jsonl`). A type that is not known yet contributes no text.
+  - Operator step, not done: `ohya rederive` on the live hub. It re-parses
+    about 837k Claude Code rows (764,604 on the Linux device, 72,906 on the
+    MacBook) and rebuilds `events_fts` in one transaction.
+  - Open: a blob with role `system` (tool additions, injected system text) is
+    in no transcript message. That text is now in `raw_json` only. The recall
+    bench (plan 003 R5) must show if a search needs it.
+  - `internal/fixgen` generates no request-log records. Benchmark corpora lack
+    the record types that make about 20% of the rows of a real 2.1.328 file.
+
+- Historical sessions keep a NULL `repo` when their directory is gone at
+  observation time (observed 2026-11-25 with the hub `sql` tool; open
+  decision, ADR 0009): `sessions.repo` comes from the session's own records,
+  or else from the write-once workspace observation of `(device_id, cwd)`
+  (`internal/store/workspace.go`). Derivation reads no sibling session. The
+  first workspace observations are dated 2026-11-16 on the Linux device and
+  2026-11-23 on the MacBook, after most sessions. Thus 274 sessions in 21
+  directories (211 codex, 58 pi, 5 claude-code) have a NULL `repo` although a
+  sibling session in the same device and directory has one. A query that
+  scopes by `repo` does not find them.
+  - All five affected MacBook directories do not exist now (checked), which
+    agrees with their observations. Example on the Linux device:
+    `/home/agent/wtk` has 100 sessions with a NULL `repo` (July 2026) and 42
+    with `github.com/nibzard/wtk`; its observation (2026-11-16) is "no
+    repository". Cause on the Linux device not verified.
+  - `/home/agent/oak` is a different case. The observation came two seconds
+    after the first session (2026-11-17 14:48:48) and is also "no
+    repository", although sessions ran there for two more days. Cause not
+    verified; the directory possibly had no `.git` entry at that time.
+  - Option A, keep ADR 0009: a fallback reads a repository that the session
+    process did not use, and a directory can hold a different project later.
+  - Option B, amend ADR 0009: a session with a NULL `repo` inherits the
+    repository of the sibling session nearest in time, on the same device and
+    in the same directory. This needs a derivation change, a DB.md update,
+    and `ohya rederive`.
