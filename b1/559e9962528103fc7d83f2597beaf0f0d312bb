@@ -1,0 +1,19 @@
+# Context
+
+## Background
+The owner asked "commit all, push all, cut new version, reinstall
+new version" on 2026-11-25. v0.8.0 was published at 22:29:02Z from
+915df53, and the released installer upgraded the hub at 22:30:13Z to
+22:45:55Z. This commit holds the records of both steps.
+
+## Gotchas
+- Attempt 1 of candidate run 45709812198 failed one timing test on
+  the Intel macOS runner. "gh run rerun <run-id> --failed" reran that
+  job and its dependent jobs on the same commit. The release notes and
+  both documents state the failure and the rerun.
+- The first pass of the new ingest service filled the workspace of 68
+  of 74 Antigravity sources on the live hub without a manual step.
+- The hub kept its recovery point (17 GB) under
+  ~/.ohya/setup/backups/, so the volume has 66 GB free in place of
+  83 GB. Each further schema upgrade needs about 20 GB more or a
+  removed old recovery point.
