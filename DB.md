@@ -554,6 +554,9 @@ query patterns justify them.
 
 ## Recall recipes
 
+Agents run these recipes through the MCP `sql` tool. `ohya sql --json`
+runs the same engine for scripts and for people at a shell.
+
 The `sql` tool description publishes the core recall recipes at connect
 time, one paragraph per recipe, and serves lower-frequency analytics and
 review recipes on demand through the `ohya://guides/analytics-and-review`

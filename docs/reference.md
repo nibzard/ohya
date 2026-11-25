@@ -463,7 +463,8 @@ change nothing, not even timestamps. Agents query annotations through the
 `ohya sql`, `ohya search`, `ohya show`, and `ohya sessions` give a human,
 script, or companion UI
 the same recall the `sql` tool gives an agent, without sqlite3, an agent
-session, or MCP wiring. All four are print-only, never prompt, and take
+session, or MCP wiring. An agent that has the MCP `sql` tool uses it for
+interactive recall, and keeps `ohya sql --json` for scripts. All four are print-only, never prompt, and take
 `--json` for versioned structured output ([ADR 0005](adr/0005-json-output.md)).
 
 ```sh

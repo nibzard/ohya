@@ -163,10 +163,13 @@ WHERE events_fts MATCH 'authentication AND refresh'
 ORDER BY events_fts.rank LIMIT 10;
 ```
 
-For multi-step shell pipelines, agents and operators can also run
-`ohya sql --json '<query>'` (or `-` for stdin, `--remote` on a joined
-device), which routes through the exact same read-only authorizer, row/byte
-bounds, and egress secret redaction as the MCP tool.
+Agents use the MCP `sql` tool for interactive recall: it needs no shell
+quoting, its result never mixes with stderr, it sits next to `annotate`,
+and each call writes a usage record. For multi-step shell pipelines,
+agents and operators can also run `ohya sql --json '<query>'` (or `-` for
+stdin, `--remote` on a joined device), which routes through the exact same
+read-only authorizer, row/byte bounds, and egress secret redaction as the
+MCP tool.
 
 | Surface | Does | Bounds |
 | --- | --- | --- |
