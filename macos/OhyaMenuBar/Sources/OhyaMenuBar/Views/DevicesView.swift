@@ -47,7 +47,15 @@ struct DevicesView: View {
 
             if let transport = model.doctor?.transport {
                 VStack(spacing: 5) {
-                    row("Hub reachable", value: transport.hubAnswers.map { $0 ? "Yes" : "No" } ?? "Checking")
+                    HStack {
+                        Text("Hub reachable")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        StatusDot(color: hubReachabilityColor(transport.hubAnswers))
+                        Text(transport.hubAnswers.map { $0 ? "Yes" : "No" } ?? "Checking")
+                            .font(.caption.monospacedDigit())
+                    }
                     row("Path", value: transport.path.capitalized)
                     if let region = transport.relayRegion, !region.isEmpty {
                         row("Relay", value: region)
@@ -163,9 +171,7 @@ struct DevicesView: View {
 
     private func deviceRow(_ device: PairedDevice) -> some View {
         HStack(spacing: 8) {
-            Circle()
-                .fill(device.state == "paired" ? Color.green : Color.secondary.opacity(0.4))
-                .frame(width: 6, height: 6)
+            StatusDot(color: device.state == "paired" ? Color.green.opacity(0.85) : Color.secondary.opacity(0.35))
             VStack(alignment: .leading, spacing: 2) {
                 Text(DisplayFormat.shortID(device.id))
                     .font(.subheadline.monospaced())
@@ -196,6 +202,17 @@ struct DevicesView: View {
             Button("Copy Device ID") {
                 model.copyText(device.id, notice: "Device ID copied")
             }
+        }
+    }
+
+    private func hubReachabilityColor(_ hubAnswers: Bool?) -> Color {
+        switch hubAnswers {
+        case true?:
+            return Color.green.opacity(0.85)
+        case false?:
+            return Color.red.opacity(0.85)
+        case nil:
+            return Color.secondary.opacity(0.35)
         }
     }
 

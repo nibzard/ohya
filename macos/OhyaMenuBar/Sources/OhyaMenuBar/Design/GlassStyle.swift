@@ -109,6 +109,52 @@ struct QuietRowHighlight: ViewModifier {
     }
 }
 
+struct TagLabel: View {
+    enum Emphasis {
+        case prominent
+        case quiet
+    }
+
+    let text: String
+    let systemImage: String?
+    let emphasis: Emphasis
+
+    init(_ text: String, systemImage: String? = nil, emphasis: Emphasis) {
+        self.text = text
+        self.systemImage = systemImage
+        self.emphasis = emphasis
+    }
+
+    var body: some View {
+        HStack(spacing: 3) {
+            if let systemImage {
+                Image(systemName: systemImage)
+                    .imageScale(.small)
+            }
+            Text(text)
+        }
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(emphasis == .prominent ? Color.white : Color.primary)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 1)
+        .background(Capsule().fill(emphasis == .prominent ? OhyaTheme.brandPurple : Color.primary.opacity(0.1)))
+        .overlay(
+            Capsule().strokeBorder(emphasis == .prominent ? Color.clear : Color.primary.opacity(0.28), lineWidth: 0.75)
+        )
+        .fixedSize()
+    }
+}
+
+struct StatusDot: View {
+    let color: Color
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: 6, height: 6)
+    }
+}
+
 struct CopyFeedbackButton: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let label: String

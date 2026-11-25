@@ -71,6 +71,7 @@ type statusService struct {
 type statusTopology struct {
 	Mode       string            `json:"mode"`
 	StateDir   string            `json:"state_dir"`
+	DeviceID   string            `json:"device_id,omitempty"`
 	Ambiguity  []string          `json:"ambiguity,omitempty"`
 	AgentRoots []statusAgentRoot `json:"agent_roots"`
 	Services   []statusService   `json:"services,omitempty"`
@@ -325,6 +326,15 @@ func buildStatus(ctx context.Context, o statusOptions) (statusData, error) {
 	}
 	if o.instanceID != "" {
 		data.Coverage.Notes = append(data.Coverage.Notes, "filtered to instance "+o.instanceID)
+	}
+	if deviceID, err := device.Load(o.stateDir); err == nil {
+		data.Topology.DeviceID = deviceID
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		data.Findings = append(data.Findings, statusFinding{
+			Code: "device_identity_unusable", Severity: sevWarn,
+			Evidence: err.Error(),
+			Hint:     "run ohya doctor; restore the device identity file, or delete it to start over as a new device",
+		})
 	}
 	data.Topology.AgentRoots = statusAgentRoots(o.home)
 	data.Topology.Services = statusServices(ctx, o)
