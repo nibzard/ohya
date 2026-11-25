@@ -109,6 +109,41 @@ func TestReaderCannotCreateDatabase(t *testing.T) {
 	}
 }
 
+func TestWriteTransactionDoesNotWaitForTheWriteLock(t *testing.T) {
+	hub, _ := openTestDB(t)
+	other, err := sql.Open("sqlite3", writerDSN(hub.path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	ctx := context.Background()
+	conn, err := other.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		t.Fatal(err)
+	}
+
+	started := time.Now()
+	err = hub.RegisterSource(ctx, "s1", "dev1", "claude-code", "/transcripts/a.jsonl")
+	elapsed := time.Since(started)
+	if !busyDatabase(err) {
+		t.Fatalf("RegisterSource returned %v after %v; want a busy database", err, elapsed)
+	}
+	if elapsed >= busyTimeout {
+		t.Fatalf("RegisterSource waited %v for the write lock; DB.md and docs/release-operations.md state that a store transaction fails at once", elapsed)
+	}
+
+	if _, err := conn.ExecContext(ctx, `ROLLBACK`); err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.RegisterSource(ctx, "s1", "dev1", "claude-code", "/transcripts/a.jsonl"); err != nil {
+		t.Fatalf("RegisterSource after the lock was released: %v", err)
+	}
+}
+
 func TestOpenAppliesRealMigrationsAndReopensCleanly(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "hub.db")
 	hub, err := Open(context.Background(), path)

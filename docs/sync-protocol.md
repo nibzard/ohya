@@ -208,9 +208,11 @@ String fields with a 2-byte length must not be empty, except `repo` in `workspac
   its framed boundaries; JSON with an embedded line terminator fails this
   check. A batch that holds offset 0 supplies the first native ID for the
   rest of the batch.
-- Transient write failures, such as an external lock past the busy timeout,
-  retry with the hub policy: 3 attempts, waits from 100 ms doubling up to
-  2 s, no jitter. Deterministic rejections (`ErrBatchRejected`,
+- Transient write failures, such as `database is locked` while another
+  connection holds the write lock, retry with the hub policy: 3 attempts,
+  waits from 100 ms doubling up to 2 s, no jitter. A store transaction does
+  not wait for the write lock, so a held lock fails a batch in about 0.3 s.
+  Deterministic rejections (`ErrBatchRejected`,
   `ErrSourceOwnership`, `ErrSourceNotRegistered`, `ErrSourcePurged`) never
   retry. A purged source's registration and batches are answered with
   `CodeRejected` and the refusal text names the purge date and the

@@ -82,10 +82,15 @@ to every pooled connection, and `store.Open` verifies them before use. Open the 
 it open while readers run: a read-only connection cannot create the database or recover the
 write-ahead log.
 
-The busy timeout is 5 s, so a lock held by another process, such as a backup tool, fails a statement
-only after that wait. SQLite answers a few conflicts between two processes that open the same
-database at once without that wait. `store.Open` then repeats its attempt until one busy timeout has
-passed since the attempt that first failed. Driver parameters with a leading underscore apply to every
+The busy timeout is 5 s. A single write statement and a migration, which takes the write lock
+first, wait up to that time for a lock that another process holds, such as a backup tool. A
+transaction of the store does not wait. Each one starts deferred and reads before it writes, and
+SQLite fails the first write statement at once with `database is locked` when another connection
+holds the write lock. The caller then retries: the hub makes three attempts in about 0.3 s and sends
+no acknowledgment, and the ingest service reads the same bytes again on its next pass. SQLite also
+answers a few conflicts between two processes that open the same database at once without that
+wait. `store.Open` then repeats its attempt until one busy timeout has passed since the attempt that
+first failed. Driver parameters with a leading underscore apply to every
 pooled connection; `mode=ro` reaches SQLite when it opens the file. `store.OpenReadOnly` serves
 `ohya doctor`: it opens an existing hub database in WAL mode with one read-only pool, applies no
 migrations, and has no writer.
