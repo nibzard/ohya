@@ -1,0 +1,42 @@
+# Context
+
+## Background
+After an upgrade, each agent session that was open keeps its ohya mcp
+process on the old build. Only ohya doctor reported that. The owner
+ran install.sh, saw "memory: ready", and had no sign that two sessions
+still ran the deleted binary (2026-11-25). docs/installer-plan.md
+asks setup to report external running clients that need a new session.
+
+## Why This Way
+- The result is a warning. Report.Complete() is false only for failed,
+  unsupported, and blocked, so a warning keeps exit code 0 and the
+  upgrade ends well. Setup must not stop a coding session: the owner
+  decides when a session reconnects.
+- setup calls the mcp_build check of doctor. One rule for "another
+  build" serves both commands.
+- setup reads the processes before setup.Run. The verification step of
+  setup starts an ohya mcp process of the setup binary. With a
+  committed build that process counts as "this build". With an
+  uncommitted build the check cannot tell it from another build, so it
+  would give a false warning when the process is still alive. Before
+  the run, that cannot happen.
+- setup reads <state>/observe, or <state>/join/observe for a remote
+  connection, the directory that ohya mcp publishes to in each mode.
+- The result prints after the run. When setup.Run returns an error,
+  printSetupReport prints the failure and no result, as for the PATH
+  conflict. Doctor then reports the processes.
+
+## Gotchas
+- runSetupCommandWith takes the flags without the command name.
+- A remote setup without --dry-run pairs with a hub, so a remote test
+  uses --dry-run.
+- The text test runs the real path through a shell wrapper around the
+  test binary ("child-run"), the pattern of TestRemoteSetupPairsAndResumes.
+- 9 mutation checks failed a test, and a tenth (a missing result) was
+  repeated in a form that compiles. The placement before setup.Run is
+  a design decision without a test: the verification process is reaped
+  before the run ends in both placements.
+
+## Related
+Follows 991a5ea (the check compares uncommitted builds) and cce0559
+(the check reads the observe directory of a joined device).
