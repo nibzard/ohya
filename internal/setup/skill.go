@@ -71,6 +71,8 @@ FROM sessions WHERE repo = 'github.com/owner/name'
 ORDER BY last_event_at_ms DESC LIMIT 10;
 ` + "```" + `
 
+A repo filter skips sessions whose working directory resolved to no repository (` + "`repo IS NULL`" + `), for example sessions outside a git tree. When the results look thin, also try a ` + "`cwd`" + ` filter or the agent and time window recipe below.
+
 Find sessions by agent and time window (` + "`claude-code`" + `, ` + "`codex`" + `, ` + "`pi`" + `, ` + "`antigravity`" + `):
 
 ` + "```sql" + `

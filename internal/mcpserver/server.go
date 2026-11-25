@@ -109,7 +109,7 @@ Recipes (keep results small with substr/snippet; format *_ms via datetime(col/10
 Recent sessions:
 SELECT id, agent, substr(first_prompt, 1, 160) AS first_prompt, datetime(last_event_at_ms/1000, 'unixepoch') AS last_utc, event_count FROM sessions ORDER BY last_event_at_ms DESC LIMIT 5;
 
-Project sessions across devices (repo = host/path from workspaces or git remote):
+Project sessions across devices (repo = host/path from workspaces or git remote; repo IS NULL when none resolved, so when results look thin also try cwd or a time window):
 SELECT device_id, agent, cwd, substr(first_prompt, 1, 160) AS first_prompt, datetime(last_event_at_ms/1000, 'unixepoch') AS last_utc FROM sessions
 WHERE repo = 'github.com/owner/name' ORDER BY last_event_at_ms DESC LIMIT 10;
 
