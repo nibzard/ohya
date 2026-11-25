@@ -3173,7 +3173,10 @@ How to use this file:
     <nil>, want ErrBusy" after 5.06 s. The test is unchanged since
     `996e0fe`, the next run on `main` passed, and it was not reproduced.
     The loop fails only when the slow query does not hold its only slot
-    during the 5 s of the loop. How that can happen is not known.
+    during the 5 s of the loop. That query sums one billion rows and
+    needs about 2.6 minutes here, so its goroutine took the slot late or
+    not at all. Why is not known. Research note:
+    /notes/2026-11-25-timing-tests-on-loaded-runners.md.
 
 - menubar-session-tags (2026-11-25; `b7e31f1` and `fbce579` by the owner,
   merged in `6676d10` after the v0.8.0 tag, so it is in no release): `ohya
