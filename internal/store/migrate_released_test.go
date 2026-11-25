@@ -34,6 +34,7 @@ var releasedSchemas = []releasedSchema{
 	{"v0.6.1", 8},
 	{"v0.7.0", 8},
 	{"v0.7.1", 8},
+	{"v0.8.0", 9},
 }
 
 const releasedSeedMs = 1731800000000
@@ -100,9 +101,15 @@ func seedReleasedDatabase(t *testing.T, db *sql.DB, schema int) {
 		releasedClaudeSession, deviceHex)
 	must(`INSERT INTO sessions(id,agent,device_id,native_id,event_count)
 		VALUES(?, 'codex', ?, 'rel-thread', 1)`, releasedCodexSession, deviceHex)
-	must(`INSERT INTO sources(id,device_id,agent,path,file_identity,cursor_bytes,updated_at_ms)
-		VALUES('relsrc-a', ?, 'claude-code', ?, 'released-file-identity', ?, ?)`,
-		deviceHex, releasedClaudePath, releasedClaudeCursor(), releasedSeedMs)
+	if schema >= 9 {
+		must(`INSERT INTO sources(id,device_id,agent,path,cursor_bytes,updated_at_ms)
+			VALUES('relsrc-a', ?, 'claude-code', ?, ?, ?)`,
+			deviceHex, releasedClaudePath, releasedClaudeCursor(), releasedSeedMs)
+	} else {
+		must(`INSERT INTO sources(id,device_id,agent,path,file_identity,cursor_bytes,updated_at_ms)
+			VALUES('relsrc-a', ?, 'claude-code', ?, 'released-file-identity', ?, ?)`,
+			deviceHex, releasedClaudePath, releasedClaudeCursor(), releasedSeedMs)
+	}
 	must(`INSERT INTO sources(id,device_id,agent,path,cursor_bytes,updated_at_ms)
 		VALUES('relsrc-b', ?, 'codex', '/released/rollout.jsonl', ?, ?)`, deviceHex, releasedCodexCursor(), releasedSeedMs)
 	res, err := tx.Exec(`INSERT INTO events(session_id,source_id,source_offset,kind,role,text,raw_json,parser_version)
