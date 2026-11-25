@@ -76,15 +76,18 @@ Bookkeeping records carry only `sessionId` and their own fields:
     and a `content` array. It has no `timestamp`, `uuid`, `cwd`,
     `message.id`, `model`, or `usage`. Block types seen: `text`, `thinking`,
     `tool_use`, `tool_result`, and `tool_addition`.
-- `pr-link` holds `prNumber`, `prUrl`, `prRepository`, and `timestamp`. It was
-  seen once, with 2.1.280.
+- `pr-link` holds `prNumber`, `prUrl`, `prRepository`, and `timestamp`. Seen
+  in 2.1.280 sessions.
 - `file-history-snapshot` and `file-history-delta` hold file backup data
   (`snapshot.trackedFileBackups`, `backup` with `backupFileName`, `version`,
   `backupTime`, and `realParentDir`). They carry `messageId` and no
   `sessionId`, so they land in the synthetic session of their source.
 
-Subagent files add `started`, `result`, `launched`, and `failed`. These carry
-`agentId` and a `key`, not `sessionId`.
+Subagent files add `started`, `result`, `launched`, `failed`, and
+`fork-context-ref`. The first four carry `agentId` and a `key`;
+`fork-context-ref` carries `agentId`, `parentSessionId`, `parentLastUuid`,
+and `contextLength`. None carries `sessionId`, so they land in the synthetic
+session of their source.
 
 ### Native session identity
 
@@ -132,8 +135,8 @@ monotonic. Do not sort by timestamp alone.
 - Kind: the message types `user`, `assistant`, `attachment`, and `system`;
   the bookkeeping types `queue-operation`, `mode`, `permission-mode`,
   `atis-latch`, `last-prompt`, `ai-title`, `cost-state`, and `agent-name`;
-  the subagent types `started`, `result`, `launched`, and `failed`; the
-  request-log types `api-request`, `api-request-blob`,
+  the subagent types `started`, `result`, `launched`, `failed`, and
+  `fork-context-ref`; the request-log types `api-request`, `api-request-blob`,
   `api-request-shape`, `session-owner`, and `tools-used`; and the record
   types `pr-link`, `file-history-snapshot`, and `file-history-delta`.
   Every other type is `unknown`.

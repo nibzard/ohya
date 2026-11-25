@@ -379,7 +379,7 @@ Output version history:
 |---|---|---|
 | `claudecode` | 1 | Output when the marker was introduced |
 | `claudecode` | 2 | Ignores `"usage": null`, avoids HTML escaping in compact JSON tool payloads, and excludes sidechain subagent prompts from `first_prompt` |
-| `claudecode` | 3 | Stores the request-log and bookkeeping types (`api-request`, `api-request-blob`, `api-request-shape`, `session-owner`, `tools-used`, `pr-link`, `file-history-snapshot`, `file-history-delta`) under their own kind, not `unknown`, and reads `message` only for `user` and `assistant` records, so an `api-request-blob` copy contributes no `text` |
+| `claudecode` | 3 | Stores the request-log and bookkeeping types (`api-request`, `api-request-blob`, `api-request-shape`, `session-owner`, `tools-used`, `pr-link`, `file-history-snapshot`, `file-history-delta`, `fork-context-ref`) under their own kind, not `unknown`, and reads `message` only for `user` and `assistant` records, so an `api-request-blob` copy contributes no `text` |
 | `codex` | 1 | Output when the marker was introduced |
 | `codex` | 2 | Adds `Record.Repo`, derived from `session_meta.git.repository_url` |
 | `codex` | 3 | `Record.Repo` uses `workspace.NormalizeRemote`: drops a port from a URL with a scheme, drops all user information up to the last `@`, and rejects an invalid host |

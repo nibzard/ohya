@@ -587,6 +587,37 @@ func TestParseRequestLogRecords(t *testing.T) {
 	}
 }
 
+func TestParseForkContextRef(t *testing.T) {
+	const scope = "src-fork"
+	line := `{"type":"fork-context-ref","agentId":"agent-fixture-0001","parentSessionId":"00000000-0000-4000-8000-0000000000c1","parentLastUuid":"00000000-0000-4000-8000-0000000000c4","contextLength":42}` + "\n"
+	res, err := Parse([]byte(line), 0, Options{SourceScope: scope})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Records) != 1 {
+		t.Fatalf("got %d records, want 1", len(res.Records))
+	}
+	checkInvariants(t, []byte(line), 0, res)
+	r := res.Records[0]
+	if r.Kind != "fork-context-ref" {
+		t.Errorf("kind = %q, want fork-context-ref", r.Kind)
+	}
+	if !r.Synthetic || r.Native != SyntheticNativeIDPrefix+scope {
+		t.Errorf("native = %q (synthetic %t), want %q", r.Native, r.Synthetic, SyntheticNativeIDPrefix+scope)
+	}
+	if r.Text != "" || r.ContentForm != "" || r.Role != "" || r.ToolName != "" ||
+		r.MessageID != "" || r.Model != "" || r.Usage != nil || r.HasTime || r.TimeMS != 0 {
+		t.Errorf("unexpected derived fields: %+v", r)
+	}
+	md := metadataOf(t, r)
+	if md["agentId"] != "agent-fixture-0001" {
+		t.Errorf("metadata = %v, want agentId", md)
+	}
+	if _, observed := md["observedType"]; observed {
+		t.Errorf("known kind must not set observedType: %v", md)
+	}
+}
+
 func TestParseMessageIsReadForMessageRecordsOnly(t *testing.T) {
 	const message = `"message":{"role":"assistant","id":"m1","model":"fixture-model",` +
 		`"content":[{"type":"text","text":"leak"}],"usage":{"input_tokens":5,"output_tokens":1}}`

@@ -94,12 +94,21 @@ func eventFromRecord(r claudecode.Record) Event {
 		Cwd: r.Cwd, GitBranch: r.GitBranch, Model: r.Model,
 		MessageID: r.MessageID, ParserVersion: claudecode.OutputVersion,
 	}
-	var md struct {
-		ContentForm string `json:"contentForm"`
-	}
-	_ = json.Unmarshal([]byte(r.Metadata), &md)
-	if r.Kind == "user" && md.ContentForm == "string" {
-		e.Prompt = r.Text
+	if r.Kind == "user" && !r.IsSidechain {
+		contentForm := r.ContentForm
+		isSidechain := r.IsSidechain
+		if contentForm == "" && r.Metadata != "" {
+			var md struct {
+				ContentForm string `json:"contentForm"`
+				IsSidechain bool   `json:"isSidechain"`
+			}
+			_ = json.Unmarshal([]byte(r.Metadata), &md)
+			contentForm = md.ContentForm
+			isSidechain = md.IsSidechain
+		}
+		if contentForm == "string" && !isSidechain {
+			e.Prompt = r.Text
+		}
 	}
 	if len(r.Usage) > 0 && string(r.Usage) != "null" {
 		var u struct {

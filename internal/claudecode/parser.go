@@ -24,7 +24,8 @@ var knownKinds = map[string]bool{
 	"atis-latch": true, "last-prompt": true, "ai-title": true,
 	"cost-state": true, "agent-name": true,
 	"started": true, "result": true, "launched": true, "failed": true,
-	"api-request": true, "api-request-blob": true, "api-request-shape": true,
+	"fork-context-ref": true,
+	"api-request":      true, "api-request-blob": true, "api-request-shape": true,
 	"session-owner": true, "tools-used": true, "pr-link": true,
 	"file-history-snapshot": true, "file-history-delta": true,
 }

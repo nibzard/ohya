@@ -555,41 +555,72 @@ func TestReDeriveDropsRequestBlobText(t *testing.T) {
 	message := mkEvent(0, rawUser("alpha bravo"))
 	message.Text = "alpha bravo"
 	message.ParserVersion = previous
-	blobRaw := `{"type":"api-request-blob","sessionId":"sess-1","hash":"` + strings.Repeat("a", 64) +
+
+	toolRaw := `{"type":"assistant","sessionId":"sess-1","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/catalog.txt"}}]}}`
+	toolMsg := Event{
+		Offset: message.End, End: message.End + int64(len(toolRaw)) + 1, NativeID: "sess-1",
+		Kind: "assistant", Role: "assistant", ToolName: "Read",
+		Text:          `Read {"file_path":"/catalog.txt"}`,
+		RawJSON:       toolRaw,
+		Metadata:      `{"blocks":[{"id":"t1","input":{"file_path":"/catalog.txt"},"name":"Read","type":"tool_use"}],"contentForm":"array"}`,
+		ParserVersion: previous,
+	}
+
+	userBlobRaw := `{"type":"api-request-blob","sessionId":"sess-1","hash":"` + strings.Repeat("a", 64) +
 		`","message":{"role":"user","content":[{"type":"text","text":"alpha bravo"}]}}`
-	blob := Event{
-		Offset: message.End, End: message.End + int64(len(blobRaw)) + 1, NativeID: "sess-1",
-		Kind: "unknown", Role: "user", Text: "alpha bravo", RawJSON: blobRaw,
+	userBlob := Event{
+		Offset: toolMsg.End, End: toolMsg.End + int64(len(userBlobRaw)) + 1, NativeID: "sess-1",
+		Kind: "unknown", Role: "user", Text: "alpha bravo", RawJSON: userBlobRaw,
 		Metadata:      `{"blocks":[{"type":"text"}],"contentForm":"array","observedType":"api-request-blob"}`,
 		ParserVersion: previous,
 	}
-	mustIngest(t, hub, Batch{SourceID: "s1", Events: []Event{message, blob}})
+
+	toolBlobRaw := `{"type":"api-request-blob","sessionId":"sess-1","hash":"` + strings.Repeat("b", 64) +
+		`","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/catalog.txt"}}]}}`
+	toolBlob := Event{
+		Offset: userBlob.End, End: userBlob.End + int64(len(toolBlobRaw)) + 1, NativeID: "sess-1",
+		Kind: "unknown", Role: "assistant", ToolName: "Read",
+		Text:          `Read {"file_path":"/catalog.txt"}`,
+		RawJSON:       toolBlobRaw,
+		Metadata:      `{"blocks":[{"id":"t1","input":{"file_path":"/catalog.txt"},"name":"Read","type":"tool_use"}],"contentForm":"array","observedType":"api-request-blob"}`,
+		ParserVersion: previous,
+	}
+
+	mustIngest(t, hub, Batch{SourceID: "s1", Events: []Event{message, toolMsg, userBlob, toolBlob}})
 	if n := matchCount(t, hub, "bravo"); n != 2 {
 		t.Fatalf("precondition: MATCH bravo = %d, want 2 (the message and its blob copy)", n)
+	}
+	if n := matchCount(t, hub, "catalog"); n != 2 {
+		t.Fatalf("precondition: MATCH catalog = %d, want 2 (the tool_use and its blob copy)", n)
 	}
 
 	res, err := hub.ReDerive(ctx, []ParserDeriver{claudeDeriver(claudecode.OutputVersion, nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Events != 2 {
-		t.Fatalf("re-derive walked %d events, want 2", res.Events)
+	if res.Events != 4 {
+		t.Fatalf("re-derive walked %d events, want 4", res.Events)
 	}
 
-	var kind string
-	var text sql.NullString
-	var version int
-	if err := hub.Writer().QueryRow(
-		`SELECT kind, text, parser_version FROM events WHERE source_offset = ?`, blob.Offset).
-		Scan(&kind, &text, &version); err != nil {
-		t.Fatal(err)
-	}
-	if kind != "api-request-blob" || text.Valid || version != claudecode.OutputVersion {
-		t.Fatalf("blob row after re-derive = (%s, text valid %t, version %d); want (api-request-blob, false, %d)",
-			kind, text.Valid, version, claudecode.OutputVersion)
+	for _, offset := range []int64{userBlob.Offset, toolBlob.Offset} {
+		var kind, metadata string
+		var role, toolName, text sql.NullString
+		var version int
+		if err := hub.Writer().QueryRow(
+			`SELECT kind, role, tool_name, text, metadata, parser_version FROM events WHERE source_offset = ?`, offset).
+			Scan(&kind, &role, &toolName, &text, &metadata, &version); err != nil {
+			t.Fatal(err)
+		}
+		if kind != "api-request-blob" || role.Valid || toolName.Valid || text.Valid || metadata != "{}" || version != claudecode.OutputVersion {
+			t.Fatalf("blob at offset %d after re-derive = (kind=%s role=%v tool=%v text=%v md=%s pv=%d); want api-request-blob with NULL role/tool/text, md={}, pv=%d",
+				offset, kind, role, toolName, text, metadata, version, claudecode.OutputVersion)
+		}
 	}
 	if n := matchCount(t, hub, "bravo"); n != 1 {
 		t.Fatalf("MATCH bravo = %d after re-derive, want 1 (the message only)", n)
+	}
+	if n := matchCount(t, hub, "catalog"); n != 1 {
+		t.Fatalf("MATCH catalog = %d after re-derive, want 1 (the tool_use only)", n)
 	}
 	if err := hub.FTSIndexConsistent(ctx); err != nil {
 		t.Fatalf("FTSIndexConsistent after re-derive: %v", err)
