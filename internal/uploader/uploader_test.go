@@ -247,7 +247,14 @@ func (f *fixture) sync() (Stats, error) {
 
 func (f *fixture) mustSync() Stats {
 	f.t.Helper()
-	stats, err := f.sync()
+	return f.mustSyncWithin(30 * time.Second)
+}
+
+func (f *fixture) mustSyncWithin(timeout time.Duration) Stats {
+	f.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	stats, err := f.up.Sync(ctx, f.candidates())
 	if err != nil {
 		f.t.Fatalf("Sync: %v\nlog:\n%s", err, f.log)
 	}
@@ -919,7 +926,7 @@ func TestOversizedRecordStopsLocally(t *testing.T) {
 }
 
 func TestLargeFileUploadsInBoundedBatches(t *testing.T) {
-	f := newFixture(t, Options{})
+	f := newFixture(t, Options{RequestTimeout: DefaultRequestTimeout})
 	db := openHubDB(t, filepath.Join(t.TempDir(), "hub.db"))
 	h := serve(t, db, f.reg, hubsync.Options{})
 	f.dialer.point(h.addr)
@@ -931,7 +938,7 @@ func TestLargeFileUploadsInBoundedBatches(t *testing.T) {
 	}
 	a := filepath.Join(f.dir, "a.jsonl")
 	writeFile(t, a, sb.String())
-	if stats := f.mustSync(); stats.Inserted != int64(n) {
+	if stats := f.mustSyncWithin(2 * DefaultRequestTimeout); stats.Inserted != int64(n) {
 		t.Fatalf("stats = %+v; want %d events", stats, n)
 	}
 	if got := f.dialer.batches.Load(); got != 2 {
