@@ -89,12 +89,20 @@ reads. A single write statement and a migration wait in the same way. A lock hel
 the transaction with `database is locked`, and the caller retries: the hub makes three attempts in
 about 15 s and sends no acknowledgment, and the ingest service reads the same bytes again on its
 next pass. A context that ends does not shorten the wait. The plan of a purge (`PlanPurge`) reads
-through a reader pool, so it takes no write lock. SQLite also answers a few conflicts between
-two processes that open the same database at once without that wait. `store.Open` then repeats its
-attempt until one busy timeout has passed since the attempt that first failed. Driver parameters
+through a reader pool, so it takes no write lock. Driver parameters
 with a leading underscore apply to every pooled connection; `mode=ro` reaches SQLite when it opens
 the file. `store.OpenReadOnly` serves `ohya doctor`: it opens an existing hub database in WAL mode
 with one read-only pool, applies no migrations, and has no writer.
+
+An up-to-date database needs no write lock to open. The open waits only when a migration is
+pending, because each migration begins immediate, or when SQLite answers a conflict between two
+processes that open the same database at once without the busy timeout. `store.Open` repeats its
+attempt on a busy error until one busy timeout has passed since the attempt that first failed,
+and returns the error with a hint. `store.WaitForLock(report)` removes that limit: the open then
+repeats its attempt until its context ends and calls `report` after a busy attempt, at most once
+per busy timeout. `ohya mcp`, `ohya serve`, and the ingest service open with it. A one-shot
+command and `ohya setup` open without it. A context that ends does not shorten the wait of one
+attempt, so an open that is stopped during the wait returns up to one busy timeout later.
 
 | Table | Meaning |
 |---|---|

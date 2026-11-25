@@ -206,6 +206,12 @@ func runIngestCommand(args []string, stdout, stderr io.Writer) error {
 	return err
 }
 
+func reportLockWait(w io.Writer) func(error) {
+	return func(err error) {
+		fmt.Fprintf(w, "ohya: hub database is busy, waiting for its write lock: %v\n", err)
+	}
+}
+
 func codexHome(home string) string {
 	if dir := os.Getenv("CODEX_HOME"); dir != "" {
 		return dir

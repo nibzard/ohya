@@ -23,10 +23,12 @@ const busyTimeout = time.Duration(busyTimeoutMs) * time.Millisecond
 const openBusyPause = 20 * time.Millisecond
 
 type DB struct {
-	path     string
-	writer   *sql.DB
-	readers  *sql.DB
-	observer observe.Observer
+	path        string
+	writer      *sql.DB
+	readers     *sql.DB
+	observer    observe.Observer
+	waitForLock bool
+	lockReport  func(error)
 }
 
 type OpenOption func(*DB)
@@ -36,6 +38,13 @@ func WithObserver(o observe.Observer) OpenOption {
 		if o != nil {
 			d.observer = o
 		}
+	}
+}
+
+func WaitForLock(report func(error)) OpenOption {
+	return func(d *DB) {
+		d.waitForLock = true
+		d.lockReport = report
 	}
 }
 
@@ -50,24 +59,47 @@ func Open(ctx context.Context, path string, opts ...OpenOption) (*DB, error) {
 	}
 	writer.SetMaxOpenConns(1)
 	writer.SetMaxIdleConns(1)
-	if err := prepareWriter(ctx, writer); err != nil {
-		_ = writer.Close()
-		return nil, err
-	}
 	d := &DB{path: abs, writer: writer, observer: observe.Disabled}
 	for _, opt := range opts {
 		opt(d)
 	}
+	if err := prepareWriter(ctx, d); err != nil {
+		_ = writer.Close()
+		return nil, err
+	}
 	return d, nil
 }
 
-func prepareWriter(ctx context.Context, writer *sql.DB) error {
-	return retryBusy(ctx, busyTimeout, func() error {
-		if err := verifyWriter(ctx, writer); err != nil {
-			return err
+func prepareWriter(ctx context.Context, d *DB) error {
+	wait := busyTimeout
+	var report func(error)
+	if d.waitForLock {
+		wait = 0
+		if d.lockReport != nil {
+			report = atMostEvery(busyTimeout, d.lockReport)
 		}
-		return migrate(ctx, writer, migrationsFS)
+	}
+	return retryBusy(ctx, wait, func() error {
+		err := verifyWriter(ctx, d.writer)
+		if err == nil {
+			err = migrate(ctx, d.writer, migrationsFS)
+		}
+		if busyDatabase(err) && report != nil {
+			report(err)
+		}
+		return err
 	})
+}
+
+func atMostEvery(interval time.Duration, report func(error)) func(error) {
+	var last time.Time
+	return func(err error) {
+		if time.Since(last) < interval {
+			return
+		}
+		last = time.Now()
+		report(err)
+	}
 }
 
 func retryBusy(ctx context.Context, wait time.Duration, attempt func() error) error {
@@ -84,8 +116,8 @@ func retryBusy(ctx context.Context, wait time.Duration, attempt func() error) er
 		if deadline.IsZero() {
 			deadline = started.Add(wait)
 		}
-		if !time.Now().Before(deadline) {
-			return err
+		if wait > 0 && !time.Now().Before(deadline) {
+			return fmt.Errorf("%w; the database stayed locked for %s, so another process may be migrating the database or may hold a long write", err, wait)
 		}
 		timer := time.NewTimer(openBusyPause)
 		select {

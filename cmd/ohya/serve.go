@@ -115,7 +115,7 @@ func runServe(ctx context.Context, o serveOptions) error {
 
 	telem := startTelemetry(o.stateDir, o.observe, sqliteSampleFiles(o.dbPath), observe.RoleServe)
 	defer telem.close()
-	hub, err := store.Open(ctx, o.dbPath, store.WithObserver(telem.observer()))
+	hub, err := store.Open(ctx, o.dbPath, store.WithObserver(telem.observer()), store.WaitForLock(reportLockWait(o.stdout)))
 	if err != nil {
 		if errors.Is(ctx.Err(), context.Canceled) {
 			return nil

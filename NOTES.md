@@ -332,21 +332,23 @@ How to use this file:
     and before it changes a service file (ADR 0008, "Recovery points"),
     and reports `schema: updated` or `schema: failed` with the cause.
     A `Type=simple` service is active before its first open of the
-    database ends, the hub probe of setup allows 30 s, and an open that
-    finds the database busy gives up after one busy timeout of 5 s. A
-    migration inside a starting service therefore outlasts both limits
-    on this hub. That failure of the old flow follows from the code and
-    from the held-transaction check in the next bullet; it was not
-    reproduced with a real migration.
+    database ends, the hub probe of setup allows 30 s, and a service
+    whose open finds the database busy now waits for the write lock (it
+    gave up after one busy timeout of 5 s before 2026-11-25). A migration
+    inside a starting service therefore outlasts the probe on this hub.
+    That failure of the old flow follows from the code and from the
+    held-transaction check in the next bullet; it was not reproduced with
+    a real migration.
   - Checked with a held write transaction and a pending 009: a second
     writer open failed after 5.0 s with `store: migration
     009_source_workspace: begin: database is locked`. A read-only open
-    and its query worked at once. So a new `ohya mcp` process that
-    starts during the migration of a hub fails, and that agent has no
-    memory tools until its MCP server restarts. Processes that are
-    already open keep their access. Plan the upgrade of a large hub for
-    a time when no agent starts a session, or decide on a longer wait of
-    `store.Open` (the open question at TestHubSetupTwoStepFlow below).
+    and its query worked at once. So before the change a new `ohya mcp`
+    process that started during the migration of a hub failed, and that
+    agent had no memory tools until its MCP server restarted. Processes
+    that are already open keep their access. Fixed on 2026-11-25: the
+    open of `ohya mcp` and of both services now waits for the lock (see
+    "Store transactions and the write lock" below). An agent session that
+    starts during the migration still has no memory tools for that time.
   - A batch that the running hub service commits during such a migration
     now waits for the lock and gives up after about 15 s with no
     acknowledgment; before the change it was refused after 302 ms. The hub
@@ -389,6 +391,37 @@ How to use this file:
   - The time of the `internal/store` tests swings with the load of this
     machine (10 s to 49 s for one package) and does not change with the
     transaction mode.
+  - Open wait (2026-11-25): `store.WaitForLock(report)` makes `store.Open`
+    repeat its attempt until its context ends and call `report` after a
+    busy attempt, at most once per busy timeout. `ohya mcp`, `ohya serve`
+    and the ingest service open with it. One-shot commands and `ohya
+    setup` stay bounded, and their busy error now names the lock and the
+    wait.
+  - `ohya mcp` opens the database in the background
+    (`mcpserver.Opening`). The handshake and the tool list need no
+    database. A tool call that arrives before the open ends waits up to
+    its deadline and then returns "the hub database is still opening". An
+    open error stops the server, and the process exits with that error.
+  - Measured: an up-to-date database needs no write lock to open. A
+    bounded open under a held `BEGIN IMMEDIATE` succeeded at once, and
+    only a pending migration made it wait. The command tests therefore
+    hold the database with a connection in `locking_mode=EXCLUSIVE`, which
+    blocks every statement of another connection. That lock ends only when
+    the connection closes; a rollback does not release it.
+  - Limit: a process that stops while its open waits for the lock exits up
+    to one busy timeout later, because SQLite does not shorten the wait.
+    Claude Code stops a stdio server with SIGINT, then SIGTERM after
+    100 ms, then SIGKILL after 400 ms more, so `ohya mcp` is killed in
+    that case. That is safe: the open holds no transaction, and a
+    migration is atomic.
+  - Tests: `TestOpenWaitsForTheLockOnlyWhenAsked`,
+    `TestRetryBusyWaitsUntilTheContextEnds` and
+    `TestAtMostEveryReportsOncePerInterval` (`internal/store`);
+    `TestOpening*` and `TestServerAnswersWhileTheDatabaseOpens`
+    (`internal/mcpserver`); `TestMCPStdioServesWhileTheHubDatabaseIsLocked`,
+    `TestMCPStdioExitsWithTheOpenError` and
+    `TestHubServicesWaitForALockedHubDatabase` (`cmd/ohya/hub_lock_test.go`).
+    Each fails when its part of the change is reverted.
   - Research note: /notes/2026-11-24-concurrent-open-migration-race.md.
 
 - A stray build was deleted by mistake (2026-11-24, 22:23): a scratch
@@ -2678,13 +2711,15 @@ How to use this file:
   - A cached run proves nothing about a flake: `make check` returns the
     results of the last run when no Go file changed. Use
     `GOFLAGS=-count=1` to count flakes.
-  - Open: a migration that one process runs for longer than about two
-    busy timeouts still makes a process that opens the database at that
-    time exit with `database is locked`. Migration 009 is that slow on a
-    large hub since it builds the index: 3 min 41 s on this hub (see
-    "Schema 9 upgrade path"). A longer wait is a decision for the
-    owner. `store.OpenReadOnly` has no retry, and macOS was not tested.
-    Research note:
+  - Fixed for services and `ohya mcp` on 2026-11-25 with
+    `store.WaitForLock` (see "Store transactions and the write lock"). A
+    migration that one process runs for longer than two busy timeouts
+    (009 takes 3 min 41 s on this hub; see "Schema 9 upgrade path") no
+    longer makes them exit. A one-shot command and `ohya setup` still
+    exit with `database is locked` after one busy timeout, now with a
+    hint.
+  - Still open: `store.OpenReadOnly` has no retry, and macOS was not
+    tested. Research note:
     /notes/2026-11-24-concurrent-open-migration-race.md.
 
 - TestIdleKeepalivePreventsReconnectProbeStorm (`9d86d67`; margins

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -281,6 +282,40 @@ func TestRetryBusyGivesUpAfterTheWait(t *testing.T) {
 	if !busyDatabase(err) || attempts < 2 || time.Since(started) < 150*time.Millisecond {
 		t.Fatalf("err = %v after %d attempts in %s, want the busy error after a 150 ms wait", err, attempts, time.Since(started))
 	}
+	if !strings.Contains(err.Error(), "stayed locked for 150ms") {
+		t.Fatalf("err = %v, want the error to name the lock and the wait", err)
+	}
+}
+
+func TestRetryBusyWaitsUntilTheContextEnds(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	attempts := 0
+	err := retryBusy(ctx, 0, func() error {
+		attempts++
+		if attempts == 4 {
+			cancel()
+		}
+		return busyError()
+	})
+	if !errors.Is(err, context.Canceled) || attempts != 4 {
+		t.Fatalf("err = %v after %d attempts, want context.Canceled after 4", err, attempts)
+	}
+}
+
+func TestAtMostEveryReportsOncePerInterval(t *testing.T) {
+	calls := 0
+	report := atMostEvery(20*time.Millisecond, func(error) { calls++ })
+	report(busyError())
+	report(busyError())
+	if calls != 1 {
+		t.Fatalf("report ran %d times in one interval, want 1", calls)
+	}
+	time.Sleep(30 * time.Millisecond)
+	report(busyError())
+	if calls != 2 {
+		t.Fatalf("report ran %d times after the interval, want 2", calls)
+	}
 }
 
 func TestRetryBusyStopsWhenTheContextEnds(t *testing.T) {
@@ -294,6 +329,85 @@ func TestRetryBusyStopsWhenTheContextEnds(t *testing.T) {
 	})
 	if !errors.Is(err, context.Canceled) || attempts != 1 {
 		t.Fatalf("err = %v after %d attempts, want context.Canceled after 1", err, attempts)
+	}
+}
+
+func openAndClose(path string, opts ...OpenOption) error {
+	hub, err := Open(context.Background(), path, opts...)
+	if err != nil {
+		return err
+	}
+	return hub.Close()
+}
+
+func outdatedDatabase(t *testing.T) string {
+	t.Helper()
+	current, err := SchemaVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "hub.db")
+	db, err := sql.Open("sqlite3", writerDSN(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := migrate(context.Background(), db, releasedMigrations(t, current-1)); err != nil {
+		t.Fatalf("build a database one migration behind: %v", err)
+	}
+	return path
+}
+
+func TestOpenWaitsForTheLockOnlyWhenAsked(t *testing.T) {
+	path := outdatedDatabase(t)
+	conn := holdWriteLock(t, path)
+
+	var mu sync.Mutex
+	reports := 0
+	firstReport := make(chan struct{}, 2)
+	waiting := make(chan error, 1)
+	go func() {
+		waiting <- openAndClose(path, WaitForLock(func(error) {
+			mu.Lock()
+			reports++
+			mu.Unlock()
+			firstReport <- struct{}{}
+		}))
+	}()
+	bounded := make(chan error, 1)
+	go func() {
+		bounded <- openAndClose(path)
+	}()
+	var err error
+
+	select {
+	case err = <-bounded:
+	case <-time.After(2 * busyTimeout):
+		t.Fatal("a bounded open did not return while another connection held the write lock")
+	}
+	if !busyDatabase(err) || !strings.Contains(err.Error(), "stayed locked for 5s") {
+		t.Fatalf("a bounded open returned %v; want the busy error with a hint after one busy timeout", err)
+	}
+	select {
+	case <-firstReport:
+	case <-time.After(2 * busyTimeout):
+		t.Fatal("the waiting open did not report the held lock")
+	}
+	if _, err := conn.ExecContext(context.Background(), `ROLLBACK`); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err = <-waiting:
+	case <-time.After(2 * busyTimeout):
+		t.Fatal("the waiting open did not return after the lock was released")
+	}
+	if err != nil {
+		t.Fatalf("waiting open returned %v; want the migration after the lock was released", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if reports != 1 {
+		t.Fatalf("waiting open reported the lock %d times, want 1", reports)
 	}
 }
 

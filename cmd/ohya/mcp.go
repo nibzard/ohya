@@ -80,23 +80,40 @@ func runMcp(ctx context.Context, dbPath, stateDir string, observeOn bool) error 
 	}
 	telem := startTelemetry(stateDir, observeOn, sqliteSampleFiles(dbPath), observe.RoleMCP)
 	defer telem.close()
-	hub, err := store.Open(ctx, dbPath)
-	if err != nil {
-		return err
-	}
-	defer hub.Close()
-	readers, err := hub.Reader()
-	if err != nil {
-		return err
-	}
-	defer readers.Close()
 	deviceID, err := device.LoadOrCreate(stateDir)
 	if err != nil {
 		return err
 	}
-	server := mcpserver.New(mcpserver.NewEngine(readers, hub.Writer(), mcpserver.EngineOptions{WriterID: deviceID, Usage: telem.usageSink(), Observer: telem.observer(), Events: telem.eventsSink()}),
-		mcpserver.EngineOptions{WriterID: deviceID})
-	return mcpserver.Run(ctx, server)
+	engineOptions := mcpserver.EngineOptions{WriterID: deviceID, Usage: telem.usageSink(), Observer: telem.observer(), Events: telem.eventsSink()}
+	opening := mcpserver.OpenInBackground(ctx, engineOptions, func(ctx context.Context) (mcpserver.Backend, func(), error) {
+		return openMcpEngine(ctx, dbPath, engineOptions)
+	})
+	serverCtx, stopServer := context.WithCancel(ctx)
+	defer stopServer()
+	go func() {
+		if err := opening.Wait(); err != nil && ctx.Err() == nil {
+			stopServer()
+		}
+	}()
+	runErr := mcpserver.Run(serverCtx, mcpserver.New(opening, mcpserver.EngineOptions{WriterID: deviceID}))
+	openErr := opening.Close()
+	if openErr != nil && !errors.Is(openErr, context.Canceled) {
+		return openErr
+	}
+	return runErr
+}
+
+func openMcpEngine(ctx context.Context, dbPath string, o mcpserver.EngineOptions) (mcpserver.Backend, func(), error) {
+	hub, err := store.Open(ctx, dbPath, store.WaitForLock(reportLockWait(os.Stderr)))
+	if err != nil {
+		return nil, nil, err
+	}
+	readers, err := hub.Reader()
+	if err != nil {
+		hub.Close()
+		return nil, nil, err
+	}
+	return mcpserver.NewEngine(readers, hub.Writer(), o), func() { readers.Close(); hub.Close() }, nil
 }
 
 func runMcpRemote(ctx context.Context, stateDir string, observeOn bool) error {

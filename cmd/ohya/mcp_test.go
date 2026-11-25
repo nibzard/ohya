@@ -89,11 +89,20 @@ func seedMcpDatabase(t *testing.T) (dbPath, stateDir string) {
 
 func startMcpProcess(t *testing.T, dbPath, stateDir string) *mcp.ClientSession {
 	t.Helper()
+	return connectMcpProcess(t, mcpProcessCommand(dbPath, stateDir))
+}
+
+func mcpProcessCommand(dbPath, stateDir string) *exec.Cmd {
 	cmd := exec.Command(os.Args[0])
 	cmd.Env = append(os.Environ(),
 		"OHYA_MCP_TEST_DB="+dbPath,
 		"OHYA_MCP_TEST_STATE="+stateDir,
 	)
+	return cmd
+}
+
+func connectMcpProcess(t *testing.T, cmd *exec.Cmd) *mcp.ClientSession {
+	t.Helper()
 	client := mcp.NewClient(&mcp.Implementation{Name: "stdio-client", Version: "v0"}, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)

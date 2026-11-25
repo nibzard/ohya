@@ -258,7 +258,12 @@ of every watched file.
 
 `ohya serve` runs the hub side of device sync until it receives SIGINT or
 SIGTERM; the process exits 0 whether the signal arrives during startup
-(identity creation, relay setup, database open) or while serving. On its
+(identity creation, relay setup, database open) or while serving. When
+another process holds the write lock of the database at start, for example
+a migration, serve waits for the lock and logs `ohya: hub database is busy,
+waiting for its write lock` at most once per 5 s. The ingest service waits
+in the same way; `ohya ingest --once` and the other one-shot commands fail
+after one busy timeout (5 s) with `database is locked` and a hint. On its
 first start it creates the Tailcat hub identity — node key,
 pre-shared key, relay region — and saves it owner-only under `tailcat-hub/`
 in the state directory, so the hub's address stays the same across
@@ -412,7 +417,11 @@ the command is safe to run any time.
 (same `--db` and `--state` flags). The initialize result identifies the
 server as `ohya` with the same build version `ohya version` prints (the
 release tag, or the source pseudo-version in a development build), so a
-client can tell which build serves it. The tool runs exactly one statement
+client can tell which build serves it. The server completes its handshake
+before it opens the database. While another process holds the write lock of
+the hub, for example a migration, each tool call waits up to its deadline
+and then returns an error that says the hub database is still opening. The
+same session serves the tools after the lock is released. The tool runs exactly one statement
 per call — `SELECT` and read-only `PRAGMA` only — on a restricted
 read-only connection guarded by a SQLite authorizer. Writes, schema
 changes, `ATTACH`, extension loading, and state-changing pragmas are

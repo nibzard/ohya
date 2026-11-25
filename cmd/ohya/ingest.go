@@ -99,7 +99,11 @@ func runIngest(ctx context.Context, o ingestOptions) error {
 	if len(o.excludes) > 0 {
 		fmt.Fprintf(o.stderr, "ohya: excluding session files matching: %s\n", strings.Join(o.excludes, ", "))
 	}
-	hub, err := store.Open(ctx, o.dbPath, store.WithObserver(o.observer))
+	openOpts := []store.OpenOption{store.WithObserver(o.observer)}
+	if !o.once {
+		openOpts = append(openOpts, store.WaitForLock(reportLockWait(o.stderr)))
+	}
+	hub, err := store.Open(ctx, o.dbPath, openOpts...)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil

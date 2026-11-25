@@ -24,6 +24,9 @@ The hub also ingests its own files through the same transactional write path.
 All writes use one writer. Readers use separate restricted connections. The
 writer begins each transaction immediate, so it waits up to the busy timeout
 for the write lock of another process instead of failing at its first write.
+The hub services and `ohya mcp` open the database with `store.WaitForLock`,
+so an open that waits for a migration repeats its attempt until the process
+stops. `ohya mcp` answers its tools with `still opening` until its open ends.
 
 ## Domain and local state
 

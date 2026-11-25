@@ -169,17 +169,25 @@ After the copy, setup applies the pending migrations itself, before it
 changes a service file ([ADR 0008](adr/0008-integrated-setup.md), "Recovery
 points"). The migration has no time limit and adds to the stop of ingestion:
 migration 009 took 3 min 41 s on a copy of that hub. While the migration
-runs, a process that opens the database with a writer fails after one busy
-timeout (5 s) with `database is locked`, including a new `ohya mcp` process.
-Processes that are already open can still read, but the migration holds
-the write lock. A batch that the running hub service (`ohya serve`) tries
+runs, it holds the write lock. Processes that are already open can still
+read. A service that starts during the migration (`ohya serve` or the
+ingest service) waits for the lock and logs `ohya: hub database is busy,
+waiting for its write lock` at most once per 5 s. A new `ohya mcp` process
+completes its handshake at once. Each tool call then waits up to its
+deadline and answers that the hub database is still opening, until the
+migration commits; the same session serves the tools after that. A
+one-shot command that opens the database with a writer, such as `ohya
+ingest --once`, fails after one busy timeout (5 s) with `database is
+locked` and a hint. Run it again after the migration.
+A batch that the running hub service (`ohya serve`) tries
 to commit waits for the lock on each of its three attempts and gives up
 after about 15 s with no acknowledgment for the batch, so the device keeps
 its checkpoint and sends the same bytes on a later pass
 ([sync protocol](sync-protocol.md)), and no event is lost. The hub service
 of v0.7.1 or earlier, which runs during the first upgrade with this build,
 gives up at once.
-Plan the upgrade of a large hub for a time when no agent starts a session.
+An agent session that starts during the migration has no memory tools for
+that time, so plan the upgrade of a large hub for a quiet time.
 
 After the upgrade, agent sessions that were open keep their `ohya mcp`
 process on the old build until they reconnect the MCP server (`/mcp` in

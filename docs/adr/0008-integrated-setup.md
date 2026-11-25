@@ -348,3 +348,18 @@ This does not restore an older database or executable.
 
 Setup reports when another ohya executable is selected by the current PATH.
 It keeps all service and client paths absolute and does not adopt that file.
+
+## Amendment (2026-11-25): a service waits for the write lock
+
+"Recovery points" states that an open which finds the database busy gives
+up after one busy timeout of 5 s. That is no longer true for a service.
+`ohya serve` and the ingest service now open the database with
+`store.WaitForLock`: the open repeats its attempt until the process stops,
+and the service logs the wait at most once per busy timeout. A new
+`ohya mcp` process completes its handshake at once, and its tools answer
+that the hub database is still opening until the lock is released.
+
+The decision stands. The hub probe of setup still allows 30 s, and a
+migration of minutes inside a starting service still outlasts it. Setup
+therefore still applies the pending migrations itself, and its own open
+stays bounded.
