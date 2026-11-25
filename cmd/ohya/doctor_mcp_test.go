@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nibzard/ohya/internal/observe"
+	"github.com/nibzard/ohya/internal/setup"
 )
 
 const mcpTestNowMS = int64(1_800_000_000_000)
@@ -74,6 +77,41 @@ func TestCheckMCPBuildsIgnoresStoppedAndStaleInstances(t *testing.T) {
 	findings := checkMCPBuilds(dir, "new5678", mcpTestNowMS)
 	if len(findings) != 1 || findings[0].Severity != sevOK || !strings.Contains(findings[0].Detail, "1 running ohya mcp process runs this build") {
 		t.Fatalf("findings = %+v, want one ok finding for the live instance", findings)
+	}
+}
+
+func TestDoctorReportsTheMCPServersOfItsStateDirectory(t *testing.T) {
+	for _, tc := range []struct {
+		mode   string
+		joined bool
+	}{
+		{mode: "local"},
+		{mode: "remote", joined: true},
+	} {
+		t.Run(tc.mode, func(t *testing.T) {
+			home := t.TempDir()
+			root := filepath.Join(home, ".ohya")
+			if err := setup.SaveConnection(root, setup.Connection{Mode: tc.mode}); err != nil {
+				t.Fatal(err)
+			}
+			stateDir := root
+			if tc.joined {
+				stateDir = filepath.Join(root, "join")
+			}
+			nowMS := time.Now().UnixMilli()
+			observeDir := filepath.Join(stateDir, "observe")
+			writeMCPSnapshot(t, observeDir, strings.Repeat("a", 32), observe.RoleMCP, os.Getpid(), "old1234", nowMS-1000, false)
+			writeMCPSnapshot(t, observeDir, strings.Repeat("b", 32), observe.RoleMCP, os.Getpid(), "new5678", nowMS-1000, false)
+
+			var stdout, stderr bytes.Buffer
+			if err := runDoctorCommandWith(nil, &stdout, &stderr, doctorRuntime{home: home, buildRevision: "new5678"}); err != nil {
+				t.Fatalf("doctor returned %v (stdout:\n%s)", err, stdout.String())
+			}
+			f := soleFinding(t, parseDoctorFindings(t, stdout.String()), "mcp_build")
+			if f.Severity != sevWarn || !strings.Contains(f.Detail, "1 of 2 running ohya mcp processes runs another build") || !strings.Contains(f.Detail, "build old1234") {
+				t.Fatalf("mcp_build finding = %+v; want a warning for the old build", f)
+			}
+		})
 	}
 }
 

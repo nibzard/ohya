@@ -70,8 +70,9 @@ type doctorTransportSum struct {
 const doctorProbeTimeout = 45 * time.Second
 
 type doctorRuntime struct {
-	home       string
-	inspectRun func(context.Context, []string) error
+	home          string
+	inspectRun    func(context.Context, []string) error
+	buildRevision string
 }
 
 func runDoctorCommand(args []string, stdout, stderr io.Writer) error {
@@ -171,7 +172,10 @@ func runDoctorCommandWith(args []string, stdout, stderr io.Writer, rt doctorRunt
 	}
 	findings = append(findings, checkHubUnits(context.Background(), home)...)
 	_, revision, _, _ := buildinfo.Identity()
-	findings = append(findings, checkMCPBuilds(filepath.Join(setupState, "observe"), revision, time.Now().UnixMilli())...)
+	if rt.buildRevision != "" {
+		revision = rt.buildRevision
+	}
+	findings = append(findings, checkMCPBuilds(filepath.Join(stateDir, "observe"), revision, time.Now().UnixMilli())...)
 	if *asJSON {
 		if err := printJSON(stdout, doctorSpec.name, doctorJSONData{Findings: findings, Transport: transport}); err != nil {
 			return err

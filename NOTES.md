@@ -94,6 +94,10 @@ How to use this file:
     deleted v0.7.0 binary. MCP recall still cut `task-…` names and printed
     the old deadline text, and `ohya status` showed them as running. The
     `mcp_build` check of `ohya doctor` (`e1a6415`) now warns about them.
+    The check first read `<state>/observe` only, so a joined device, whose
+    MCP servers publish to `<state>/join/observe`, reported nothing. It
+    now reads the observe directory of the state directory the doctor
+    examines.
     Setup does not report them yet, although docs/installer-plan.md asks
     for it. A setup result that is not complete would make setup exit
     nonzero, so that needs its own design.

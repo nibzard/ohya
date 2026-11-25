@@ -118,8 +118,9 @@ restart away from an outage in both cases. An `ohya mcp` process that an
 agent session started before an upgrade keeps the old build until the
 session reconnects its MCP server, because setup never stops coding
 sessions. The `mcp_build` check reads the observe snapshots of the state
-directory and warns about each live `ohya mcp` process whose build
-revision differs from the doctor binary's. It names the PID and the build,
+directory (`<state>/join/observe` on a joined device) and warns about each
+live `ohya mcp` process whose build revision differs from the doctor
+binary's. It names the PID and the build,
 and its remedy is to reconnect the server (`/mcp` in Claude Code) or to
 start a new session. A process that has published no fresh snapshot
 (older than 30 s) or runs with `--observe off` is not counted.
