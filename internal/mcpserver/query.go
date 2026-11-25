@@ -321,6 +321,9 @@ func jsonValue(v any) any {
 const hintLike = "this query used LIKE and read events; LIKE on a large table reads every row: " +
 	"filter session_id with = and search text with events_fts MATCH"
 
+const hintRawJSON = "this query read events.raw_json; each raw_json value holds a full original record: " +
+	"select the event ids first with events_fts MATCH or session_id =, then read raw_json for those ids only"
+
 const hintCount = "this query used count() and read events; a count reads every matching row: " +
 	"for the total read sum(event_count) FROM sessions, and for one session read sessions.event_count"
 
@@ -331,6 +334,8 @@ func (t *queryTrace) deadlineHint() string {
 	switch {
 	case t.usedFunction("like") && t.readTable("events"):
 		return hintLike
+	case t.readColumn("events", "raw_json"):
+		return hintRawJSON
 	case t.usedFunction("count") && t.readTable("events") && !t.readTable("events_fts"):
 		return hintCount
 	default:

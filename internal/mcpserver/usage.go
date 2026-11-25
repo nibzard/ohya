@@ -104,6 +104,12 @@ func (t *queryTrace) readTable(table string) bool {
 	return t.tables[table]
 }
 
+func (t *queryTrace) readColumn(table, column string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.reads[table+"."+column]
+}
+
 func (t *queryTrace) usageRecord(engine *Engine, origin Origin, result Result, err error, annotateOps *observe.AnnotateOps) observe.UsageRecord {
 	t.mu.Lock()
 	reads := make([]string, 0, len(t.reads))

@@ -542,7 +542,11 @@ Measured effect and the rejected alternatives (an `events(time_ms)` index, a
 wider covering index) are recorded in docs/performance.md
 ("Recall query deadline"). When a query exceeds the deadline, the error
 names the cause that the SQLite authorizer reported to the engine: `LIKE`
-on `events`, `count()` on `events`, or a wide read.
+on `events`, a read of `events.raw_json`, `count()` on `events`, or a wide
+read. The first cause that applies wins, in that order. A `raw_json` read
+comes before `count()` because a grouped count over `json_extract(raw_json, …)`
+spends its time in reading full records, and `sessions.event_count` cannot
+answer it.
 
 Agents persist their interpretations in `event_annotations`; there is no built-in
 classifier or dedicated classification table. Add secondary indexes or normalized file references only after real

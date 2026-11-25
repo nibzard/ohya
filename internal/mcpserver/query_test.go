@@ -320,6 +320,7 @@ func TestQueryDeadlineErrorNamesItsCause(t *testing.T) {
 	}{
 		{"like", endless + `SELECT count(*) FROM events, c WHERE events.text LIKE '%' || c.n || '%'`, hintLike},
 		{"count", endless + `SELECT count(*) FROM events, c`, hintCount},
+		{"raw_json", endless + `SELECT json_extract(e.raw_json, '$.type') AS t, count(*) FROM events e, c GROUP BY t`, hintRawJSON},
 		{"wide", endless + `SELECT e.id FROM events e, c WHERE e.text = 'needle' ORDER BY e.time_ms`, hintNarrow},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
