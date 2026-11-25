@@ -1,0 +1,37 @@
+# Context
+
+## Background
+A developer builds ohya from a tree with uncommitted changes and
+restarts the binary many times between two commits. Each build has the
+revision of HEAD. The mcp_build check compared the revision only, so
+it said "this build" for an ohya mcp process that ran an earlier
+build of that revision.
+
+## Why This Way
+- The snapshot of an instance holds the revision and the uncommitted
+  flag of its build (observe.Instance). A pair identifies a committed
+  build. It does not identify an uncommitted build: two of them at one
+  revision can hold different code, and the check cannot know.
+- For that pair the check reports a warning and says that the process
+  can also be the same build. The other choice, silence, hides the
+  common case of a developer who rebuilt without a commit.
+- A build is dirty when git status reports any change, also an
+  untracked file. So a build from a clean checkout with one stray
+  file is "uncommitted" here. That is a false warning at most.
+- buildIdentity holds the conversion that doctor and setup share. The
+  comparison with "true" is the one of startTelemetry, which writes
+  the flag into the snapshots.
+
+## Gotchas
+- A test binary carries no build stamp: Identity returns "unknown".
+  The line of buildIdentity that reads the stamp has no test. The
+  runtime struct of each command overrides revision and flag.
+- 12 mutation checks failed a test: the revision-only rule, each flag
+  of the rule, each term of the alike note, each part of the build
+  name, the flags that doctor passes, and the guard for an unknown
+  revision.
+- An uncommitted doctor never produces the ok finding: each process
+  at its revision differs in the flag or is an alike build.
+
+## Related
+Follows e1a6415 and cce0559 (the mcp_build check).
