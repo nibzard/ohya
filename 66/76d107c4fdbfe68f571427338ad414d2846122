@@ -1,0 +1,37 @@
+# Context
+
+## Background
+The owner pushed menubar-session-tags (b7e31f1 and fbce579) on
+2026-11-25 and asked "review work i did and merge it if ok". v0.8.0
+was cut first, because the release was requested first and this VM
+cannot build the Swift app.
+
+## Review
+No blocker. An independent review agent reported seven findings and
+each one was checked against the code. None changes the merge:
+- On a paired device the uploader stores sessions under the device ID
+  of credential.json, while the new topology.device_id reads
+  device.json. The two are equal after a normal join. They differ
+  only after device.json is recreated, a state that existed before
+  this branch. The menu bar app then labels the sessions of this Mac
+  as those of another device. No check reports that state today.
+- docs/reference.md says that the status output carries this device's
+  ID. Only the JSON output does.
+- The hub device ID of the diagnostics frame is the identity of
+  ohya serve. It equals the identity of ohya ingest only when both
+  use one state directory, which ohya setup --hub guarantees.
+- status grades an unusable device.json as warn and doctor as error.
+  The exit code of status is the same for both.
+- The Hub reachable row copies the layout of row(_:value:), and the
+  dot color is repeated in two places.
+- VoiceOver reads the name of the symbol of a tag before its text.
+- The two commit subjects have 57 and 65 characters, and their
+  bodies are not wrapped. The commits of the owner were not changed.
+
+## Gotchas
+- The trial merge of main at 915df53 and the branch has the tree
+  1b32713ef7f766cdddcb1ce843427aa84d9b0308. make check with
+  GOFLAGS=-count=1 and make tla passed on it. This commit has the
+  same tree.
+- CI run 45706558153 on the branch passed xcrun swift test, make
+  check, and make build on macOS. The app itself was not opened.
