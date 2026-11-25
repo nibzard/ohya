@@ -173,11 +173,12 @@ runs, a process that opens the database with a writer fails after one busy
 timeout (5 s) with `database is locked`, including a new `ohya mcp` process.
 Processes that are already open can still read, but the migration holds
 the write lock. A batch that the running hub service (`ohya serve`) tries
-to commit is refused at once, because a store transaction does not wait for
-the write lock ([`DB.md`](../DB.md), "Connections and durability"). The hub
-gives up after three attempts in about 0.3 s and sends no acknowledgment
-for the batch, so the device keeps its checkpoint and sends the same bytes
-on a later pass ([sync protocol](sync-protocol.md)), and no event is lost.
+to commit waits for the lock on each of its three attempts and gives up
+after about 15 s with no acknowledgment for the batch, so the device keeps
+its checkpoint and sends the same bytes on a later pass
+([sync protocol](sync-protocol.md)), and no event is lost. The hub service
+of v0.7.1 or earlier, which runs during the first upgrade with this build,
+gives up at once.
 Plan the upgrade of a large hub for a time when no agent starts a session.
 
 After the upgrade, agent sessions that were open keep their `ohya mcp`

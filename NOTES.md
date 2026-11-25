@@ -348,47 +348,48 @@ How to use this file:
     a time when no agent starts a session, or decide on a longer wait of
     `store.Open` (the open question at TestHubSetupTwoStepFlow below).
   - A batch that the running hub service commits during such a migration
-    is refused at once, not after 5 s: a hub batch under a held write lock
-    failed after 302 ms with three attempts and no acknowledgment. See
-    "Store transactions and the write lock" below.
+    now waits for the lock and gives up after about 15 s with no
+    acknowledgment; before the change it was refused after 302 ms. The hub
+    service of v0.7.1 gives up at once. See "Store transactions and the
+    write lock" below.
   - Tests in `internal/setup`: the migration runs before the first
     service command; setup stops before the service file when the
     migration fails; a database without a schema stays with the service.
 
-- Store transactions and the write lock (2026-11-25; measured; the decision
-  is open):
-  - Each write transaction of the store starts with a deferred `BeginTx`
-    and reads before it writes (nine sites, for example
-    `internal/store/ingest.go:214`). SQLite skips the busy handler when a
-    read transaction changes to a write transaction, so the first write
-    statement fails at once when another connection holds the write lock.
-    The busy timeout of 5 s does not apply to it. The registry database
-    uses `_txlock=immediate` for this reason (see "Device pairing
-    choices"); the hub database does not.
-  - Measured: a deferred transaction failed at once under a write lock
-    held for 300 ms and for 7 s, while a single autocommit write statement
-    waited and succeeded after 238 ms. A hub batch under a held lock failed
-    after 302 ms (`retry exhausted after 3 attempts … ensure session:
-    database is locked`) and took 7 ms after the lock was released. The
-    device keeps its checkpoint, so no event is lost. `DB.md` ("Connections
-    and durability"), `docs/release-operations.md` and the retry example
-    of `docs/sync-protocol.md` now state this behavior; the first two said
-    that such a transaction waits 5 s.
-    `TestWriteTransactionDoesNotWaitForTheWriteLock`
-    (`internal/store/open_test.go`) pins it. With `_txlock=immediate` in
-    the DSN it fails after 5.01 s and names those documents.
-  - Live journal: `ohya.service` logged `database is locked` 1,508 times
-    from 2026-11-16 to 2026-11-25: 12 on 2026-11-16, 2 on 2026-11-18 and
-    1,494 from 07:44 to 08:41 on 2026-11-20 (two sources of looper
-    worktrees, up to 58 a minute). `ohya-serve.service` logged none. The
-    journal does not show which process held the write lock in that hour.
-  - Option: add `_txlock=immediate` to `writerDSN` and run the read-only
-    `PlanPurge` on the reader pool, so that a plan does not hold the write
-    lock. A write transaction then waits up to 5 s, and a hub batch gives
-    up after three attempts in about 15 s, within the device request
-    timeout of 60 s. Research note:
-    /notes/2026-11-24-concurrent-open-migration-race.md (update of
-    2026-11-25).
+- Store transactions and the write lock (2026-11-25; measured; decided by
+  the owner the same day):
+  - Before this change each write transaction of the store started with a
+    deferred `BeginTx` and read before it wrote, so the first write
+    statement failed at once when another connection held the write lock.
+    SQLite skips the busy handler for that change. A held lock failed a
+    hub batch after 302 ms with three attempts and no acknowledgment; the
+    device kept its checkpoint, so no event was lost.
+  - Live journal before the change: `ohya.service` logged `database is
+    locked` 1,508 times from 2026-11-16 to 2026-11-25: 12 on 2026-11-16,
+    2 on 2026-11-18 and 1,494 from 07:44 to 08:41 on 2026-11-20 (two
+    sources of looper worktrees, up to 58 a minute). `ohya-serve.service`
+    logged none. The journal does not show which process held the write
+    lock in that hour.
+  - Change: `writerDSN` has `_txlock=immediate`, as the registry DSN has
+    since 2026-11-13, and the read-only `PlanPurge` reads through a reader
+    pool. A write transaction now waits up to the busy timeout of 5 s. A
+    hub batch under a longer lock gives up after three attempts in about
+    15 s, within the device request timeout of 60 s. The hub service of
+    v0.7.1 gives up at once during the first upgrade with this build,
+    because it runs the old code.
+  - Limit: a context that ends does not shorten the wait. The default busy
+    callback of SQLite 3.54.1 does not check the interrupt flag (main.c,
+    `sqliteDefaultBusyCallback`), so a canceled `BeginTx` returns with
+    `database is locked` after one busy timeout. A service that stops
+    while it waits for the lock can take 5 s longer.
+  - Tests: `TestWriteTransactionWaitsForTheWriteLock` and
+    `TestPlanPurgeNeedsNoWriteLock` (`internal/store/open_test.go`), and
+    `TestBatchWaitsForAnotherWriter` (`internal/hubsync`). Each fails on
+    a deferred DSN or on a plan through the writer.
+  - The time of the `internal/store` tests swings with the load of this
+    machine (10 s to 49 s for one package) and does not change with the
+    transaction mode.
+  - Research note: /notes/2026-11-24-concurrent-open-migration-race.md.
 
 - A stray build was deleted by mistake (2026-11-24, 22:23): a scratch
   cleanup ran `rm -f` with relative paths while the shell stood in the

@@ -21,7 +21,9 @@ port. All transport code stays behind the `internal/transport` interfaces
 consumed by the sync layer. See BACKLOG.md for implementation order.
 
 The hub also ingests its own files through the same transactional write path.
-All writes use one writer. Readers use separate restricted connections.
+All writes use one writer. Readers use separate restricted connections. The
+writer begins each transaction immediate, so it waits up to the busy timeout
+for the write lock of another process instead of failing at its first write.
 
 ## Domain and local state
 

@@ -189,7 +189,12 @@ func (d *DB) PlanPurge(ctx context.Context, sel PurgeSelector) (PurgePlan, error
 	if err := sel.validate(); err != nil {
 		return PurgePlan{}, err
 	}
-	tx, err := d.writer.BeginTx(ctx, nil)
+	readers, err := d.Reader()
+	if err != nil {
+		return PurgePlan{}, err
+	}
+	defer readers.Close()
+	tx, err := readers.BeginTx(ctx, nil)
 	if err != nil {
 		return PurgePlan{}, fmt.Errorf("store: plan purge: begin: %w", err)
 	}

@@ -172,6 +172,7 @@ func writerDSN(path string) string {
 		"_synchronous":  []string{"FULL"},
 		"_foreign_keys": []string{"on"},
 		"_busy_timeout": []string{strconv.Itoa(busyTimeoutMs)},
+		"_txlock":       []string{"immediate"},
 	})
 }
 

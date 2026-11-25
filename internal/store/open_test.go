@@ -109,38 +109,54 @@ func TestReaderCannotCreateDatabase(t *testing.T) {
 	}
 }
 
-func TestWriteTransactionDoesNotWaitForTheWriteLock(t *testing.T) {
+func holdWriteLock(t *testing.T, path string) *sql.Conn {
+	t.Helper()
+	other, err := sql.Open("sqlite3", writerDSN(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { other.Close() })
+	conn, err := other.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	if _, err := conn.ExecContext(context.Background(), `BEGIN IMMEDIATE`); err != nil {
+		t.Fatal(err)
+	}
+	return conn
+}
+
+func releaseWriteLock(conn *sql.Conn) *time.Timer {
+	return time.AfterFunc(300*time.Millisecond, func() {
+		_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+	})
+}
+
+func TestWriteTransactionWaitsForTheWriteLock(t *testing.T) {
 	hub, _ := openTestDB(t)
-	other, err := sql.Open("sqlite3", writerDSN(hub.path))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer other.Close()
-	ctx := context.Background()
-	conn, err := other.Conn(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
-		t.Fatal(err)
-	}
+	conn := holdWriteLock(t, hub.path)
+	release := releaseWriteLock(conn)
+	defer release.Stop()
 
 	started := time.Now()
-	err = hub.RegisterSource(ctx, "s1", "dev1", "claude-code", "/transcripts/a.jsonl")
-	elapsed := time.Since(started)
-	if !busyDatabase(err) {
-		t.Fatalf("RegisterSource returned %v after %v; want a busy database", err, elapsed)
+	err := hub.RegisterSource(context.Background(), "s1", "dev1", "claude-code", "/transcripts/a.jsonl")
+	if elapsed := time.Since(started); err != nil || elapsed < 250*time.Millisecond {
+		t.Fatalf("RegisterSource returned %v after %v; want success after a wait for the lock", err, elapsed)
 	}
-	if elapsed >= busyTimeout {
-		t.Fatalf("RegisterSource waited %v for the write lock; DB.md and docs/release-operations.md state that a store transaction fails at once", elapsed)
-	}
+}
 
-	if _, err := conn.ExecContext(ctx, `ROLLBACK`); err != nil {
-		t.Fatal(err)
+func TestPlanPurgeNeedsNoWriteLock(t *testing.T) {
+	hub, _ := openTestDB(t)
+	holdWriteLock(t, hub.path)
+
+	started := time.Now()
+	plan, err := hub.PlanPurge(context.Background(), PurgeSelector{Session: "sess-a"})
+	if elapsed := time.Since(started); err != nil || elapsed >= busyTimeout {
+		t.Fatalf("PlanPurge returned %v after %v; want a plan while another connection holds the write lock", err, elapsed)
 	}
-	if err := hub.RegisterSource(ctx, "s1", "dev1", "claude-code", "/transcripts/a.jsonl"); err != nil {
-		t.Fatalf("RegisterSource after the lock was released: %v", err)
+	if len(plan.Sessions) != 0 {
+		t.Fatalf("plan has %d sessions; want none", len(plan.Sessions))
 	}
 }
 
