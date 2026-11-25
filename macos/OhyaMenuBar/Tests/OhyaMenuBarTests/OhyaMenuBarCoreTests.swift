@@ -130,6 +130,44 @@ final class OhyaMenuBarCoreTests: XCTestCase {
         XCTAssertEqual(showEnv.data?.events.first?.excerpt, "hello")
     }
 
+    func testSessionOriginNamesThisMacTheHubAndOtherDevices() throws {
+        let local = "a4ca22cc3f546eeffd469f74abade288"
+        let hub = "05b0ff2c233cb6a22d24cb1722f9204f"
+        let third = "77e1d0c4aa0b4c1e9f0d2b3c4d5e6f70"
+        let joinedJSON = """
+        {
+          "topology": {"mode": "remote", "state_dir": "/Users/dev/.ohya/join", "device_id": "\(local)", "agent_roots": []},
+          "storage": {"location": "remote-hub"},
+          "remote_hub": {"reachable": true, "supported": true, "hub": {"device_id": "\(hub)", "version": "v0.3.0"}},
+          "instances": [],
+          "findings": []
+        }
+        """
+        let joined = try decoder.decode(StatusData.self, from: Data(joinedJSON.utf8))
+        XCTAssertEqual(joined.topology.deviceID, local)
+        XCTAssertEqual(joined.remoteHub?.hub?.deviceID, hub)
+        XCTAssertEqual(SessionOrigin.resolve(deviceID: local, status: joined), .thisMac)
+        XCTAssertEqual(SessionOrigin.resolve(deviceID: hub, status: joined), .hub)
+        XCTAssertEqual(SessionOrigin.resolve(deviceID: third, status: joined), .device("77e1d0c4"))
+
+        let hubJSON = joinedJSON
+            .replacingOccurrences(of: #""mode": "remote""#, with: #""mode": "local""#)
+            .replacingOccurrences(of: #""device_id": "\#(local)""#, with: #""device_id": "\#(hub)""#)
+        let onHub = try decoder.decode(StatusData.self, from: Data(hubJSON.utf8))
+        XCTAssertEqual(SessionOrigin.resolve(deviceID: hub, status: onHub), .thisMac)
+        XCTAssertEqual(SessionOrigin.resolve(deviceID: local, status: onHub), .device("a4ca22cc"))
+
+        let olderHubJSON = joinedJSON.replacingOccurrences(of: #""device_id": "\#(hub)", "#, with: "")
+        let olderHub = try decoder.decode(StatusData.self, from: Data(olderHubJSON.utf8))
+        XCTAssertNil(olderHub.remoteHub?.hub?.deviceID)
+        XCTAssertEqual(SessionOrigin.resolve(deviceID: hub, status: olderHub), .device("05b0ff2c"))
+
+        XCTAssertEqual(SessionOrigin.resolve(deviceID: local, status: nil), .device("a4ca22cc"))
+        XCTAssertEqual(SessionOrigin.thisMac.label, "This Mac")
+        XCTAssertEqual(SessionOrigin.hub.label, "Hub")
+        XCTAssertEqual(SessionOrigin.device("77e1d0c4").label, "77e1d0c4")
+    }
+
     func testFTSQueryFormatterAutoQuotesPunctuationPreservingOperators() {
         XCTAssertEqual(FTSQueryFormatter.format("auth-refresh"), "\"auth-refresh\"")
         XCTAssertEqual(FTSQueryFormatter.format("auth AND refresh"), "auth AND refresh")

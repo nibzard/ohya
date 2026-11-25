@@ -226,6 +226,33 @@ public enum StatusEvaluator {
     }
 }
 
+public enum SessionOrigin: Sendable, Equatable {
+    case thisMac
+    case hub
+    case device(String)
+
+    public static func resolve(deviceID: String, status: StatusData?) -> SessionOrigin {
+        if let local = status?.topology.deviceID, deviceID == local {
+            return .thisMac
+        }
+        if status?.topology.mode == "remote", let hub = status?.remoteHub?.hub?.deviceID, deviceID == hub {
+            return .hub
+        }
+        return .device(DisplayFormat.shortID(deviceID))
+    }
+
+    public var label: String {
+        switch self {
+        case .thisMac:
+            return "This Mac"
+        case .hub:
+            return "Hub"
+        case .device(let shortID):
+            return shortID
+        }
+    }
+}
+
 public enum DisplayFormat {
     public static func bytes(_ value: Double) -> String {
         if value < 1024 {

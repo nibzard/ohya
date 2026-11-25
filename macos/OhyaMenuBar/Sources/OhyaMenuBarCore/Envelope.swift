@@ -40,7 +40,13 @@ public struct StatusData: Decodable, Sendable, Equatable {
 }
 
 public struct RemoteHubIdentity: Decodable, Sendable, Equatable {
+    public let deviceID: String?
     public let version: String
+
+    enum CodingKeys: String, CodingKey {
+        case deviceID = "device_id"
+        case version
+    }
 }
 
 public struct RemoteHubStatus: Decodable, Sendable, Equatable {
@@ -62,12 +68,14 @@ public struct RemoteHubStatus: Decodable, Sendable, Equatable {
 public struct StatusTopology: Decodable, Sendable, Equatable {
     public let mode: String
     public let stateDir: String
+    public let deviceID: String?
     public let agentRoots: [StatusAgentRoot]
     public let services: [StatusService]?
 
     enum CodingKeys: String, CodingKey {
         case mode
         case stateDir = "state_dir"
+        case deviceID = "device_id"
         case agentRoots = "agent_roots"
         case services
     }

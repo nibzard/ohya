@@ -148,19 +148,13 @@ struct RecallView: View {
                             .font(.subheadline.weight(.medium))
                             .lineLimit(1)
                         if session.settled == false {
-                            Text("active")
-                                .font(.caption2.weight(.medium))
-                                .foregroundStyle(OhyaTheme.brandPurple)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1)
-                                .background(Capsule().fill(OhyaTheme.brandPurple.opacity(0.14)))
+                            TagLabel("active", emphasis: .prominent)
                         }
+                        originTag(SessionOrigin.resolve(deviceID: session.deviceID, status: model.status))
                     }
 
                     HStack(spacing: 4) {
                         Text(DisplayFormat.agentDisplayName(session.agent))
-                        Text("·")
-                        Text(DisplayFormat.shortID(session.deviceID))
                         if let ms = session.lastEventAtMS ?? session.startedAtMS {
                             Text("·")
                             Text(DisplayFormat.relativeAge(fromEpochMS: ms))
@@ -198,6 +192,19 @@ struct RecallView: View {
         .onHover { inside in
             hoveredID = inside ? session.id : nil
         }
+    }
+
+    private func originTag(_ origin: SessionOrigin) -> some View {
+        let systemImage: String
+        switch origin {
+        case .thisMac:
+            systemImage = "laptopcomputer"
+        case .hub:
+            systemImage = "server.rack"
+        case .device:
+            systemImage = "desktopcomputer"
+        }
+        return TagLabel(origin.label, systemImage: systemImage, emphasis: .quiet)
     }
 
     private func searchHitRow(_ hit: SearchHit) -> some View {
