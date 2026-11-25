@@ -1,0 +1,22 @@
+# Context
+
+## Background
+The owner asked "commit all, push all, cut new version, reinstall new
+version" on 2026-11-25. v0.8.0 is the first release with schema 9
+(migration 009_source_workspace.sql). The release policy asks the
+release change to list the schema that the release ships, so that the
+released-schema upgrade tests cover it before the tag exists.
+
+## Why This Way
+TestMigrateUpgradesReleasedSchemas builds a database at each released
+schema, seeds it, and opens it with the current store. For v0.8.0 the
+seed failed on "table sources has no column named file_identity":
+migration 009 drops that column, and the seed had never run on schema 9.
+The seed now inserts file_identity only for schema 8 and below.
+
+## Gotchas
+- make check with GOFLAGS=-count=1 passed in about 6 minutes, and make
+  tla passed in about 13 minutes (SyncConcurrent, SyncFailures,
+  SyncLiveness, Auth 2 min 54 s, AuthWide 9 min 20 s), both on this tree.
+- The branch menubar-session-tags is not in this release. This Linux VM
+  cannot build the Swift app, so the merge follows the tag.
