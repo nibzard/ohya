@@ -186,6 +186,7 @@ func runJoin(ctx context.Context, o joinOptions) error {
 	telem := startTelemetry(o.stateDir, o.observe, nil, observe.RoleJoin)
 	defer telem.close()
 	gaugeGroup := observe.NewGaugeGroup(telem.observer())
+	eventGate := newJoinEventGate(telem.eventsSink())
 	dial := func(ctx context.Context) (net.Conn, error) { return node.Dial(ctx, hubAddr) }
 	errs := make(chan error, len(o.roots))
 	runCtx, cancel := context.WithCancel(ctx)
@@ -211,7 +212,7 @@ func runJoin(ctx context.Context, o joinOptions) error {
 			Agent:           root.agent,
 			Interval:        o.interval,
 			Observer:        agentObserver,
-			Events:          telem.eventsSink(),
+			Events:          eventGate.sink(root.agent),
 			Log:             o.stderr,
 			Excluded:        excluded,
 			SourceWorkspace: sourceWorkspace,
@@ -383,4 +384,58 @@ func reportJoinBacklog(stateDir string, roots []agentRoot, excludes excludeGlobs
 		}
 	}
 	fmt.Fprintf(stderr, "ohya: upload backlog: %d bytes\n", pending)
+}
+
+type joinEventGate struct {
+	base            observe.EventSink
+	mu              sync.Mutex
+	offline         map[string]bool
+	reportedOffline bool
+}
+
+func newJoinEventGate(base observe.EventSink) *joinEventGate {
+	return &joinEventGate{
+		base:    base,
+		offline: map[string]bool{},
+	}
+}
+
+func (g *joinEventGate) sink(agent string) observe.EventSink {
+	if g == nil || g.base == nil {
+		return nil
+	}
+	return joinAgentEventSink{gate: g, agent: agent}
+}
+
+type joinAgentEventSink struct {
+	gate  *joinEventGate
+	agent string
+}
+
+func (s joinAgentEventSink) Event(component string, level observe.Level, code observe.EventCode, outcome string, counts map[string]int64) bool {
+	switch code {
+	case observe.EventTransportOffline:
+		s.gate.mu.Lock()
+		s.gate.offline[s.agent] = true
+		emit := !s.gate.reportedOffline
+		if emit {
+			s.gate.reportedOffline = true
+		}
+		s.gate.mu.Unlock()
+		if !emit {
+			return true
+		}
+	case observe.EventTransportOnline:
+		s.gate.mu.Lock()
+		delete(s.gate.offline, s.agent)
+		emit := s.gate.reportedOffline && len(s.gate.offline) == 0
+		if emit {
+			s.gate.reportedOffline = false
+		}
+		s.gate.mu.Unlock()
+		if !emit {
+			return true
+		}
+	}
+	return s.gate.base.Event(component, level, code, outcome, counts)
 }

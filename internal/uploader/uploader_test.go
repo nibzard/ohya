@@ -19,6 +19,7 @@ import (
 	"github.com/nibzard/ohya/internal/claudecode"
 	"github.com/nibzard/ohya/internal/device"
 	"github.com/nibzard/ohya/internal/hubsync"
+	"github.com/nibzard/ohya/internal/observe"
 	"github.com/nibzard/ohya/internal/observe/observertest"
 	"github.com/nibzard/ohya/internal/registry"
 	"github.com/nibzard/ohya/internal/store"
@@ -1515,5 +1516,83 @@ func TestReconnectProbesExistingSourceWithoutReRegistering(t *testing.T) {
 	after := f.obs.DurationCount("upload_round_trip_duration")
 	if delta := after - before; delta != 2 {
 		t.Fatalf("reconnect round trips = %d (1 probe + 1 workspace check); want 2, not 3 with redundant registration", delta)
+	}
+}
+
+type recordedEvent struct {
+	level   observe.Level
+	code    observe.EventCode
+	outcome string
+}
+
+type eventCollector struct {
+	mu     sync.Mutex
+	events []recordedEvent
+}
+
+func (c *eventCollector) Event(_ string, level observe.Level, code observe.EventCode, outcome string, _ map[string]int64) bool {
+	c.mu.Lock()
+	c.events = append(c.events, recordedEvent{level: level, code: code, outcome: outcome})
+	c.mu.Unlock()
+	return true
+}
+
+func (c *eventCollector) codes() []observe.EventCode {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]observe.EventCode, len(c.events))
+	for i, e := range c.events {
+		out[i] = e.code
+	}
+	return out
+}
+
+func TestHalfOpenAcceptDoesNotPrematurelyEmitTransportOnline(t *testing.T) {
+	events := &eventCollector{}
+	f := newFixture(t, Options{Events: events})
+	a := filepath.Join(f.dir, "a.jsonl")
+	writeFile(t, a, line(sessA, "one"))
+
+	f.dialer.fault.Store(int32(closedHub))
+	f.wantDisconnected()
+
+	halfOpen, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer halfOpen.Close()
+	go func() {
+		for {
+			c, err := halfOpen.Accept()
+			if err != nil {
+				return
+			}
+			_, _ = io.CopyN(io.Discard, c, 66)
+			_ = c.Close()
+		}
+	}()
+
+	f.dialer.fault.Store(int32(noFault))
+	f.dialer.point(halfOpen.Addr().String())
+	f.wantDisconnected()
+
+	if strings.Contains(f.log.String(), "reconnected") {
+		t.Fatalf("half-open connection prematurely logged reconnect:\n%s", f.log)
+	}
+	gotCodes := events.codes()
+	if len(gotCodes) != 1 || gotCodes[0] != observe.EventTransportOffline {
+		t.Fatalf("events after half-open drop = %v, want [transport_offline]", gotCodes)
+	}
+
+	h := serve(t, openHubDB(t, filepath.Join(t.TempDir(), "hub.db")), f.reg, hubsync.Options{})
+	f.dialer.point(h.addr)
+	f.mustSync()
+
+	if n := strings.Count(f.log.String(), "reconnected"); n != 1 {
+		t.Fatalf("reconnect log count = %d, want 1:\n%s", n, f.log)
+	}
+	gotCodes = events.codes()
+	if len(gotCodes) != 2 || gotCodes[0] != observe.EventTransportOffline || gotCodes[1] != observe.EventTransportOnline {
+		t.Fatalf("events after real recovery = %v, want [transport_offline transport_online]", gotCodes)
 	}
 }

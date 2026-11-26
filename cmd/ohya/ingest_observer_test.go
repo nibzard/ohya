@@ -286,3 +286,50 @@ func TestJoinDiscoverRecordsScanMetrics(t *testing.T) {
 		t.Errorf("discovery_last_scan_ms = %v, want 42", snap.Gauges["discovery_last_scan_ms"])
 	}
 }
+
+type sinkRecorder struct {
+	codes []observe.EventCode
+}
+
+func (r *sinkRecorder) Event(_ string, _ observe.Level, code observe.EventCode, _ string, _ map[string]int64) bool {
+	r.codes = append(r.codes, code)
+	return true
+}
+
+func TestJoinEventGateCoalescesMultiAgentTransportTransitions(t *testing.T) {
+	rec := &sinkRecorder{}
+	gate := newJoinEventGate(rec)
+	claudeSink := gate.sink("claude-code")
+	codexSink := gate.sink("codex")
+	piSink := gate.sink("pi")
+
+	claudeSink.Event("uploader", observe.LevelWarn, observe.EventTransportOffline, "connect", nil)
+	codexSink.Event("uploader", observe.LevelWarn, observe.EventTransportOffline, "connect", nil)
+	piSink.Event("uploader", observe.LevelWarn, observe.EventTransportOffline, "connect", nil)
+	codexSink.Event("uploader", observe.LevelWarn, observe.EventSourceStopped, "malformed", nil)
+
+	claudeSink.Event("uploader", observe.LevelInfo, observe.EventTransportOnline, "", nil)
+	claudeSink.Event("uploader", observe.LevelWarn, observe.EventTransportOffline, "connect", nil)
+	claudeSink.Event("uploader", observe.LevelInfo, observe.EventTransportOnline, "", nil)
+	codexSink.Event("uploader", observe.LevelInfo, observe.EventTransportOnline, "", nil)
+	piSink.Event("uploader", observe.LevelInfo, observe.EventTransportOnline, "", nil)
+
+	piSink.Event("uploader", observe.LevelWarn, observe.EventTransportOffline, "connect", nil)
+	piSink.Event("uploader", observe.LevelInfo, observe.EventTransportOnline, "", nil)
+
+	want := []observe.EventCode{
+		observe.EventTransportOffline,
+		observe.EventSourceStopped,
+		observe.EventTransportOnline,
+		observe.EventTransportOffline,
+		observe.EventTransportOnline,
+	}
+	if len(rec.codes) != len(want) {
+		t.Fatalf("emitted %v, want %v", rec.codes, want)
+	}
+	for i := range want {
+		if rec.codes[i] != want[i] {
+			t.Fatalf("emitted[%d] = %q, want %q (all: %v)", i, rec.codes[i], want[i], rec.codes)
+		}
+	}
+}

@@ -721,6 +721,7 @@ func (u *Uploader) keepalive(ctx context.Context) error {
 		u.capsOff = true
 		return ErrDisconnected
 	}
+	u.noteOnline()
 	return nil
 }
 
@@ -752,6 +753,7 @@ func (u *Uploader) connect(ctx context.Context) error {
 		}
 		if perr == nil {
 			u.hubCaps = caps
+			u.noteOnline()
 			return nil
 		}
 		u.Close()
@@ -794,11 +796,6 @@ func (u *Uploader) dialHello(ctx context.Context) error {
 	u.hubCaps = 0
 	u.ready = map[string]bool{}
 	u.workspacesDue = true
-	if u.offline {
-		u.offline = false
-		u.logf("reconnected to the hub; catching up from the retained files")
-		u.event(observe.LevelInfo, observe.EventTransportOnline, "", nil)
-	}
 	return nil
 }
 
@@ -909,7 +906,17 @@ func (u *Uploader) roundTrip(ctx context.Context, write func(io.Writer) error, r
 			return nil, connError(perr)
 		}
 	}
+	u.noteOnline()
 	return perr, nil
+}
+
+func (u *Uploader) noteOnline() {
+	if !u.offline {
+		return
+	}
+	u.offline = false
+	u.logf("reconnected to the hub; catching up from the retained files")
+	u.event(observe.LevelInfo, observe.EventTransportOnline, "", nil)
 }
 
 func (u *Uploader) protocolFailure(perr *hubsync.Error) {
