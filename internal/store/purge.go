@@ -148,7 +148,7 @@ type PurgedSourceInfo struct {
 }
 
 func (p PurgedSourceInfo) refusal() error {
-	return fmt.Errorf("store: source %s was purged by the owner on %s (scope %s); re-admission is an owner action: run 'ohya sources reallow %s' on the hub and restart ohya join on the device: %w",
+	return fmt.Errorf("store: source %s was purged by the owner on %s (scope %s); re-admission is an owner action: run 'ohya sources reallow %s' on the hub: %w",
 		p.SourceID, msRFC3339(p.PurgedAtMS), p.Scope, p.SourceID, ErrSourcePurged)
 }
 
@@ -301,42 +301,13 @@ func checkSourceSessionsSelected(ctx context.Context, q purgeQuerier, sourceID s
 	return rows.Err()
 }
 
-func (d *DB) ApplyPurge(ctx context.Context, sel PurgeSelector) (PurgePlan, PurgeResult, error) {
+func (d *DB) ApplyPurge(ctx context.Context, sel PurgeSelector) (plan PurgePlan, result PurgeResult, err error) {
 	if sel.Empty() {
 		return PurgePlan{}, PurgeResult{}, fmt.Errorf("store: purge needs at least one selector: %w", ErrBatchRejected)
 	}
-	plan, err := d.PlanPurge(ctx, sel)
-	if err != nil {
+	if err := sel.validate(); err != nil {
 		return PurgePlan{}, PurgeResult{}, err
 	}
-	selected := make(map[string]bool, len(plan.Sessions))
-	for _, s := range plan.Sessions {
-		selected[s.ID] = true
-	}
-	result := PurgeResult{Plan: plan, PurgedAtMS: time.Now().UnixMilli()}
-	for i, src := range plan.Sources {
-		committedCursor, err := d.purgeOneSource(ctx, src, selected, sel.Scope(), result.PurgedAtMS)
-		if err != nil {
-			return plan, result, err
-		}
-		if committedCursor >= 0 {
-			plan.Bytes += committedCursor - plan.Sources[i].Cursor
-			plan.Sources[i].Cursor = committedCursor
-		}
-	}
-	result.Plan = plan
-	if err := d.dropEmptySelectedSessions(ctx, plan); err != nil {
-		return plan, result, err
-	}
-	return plan, result, nil
-}
-
-type PurgeResult struct {
-	Plan       PurgePlan
-	PurgedAtMS int64
-}
-
-func (d *DB) purgeOneSource(ctx context.Context, src PurgeSource, selected map[string]bool, scope string, nowMS int64) (committedCursor int64, err error) {
 	txStart := time.Now()
 	defer func() {
 		d.observer.Observe("sqlite_transaction_duration", time.Since(txStart))
@@ -346,29 +317,46 @@ func (d *DB) purgeOneSource(ctx context.Context, src PurgeSource, selected map[s
 	}()
 	tx, err := d.writer.BeginTx(ctx, nil)
 	if err != nil {
-		return -1, fmt.Errorf("store: purge source %s: begin: %w", src.ID, err)
+		return PurgePlan{}, PurgeResult{}, fmt.Errorf("store: purge: begin: %w", err)
 	}
 	defer tx.Rollback()
 
+	plan, err = d.planPurge(ctx, tx, sel)
+	if err != nil {
+		return PurgePlan{}, PurgeResult{}, err
+	}
+	result = PurgeResult{Plan: plan, PurgedAtMS: time.Now().UnixMilli()}
+	for _, src := range plan.Sources {
+		if err := purgeOneSourceTx(ctx, tx, src, sel.Scope(), result.PurgedAtMS); err != nil {
+			return plan, PurgeResult{}, err
+		}
+	}
+	if err := dropEmptySelectedSessionsTx(ctx, tx, plan); err != nil {
+		return plan, PurgeResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return plan, PurgeResult{}, fmt.Errorf("store: purge: commit: %w", err)
+	}
+	return plan, result, nil
+}
+
+type PurgeResult struct {
+	Plan       PurgePlan
+	PurgedAtMS int64
+}
+
+func purgeOneSourceTx(ctx context.Context, tx *sql.Tx, src PurgeSource, scope string, nowMS int64) error {
 	var (
 		deviceID, agent, path string
-		cursorBytes           int64
 		firstNative           sql.NullString
 		workspace             sql.NullString
 	)
-	err = tx.QueryRowContext(ctx,
-		`SELECT device_id, agent, path, cursor_bytes, first_native_id, workspace_path
+	err := tx.QueryRowContext(ctx,
+		`SELECT device_id, agent, path, first_native_id, workspace_path
 		 FROM sources WHERE id = ?`, src.ID).
-		Scan(&deviceID, &agent, &path, &cursorBytes, &firstNative, &workspace)
-	if errors.Is(err, sql.ErrNoRows) {
-		return -1, nil
-	}
+		Scan(&deviceID, &agent, &path, &firstNative, &workspace)
 	if err != nil {
-		return -1, fmt.Errorf("store: purge source %s: read source: %w", src.ID, err)
-	}
-
-	if err := checkSourceSessionsSelected(ctx, tx, src.ID, selected); err != nil {
-		return -1, err
+		return fmt.Errorf("store: purge source %s: read source: %w", src.ID, err)
 	}
 
 	if !firstNative.Valid || firstNative.String == "" {
@@ -377,7 +365,7 @@ func (d *DB) purgeOneSource(ctx context.Context, src PurgeSource, selected map[s
 			`SELECT s.native_id FROM events e JOIN sessions s ON s.id = e.session_id
 			 WHERE e.source_id = ? AND e.source_offset = 0`, src.ID).Scan(&offsetZero)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return -1, fmt.Errorf("store: purge source %s: read first native ID: %w", src.ID, err)
+			return fmt.Errorf("store: purge source %s: read first native ID: %w", src.ID, err)
 		}
 		if offsetZero.Valid && offsetZero.String != "" {
 			firstNative = offsetZero
@@ -387,46 +375,46 @@ func (d *DB) purgeOneSource(ctx context.Context, src PurgeSource, selected map[s
 	sessionRows, err := tx.QueryContext(ctx,
 		`SELECT DISTINCT session_id FROM events WHERE source_id = ? ORDER BY session_id`, src.ID)
 	if err != nil {
-		return -1, fmt.Errorf("store: purge source %s: read sessions: %w", src.ID, err)
+		return fmt.Errorf("store: purge source %s: read sessions: %w", src.ID, err)
 	}
 	var sessions []string
 	for sessionRows.Next() {
 		var sid string
 		if err := sessionRows.Scan(&sid); err != nil {
 			sessionRows.Close()
-			return -1, fmt.Errorf("store: purge source %s: read session: %w", src.ID, err)
+			return fmt.Errorf("store: purge source %s: read session: %w", src.ID, err)
 		}
 		sessions = append(sessions, sid)
 	}
 	if err := sessionRows.Err(); err != nil {
 		sessionRows.Close()
-		return -1, fmt.Errorf("store: purge source %s: read sessions: %w", src.ID, err)
+		return fmt.Errorf("store: purge source %s: read sessions: %w", src.ID, err)
 	}
 	sessionRows.Close()
 
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM event_annotations WHERE event_id IN
 		   (SELECT id FROM events WHERE source_id = ?)`, src.ID); err != nil {
-		return -1, fmt.Errorf("store: purge source %s: delete annotations: %w", src.ID, err)
+		return fmt.Errorf("store: purge source %s: delete annotations: %w", src.ID, err)
 	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE events SET duplicate_of = NULL
 		 WHERE source_id != ?
 		   AND duplicate_of IN (SELECT id FROM events WHERE source_id = ?)`,
 		src.ID, src.ID); err != nil {
-		return -1, fmt.Errorf("store: purge source %s: detach cross-source duplicates: %w", src.ID, err)
+		return fmt.Errorf("store: purge source %s: detach cross-source duplicates: %w", src.ID, err)
 	}
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM events WHERE source_id = ?`, src.ID); err != nil {
-		return -1, fmt.Errorf("store: purge source %s: delete events: %w", src.ID, err)
+		return fmt.Errorf("store: purge source %s: delete events: %w", src.ID, err)
 	}
 	for _, sid := range sessions {
 		if err := dropSessionIfEmpty(ctx, tx, sid); err != nil {
-			return -1, fmt.Errorf("store: purge source %s: %w", src.ID, err)
+			return fmt.Errorf("store: purge source %s: %w", src.ID, err)
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM sources WHERE id = ?`, src.ID); err != nil {
-		return -1, fmt.Errorf("store: purge source %s: delete source: %w", src.ID, err)
+		return fmt.Errorf("store: purge source %s: delete source: %w", src.ID, err)
 	}
 	var native, first any
 	if src.NativeID != "" {
@@ -442,13 +430,10 @@ func (d *DB) purgeOneSource(ctx context.Context, src PurgeSource, selected map[s
 		   (source_id, device_id, agent, path, cursor_bytes, native_id, first_native_id, workspace_path,
 		    scope, purged_at_ms)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		src.ID, deviceID, agent, path, cursorBytes, native, first, workspace, scope, nowMS); err != nil {
-		return -1, fmt.Errorf("store: purge source %s: record tombstone: %w", src.ID, err)
+		src.ID, deviceID, agent, path, src.Cursor, native, first, workspace, scope, nowMS); err != nil {
+		return fmt.Errorf("store: purge source %s: record tombstone: %w", src.ID, err)
 	}
-	if err := tx.Commit(); err != nil {
-		return -1, fmt.Errorf("store: purge source %s: commit: %w", src.ID, err)
-	}
-	return cursorBytes, nil
+	return nil
 }
 
 func dropSessionIfEmpty(ctx context.Context, tx *sql.Tx, sid string) error {
@@ -490,22 +475,11 @@ func dropSessionIfEmpty(ctx context.Context, tx *sql.Tx, sid string) error {
 	return nil
 }
 
-func (d *DB) dropEmptySelectedSessions(ctx context.Context, plan PurgePlan) error {
-	if len(plan.Sessions) == 0 {
-		return nil
-	}
-	tx, err := d.writer.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("store: purge: begin: %w", err)
-	}
-	defer tx.Rollback()
+func dropEmptySelectedSessionsTx(ctx context.Context, tx *sql.Tx, plan PurgePlan) error {
 	for _, ps := range plan.Sessions {
 		if err := dropSessionIfEmpty(ctx, tx, ps.ID); err != nil {
 			return fmt.Errorf("store: purge: %w", err)
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("store: purge: commit: %w", err)
 	}
 	return nil
 }

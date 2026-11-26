@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/nibzard/ohya/internal/claudecode"
+	"github.com/nibzard/ohya/internal/codex"
 )
 
 func claudeDeriver(version int, mutate func(*Event)) ParserDeriver {
@@ -698,5 +699,103 @@ func TestWriterJournalSizeLimitAndReDeriveTruncatesWAL(t *testing.T) {
 	info, err := os.Stat(dbPath + "-wal")
 	if err == nil && info.Size() != 0 {
 		t.Fatalf("WAL size after ReDerive = %d, want 0", info.Size())
+	}
+}
+
+func codexDeriver(version int) ParserDeriver {
+	return ParserDeriver{
+		Agent:         "codex",
+		OutputVersion: version,
+		Derive: func(in DeriveInput) (Event, error) {
+			res, err := codex.Parse([]byte(in.RawJSON+"\n"), in.SourceOffset,
+				codex.Options{SourceScope: in.SourceID, Native: in.FirstNativeID, MaxRecordBytes: int64(len(in.RawJSON))})
+			if err != nil {
+				return Event{}, err
+			}
+			if len(res.Records) != 1 {
+				return Event{}, fmt.Errorf("record at offset %d re-parsed into %d records", in.SourceOffset, len(res.Records))
+			}
+			r := res.Records[0]
+			return Event{
+				Offset: r.Offset, End: r.End, NativeID: r.Native,
+				Kind: r.Kind, Role: r.Role, ToolName: r.ToolName, Text: r.Text,
+				RawJSON: r.Raw, Metadata: r.Metadata,
+				HasTime: r.HasTime, TimeMS: r.TimeMS,
+				Cwd: r.Cwd, GitBranch: r.GitBranch, Repo: r.Repo, Model: r.Model,
+				MessageID: r.ResponseID, Prompt: r.Prompt,
+				HasOrdinal: r.HasOrdinal, Ordinal: r.Ordinal,
+				ParserVersion: version,
+			}, nil
+		},
+	}
+}
+
+func TestReDerivePurgedReallowedHeaderFirstSourceWithoutFirstNativeID(t *testing.T) {
+	ctx := context.Background()
+	hub := ingestHub(t)
+	mustRegisterAs(t, hub, "src-codex-reallow", deviceHex, "codex", "/c/rollout.jsonl")
+
+	raw0 := `{"type":"session_meta","payload":{"id":"codex-reallow-1"}}`
+	e0 := Event{
+		Offset: 0, End: int64(len(raw0)) + 1, NativeID: "codex-reallow-1",
+		Kind: "session_meta", RawJSON: raw0, Metadata: "{}", HasTime: true, TimeMS: 1000, ParserVersion: 1,
+	}
+	mustIngest(t, hub, Batch{SourceID: "src-codex-reallow", DeviceID: deviceHex, Events: []Event{e0}})
+
+	if _, _, err := hub.ApplyPurge(ctx, PurgeSelector{Session: "codex-reallow-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hub.Writer().ExecContext(ctx,
+		`UPDATE purged_sources SET first_native_id = NULL, native_id = NULL WHERE source_id = 'src-codex-reallow'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hub.ReallowSource(ctx, "src-codex-reallow"); err != nil {
+		t.Fatal(err)
+	}
+	var firstBefore sql.NullString
+	if err := hub.Writer().QueryRowContext(ctx,
+		`SELECT first_native_id FROM sources WHERE id = 'src-codex-reallow'`).Scan(&firstBefore); err != nil {
+		t.Fatal(err)
+	}
+	if firstBefore.Valid {
+		t.Fatalf("precondition: first_native_id = %q, want NULL", firstBefore.String)
+	}
+
+	raw1 := `{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"resumed codex prompt"}]}}`
+	e1 := Event{
+		Offset: e0.End, End: e0.End + int64(len(raw1)) + 1, NativeID: "codex-reallow-1",
+		Kind: "response_item", Role: "user", Text: "resumed codex prompt", RawJSON: raw1, Metadata: "{}",
+		HasTime: true, TimeMS: 2000, ParserVersion: 1,
+	}
+	mustIngest(t, hub, Batch{SourceID: "src-codex-reallow", DeviceID: deviceHex, Events: []Event{e1}})
+
+	res, err := hub.ReDerive(ctx, []ParserDeriver{codexDeriver(codex.OutputVersion)})
+	if err != nil {
+		t.Fatalf("ReDerive failed on purged+reallowed source with empty first_native_id: %v", err)
+	}
+	if res.Events != 1 || res.Sessions != 1 {
+		t.Fatalf("ReDerive result = %+v, want 1 event and 1 session", res)
+	}
+
+	var firstAfter sql.NullString
+	if err := hub.Writer().QueryRowContext(ctx,
+		`SELECT first_native_id FROM sources WHERE id = 'src-codex-reallow'`).Scan(&firstAfter); err != nil {
+		t.Fatal(err)
+	}
+	if !firstAfter.Valid || firstAfter.String != "codex-reallow-1" {
+		t.Fatalf("backfilled first_native_id = %+v, want codex-reallow-1", firstAfter)
+	}
+	var text string
+	var pv int
+	if err := hub.Writer().QueryRowContext(ctx,
+		`SELECT text, parser_version FROM events WHERE source_id = 'src-codex-reallow' AND source_offset = ?`,
+		e0.End).Scan(&text, &pv); err != nil {
+		t.Fatal(err)
+	}
+	if text != "resumed codex prompt" || pv != codex.OutputVersion {
+		t.Fatalf("re-derived event = (%q, pv=%d), want (%q, pv=%d)", text, pv, "resumed codex prompt", codex.OutputVersion)
+	}
+	if err := hub.FTSIndexConsistent(ctx); err != nil {
+		t.Fatalf("FTSIndexConsistent: %v", err)
 	}
 }

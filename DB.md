@@ -437,9 +437,10 @@ chunks of 128 records with keyset pagination on the offset. Each chunk closes be
 the scan never observes the rows it changes, and memory stays bounded even for gigabyte rollouts.
 Each source seeds its native session from `sources.first_native_id` (so a reallowed Codex or Pi
 source whose offset-0 event was purged still re-derives past offset 0), the record at offset 0
-establishes or updates it when present, and each later record receives the native ID
-of the record before it, exactly like a fresh parse. A deriver must return an event that frames
-exactly the stored record (offset, end, and raw JSON), names a session, and carries the version it
+establishes or updates it when present. For a legacy source that has neither a saved ID
+nor an offset-0 record, re-derive seeds and backfills the ID from the session of the earliest
+retained event. Each later record receives the native ID of the previous record.
+A deriver must return an event that frames exactly the stored record (offset, end, and raw JSON), names a session, and carries the version it
 was bound with. The pass clears replay-original marks and token totals before the walk, so the
 first usage of a message ID is the one a fresh ingest in walk order keeps. Sessions belong to one
 agent, because the session ID embeds the agent. The walk recomputes `repo` like `cwd` and `branch`.

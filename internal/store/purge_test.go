@@ -434,7 +434,7 @@ func TestReallowUnknownSource(t *testing.T) {
 	}
 }
 
-func TestApplyPurgePerSourceTransactionsResume(t *testing.T) {
+func TestApplyPurgeRollsBackAtomicallyAcrossSources(t *testing.T) {
 	hub := ingestHub(t)
 	ctx := context.Background()
 	mustRegisterAs(t, hub, "src-1", deviceHex, "codex", "/a/1.jsonl")
@@ -447,21 +447,13 @@ func TestApplyPurgePerSourceTransactionsResume(t *testing.T) {
 		 BEGIN SELECT RAISE(ABORT, 'injected: second tombstone refused'); END`); err != nil {
 		t.Fatal(err)
 	}
+	before := hubSnapshot(t, hub)
 	_, _, err := hub.ApplyPurge(ctx, PurgeSelector{Agent: "codex"})
 	if err == nil || !strings.Contains(err.Error(), "injected") {
 		t.Fatalf("apply error = %v, want the injected failure", err)
 	}
-	if got := hubCount(t, hub, `SELECT count(*) FROM purged_sources WHERE source_id = 'src-1'`); got != 1 {
-		t.Fatalf("first source was not committed separately: %d tombstones", got)
-	}
-	if got := hubCount(t, hub, `SELECT count(*) FROM events WHERE source_id = 'src-1'`); got != 0 {
-		t.Fatalf("first source events survive its committed purge: %d", got)
-	}
-	if got := hubCount(t, hub, `SELECT count(*) FROM events WHERE source_id = 'src-2'`); got != 1 {
-		t.Fatalf("second source lost events from the failed transaction: %d", got)
-	}
-	if got := hubCount(t, hub, `SELECT count(*) FROM sessions WHERE native_id = 'thread-2'`); got != 1 {
-		t.Fatalf("second session lost its row from the failed transaction: %d", got)
+	if after := hubSnapshot(t, hub); after != before {
+		t.Fatalf("failed multi-source purge changed the database\nbefore:\n%s\nafter:\n%s", before, after)
 	}
 
 	if _, err := hub.Writer().Exec(`DROP TRIGGER block_second_tombstone`); err != nil {
@@ -471,14 +463,73 @@ func TestApplyPurgePerSourceTransactionsResume(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Sources) != 1 || plan.Sources[0].ID != "src-2" {
-		t.Fatalf("rerun planned %+v, want only the remaining source", plan.Sources)
+	if len(plan.Sources) != 2 || plan.Sources[0].ID != "src-1" || plan.Sources[1].ID != "src-2" {
+		t.Fatalf("rerun planned %+v, want both sources", plan.Sources)
 	}
 	if got := hubCount(t, hub, `SELECT count(*) FROM sources`); got != 0 {
 		t.Fatalf("sources after the resumed purge = %d", got)
 	}
 	if got := hubCount(t, hub, `SELECT count(*) FROM sessions`); got != 0 {
 		t.Fatalf("sessions after the resumed purge = %d", got)
+	}
+	if got := hubCount(t, hub, `SELECT count(*) FROM purged_sources`); got != 2 {
+		t.Fatalf("tombstones after the resumed purge = %d", got)
+	}
+}
+
+func TestApplyPurgeAtomicRollbackPreservesCrossSourceDuplicateOf(t *testing.T) {
+	ctx := context.Background()
+	hub := ingestHub(t)
+	mustRegisterAs(t, hub, "src-1", deviceHex, "codex", "/c/orig.jsonl")
+	mustRegisterAs(t, hub, "src-2", deviceHex, "codex", "/c/page.jsonl")
+
+	raw := `{"type":"response_item","ordinal":1,"payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"shared"}]}}`
+	e1 := Event{
+		Offset: 0, End: int64(len(raw)) + 1, NativeID: "codex-thread-dup",
+		Kind: "message", Role: "user", Text: "shared", RawJSON: raw, Metadata: "{}",
+		HasTime: true, TimeMS: 1000, HasOrdinal: true, Ordinal: 1, ParserVersion: 1,
+	}
+	mustIngest(t, hub, Batch{SourceID: "src-1", DeviceID: deviceHex, Events: []Event{e1}})
+	mustIngest(t, hub, Batch{SourceID: "src-2", DeviceID: deviceHex, Events: []Event{e1}})
+
+	var origID int64
+	if err := hub.Writer().QueryRow(`SELECT id FROM events WHERE source_id = 'src-1'`).Scan(&origID); err != nil {
+		t.Fatal(err)
+	}
+	var dupBefore sql.NullInt64
+	if err := hub.Writer().QueryRow(`SELECT duplicate_of FROM events WHERE source_id = 'src-2'`).Scan(&dupBefore); err != nil {
+		t.Fatal(err)
+	}
+	if !dupBefore.Valid || dupBefore.Int64 != origID {
+		t.Fatalf("precondition: src-2 duplicate_of = %+v, want %d", dupBefore, origID)
+	}
+
+	if _, err := hub.Writer().Exec(
+		`CREATE TRIGGER block_second_tombstone BEFORE INSERT ON purged_sources
+		 WHEN NEW.source_id = 'src-2'
+		 BEGIN SELECT RAISE(ABORT, 'injected: second tombstone refused'); END`); err != nil {
+		t.Fatal(err)
+	}
+	before := hubSnapshot(t, hub)
+	_, _, err := hub.ApplyPurge(ctx, PurgeSelector{Session: "codex-thread-dup"})
+	if err == nil || !strings.Contains(err.Error(), "injected") {
+		t.Fatalf("ApplyPurge error = %v, want injected trigger failure", err)
+	}
+	if after := hubSnapshot(t, hub); after != before {
+		t.Fatalf("failed multi-source purge mutated the database\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+	var dupAfter sql.NullInt64
+	if err := hub.Writer().QueryRow(`SELECT duplicate_of FROM events WHERE source_id = 'src-2'`).Scan(&dupAfter); err != nil {
+		t.Fatal(err)
+	}
+	if !dupAfter.Valid || dupAfter.Int64 != origID {
+		t.Fatalf("src-2 duplicate_of after rollback = %+v, want %d preserved", dupAfter, origID)
+	}
+	if got := hubCount(t, hub, `SELECT count(*) FROM events WHERE source_id = 'src-1'`); got != 1 {
+		t.Fatalf("src-1 events after rollback = %d, want 1", got)
+	}
+	if err := hub.FTSIndexConsistent(ctx); err != nil {
+		t.Fatalf("FTS integrity after rollback: %v", err)
 	}
 }
 
@@ -711,19 +762,20 @@ func TestPurgeReadsAuthoritativeCursorInsideTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	staleSource := plan.Sources[0]
+	if plan.Sources[0].Cursor != e1.End {
+		t.Fatalf("preview cursor = %d, want %d", plan.Sources[0].Cursor, e1.End)
+	}
 
-	e2 := mkEvent(e1.End, rawUser("arrived during purge"))
+	e2 := mkEvent(e1.End, rawUser("arrived after preview"))
 	e2.NativeID = "live-sess"
 	mustIngest(t, hub, Batch{SourceID: "src-live", DeviceID: deviceHex, Events: []Event{e2}})
 
-	selected := map[string]bool{plan.Sessions[0].ID: true}
-	committedCursor, err := hub.purgeOneSource(ctx, staleSource, selected, "session=live-sess", 5000)
+	applied, _, err := hub.ApplyPurge(ctx, PurgeSelector{Session: "live-sess"})
 	if err != nil {
-		t.Fatalf("purgeOneSource: %v", err)
+		t.Fatal(err)
 	}
-	if committedCursor != e2.End {
-		t.Fatalf("committedCursor = %d, want fresh in-tx cursor %d (stale was %d)", committedCursor, e2.End, staleSource.Cursor)
+	if applied.Sources[0].Cursor != e2.End || applied.Events != 2 {
+		t.Fatalf("apply plan = %+v, want cursor %d and both records", applied, e2.End)
 	}
 	var storedCursor int64
 	if err := hub.Writer().QueryRow(`SELECT cursor_bytes FROM purged_sources WHERE source_id = 'src-live'`).Scan(&storedCursor); err != nil {

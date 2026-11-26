@@ -224,6 +224,18 @@ func rederiveAgent(ctx context.Context, tx *sql.Tx, p ParserDeriver, states map[
 				break
 			}
 
+			if lastOffset == -1 && chunk[0].offset > 0 && native == "" {
+				if err := tx.QueryRowContext(ctx,
+					`SELECT s.native_id FROM events e JOIN sessions s ON s.id = e.session_id
+					 WHERE e.id = ?`, chunk[0].id).Scan(&native); err != nil {
+					return 0, fmt.Errorf("store: re-derive source %s: read first retained native ID: %w", src.id, err)
+				}
+				if _, err := tx.ExecContext(ctx, `UPDATE sources SET first_native_id = ? WHERE id = ?`,
+					native, src.id); err != nil {
+					return 0, fmt.Errorf("store: re-derive source %s: update first native ID: %w", src.id, err)
+				}
+			}
+
 			for _, e := range chunk {
 				ev, err := p.Derive(DeriveInput{
 					Agent: p.Agent, SourceID: src.id, SourcePath: src.path, SourceOffset: e.offset,
