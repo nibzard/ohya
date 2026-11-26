@@ -232,6 +232,7 @@ type ingestor struct {
 	workspaceTried  map[string]bool
 	workspaceFailed map[string]bool
 	workspacesDue   bool
+	discovery       *discoveryCache
 }
 
 type noProgressMark struct {
@@ -253,6 +254,7 @@ func newIngestor(hub *store.DB, w *watch.Watcher, agent, deviceID string, maxRec
 		missingReported: map[string]bool{}, present: map[string]bool{}, noProgress: map[string]noProgressMark{}, tails: map[string]int64{},
 		registered: map[string]string{}, purged: map[string]bool{}, workspacesDue: true,
 		workspaceTried: map[string]bool{}, workspaceFailed: map[string]bool{},
+		discovery: newDiscoveryCache(),
 	}
 }
 
@@ -306,7 +308,7 @@ func excludedSummary(byAgent map[string]int) string {
 
 func (r *ingestor) poll(ctx context.Context, dirs []agentDir, allowEmpty bool) (passStats, error) {
 	discoveryStart := time.Now()
-	candidates, excluded, err := discoverAgentSessionFiles(r.agent, dirs, r.excludes, allowEmpty)
+	candidates, excluded, err := discoverAgentSessionFilesCached(r.discovery, r.agent, dirs, r.excludes, allowEmpty)
 	if err != nil {
 		r.observer.Add("discovery_errors", 1, "read")
 		return passStats{}, err
@@ -675,10 +677,25 @@ func discoverSessionFiles(dirs []agentDir, excludes excludeGlobs, allowEmpty boo
 }
 
 func discoverAgentSessionFiles(agent string, dirs []agentDir, excludes excludeGlobs, allowEmpty bool) ([]string, []string, error) {
+	return discoverAgentSessionFilesCached(nil, agent, dirs, excludes, allowEmpty)
+}
+
+func discoverAgentSessionFilesCached(cache *discoveryCache, agent string, dirs []agentDir, excludes excludeGlobs, allowEmpty bool) ([]string, []string, error) {
+	return discoverAgentSessionFilesAt(cache, agent, dirs, excludes, allowEmpty, time.Now())
+}
+
+func discoverAgentSessionFilesAt(cache *discoveryCache, agent string, dirs []agentDir, excludes excludeGlobs, allowEmpty bool, now time.Time) ([]string, []string, error) {
 	var files []string
 	var excluded []string
+	visited := 0
 	for _, d := range dirs {
-		found, skipped, err := walkSessionFiles(agent, d.dir, excludes)
+		var found, skipped []string
+		var err error
+		if cache != nil && len(excludes) == 0 {
+			found, err = cache.walkRoot(agent, d.dir, now, &visited)
+		} else {
+			found, skipped, err = walkSessionFiles(agent, d.dir, excludes)
+		}
 		if errors.Is(err, os.ErrNotExist) && (d.optional || allowEmpty) {
 			continue
 		}
@@ -688,7 +705,146 @@ func discoverAgentSessionFiles(agent string, dirs []agentDir, excludes excludeGl
 		files = append(files, found...)
 		excluded = append(excluded, skipped...)
 	}
+	if cache != nil && len(cache.dirs) > visited*2+64 {
+		clear(cache.dirs)
+	}
 	return files, excluded, nil
+}
+
+type cachedDirChild struct {
+	path  string
+	isDir bool
+}
+
+type cachedSessionDir struct {
+	stamp    watch.DirStamp
+	children []cachedDirChild
+}
+
+type discoveryCache struct {
+	dirs map[string]cachedSessionDir
+}
+
+func newDiscoveryCache() *discoveryCache {
+	return &discoveryCache{dirs: map[string]cachedSessionDir{}}
+}
+
+func isSkippedAntigravityDir(name string) bool {
+	switch name {
+	case "chunks", "steps", "scratch", ".user_uploaded", "messages":
+		return true
+	default:
+		return false
+	}
+}
+
+func isAgentSessionFile(agent, path, name string) bool {
+	if !strings.HasSuffix(name, ".jsonl") {
+		return false
+	}
+	if agent == antigravity.AgentName {
+		return name == "transcript_full.jsonl" && antigravity.ConversationIDFromPath(path) != ""
+	}
+	return true
+}
+
+func (c *discoveryCache) walkRoot(agent, root string, now time.Time, visited *int) ([]string, error) {
+	var files []string
+	err := c.walkDir(agent, root, true, now, &files, visited)
+	if err != nil {
+		return nil, err
+	}
+	return files, nil
+}
+
+func (c *discoveryCache) walkDir(agent, dir string, isRoot bool, now time.Time, files *[]string, visited *int) error {
+	info, err := os.Lstat(dir)
+	if err != nil {
+		if isRoot && errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("session directory %s does not exist: %w", dir, fs.ErrNotExist)
+		}
+		return fmt.Errorf("discover %s: %w", dir, err)
+	}
+	if !info.IsDir() {
+		if isRoot && info.Mode().IsRegular() && isAgentSessionFile(agent, dir, info.Name()) {
+			*files = append(*files, dir)
+		}
+		return nil
+	}
+	if !isRoot && agent == antigravity.AgentName && isSkippedAntigravityDir(info.Name()) {
+		return nil
+	}
+	*visited++
+	stamp, ok := watch.StatDirStamp(info)
+	if ok && stamp.StableAt(now) {
+		if cached, hit := c.dirs[dir]; hit && cached.stamp == stamp {
+			mark := len(*files)
+			stale := false
+			for _, child := range cached.children {
+				if !child.isDir {
+					*files = append(*files, child.path)
+					continue
+				}
+				if err := c.walkDir(agent, child.path, false, now, files, visited); err != nil {
+					if errors.Is(err, os.ErrNotExist) {
+						stale = true
+						break
+					}
+					return err
+				}
+			}
+			if !stale {
+				return nil
+			}
+			*files = (*files)[:mark]
+			delete(c.dirs, dir)
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if isRoot && errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("session directory %s does not exist: %w", dir, fs.ErrNotExist)
+		}
+		return fmt.Errorf("discover %s: %w", dir, err)
+	}
+	var children []cachedDirChild
+	cacheable := ok && stamp.StableAt(now)
+	if cacheable {
+		children = make([]cachedDirChild, 0, len(entries))
+	}
+	for _, d := range entries {
+		name := d.Name()
+		if d.IsDir() {
+			if agent == antigravity.AgentName && isSkippedAntigravityDir(name) {
+				continue
+			}
+			sub := filepath.Join(dir, name)
+			if cacheable {
+				children = append(children, cachedDirChild{path: sub, isDir: true})
+			}
+			if err := c.walkDir(agent, sub, false, now, files, visited); err != nil {
+				return err
+			}
+			continue
+		}
+		if !d.Type().IsRegular() {
+			continue
+		}
+		p := filepath.Join(dir, name)
+		if !isAgentSessionFile(agent, p, name) {
+			continue
+		}
+		if cacheable {
+			children = append(children, cachedDirChild{path: p, isDir: false})
+		}
+		*files = append(*files, p)
+	}
+	if cacheable {
+		c.dirs[dir] = cachedSessionDir{stamp: stamp, children: children}
+	} else {
+		delete(c.dirs, dir)
+	}
+	return nil
 }
 
 func walkSessionFiles(agent, root string, excludes excludeGlobs) ([]string, []string, error) {

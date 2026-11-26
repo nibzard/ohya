@@ -328,9 +328,10 @@ func reportJoinTransport(ctx context.Context, node *address.Device, hubAddr stri
 func joinDiscover(dirs []agentDir, agent string, excludes excludeGlobs, allowEmpty bool, observer observe.Observer, stderr io.Writer) (func() ([]string, error), func(string) bool) {
 	excludedPaths := map[string]bool{}
 	lastExcluded := -1
+	cache := newDiscoveryCache()
 	discover := func() ([]string, error) {
 		discoveryStart := time.Now()
-		candidates, excluded, err := discoverAgentSessionFiles(agent, dirs, excludes, allowEmpty)
+		candidates, excluded, err := discoverAgentSessionFilesCached(cache, agent, dirs, excludes, allowEmpty)
 		if err != nil {
 			observer.Add("discovery_errors", 1, "read")
 			return nil, err

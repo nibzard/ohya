@@ -333,3 +333,68 @@ func TestJoinEventGateCoalescesMultiAgentTransportTransitions(t *testing.T) {
 		}
 	}
 }
+
+func TestDiscoveryCacheDetectsNewRenamedAndDeletedSessionFiles(t *testing.T) {
+	root := t.TempDir()
+	coldDir := filepath.Join(root, "2026", "01", "15")
+	hotDir := filepath.Join(root, "2026", "11", "26")
+	for _, d := range []string{coldDir, hotDir} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	coldFile := filepath.Join(coldDir, "cold.jsonl")
+	hotFile := filepath.Join(hotDir, "hot.jsonl")
+	for _, f := range []string{coldFile, hotFile} {
+		if err := os.WriteFile(f, []byte("{}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := time.Now().Add(-10 * time.Second)
+	for _, d := range []string{coldDir, filepath.Dir(coldDir), filepath.Dir(filepath.Dir(coldDir)), root} {
+		if err := os.Chtimes(d, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cache := newDiscoveryCache()
+	dirs := []agentDir{{dir: root}}
+	checkMatchesUncached := func(step string, now time.Time) {
+		t.Helper()
+		got, _, err := discoverAgentSessionFilesAt(cache, claudecode.AgentName, dirs, nil, false, now)
+		if err != nil {
+			t.Fatalf("%s cached: %v", step, err)
+		}
+		want, _, err := discoverAgentSessionFiles(claudecode.AgentName, dirs, nil, false)
+		if err != nil {
+			t.Fatalf("%s uncached: %v", step, err)
+		}
+		if strings.Join(got, "\n") != strings.Join(want, "\n") {
+			t.Fatalf("%s mismatch:\ngot:  %v\nwant: %v", step, got, want)
+		}
+	}
+
+	settled := time.Now().Add(3 * time.Second)
+	checkMatchesUncached("initial", settled)
+	if len(cache.dirs) == 0 {
+		t.Fatal("settled directories were not cached")
+	}
+	checkMatchesUncached("second-pass", settled)
+
+	addedInCold := filepath.Join(coldDir, "added.jsonl")
+	if err := os.WriteFile(addedInCold, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	checkMatchesUncached("added-in-cold-dir", time.Now().Add(3*time.Second))
+
+	renamedHot := filepath.Join(hotDir, "renamed.jsonl")
+	if err := os.Rename(hotFile, renamedHot); err != nil {
+		t.Fatal(err)
+	}
+	checkMatchesUncached("renamed-in-hot-dir", time.Now())
+
+	if err := os.Remove(coldFile); err != nil {
+		t.Fatal(err)
+	}
+	checkMatchesUncached("deleted-cold-file", time.Now())
+}

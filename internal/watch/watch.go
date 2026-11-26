@@ -26,14 +26,17 @@ type Options struct {
 }
 
 type Watcher struct {
-	stateDir string
-	agent    string
-	window   int64
-	state    checkpointFile
-	lastPass map[string]probe
-	missing  map[string]bool
-	dirty    bool
-	observer observe.Observer
+	stateDir     string
+	agent        string
+	window       int64
+	state        checkpointFile
+	lastPass     map[string]probe
+	missing      map[string]bool
+	probes       map[string]probe
+	dirCache     map[string]resolvedDir
+	dirAncestors map[string]resolvedDir
+	dirty        bool
+	observer     observe.Observer
 }
 
 type Outcome struct {
@@ -67,24 +70,68 @@ func New(stateDir, agent string, o Options) (*Watcher, error) {
 		return nil, err
 	}
 	return &Watcher{stateDir: stateDir, agent: agent, window: window, state: state,
-		lastPass: map[string]probe{}, missing: map[string]bool{}, observer: observer}, nil
+		lastPass: map[string]probe{}, missing: map[string]bool{},
+		probes: map[string]probe{}, dirCache: map[string]resolvedDir{}, dirAncestors: map[string]resolvedDir{},
+		observer: observer}, nil
 }
 
 type probe struct {
+	dev      uint64
+	ino      uint64
+	hasID    bool
 	identity string
 	size     int64
 	modTime  time.Time
 	ctime    int64
 }
 
+func (w *Watcher) buildProbe(norm string, info fs.FileInfo) probe {
+	dev, ino, hasID := rawFileIdentity(info)
+	var id string
+	if hasID {
+		if prev, ok := w.lastPass[norm]; ok && prev.hasID && prev.dev == dev && prev.ino == ino {
+			id = prev.identity
+		} else {
+			id = formatFileIdentity(dev, ino)
+			if entry, ok := w.state.Sources[norm]; ok && entry.FileIdentity == id {
+				id = entry.FileIdentity
+			}
+		}
+	}
+	return probe{
+		dev:      dev,
+		ino:      ino,
+		hasID:    hasID,
+		identity: id,
+		size:     info.Size(),
+		modTime:  info.ModTime(),
+		ctime:    platformFileChangeTime(info),
+	}
+}
+
 func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
-	probes := make(map[string]probe, len(candidates))
-	dirCache := make(map[string]resolvedDir)
+	if w.probes == nil {
+		w.probes = make(map[string]probe, len(candidates))
+	} else {
+		clear(w.probes)
+	}
+	if w.dirCache == nil {
+		w.dirCache = make(map[string]resolvedDir)
+	} else {
+		clear(w.dirCache)
+	}
+	if w.dirAncestors == nil {
+		w.dirAncestors = make(map[string]resolvedDir)
+	} else {
+		clear(w.dirAncestors)
+	}
+	probes := w.probes
+	unclaimedProbes := 0
 	for _, p := range candidates {
 		if p == "" {
 			continue
 		}
-		norm := normalizePathCached(p, dirCache)
+		norm := normalizePathWithAncestors(p, w.dirCache, w.dirAncestors)
 		if _, seen := probes[norm]; seen {
 			continue
 		}
@@ -92,101 +139,104 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 		if err != nil || !info.Mode().IsRegular() {
 			continue
 		}
-		probes[norm] = probe{
-			identity: platformFileIdentity(info),
-			size:     info.Size(),
-			modTime:  info.ModTime(),
-			ctime:    platformFileChangeTime(info),
+		pr := w.buildProbe(norm, info)
+		probes[norm] = pr
+		if entry, ok := w.state.Sources[norm]; !ok || entry.FileIdentity != pr.identity {
+			unclaimedProbes++
 		}
 	}
 
-	byIdentity := make(map[string]string, len(probes))
-	for _, p := range slices.Sorted(maps.Keys(probes)) {
-		if id := probes[p].identity; id != "" {
-			if _, taken := byIdentity[id]; !taken {
-				byIdentity[id] = p
-			}
-		}
-	}
-
-	var outcomes []Outcome
+	outcomes := make([]Outcome, 0, len(w.state.Sources)+unclaimedProbes)
 	changed := false
 	present, missing := 0, 0
 	var observedBytes int64
 
-	renamedFrom := map[string]string{}
-	moves := map[string]string{}
-	for _, key := range slices.Sorted(maps.Keys(w.state.Sources)) {
-		entry := w.state.Sources[key]
-		if entry.FileIdentity == "" {
-			continue
+	var renamedFrom map[string]string
+	var claimed map[string]bool
+
+	if unclaimedProbes > 0 {
+		byIdentity := make(map[string]string, len(probes))
+		for _, p := range slices.Sorted(maps.Keys(probes)) {
+			if id := probes[p].identity; id != "" {
+				if _, taken := byIdentity[id]; !taken {
+					byIdentity[id] = p
+				}
+			}
 		}
-		if pr, ok := probes[key]; ok && pr.identity == entry.FileIdentity {
-			continue
+
+		moves := map[string]string{}
+		for _, key := range slices.Sorted(maps.Keys(w.state.Sources)) {
+			entry := w.state.Sources[key]
+			if entry.FileIdentity == "" {
+				continue
+			}
+			if pr, ok := probes[key]; ok && pr.identity == entry.FileIdentity {
+				continue
+			}
+			if newPath, ok := byIdentity[entry.FileIdentity]; ok && newPath != key {
+				moves[key] = newPath
+			}
 		}
-		if newPath, ok := byIdentity[entry.FileIdentity]; ok && newPath != key {
-			moves[key] = newPath
+		if len(moves) > 0 {
+			for {
+				claims := make(map[string]int, len(w.state.Sources))
+				for key := range w.state.Sources {
+					if target, ok := moves[key]; ok {
+						claims[target]++
+					} else {
+						claims[key]++
+					}
+				}
+				refused := false
+				for key, target := range moves {
+					if claims[target] > 1 {
+						delete(moves, key)
+						refused = true
+					}
+				}
+				if !refused {
+					break
+				}
+			}
 		}
-	}
-	if len(moves) > 0 {
-		for {
-			claims := make(map[string]int, len(w.state.Sources))
-			for key := range w.state.Sources {
+		if len(moves) > 0 {
+			renamedFrom = make(map[string]string, len(moves))
+			moved := make(map[string]sourceCheckpoint, len(w.state.Sources))
+			for key, entry := range w.state.Sources {
 				if target, ok := moves[key]; ok {
-					claims[target]++
+					entry.Path = target
+					renamedFrom[target] = key
+					moved[target] = entry
+					delete(w.missing, key)
 				} else {
-					claims[key]++
+					moved[key] = entry
 				}
 			}
-			refused := false
-			for key, target := range moves {
-				if claims[target] > 1 {
-					delete(moves, key)
-					refused = true
+			w.state.Sources = moved
+			movedPass := make(map[string]probe, len(w.lastPass))
+			for key, pr := range w.lastPass {
+				if target, ok := moves[key]; ok {
+					if cur, live := probes[target]; live && cur.identity == pr.identity && cur.size == pr.size && cur.modTime.Equal(pr.modTime) {
+						pr.ctime = cur.ctime
+					}
+					movedPass[target] = pr
+				} else {
+					movedPass[key] = pr
 				}
 			}
-			if !refused {
-				break
-			}
+			w.lastPass = movedPass
+			changed = true
 		}
-	}
-	if len(moves) > 0 {
-		moved := make(map[string]sourceCheckpoint, len(w.state.Sources))
+
+		claimed = make(map[string]bool, len(w.state.Sources))
 		for key, entry := range w.state.Sources {
-			if target, ok := moves[key]; ok {
-				entry.Path = target
-				renamedFrom[target] = key
-				moved[target] = entry
-				delete(w.missing, key)
-			} else {
-				moved[key] = entry
+			if pr, ok := probes[key]; ok && pr.identity != "" && pr.identity == entry.FileIdentity {
+				claimed[pr.identity] = true
 			}
-		}
-		w.state.Sources = moved
-		movedPass := make(map[string]probe, len(w.lastPass))
-		for key, pr := range w.lastPass {
-			if target, ok := moves[key]; ok {
-				if cur, live := probes[target]; live && cur.identity == pr.identity && cur.size == pr.size && cur.modTime.Equal(pr.modTime) {
-					pr.ctime = cur.ctime
-				}
-				movedPass[target] = pr
-			} else {
-				movedPass[key] = pr
-			}
-		}
-		w.lastPass = movedPass
-		changed = true
-	}
-
-	claimed := make(map[string]bool, len(w.state.Sources))
-	for key, entry := range w.state.Sources {
-		if pr, ok := probes[key]; ok && pr.identity != "" && pr.identity == entry.FileIdentity {
-			claimed[pr.identity] = true
 		}
 	}
 
-	for _, key := range slices.Sorted(maps.Keys(w.state.Sources)) {
-		entry := w.state.Sources[key]
+	processTracked := func(key string, entry sourceCheckpoint) error {
 		pr, live := probes[key]
 		if !live {
 			missing++
@@ -199,7 +249,7 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 				Path: key, SourceID: entry.SourceID,
 				Cursor: entry.CursorBytes, Missing: true,
 			})
-			continue
+			return nil
 		}
 		if pr.identity != entry.FileIdentity && pr.identity != "" && claimed[pr.identity] {
 			missing++
@@ -212,7 +262,7 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 				Path: key, SourceID: entry.SourceID,
 				Cursor: entry.CursorBytes, Missing: true,
 			})
-			continue
+			return nil
 		}
 		delete(w.missing, key)
 		present++
@@ -237,47 +287,65 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 			delete(w.lastPass, key)
 		}
 		if reason == "" {
+			var from string
+			if renamedFrom != nil {
+				from = renamedFrom[key]
+			}
 			outcomes = append(outcomes, Outcome{
 				Path: key, SourceID: entry.SourceID,
 				Cursor: entry.CursorBytes, End: pr.size, ModTime: pr.modTime,
-				RenamedFrom: renamedFrom[key],
+				RenamedFrom: from,
 			})
-			continue
+			return nil
 		}
 		w.observer.Add("watch_source_events", 1, watchEvent)
 		outcome, err := w.register(key, pr, reason)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		if pr.identity != "" {
+		if claimed != nil && pr.identity != "" {
 			claimed[pr.identity] = true
 		}
 		outcome.ReplacedSourceID = entry.SourceID
 		outcome.ReplacedCursor = entry.CursorBytes
 		outcomes = append(outcomes, outcome)
 		changed = true
+		return nil
 	}
 
-	for _, key := range slices.Sorted(maps.Keys(probes)) {
-		if _, tracked := w.state.Sources[key]; tracked {
-			continue
+	if unclaimedProbes > 0 {
+		for _, key := range slices.Sorted(maps.Keys(w.state.Sources)) {
+			if err := processTracked(key, w.state.Sources[key]); err != nil {
+				return nil, err
+			}
 		}
-		id := probes[key].identity
-		if id != "" && claimed[id] {
-			continue
+		for _, key := range slices.Sorted(maps.Keys(probes)) {
+			if _, tracked := w.state.Sources[key]; tracked {
+				continue
+			}
+			id := probes[key].identity
+			if id != "" && claimed[id] {
+				continue
+			}
+			present++
+			observedBytes += probes[key].size
+			outcome, err := w.register(key, probes[key], "new file")
+			if err != nil {
+				return nil, err
+			}
+			w.lastPass[key] = probes[key]
+			if id != "" {
+				claimed[id] = true
+			}
+			outcomes = append(outcomes, outcome)
+			changed = true
 		}
-		present++
-		observedBytes += probes[key].size
-		outcome, err := w.register(key, probes[key], "new file")
-		if err != nil {
-			return nil, err
+	} else {
+		for key, entry := range w.state.Sources {
+			if err := processTracked(key, entry); err != nil {
+				return nil, err
+			}
 		}
-		w.lastPass[key] = probes[key]
-		if id != "" {
-			claimed[id] = true
-		}
-		outcomes = append(outcomes, outcome)
-		changed = true
 	}
 
 	w.observer.Set("watch_sources", float64(present), "active")
@@ -440,12 +508,7 @@ func (w *Watcher) checkpoint(p string, entry sourceCheckpoint, end int64) error 
 	entry.FingerprintWindow = window
 	entry.FingerprintSHA256 = sum
 	w.state.Sources[p] = entry
-	w.lastPass[p] = probe{
-		identity: platformFileIdentity(info),
-		size:     info.Size(),
-		modTime:  info.ModTime(),
-		ctime:    platformFileChangeTime(info),
-	}
+	w.lastPass[p] = w.buildProbe(p, info)
 	w.dirty = true
 	return nil
 }
@@ -520,13 +583,23 @@ type resolvedDir struct {
 }
 
 func normalizePath(p string) string {
-	return normalizePathCached(p, nil)
+	return normalizePathWithAncestors(p, nil, nil)
 }
 
 func normalizePathCached(p string, cache map[string]resolvedDir) string {
-	abs, err := filepath.Abs(p)
-	if err != nil {
-		return filepath.Clean(p)
+	return normalizePathWithAncestors(p, cache, nil)
+}
+
+func normalizePathWithAncestors(p string, cache, ancestors map[string]resolvedDir) string {
+	var abs string
+	if filepath.IsAbs(p) {
+		abs = filepath.Clean(p)
+	} else {
+		var err error
+		abs, err = filepath.Abs(p)
+		if err != nil {
+			return filepath.Clean(p)
+		}
 	}
 	dir, base := filepath.Split(abs)
 	cleanDir := filepath.Clean(dir)
@@ -535,16 +608,66 @@ func normalizePathCached(p string, cache map[string]resolvedDir) string {
 		var cached bool
 		entry, cached = cache[cleanDir]
 		if !cached {
-			resolved, err := filepath.EvalSymlinks(cleanDir)
-			entry = resolvedDir{path: resolved, ok: err == nil}
+			entry = evalDirWithAncestors(cleanDir, ancestors)
 			cache[cleanDir] = entry
 		}
 	} else {
-		resolved, err := filepath.EvalSymlinks(cleanDir)
-		entry = resolvedDir{path: resolved, ok: err == nil}
+		entry = evalDirWithAncestors(cleanDir, ancestors)
 	}
 	if entry.ok {
+		if len(abs) == len(entry.path)+1+len(base) &&
+			abs[:len(entry.path)] == entry.path &&
+			abs[len(entry.path)] == filepath.Separator &&
+			abs[len(entry.path)+1:] == base {
+			return abs
+		}
 		return filepath.Join(entry.path, base)
 	}
-	return filepath.Clean(abs)
+	return abs
+}
+
+func evalDirWithAncestors(cleanDir string, ancestors map[string]resolvedDir) resolvedDir {
+	if ancestors == nil {
+		resolved, err := filepath.EvalSymlinks(cleanDir)
+		return resolvedDir{path: resolved, ok: err == nil}
+	}
+	if entry, ok := ancestors[cleanDir]; ok {
+		return entry
+	}
+	parent := filepath.Dir(cleanDir)
+	if parent == cleanDir {
+		resolved, err := filepath.EvalSymlinks(cleanDir)
+		entry := resolvedDir{path: resolved, ok: err == nil}
+		ancestors[cleanDir] = entry
+		return entry
+	}
+	parentEntry := evalDirWithAncestors(parent, ancestors)
+	if !parentEntry.ok {
+		entry := resolvedDir{ok: false}
+		ancestors[cleanDir] = entry
+		return entry
+	}
+	base := filepath.Base(cleanDir)
+	candidate := cleanDir
+	if !(len(cleanDir) == len(parentEntry.path)+1+len(base) &&
+		cleanDir[:len(parentEntry.path)] == parentEntry.path &&
+		cleanDir[len(parentEntry.path)] == filepath.Separator &&
+		cleanDir[len(parentEntry.path)+1:] == base) {
+		candidate = filepath.Join(parentEntry.path, base)
+	}
+	info, err := os.Lstat(candidate)
+	if err != nil {
+		entry := resolvedDir{ok: false}
+		ancestors[cleanDir] = entry
+		return entry
+	}
+	if info.Mode()&fs.ModeSymlink != 0 {
+		resolved, err := filepath.EvalSymlinks(candidate)
+		entry := resolvedDir{path: resolved, ok: err == nil}
+		ancestors[cleanDir] = entry
+		return entry
+	}
+	entry := resolvedDir{path: candidate, ok: true}
+	ancestors[cleanDir] = entry
+	return entry
 }

@@ -26,8 +26,8 @@ type sourceCheckpoint struct {
 	FileIdentity      string `json:"file_identity"`
 	CursorBytes       int64  `json:"cursor_bytes"`
 	SizeBytes         int64  `json:"size_bytes"`
-	FingerprintWindow int64  `json:"fingerprint_window"`
-	FingerprintSHA256 string `json:"fingerprint_sha256"`
+	FingerprintWindow int64  `json:"fingerprint_window,omitempty"`
+	FingerprintSHA256 string `json:"fingerprint_sha256,omitempty"`
 }
 
 type checkpointFile struct {
@@ -103,7 +103,7 @@ func saveState(stateDir, agent string, state checkpointFile) (int64, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return 0, fmt.Errorf("watch: create state directory: %w", err)
 	}
-	data, err := json.MarshalIndent(state, "", "  ")
+	data, err := json.Marshal(state)
 	if err != nil {
 		return 0, fmt.Errorf("watch: encode state: %w", err)
 	}

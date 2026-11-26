@@ -176,7 +176,7 @@ func TestPollRegistersNewSourceBeforeIngestion(t *testing.T) {
 	if !strings.Contains(string(state), outcome.SourceID) {
 		t.Fatalf("state does not persist the new source ID:\n%s", state)
 	}
-	if !strings.Contains(string(state), `"file_identity": "dev:`) {
+	if !strings.Contains(string(state), `"file_identity":"dev:`) {
 		t.Fatalf("state does not persist the platform file identity:\n%s", state)
 	}
 
@@ -203,7 +203,7 @@ func TestPollThenAppendThenAcknowledge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read state: %v", err)
 	}
-	if !strings.Contains(string(state), `"cursor_bytes": 6`) {
+	if !strings.Contains(string(state), `"cursor_bytes":6`) {
 		t.Fatalf("state does not record the acknowledged cursor:\n%s", state)
 	}
 
@@ -631,7 +631,7 @@ func TestFlushPersistsAllPendingAcknowledgmentsAtOnce(t *testing.T) {
 	if after == before {
 		t.Fatal("Flush did not persist the accumulated acknowledgments")
 	}
-	if n := strings.Count(readState(t, dir), `"cursor_bytes": 11`); n != 2 {
+	if n := strings.Count(readState(t, dir), `"cursor_bytes":11`); n != 2 {
 		t.Fatalf("state records %d acknowledged cursors at 11, want 2 from a single flush", n)
 	}
 
