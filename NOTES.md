@@ -3180,11 +3180,11 @@ How to use this file:
 - v0.8.1 and v0.8.2 releases (2026-11-26): v0.8.1 at `ca4579c` (run
   45799280418) and v0.8.2 at `7bd2e5f` (run 45843831770), each with all
   eight candidate jobs on attempt 1 and local `make check` + `make tla`.
-  The hub runs v0.8.1 and reports `remote_hub.hub.device_id` and
-  `local_ingest_device_ids` (both `05b0ff2c…`); the MacBook runs v0.8.2.
-  Open: upgrade the hub to v0.8.2, then run `ohya service restart --hub`
-  once (its v0.8.1 executable runs that setup); later upgrades restart
-  serve by themselves.
+  The hub and the MacBook run v0.8.2. The hub reports
+  `remote_hub.hub.device_id` and `local_ingest_device_ids` (both
+  `05b0ff2c…`). `install.sh` runs the setup of the downloaded executable,
+  so the hub upgrade to v0.8.2 already restarted serve without a manual
+  step.
 
 - menubar-session-tags (2026-11-25; `b7e31f1` and `fbce579` by the owner,
   merged in `6676d10` after the v0.8.0 tag and released in v0.8.1): `ohya

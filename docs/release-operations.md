@@ -394,9 +394,13 @@ space before you upgrade. Beyond that:
   Codex entry with the same values. The released installer upgraded the
   macOS arm64 joined device from v0.8.1 with exit 0; `ohya doctor` reported
   only an `mcp_build` warning for two older `ohya mcp` processes. The app
-  0.8.2 runs from `/Applications`. Not done at publication: the upgrade of
-  the hub host, which needs `ohya service restart --hub` one more time
-  because its v0.8.1 executable runs the setup.
+  0.8.2 runs from `/Applications`. The released installer then upgraded the
+  linux-amd64 hub host from v0.8.1: `backup: not needed`, `service`,
+  `hub-service: running`, `hub: ready`, `memory: ready`, and an
+  `mcp-builds` warning for two `ohya mcp` processes of v0.8.1. Serve then
+  reported v0.8.2 and the hub device ID in `ohya status --remote`. The fix
+  applied to that same upgrade, because `install.sh` runs the setup of the
+  downloaded executable.
 - The installer refuses to replace an executable whose digest matches neither
   its receipt entry nor the previous one ("installed executable has changed;
   preserve it"). A copy installed by hand outside `install.sh` triggers this
