@@ -104,20 +104,33 @@ func codexFixture() string {
 	return b.String()
 }
 
-func writeSeedFixtures(claudeRoot, codexRoot string) error {
-	claudeDir := filepath.Join(claudeRoot, "-home-dev-ohya-e2e")
-	if err := os.MkdirAll(claudeDir, 0o700); err != nil {
-		return err
+type seedFixture struct {
+	agent, nativeID, path, content string
+}
+
+func seedFixtures(claudeRoot, codexRoot string) []seedFixture {
+	return []seedFixture{
+		{
+			agent: "claude-code", nativeID: claudeSessionID, content: claudeFixture(),
+			path: filepath.Join(claudeRoot, "-home-dev-ohya-e2e", claudeSessionID+".jsonl"),
+		},
+		{
+			agent: "codex", nativeID: codexThreadID, content: codexFixture(),
+			path: filepath.Join(codexRoot, "2026", "11", "12", "rollout-2026-11-12T10-00-00-"+codexThreadID+".jsonl"),
+		},
 	}
-	if err := os.WriteFile(filepath.Join(claudeDir, claudeSessionID+".jsonl"), []byte(claudeFixture()), 0o600); err != nil {
-		return err
+}
+
+func writeSeedFixtures(fixtures []seedFixture) error {
+	for _, fixture := range fixtures {
+		if err := os.MkdirAll(filepath.Dir(fixture.path), 0o700); err != nil {
+			return err
+		}
+		if err := os.WriteFile(fixture.path, []byte(fixture.content), 0o600); err != nil {
+			return err
+		}
 	}
-	codexDir := filepath.Join(codexRoot, "2026", "11", "12")
-	if err := os.MkdirAll(codexDir, 0o700); err != nil {
-		return err
-	}
-	name := "rollout-2026-11-12T10-00-00-" + codexThreadID + ".jsonl"
-	return os.WriteFile(filepath.Join(codexDir, name), []byte(codexFixture()), 0o600)
+	return nil
 }
 
 func writeJSON(path string, v any) error {
@@ -178,6 +191,53 @@ func textOf(result *mcp.CallToolResult) string {
 		}
 	}
 	return b.String()
+}
+
+func (r *resolver) verifySeedInventory(ctx context.Context, fixtures []seedFixture) error {
+	eventCount := 0
+	for _, fixture := range fixtures {
+		eventCount += strings.Count(fixture.content, "\n")
+	}
+	rows, err := r.query(ctx, `SELECT (SELECT count(*) FROM sources),
+		(SELECT count(*) FROM sessions), (SELECT count(*) FROM events)`)
+	if err != nil {
+		return fmt.Errorf("count seeded sources, sessions, and events: %w", err)
+	}
+	if len(rows) != 1 || len(rows[0]) != 3 ||
+		rows[0][0] != float64(len(fixtures)) || rows[0][1] != float64(len(fixtures)) ||
+		rows[0][2] != float64(eventCount) {
+		return fmt.Errorf("unexpected seed inventory: got %v, want %d sources, %d sessions, and %d events",
+			rows, len(fixtures), len(fixtures), eventCount)
+	}
+
+	for _, fixture := range fixtures {
+		path, err := filepath.EvalSymlinks(fixture.path)
+		if err != nil {
+			return fmt.Errorf("resolve %s fixture path: %w", fixture.agent, err)
+		}
+		records := strings.Split(strings.TrimSuffix(fixture.content, "\n"), "\n")
+		for i, record := range records {
+			records[i] = sqlString(record)
+		}
+		query := fmt.Sprintf(`SELECT count(DISTINCT e.raw_json)
+			FROM events e JOIN sources src ON src.id = e.source_id
+			JOIN sessions s ON s.id = e.session_id
+			WHERE src.path = %s AND src.agent = %s AND s.agent = src.agent AND s.native_id = %s
+			AND e.raw_json IN (%s)`, sqlString(path), sqlString(fixture.agent),
+			sqlString(fixture.nativeID), strings.Join(records, ", "))
+		rows, err := r.query(ctx, query)
+		if err != nil {
+			return fmt.Errorf("verify %s fixture records: %w", fixture.agent, err)
+		}
+		if len(rows) != 1 || len(rows[0]) != 1 || rows[0][0] != float64(len(records)) {
+			return fmt.Errorf("%s seed records do not match the fixture", fixture.agent)
+		}
+	}
+	return nil
+}
+
+func sqlString(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
 
 func (r *resolver) countEventsWithText(ctx context.Context, marker string) (int, error) {

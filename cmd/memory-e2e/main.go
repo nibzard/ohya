@@ -69,13 +69,13 @@ func run(args []string) error {
 	g.log.line("memory-e2e: ohya=%s claude=%s codex=%s timeout=%s", g.ohya, g.claude, g.codex, g.timeout)
 	g.log.line("output directory: %s (all state and traces stay here)", g.out)
 
-	if err := g.prepare(ctx); err != nil {
-		return err
-	}
 	if err := g.seedAndVerify(ctx); err != nil {
 		return err
 	}
 	defer g.resolver.close()
+	if err := g.prepare(ctx); err != nil {
+		return err
+	}
 
 	failed := 0
 	for _, client := range []struct {
@@ -280,9 +280,15 @@ func (g *gate) verifyCodexServer(ctx context.Context) error {
 }
 
 func (g *gate) seedAndVerify(ctx context.Context) error {
-	if err := writeSeedFixtures(g.claudeRoot, g.codexRoot); err != nil {
+	fixtures := seedFixtures(g.claudeRoot, g.codexRoot)
+	if err := writeSeedFixtures(fixtures); err != nil {
 		return err
 	}
+	seedCodexHome, err := os.MkdirTemp(g.out, "seed-codex-home-")
+	if err != nil {
+		return fmt.Errorf("create isolated Codex home for ingest: %w", err)
+	}
+	defer os.Remove(seedCodexHome)
 	ingestLog := filepath.Join(g.tracesDir, "ingest.log")
 	logFile, err := os.Create(ingestLog)
 	if err != nil {
@@ -292,6 +298,7 @@ func (g *gate) seedAndVerify(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, g.ohya, "ingest", "--once",
 		"--db", g.dbPath, "--state", g.stateDir,
 		"--claude-root", g.claudeRoot, "--codex-root", g.codexRoot, "--pi-root", "", "--antigravity-root", "")
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + g.claudeHome, "CODEX_HOME=" + seedCodexHome}
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	cmd.WaitDelay = 30 * time.Second
 	if err := cmd.Run(); err != nil {
@@ -302,7 +309,19 @@ func (g *gate) seedAndVerify(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := verifySeed(ctx, res, fixtures, g.log, ingestLog); err != nil {
+		res.close()
+		return err
+	}
 	g.resolver = res
+	return nil
+}
+
+func verifySeed(ctx context.Context, res *resolver, fixtures []seedFixture, log report, ingestLog string) error {
+	if err := res.verifySeedInventory(ctx, fixtures); err != nil {
+		return fmt.Errorf("verify seed isolation: %w (see %s)", err, ingestLog)
+	}
+	log.line("seeded: exactly the synthetic Claude Code and Codex fixtures")
 	for _, marker := range seedMarkers {
 		n, err := res.countEventsWithText(ctx, marker)
 		if err != nil {
@@ -311,7 +330,7 @@ func (g *gate) seedAndVerify(ctx context.Context) error {
 		if n != 1 {
 			return fmt.Errorf("seed marker %q matched %d events, want 1 (see %s)", marker, n, ingestLog)
 		}
-		g.log.line("seeded: %q -> exactly one event", marker)
+		log.line("seeded: %q -> exactly one event", marker)
 	}
 	return nil
 }

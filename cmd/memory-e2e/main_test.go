@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeTemp(t *testing.T, name, content string) string {
@@ -397,7 +399,7 @@ func TestSeedFixtures(t *testing.T) {
 func TestWriteSeedFixtures(t *testing.T) {
 	root := t.TempDir()
 	claudeRoot, codexRoot := filepath.Join(root, "claude"), filepath.Join(root, "codex")
-	if err := writeSeedFixtures(claudeRoot, codexRoot); err != nil {
+	if err := writeSeedFixtures(seedFixtures(claudeRoot, codexRoot)); err != nil {
 		t.Fatal(err)
 	}
 	claudePath := filepath.Join(claudeRoot, "-home-dev-ohya-e2e", claudeSessionID+".jsonl")
@@ -409,4 +411,82 @@ func TestWriteSeedFixtures(t *testing.T) {
 	if _, err := os.Stat(codexPath); err != nil {
 		t.Fatalf("codex fixture: %v", err)
 	}
+}
+
+func TestSeedIsolation(t *testing.T) {
+	root := t.TempDir()
+	ohya := filepath.Join(root, "ohya")
+	build := exec.CommandContext(t.Context(), "go", "build", "-tags", "sqlite_fts5", "-o", ohya, "../ohya")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build ohya: %v\n%s", err, out)
+	}
+
+	ambientHome := filepath.Join(root, "ambient-codex")
+	archive := filepath.Join(ambientHome, "archived_sessions")
+	if err := os.MkdirAll(archive, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const archivedID = "a0000000-0000-4000-8000-000000000001"
+	archivedPath := filepath.Join(archive, "rollout-2026-11-12T10-00-00-"+archivedID+".jsonl")
+	archivedFixture := strings.ReplaceAll(codexFixture(), codexThreadID, archivedID)
+	if err := os.WriteFile(archivedPath, []byte(archivedFixture), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODEX_HOME", ambientHome)
+
+	createGate := func(t *testing.T) *gate {
+		t.Helper()
+		g, err := newGate(t.TempDir(), ohya, "", "", time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(g.close)
+		return g
+	}
+	ingest := func(t *testing.T, g *gate, codexHome string) {
+		t.Helper()
+		cmd := exec.CommandContext(t.Context(), ohya, "ingest", "--once", "--db", g.dbPath, "--state", g.stateDir,
+			"--claude-root", g.claudeRoot, "--codex-root", g.codexRoot, "--pi-root", "", "--antigravity-root", "")
+		cmd.Env = append(os.Environ(), "CODEX_HOME="+codexHome)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("ingest fixture: %v\n%s", err, out)
+		}
+	}
+
+	t.Run("ambient archive is excluded and an already polluted database is rejected", func(t *testing.T) {
+		g := createGate(t)
+		if err := g.seedAndVerify(t.Context()); err != nil {
+			t.Fatalf("verify isolated seed with an ambient archive: %v", err)
+		}
+		if err := g.resolver.close(); err != nil {
+			t.Fatal(err)
+		}
+		g.resolver = nil
+
+		ingest(t, g, ambientHome)
+		err := g.seedAndVerify(t.Context())
+		if err == nil || !strings.Contains(err.Error(), "unexpected seed inventory") || g.resolver != nil {
+			t.Fatalf("verify polluted database = %v; resolver exposed: %t", err, g.resolver != nil)
+		}
+	})
+
+	t.Run("a changed record with the same inventory count is rejected", func(t *testing.T) {
+		g := createGate(t)
+		expected := seedFixtures(g.claudeRoot, g.codexRoot)
+		changed := seedFixtures(g.claudeRoot, g.codexRoot)
+		changed[0].content = strings.Replace(changed[0].content, "Also recorded:", "Another record:", 1)
+		if err := writeSeedFixtures(changed); err != nil {
+			t.Fatal(err)
+		}
+		ingest(t, g, t.TempDir())
+		res, err := openResolver(t.Context(), g.ohya, g.dbPath, g.stateDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.close()
+		err = res.verifySeedInventory(t.Context(), expected)
+		if err == nil || !strings.Contains(err.Error(), "claude-code seed records do not match the fixture") {
+			t.Fatalf("verify changed record = %v", err)
+		}
+	})
 }

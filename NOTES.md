@@ -3207,7 +3207,7 @@ How to use this file:
   unrelated prompt. The handler took 10–14 ms including process launch.
   Defer Pi and Antigravity until there is evidence of missed handoffs.
 - Synthetic ingest tests that override `--codex-root` still include
-  `$CODEX_HOME/archived_sessions`. Point `CODEX_HOME` at an empty scratch
-  directory for the ingest subprocess and verify the seeded session count
-  before passing a fixture database to a model. Audit
-  `cmd/memory-e2e/main.go`'s `seedAndVerify` subprocess for the same issue.
+  `$CODEX_HOME/archived_sessions`. The release memory gate now sets an empty
+  `CODEX_HOME` for the ingest subprocess and verifies the exact fixture
+  inventory before launching either agent. `TestSeedIsolation` covers an
+  ambient archive, preexisting extra sessions, and a substituted event.

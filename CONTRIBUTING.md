@@ -93,6 +93,10 @@ all traces stay under `memory-e2e/` (gitignored). It is not part of
 
 The gate (`cmd/memory-e2e`) works as follows:
 
+- The ingest subprocess uses a scratch `HOME` and an empty `CODEX_HOME`,
+  which also isolates Codex's archive root. Before launching either client,
+  the gate verifies the exact fixture source paths, session IDs, and raw
+  event records. It aborts on missing or unexpected data.
 - The Claude Code fixture holds the explicit decision, and the Codex
   fixture holds the original decision and its later correction. Each
   client must therefore read a decision that the other agent recorded.
