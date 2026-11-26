@@ -2579,12 +2579,9 @@ How to use this file:
   read classifies it — the capability negotiation initially missed that
   branch and lost the busy classification (found by `TestBusyHubRetries`
   under load; every new post-hello exchange must mirror the recovery read).
-  `TestQueryBusyFailsFastAndRecovers` (internal/mcpserver) can also miss
-  under CPU starvation: it closes `started` before its goroutine enters the
-  single concurrency slot, so a starved slow query lets `SELECT 1` poll
-  succeed for the whole 5 s window; unattributed to any T145 change — if it
-  recurs, close the channel after the query takes the slot (engine hook) or
-  poll for a busy-observed flag instead.
+  The busy tests of `internal/mcpserver` probe only after the slow query
+  holds its slot (`startSlowQuery`); see "Time budgets of tests on loaded
+  runners (2026-11-25)".
 
 - Operator recall shipped (2026-11-19, T141, cmd/ohya/recall.go): `ohya
   search <query> [--repo] [--agent]` and `ohya show <session-id> [--last N]`
@@ -3167,16 +3164,18 @@ How to use this file:
     Fix: the test uses `DefaultRequestTimeout` (60 s, the production
     value) and a sync budget of two round trips. Open: 60 s was not
     measured against a 64 MiB batch on a slow hub.
-  - `TestObserverReportsBusyRejectionAndActiveGauge`
-    (`internal/mcpserver/observer_test.go`) failed in CI run 45619526142 on
-    `8d8b1ef`, in `go test -race -p 2` on Linux: "second query error =
-    <nil>, want ErrBusy" after 5.06 s. The test is unchanged since
-    `996e0fe`, the next run on `main` passed, and it was not reproduced.
-    The loop fails only when the slow query does not hold its only slot
-    during the 5 s of the loop. That query sums one billion rows and
-    needs about 2.6 minutes here, so its goroutine took the slot late or
-    not at all. Why is not known. Research note:
-    /notes/2026-11-25-timing-tests-on-loaded-runners.md.
+  - `TestObserverReportsBusyRejectionAndActiveGauge` failed in CI run
+    45619526142 (Linux, `-race`), and `TestQueryBusyFailsFastAndRecovers`
+    failed in CI run 45717625926 (macOS). Cause: both tests sent the probe
+    `SELECT 1` while the slow query was still on its way to the only slot.
+    When the probe held the slot at that moment, the slow query got
+    `ErrBusy`, the test dropped that error, and no later probe could be
+    rejected. Reproduced on 2026-11-26 under `-race` and 12 CPU hogs: the
+    slow query returned "server busy" in each failed run. Fix (2026-11-26):
+    `startSlowQuery` waits until the engine counts one active query, then
+    each test probes once and expects `ErrBusy`, and the slow query must end
+    with `context.Canceled`. 1,800 runs passed under the same load. Research
+    note: /notes/2026-11-25-timing-tests-on-loaded-runners.md.
 
 - menubar-session-tags (2026-11-25; `b7e31f1` and `fbce579` by the owner,
   merged in `6676d10` after the v0.8.0 tag, so it is in no release): `ohya

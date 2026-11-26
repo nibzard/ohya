@@ -65,24 +65,9 @@ func TestObserverReportsBusyRejectionAndActiveGauge(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	slow := `WITH RECURSIVE c(n) AS (VALUES(0) UNION ALL SELECT n+1 FROM c WHERE n < 1000000000) SELECT sum(n) FROM c`
-	started := make(chan struct{})
-	go func() {
-		close(started)
-		_, _ = e.Query(ctx, slow)
-	}()
-	<-started
-	deadline := time.Now().Add(5 * time.Second)
-	var busy error
-	for time.Now().Before(deadline) {
-		_, busy = e.Query(context.Background(), `SELECT 1`)
-		if errors.Is(busy, ErrBusy) {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	if !errors.Is(busy, ErrBusy) {
-		t.Fatalf("second query error = %v, want ErrBusy", busy)
+	slowDone := startSlowQuery(t, e, ctx)
+	if _, err := e.Query(context.Background(), `SELECT 1`); !errors.Is(err, ErrBusy) {
+		t.Fatalf("second query error = %v, want ErrBusy", err)
 	}
 	if got := obs.Counter("sql_busy_rejections"); got < 1 {
 		t.Errorf("busy rejections = %d, want at least 1", got)
@@ -94,6 +79,9 @@ func TestObserverReportsBusyRejectionAndActiveGauge(t *testing.T) {
 		return obs.Gauge("sql_active") == 1
 	})
 	cancel()
+	if err := <-slowDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("slow query error = %v, want context.Canceled", err)
+	}
 	waitForObserver(t, "the active gauge to release the cancelled query", func() bool {
 		return obs.Gauge("sql_active") == 0
 	})

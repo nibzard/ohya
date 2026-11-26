@@ -341,40 +341,47 @@ func TestQueryDeadlineErrorNamesItsCause(t *testing.T) {
 	}
 }
 
+const slowQuery = `WITH RECURSIVE c(n) AS (VALUES(0) UNION ALL SELECT n+1 FROM c WHERE n < 1000000000) SELECT sum(n) FROM c`
+
+func startSlowQuery(t *testing.T, e *Engine, ctx context.Context) <-chan error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() {
+		_, err := e.Query(ctx, slowQuery)
+		done <- err
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-done:
+			t.Fatalf("slow query returned before the probe: %v", err)
+		default:
+		}
+		e.mu.Lock()
+		active := e.active
+		e.mu.Unlock()
+		if active == 1 {
+			return done
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("the slow query never took its admission slot")
+	return nil
+}
+
 func TestQueryBusyFailsFastAndRecovers(t *testing.T) {
 	e := newTestEngine(t, EngineOptions{MaxConcurrency: 1, Deadline: 20 * time.Second})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	slow := `WITH RECURSIVE c(n) AS (VALUES(0) UNION ALL SELECT n+1 FROM c WHERE n < 1000000000) SELECT sum(n) FROM c`
-	busy := make(chan error, 1)
-	stop := make(chan struct{})
-	go func() {
-		for {
-			_, err := e.Query(context.Background(), `SELECT 1`)
-			if errors.Is(err, ErrBusy) {
-				busy <- err
-				cancel()
-				return
-			}
-			select {
-			case <-stop:
-				return
-			case <-time.After(50 * time.Millisecond):
-			}
-		}
-	}()
-	_, _ = e.Query(ctx, slow)
-	close(stop)
-	select {
-	case err := <-busy:
-		if !errors.Is(err, ErrBusy) {
-			t.Fatalf("second query error = %v, want ErrBusy", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("the slow query never crowded out the second query")
+	slowDone := startSlowQuery(t, e, ctx)
+	if _, err := e.Query(context.Background(), `SELECT 1`); !errors.Is(err, ErrBusy) {
+		t.Fatalf("second query error = %v, want ErrBusy", err)
 	}
-	time.Sleep(100 * time.Millisecond)
+	cancel()
+	if err := <-slowDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("slow query error = %v, want context.Canceled", err)
+	}
 	mustQuery(t, e, `SELECT 1`)
 }
 
