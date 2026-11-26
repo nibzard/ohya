@@ -3196,8 +3196,9 @@ How to use this file:
   - The device ID that the hub reports is the identity of `ohya serve`.
     It equals the identity of `ohya ingest` only when both use one state
     directory, which `ohya setup --hub` guarantees.
-  - Swift: the "Hub reachable" row copies the layout of `row(_:value:)`,
-    and the color of the dot is written in two places. VoiceOver reads the
-    name of the symbol of a tag before its text.
+  - Swift, changed on 2026-11-26 and not built on this Linux VM (CI on
+    macOS runs `xcrun swift test`): the tag symbol and each `StatusDot`
+    are hidden from VoiceOver, `StatusDot` takes a `Health` value and owns
+    its colors, and the "Hub reachable" row uses `row(_:value:dot:)`.
   - The two commit subjects have 57 and 65 characters, and their bodies
     are not wrapped at 72. The commits were not changed.

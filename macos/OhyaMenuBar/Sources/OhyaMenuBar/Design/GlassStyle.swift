@@ -130,6 +130,7 @@ struct TagLabel: View {
             if let systemImage {
                 Image(systemName: systemImage)
                     .imageScale(.small)
+                    .accessibilityHidden(true)
             }
             Text(text)
         }
@@ -146,12 +147,34 @@ struct TagLabel: View {
 }
 
 struct StatusDot: View {
-    let color: Color
+    enum Health {
+        case good
+        case failing
+        case inactive
+    }
+
+    let health: Health
+
+    init(_ health: Health) {
+        self.health = health
+    }
 
     var body: some View {
         Circle()
             .fill(color)
             .frame(width: 6, height: 6)
+            .accessibilityHidden(true)
+    }
+
+    private var color: Color {
+        switch health {
+        case .good:
+            return Color.green.opacity(0.85)
+        case .failing:
+            return Color.red.opacity(0.85)
+        case .inactive:
+            return Color.secondary.opacity(0.35)
+        }
     }
 }
 

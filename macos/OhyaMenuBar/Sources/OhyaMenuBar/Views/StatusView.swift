@@ -191,7 +191,7 @@ struct StatusView: View {
                 let roots = model.status?.topology.agentRoots ?? []
                 ForEach(Array(roots.enumerated()), id: \.element.id) { index, root in
                     HStack {
-                        StatusDot(color: root.present > 0 ? Color.green.opacity(0.85) : Color.secondary.opacity(0.35))
+                        StatusDot(root.present > 0 ? .good : .inactive)
                         Text(DisplayFormat.agentDisplayName(root.agent))
                             .font(.subheadline)
                         Spacer()

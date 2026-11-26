@@ -47,15 +47,11 @@ struct DevicesView: View {
 
             if let transport = model.doctor?.transport {
                 VStack(spacing: 5) {
-                    HStack {
-                        Text("Hub reachable")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        StatusDot(color: hubReachabilityColor(transport.hubAnswers))
-                        Text(transport.hubAnswers.map { $0 ? "Yes" : "No" } ?? "Checking")
-                            .font(.caption.monospacedDigit())
-                    }
+                    row(
+                        "Hub reachable",
+                        value: transport.hubAnswers.map { $0 ? "Yes" : "No" } ?? "Checking",
+                        dot: hubReachability(transport.hubAnswers)
+                    )
                     row("Path", value: transport.path.capitalized)
                     if let region = transport.relayRegion, !region.isEmpty {
                         row("Relay", value: region)
@@ -171,7 +167,7 @@ struct DevicesView: View {
 
     private func deviceRow(_ device: PairedDevice) -> some View {
         HStack(spacing: 8) {
-            StatusDot(color: device.state == "paired" ? Color.green.opacity(0.85) : Color.secondary.opacity(0.35))
+            StatusDot(device.state == "paired" ? .good : .inactive)
             VStack(alignment: .leading, spacing: 2) {
                 Text(DisplayFormat.shortID(device.id))
                     .font(.subheadline.monospaced())
@@ -205,23 +201,26 @@ struct DevicesView: View {
         }
     }
 
-    private func hubReachabilityColor(_ hubAnswers: Bool?) -> Color {
+    private func hubReachability(_ hubAnswers: Bool?) -> StatusDot.Health {
         switch hubAnswers {
         case true?:
-            return Color.green.opacity(0.85)
+            return .good
         case false?:
-            return Color.red.opacity(0.85)
+            return .failing
         case nil:
-            return Color.secondary.opacity(0.35)
+            return .inactive
         }
     }
 
-    private func row(_ label: String, value: String) -> some View {
+    private func row(_ label: String, value: String, dot: StatusDot.Health? = nil) -> some View {
         HStack {
             Text(label)
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer()
+            if let dot {
+                StatusDot(dot)
+            }
             Text(value)
                 .font(.caption.monospacedDigit())
         }
