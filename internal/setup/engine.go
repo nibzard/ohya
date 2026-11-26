@@ -480,8 +480,11 @@ func recoveryPoint(ctx context.Context, o Options) (Result, error) {
 }
 
 func migrateDatabase(ctx context.Context, o Options) (Result, error) {
-	from, found := appliedSchemaVersion(ctx, o.Database)
-	if !found {
+	from, err := appliedSchemaVersion(ctx, o.Database)
+	if err != nil {
+		return Result{Component: "schema", Status: "failed", Detail: err.Error()}, err
+	}
+	if from < 0 {
 		return Result{}, nil
 	}
 	want, err := store.SchemaVersion()
@@ -501,20 +504,26 @@ func migrateDatabase(ctx context.Context, o Options) (Result, error) {
 		Detail: fmt.Sprintf("database schema %d is now %d", from, want)}, nil
 }
 
-func appliedSchemaVersion(ctx context.Context, database string) (int, bool) {
+func appliedSchemaVersion(ctx context.Context, database string) (int, error) {
 	if database == "" {
-		return 0, false
+		return -1, nil
+	}
+	if _, err := os.Lstat(database); err != nil {
+		if os.IsNotExist(err) {
+			return -1, nil
+		}
+		return 0, err
 	}
 	ro, err := store.OpenReadOnly(database)
 	if err != nil {
-		return 0, false
+		return 0, err
 	}
 	defer ro.Close()
-	version, found, err := ro.AppliedSchemaVersion(ctx)
-	if err != nil {
-		return 0, false
+	version, _, err := ro.AppliedSchemaVersion(ctx)
+	if errors.Is(err, store.ErrNoSchemaMigrations) {
+		return -1, nil
 	}
-	return version, found
+	return version, err
 }
 
 func recoveryProgress(o Options) func(done, total int64) {

@@ -543,6 +543,46 @@ func TestSetupLeavesADatabaseWithoutASchemaToTheService(t *testing.T) {
 	}
 }
 
+func TestSetupMigratesEmptySchemaMigrationsTable(t *testing.T) {
+	o := serviceOptionsWithDatabase(t)
+	empty, err := sql.Open("sqlite3", o.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`PRAGMA journal_mode = WAL`,
+		`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at_ms INTEGER NOT NULL) STRICT`,
+	} {
+		if _, err := empty.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := empty.Close(); err != nil {
+		t.Fatal(err)
+	}
+	want, err := store.SchemaVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	o.RunService = func(ctx context.Context, _ []string) error {
+		current, err := store.SchemaCurrent(ctx, o.Database)
+		if err != nil || !current {
+			t.Errorf("service command ran before empty schema_migrations migrated: current=%v err=%v", current, err)
+		}
+		return nil
+	}
+	report, err := Run(context.Background(), o)
+	if err != nil || !report.Complete() {
+		t.Fatalf("setup = %+v %v", report, err)
+	}
+	if got := components(report); !slices.Equal(got, []string{"backup", "schema", "service", "memory"}) {
+		t.Fatalf("results = %s; want backup, schema, service, memory", strings.Join(got, ", "))
+	}
+	if r := report.Results[1]; r.Status != "updated" || !r.Changed || r.Detail != fmt.Sprintf("database schema 0 is now %d", want) {
+		t.Fatalf("schema = %+v", r)
+	}
+}
+
 func TestSetupReportsResultsAsTheyFinish(t *testing.T) {
 	o := engineOptions(t)
 	var seen []Result

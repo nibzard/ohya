@@ -2,19 +2,21 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/nibzard/ohya/internal/buildinfo"
 	"github.com/nibzard/ohya/internal/install"
 )
 
+const installUsage = "Usage: ohya install [--version VERSION] [--bin-dir DIRECTORY] [setup flags]"
+
 func runInstallCommand(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 1 && isHelpArg(args[0]) {
-		fmt.Fprintln(stdout, "Usage: ohya install [--version VERSION] [--bin-dir DIRECTORY] [setup flags]")
+		fmt.Fprintln(stdout, installUsage)
 		return nil
 	}
 	home, source, err := setupPaths()
@@ -22,6 +24,10 @@ func runInstallCommand(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	dir, version, dry, setupArgs, err := parseInstallArgs(args, filepath.Join(home, ".local", "bin"))
+	if errors.Is(err, errHelp) {
+		fmt.Fprintln(stdout, installUsage)
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -62,32 +68,31 @@ func runInstallCommand(args []string, stdout, stderr io.Writer) error {
 }
 
 func parseInstallArgs(args []string, defaultDir string) (dir, version string, dry bool, setupArgs []string, err error) {
-	dir = defaultDir
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		switch {
-		case arg == "--bin-dir" || arg == "--version":
-			if i+1 >= len(args) {
-				return "", "", false, nil, usageError{cmd: "ohya install", msg: arg + " needs a value"}
-			}
-			i++
-			if arg == "--bin-dir" {
-				dir = args[i]
-			} else {
-				version = args[i]
-			}
-		case strings.HasPrefix(arg, "--bin-dir="):
-			dir = strings.TrimPrefix(arg, "--bin-dir=")
-		case strings.HasPrefix(arg, "--version="):
-			version = strings.TrimPrefix(arg, "--version=")
-		default:
-			if arg == "--dry-run" || arg == "--dry-run=true" || arg == "--dry-run=1" {
-				dry = true
-			} else if arg == "--dry-run=false" || arg == "--dry-run=0" {
-				dry = false
-			}
-			setupArgs = append(setupArgs, arg)
-		}
+	c, flags := newSetupFlags("", "")
+	c.spec.name = "ohya install"
+	binDir := c.fs.String("bin-dir", defaultDir, "executable installation directory")
+	release := c.fs.String("version", "", "required release version")
+	if err := c.parse(args, io.Discard); err != nil {
+		return "", "", false, nil, err
 	}
-	return dir, version, dry, setupArgs, nil
+	if c.fs.NArg() != 0 {
+		return "", "", false, nil, c.usageErrorf("unexpected argument %q", c.fs.Arg(0))
+	}
+	for i := 0; i < len(args); {
+		arg := args[i]
+		if arg == "--" {
+			setupArgs = append(setupArgs, arg)
+			break
+		}
+		name, takesNext := commandFlag(c.fs, arg)
+		next := i + 1
+		if takesNext {
+			next++
+		}
+		if name != "bin-dir" && name != "version" {
+			setupArgs = append(setupArgs, args[i:next]...)
+		}
+		i = next
+	}
+	return *binDir, *release, *flags.dry, setupArgs, nil
 }

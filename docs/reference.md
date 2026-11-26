@@ -980,7 +980,10 @@ schema is older or newer than this build, it saves an owner-only SQLite
 recovery copy under `STATE/setup/backups/recovery-*/hub.db`. When the schema
 already matches, setup reports `backup: not needed` and makes no copy.
 After the copy, setup applies the pending migrations before it starts the
-memory service and reports `schema: updated`. With `--no-service`, the first
+memory service and reports `schema: updated`. If the service fails to start,
+setup tries to remove a newly installed unit or restore the previous owned
+unit. The database keeps any committed migrations, and setup reports the
+location of the recovery copy in the backup result. With `--no-service`, the first
 command that opens the database with a writer applies them.
 The copy includes committed WAL data. Setup stops if it cannot make the copy.
 Setup keeps the two newest recovery copies; uninstall preserves them. A database copy is not

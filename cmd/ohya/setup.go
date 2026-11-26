@@ -75,6 +75,45 @@ type setupRuntime struct {
 	buildDirty    bool
 }
 
+type setupFlags struct {
+	binaryPath   *string
+	state        *string
+	agents       *string
+	remote       *bool
+	local        *bool
+	codeEnv      *string
+	hubMode      *bool
+	ttl          *time.Duration
+	noAgents     *bool
+	noModifyPath *bool
+	noService    *bool
+	dry          *bool
+	asJSON       *bool
+	roots        agentRootFlags
+	excludes     *excludeGlobs
+}
+
+func newSetupFlags(home, binary string) (*commandFlagSet, setupFlags) {
+	c := newCommandFlags(setupSpec)
+	return c, setupFlags{
+		binaryPath:   c.fs.String("binary", binary, "absolute executable `path` registered with services and agents"),
+		state:        c.fs.String("state", filepath.Join(home, ".ohya"), "memory state `directory`"),
+		agents:       c.fs.String("agents", "auto", "agents to configure: auto or comma-separated claude,codex,pi,agy"),
+		remote:       c.fs.Bool("remote", false, "configure this device to use an existing hub"),
+		local:        c.fs.Bool("local", false, "configure local memory instead of a saved remote connection"),
+		codeEnv:      c.fs.String("join-code-env", "", "environment variable holding the one-time join code"),
+		hubMode:      c.fs.Bool("hub", false, "also run this machine as the hub: an owned ohya serve service, a relay check, and a one-time join code with the device command"),
+		ttl:          c.fs.Duration("ttl", registry.DefaultInvitationTTL, "how long the join code printed by --hub stays consumable"),
+		noAgents:     c.fs.Bool("no-agents", false, "skip agent configuration"),
+		noModifyPath: c.fs.Bool("no-modify-path", false, "leave shell profiles unchanged"),
+		noService:    c.fs.Bool("no-service", false, "skip the background service"),
+		dry:          c.fs.Bool("dry-run", false, "report planned changes without writing files"),
+		asJSON:       c.fs.Bool("json", false, "print one versioned JSON result"),
+		roots:        newAgentRootFlags(c.fs, home),
+		excludes:     newExcludeFlag(c.fs),
+	}
+}
+
 func runSetupCommand(args []string, stdout, stderr io.Writer) error {
 	return runSetupCommandWith(args, stdout, stderr, setupRuntime{})
 }
@@ -99,24 +138,9 @@ func runSetupCommandWith(args []string, stdout, stderr io.Writer, rt setupRuntim
 	if runners == nil {
 		runners = serviceRunners
 	}
-	c := newCommandFlags(setupSpec)
-	binaryPath := c.fs.String("binary", binary, "absolute executable `path` registered with services and agents")
-	state := c.fs.String("state", filepath.Join(home, ".ohya"), "memory state `directory`")
-	agents := c.fs.String("agents", "auto", "agents to configure: auto or comma-separated claude,codex,pi,agy")
-	remote := c.fs.Bool("remote", false, "configure this device to use an existing hub")
-	local := c.fs.Bool("local", false, "configure local memory instead of a saved remote connection")
-	codeEnv := c.fs.String("join-code-env", "", "environment variable holding the one-time join code")
-	hubMode := c.fs.Bool("hub", false, "also run this machine as the hub: an owned ohya serve service, a relay check, and a one-time join code with the device command")
-	ttl := c.fs.Duration("ttl", registry.DefaultInvitationTTL, "how long the join code printed by --hub stays consumable")
-	noAgents := c.fs.Bool("no-agents", false, "skip agent configuration")
-	noModifyPath := c.fs.Bool("no-modify-path", false, "leave shell profiles unchanged")
-	noService := c.fs.Bool("no-service", false, "skip the background service")
-	dry := c.fs.Bool("dry-run", false, "report planned changes without writing files")
-	asJSON := c.fs.Bool("json", false, "print one versioned JSON result")
-	roots := newAgentRootFlags(c.fs, home)
-	excludes := newExcludeFlag(c.fs)
+	c, flags := newSetupFlags(home, binary)
 	if config := getenv("CLAUDE_CONFIG_DIR"); config != "" {
-		*roots.claude = filepath.Join(config, "projects")
+		*flags.roots.claude = filepath.Join(config, "projects")
 	}
 	if err := c.parse(args, stdout); err != nil {
 		return err
@@ -124,16 +148,16 @@ func runSetupCommandWith(args []string, stdout, stderr io.Writer, rt setupRuntim
 	if c.fs.NArg() != 0 {
 		return c.usageErrorf("unexpected argument %q", c.fs.Arg(0))
 	}
-	if *ttl <= 0 {
+	if *flags.ttl <= 0 {
 		return c.usageErrorf("--ttl must be positive")
 	}
-	if *hubMode && (*remote || *codeEnv != "") {
+	if *flags.hubMode && (*flags.remote || *flags.codeEnv != "") {
 		return c.usageErrorf("--hub cannot be combined with remote setup; the hub machine runs local memory")
 	}
-	if *hubMode && *noService {
+	if *flags.hubMode && *flags.noService {
 		return c.usageErrorf("--hub installs the ohya serve service; omit --no-service")
 	}
-	absState, err := filepath.Abs(*state)
+	absState, err := filepath.Abs(*flags.state)
 	if err != nil {
 		return err
 	}
@@ -145,35 +169,35 @@ func runSetupCommandWith(args []string, stdout, stderr io.Writer, rt setupRuntim
 	if err != nil {
 		return err
 	}
-	if *hubMode && connection.Mode == "remote" {
+	if *flags.hubMode && connection.Mode == "remote" {
 		return c.usageErrorf("this setup state is bound to a remote hub; a hub machine needs its own state directory with local memory")
 	}
-	if *local && (*remote || *codeEnv != "") {
+	if *flags.local && (*flags.remote || *flags.codeEnv != "") {
 		return c.usageErrorf("--local cannot be combined with remote setup")
 	}
-	if *local {
+	if *flags.local {
 		connection = setup.Connection{Mode: "local"}
 	}
-	if (*remote || *codeEnv != "") && connection.Mode != "remote" {
+	if (*flags.remote || *flags.codeEnv != "") && connection.Mode != "remote" {
 		connection = setup.Connection{Mode: "remote"}
 	}
 	if err := connection.Validate(); err != nil {
 		return c.usageErrorf("%s", err)
 	}
 	code := ""
-	if *codeEnv != "" {
-		if !regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString(*codeEnv) {
+	if *flags.codeEnv != "" {
+		if !regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString(*flags.codeEnv) {
 			return c.usageErrorf("invalid join code environment variable name")
 		}
-		if !*dry {
-			code = getenv(*codeEnv)
+		if !*flags.dry {
+			code = getenv(*flags.codeEnv)
 			if code == "" {
 				return c.usageErrorf("join code environment variable is empty")
 			}
 			if _, _, err := parseJoinCode(code); err != nil {
 				return c.usageErrorf("join code environment variable does not hold one: %v", err)
 			}
-			if err := unsetenv(*codeEnv); err != nil {
+			if err := unsetenv(*flags.codeEnv); err != nil {
 				return err
 			}
 		}
@@ -191,7 +215,7 @@ func runSetupCommandWith(args []string, stdout, stderr io.Writer, rt setupRuntim
 	for _, root := range []struct {
 		name string
 		dir  *string
-	}{{"claude-root", roots.claude}, {"codex-root", roots.codex}, {"pi-root", roots.pi}, {"antigravity-root", roots.antigravity}} {
+	}{{"claude-root", flags.roots.claude}, {"codex-root", flags.roots.codex}, {"pi-root", flags.roots.pi}, {"antigravity-root", flags.roots.antigravity}} {
 		dir := *root.dir
 		if dir != "" {
 			dir, err = filepath.Abs(dir)
@@ -202,7 +226,7 @@ func runSetupCommandWith(args []string, stdout, stderr io.Writer, rt setupRuntim
 		preferences.Flags[root.name] = dir
 		serviceArgs = append(serviceArgs, "--"+root.name, dir)
 	}
-	for _, glob := range *excludes {
+	for _, glob := range *flags.excludes {
 		serviceArgs = append(serviceArgs, "--exclude", glob)
 	}
 	if err := preferences.Validate(); err != nil {
@@ -210,7 +234,7 @@ func runSetupCommandWith(args []string, stdout, stderr io.Writer, rt setupRuntim
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	binary, err = filepath.Abs(*binaryPath)
+	binary, err = filepath.Abs(*flags.binaryPath)
 	if err != nil {
 		return err
 	}
@@ -218,11 +242,11 @@ func runSetupCommandWith(args []string, stdout, stderr io.Writer, rt setupRuntim
 	if err != nil {
 		return err
 	}
-	options := setup.Options{WorkingDirectory: cwd, NoModifyPath: *noModifyPath, Shell: getenv("SHELL"), Database: db, Clients: setup.ClientOptions{Home: home, State: absState, Binary: binary, Args: clientArgs, Agents: *agents, Getenv: func(name string) string { return preferences.Homes[name] }}, ServiceArgs: serviceArgs, NoService: *noService, NoAgents: *noAgents, DryRun: *dry}
+	options := setup.Options{WorkingDirectory: cwd, NoModifyPath: *flags.noModifyPath, Shell: getenv("SHELL"), Database: db, Clients: setup.ClientOptions{Home: home, State: absState, Binary: binary, Args: clientArgs, Agents: *flags.agents, Getenv: func(name string) string { return preferences.Homes[name] }}, ServiceArgs: serviceArgs, NoService: *flags.noService, NoAgents: *flags.noAgents, DryRun: *flags.dry}
 	if run, loaded := runners(); run != nil {
 		options.RunService, options.LoadedService = run, loaded
 	}
-	if *hubMode || (connection.Mode != "remote" && hubReceipt(absState)) {
+	if *flags.hubMode || (connection.Mode != "remote" && hubReceipt(absState)) {
 		options.HubServiceArgs = hubServiceArgs(absState, filepath.Join(absState, "hub.db"))
 		options.CheckHub = func(ctx context.Context) error {
 			return checkHubSetup(ctx, absState)
@@ -252,7 +276,7 @@ func runSetupCommandWith(args []string, stdout, stderr io.Writer, rt setupRuntim
 	}
 	options.Progress = func(line string) { fmt.Fprintf(stderr, "ohya: %s\n", line) }
 	printed := 0
-	if !*asJSON {
+	if !*flags.asJSON {
 		options.Notify = func(r setup.Result) {
 			printSetupResult(stdout, r)
 			printed++
@@ -267,14 +291,14 @@ func runSetupCommandWith(args []string, stdout, stderr io.Writer, rt setupRuntim
 	if mcpBuilds != nil {
 		report.Results = append(report.Results, *mcpBuilds)
 	}
-	if err == nil && report.Complete() && *hubMode && !*dry {
-		invite, hubErr := finishHubSetup(absState, *ttl)
+	if err == nil && report.Complete() && *flags.hubMode && !*flags.dry {
+		invite, hubErr := finishHubSetup(absState, *flags.ttl)
 		if hubErr != nil {
-			return printSetupReport(stdout, setupSpec.name, *asJSON, report, printed, hubErr)
+			return printSetupReport(stdout, setupSpec.name, *flags.asJSON, report, printed, hubErr)
 		}
 		report.Hub = invite
 	}
-	return printSetupReport(stdout, setupSpec.name, *asJSON, report, printed, err)
+	return printSetupReport(stdout, setupSpec.name, *flags.asJSON, report, printed, err)
 }
 
 var serviceRunnersHook func() (run func(context.Context, []string) error, loaded func(context.Context, []string) error)

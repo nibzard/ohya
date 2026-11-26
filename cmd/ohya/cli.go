@@ -107,15 +107,7 @@ func permuteFlags(fs *flag.FlagSet, args []string) (permuted []string, valueless
 			break
 		}
 		flags = append(flags, arg)
-		if strings.Contains(arg, "=") {
-			continue
-		}
-		name := strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-")
-		f := fs.Lookup(name)
-		if f == nil {
-			continue
-		}
-		if bf, ok := f.Value.(interface{ IsBoolFlag() bool }); ok && bf.IsBoolFlag() {
+		if _, takesNext := commandFlag(fs, arg); !takesNext {
 			continue
 		}
 		if i+1 >= len(args) {
@@ -125,6 +117,16 @@ func permuteFlags(fs *flag.FlagSet, args []string) (permuted []string, valueless
 		flags = append(flags, args[i])
 	}
 	return append(flags, positional...), ""
+}
+
+func commandFlag(fs *flag.FlagSet, arg string) (name string, takesNext bool) {
+	name, _, inline := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-"), "=")
+	f := fs.Lookup(name)
+	if inline || f == nil {
+		return name, false
+	}
+	b, isBool := f.Value.(interface{ IsBoolFlag() bool })
+	return name, !isBool || !b.IsBoolFlag()
 }
 
 func (c *commandFlagSet) usageErrorf(format string, args ...any) error {
