@@ -1,0 +1,23 @@
+# Context
+
+## Background
+Review items 1 to 3 of the merged branch menubar-session-tags. The hub
+authenticates a device by its credential, so the credential's Device ID
+is the identity under which sessions and annotations are stored.
+
+## Why This Way
+- The rule "the credential names a paired device" already held for
+  uploads; status, join, and mcp --remote now follow it instead of a
+  second source of truth.
+- A mismatch is reported, never repaired: ohya cannot know which file
+  the owner wants to keep. The remedy names restore or delete.
+- Join no longer creates device.json before it parses the code, so an
+  invalid code leaves no identity behind (cli_test.go now proves --state
+  by the created directory).
+
+## Gotchas
+- A state directory that both ohya ingest and ohya join use would need
+  its device.json; the remedy text therefore says "delete it when only
+  ohya join uses this state directory".
+- No test covers the writer ID in the remote MCP tool description; the
+  hub-side annotation writer is checked by serve_e2e_test.go.
