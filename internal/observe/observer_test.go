@@ -69,3 +69,62 @@ func observerRecordingSnapshot(t *testing.T, observer Observer) Snapshot {
 	}
 	return round
 }
+
+func TestGaugeGroupSumsPerSlotWatchGauges(t *testing.T) {
+	clock := NewFakeClock(1_000_000)
+	clock.Advance(250 * time.Millisecond)
+	inst, err := NewInstance("group-test", "", false, clock, RoleJoin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := NewRecorder(inst, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	group := NewGaugeGroup(rec)
+	claude := group.Slot("claude-code")
+	antigravity := group.Slot("antigravity")
+
+	claude.Set("watch_sources", 100, "active")
+	claude.Set("watch_sources", 34, "missing")
+	claude.Set("watch_sources", 1, "stopped")
+	claude.Set("watch_pending_complete_bytes", 512)
+	claude.Set("watch_partial_tail_bytes", 64)
+	claude.Set("upload_backlog_bytes", 2048, "claude-code")
+
+	antigravity.Set("watch_sources", 6, "active")
+	antigravity.Set("watch_sources", 0, "missing")
+	antigravity.Set("watch_sources", 0, "stopped")
+	antigravity.Set("watch_pending_complete_bytes", 0)
+	antigravity.Set("watch_partial_tail_bytes", 16)
+	RecordDiscoveryScan(antigravity, 6, 2*time.Millisecond)
+
+	snap := rec.Snapshot()
+	if got := snap.Gauges["watch_sources{state=active}"]; got != 106 {
+		t.Errorf("active = %v, want 106", got)
+	}
+	if got := snap.Gauges["watch_sources{state=missing}"]; got != 34 {
+		t.Errorf("missing = %v, want 34", got)
+	}
+	if got := snap.Gauges["watch_sources{state=stopped}"]; got != 1 {
+		t.Errorf("stopped = %v, want 1 (must not be overwritten by later agent)", got)
+	}
+	if got := snap.Gauges["watch_pending_complete_bytes"]; got != 512 {
+		t.Errorf("pending_complete_bytes = %v, want 512", got)
+	}
+	if got := snap.Gauges["watch_partial_tail_bytes"]; got != 80 {
+		t.Errorf("partial_tail_bytes = %v, want 80", got)
+	}
+	if got := snap.Gauges["upload_backlog_bytes{agent=claude-code}"]; got != 2048 {
+		t.Errorf("upload_backlog_bytes = %v, want 2048", got)
+	}
+	if got := snap.Gauges["discovery_last_scan_ms"]; got != 250 {
+		t.Errorf("discovery_last_scan_ms = %v, want 250", got)
+	}
+	if got := snap.Counters["discovery_scans"]; got != 1 {
+		t.Errorf("discovery_scans = %d, want 1", got)
+	}
+	if got := snap.Counters["discovery_candidates"]; got != 6 {
+		t.Errorf("discovery_candidates = %d, want 6", got)
+	}
+}

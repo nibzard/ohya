@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nibzard/ohya/internal/antigravity"
 	"github.com/nibzard/ohya/internal/claudecode"
 	"github.com/nibzard/ohya/internal/device"
 	"github.com/nibzard/ohya/internal/observe"
@@ -184,5 +185,104 @@ func TestIngestIdlePassSkipsRegistrationAndFingerprintReads(t *testing.T) {
 	}
 	if !strings.HasSuffix(stored, "renamed-session.jsonl") {
 		t.Fatalf("stored source path = %q, want the renamed path", stored)
+	}
+}
+
+func TestMultiAgentIngestSumsWatchGaugesAcrossAgents(t *testing.T) {
+	dir := t.TempDir()
+	claudeRoot := filepath.Join(dir, "claude")
+	agyRoot := filepath.Join(dir, "brain")
+	agyLogs := filepath.Join(agyRoot, "00000000-0000-4000-8000-000000000001", ".system_generated", "logs")
+	if err := os.MkdirAll(claudeRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(agyLogs, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	goodClaude := filepath.Join(claudeRoot, "good.jsonl")
+	copyFixture(t, goodClaude, "main-session.jsonl")
+	stoppedClaude := filepath.Join(claudeRoot, "stopped.jsonl")
+	if err := os.WriteFile(stoppedClaude, []byte("{bad-json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	agyTranscript := filepath.Join(agyLogs, "transcript_full.jsonl")
+	if err := os.WriteFile(agyTranscript, []byte(`{"step_index":0,"type":"USER_INPUT","content":"<USER_REQUEST>hi</USER_REQUEST>"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	obs := observertest.New()
+	opts := ingestOptions{
+		dbPath:   filepath.Join(dir, "hub", "hub.db"),
+		stateDir: filepath.Join(dir, "state"),
+		roots: []agentRoot{
+			{agent: claudecode.AgentName, flag: "claude-root", dirs: []agentDir{{dir: claudeRoot}}},
+			{agent: antigravity.AgentName, flag: "antigravity-root", dirs: []agentDir{{dir: agyRoot}}},
+		},
+		once:           true,
+		maxRecordBytes: claudecode.DefaultMaxRecordBytes,
+		stdout:         io.Discard,
+		stderr:         io.Discard,
+		observer:       obs,
+	}
+	if err := runIngest(context.Background(), opts); err != errDegraded {
+		t.Fatalf("runIngest = %v, want errDegraded for stopped source", err)
+	}
+	if got := obs.Gauge("watch_sources", "active"); got != 3 {
+		t.Errorf("active sources = %v, want 3 across claude-code and antigravity", got)
+	}
+	if got := obs.Gauge("watch_sources", "stopped"); got != 1 {
+		t.Errorf("stopped sources = %v, want 1 (later antigravity pass must not overwrite claude-code stop)", got)
+	}
+
+	if err := os.Remove(goodClaude); err != nil {
+		t.Fatal(err)
+	}
+	if err := runIngest(context.Background(), opts); err != errDegraded {
+		t.Fatalf("second runIngest = %v, want errDegraded", err)
+	}
+	if got := obs.Gauge("watch_sources", "active"); got != 2 {
+		t.Errorf("active sources after removal = %v, want 2", got)
+	}
+	if got := obs.Gauge("watch_sources", "missing"); got != 1 {
+		t.Errorf("missing sources after removal = %v, want 1", got)
+	}
+	if got := obs.Gauge("watch_sources", "stopped"); got != 1 {
+		t.Errorf("stopped sources after removal = %v, want 1", got)
+	}
+}
+
+func TestJoinDiscoverRecordsScanMetrics(t *testing.T) {
+	dir := t.TempDir()
+	session := filepath.Join(dir, "s.jsonl")
+	if err := os.WriteFile(session, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	clock := observe.NewFakeClock(1_000_000)
+	clock.Advance(42 * time.Millisecond)
+	inst, err := observe.NewInstance(dir, "rev", false, clock, observe.RoleJoin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := observe.NewRecorder(inst, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	discover, _ := joinDiscover([]agentDir{{dir: dir}}, claudecode.AgentName, nil, false, rec, io.Discard)
+	candidates, err := discover()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("candidates = %d, want 1", len(candidates))
+	}
+	snap := rec.Snapshot()
+	if snap.Counters["discovery_scans"] != 1 || snap.Counters["discovery_candidates"] != 1 {
+		t.Errorf("counters = %+v, want 1 scan and 1 candidate", snap.Counters)
+	}
+	if snap.Durations["discovery_duration"].Count != 1 {
+		t.Errorf("discovery_duration missing: %+v", snap.Durations)
+	}
+	if snap.Gauges["discovery_last_scan_ms"] != 42 {
+		t.Errorf("discovery_last_scan_ms = %v, want 42", snap.Gauges["discovery_last_scan_ms"])
 	}
 }

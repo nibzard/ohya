@@ -31,6 +31,7 @@ type Watcher struct {
 	window   int64
 	state    checkpointFile
 	lastPass map[string]probe
+	missing  map[string]bool
 	dirty    bool
 	observer observe.Observer
 }
@@ -66,7 +67,7 @@ func New(stateDir, agent string, o Options) (*Watcher, error) {
 		return nil, err
 	}
 	return &Watcher{stateDir: stateDir, agent: agent, window: window, state: state,
-		lastPass: map[string]probe{}, observer: observer}, nil
+		lastPass: map[string]probe{}, missing: map[string]bool{}, observer: observer}, nil
 }
 
 type probe struct {
@@ -156,6 +157,7 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 				entry.Path = target
 				renamedFrom[target] = key
 				moved[target] = entry
+				delete(w.missing, key)
 			} else {
 				moved[key] = entry
 			}
@@ -189,7 +191,10 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 		if !live {
 			missing++
 			delete(w.lastPass, key)
-			w.observer.Add("watch_source_events", 1, "missing")
+			if !w.missing[key] {
+				w.missing[key] = true
+				w.observer.Add("watch_source_events", 1, "missing")
+			}
 			outcomes = append(outcomes, Outcome{
 				Path: key, SourceID: entry.SourceID,
 				Cursor: entry.CursorBytes, Missing: true,
@@ -199,13 +204,17 @@ func (w *Watcher) Poll(candidates []string) ([]Outcome, error) {
 		if pr.identity != entry.FileIdentity && pr.identity != "" && claimed[pr.identity] {
 			missing++
 			delete(w.lastPass, key)
-			w.observer.Add("watch_source_events", 1, "missing")
+			if !w.missing[key] {
+				w.missing[key] = true
+				w.observer.Add("watch_source_events", 1, "missing")
+			}
 			outcomes = append(outcomes, Outcome{
 				Path: key, SourceID: entry.SourceID,
 				Cursor: entry.CursorBytes, Missing: true,
 			})
 			continue
 		}
+		delete(w.missing, key)
 		present++
 		observedBytes += pr.size
 		reason := ""

@@ -123,12 +123,14 @@ func runIngest(ctx context.Context, o ingestOptions) error {
 		return err
 	}
 	runners := make([]*ingestor, len(o.roots))
+	gaugeGroup := observe.NewGaugeGroup(o.observer)
 	for i, root := range o.roots {
-		w, err := watch.New(o.stateDir, root.agent, watch.Options{Observer: o.observer})
+		agentObserver := gaugeGroup.Slot(root.agent)
+		w, err := watch.New(o.stateDir, root.agent, watch.Options{Observer: agentObserver})
 		if err != nil {
 			return err
 		}
-		runners[i] = newIngestor(hub, w, root.agent, deviceID, o.maxRecordBytes, o.excludes, o.stderr, o.observer, o.events)
+		runners[i] = newIngestor(hub, w, root.agent, deviceID, o.maxRecordBytes, o.excludes, o.stderr, agentObserver, o.events)
 		if root.agent == antigravity.AgentName {
 			runners[i].sourceWorkspace = antigravitySourceWorkspace(root.dirs[0].dir, o.stderr)
 		}
@@ -310,12 +312,10 @@ func (r *ingestor) poll(ctx context.Context, dirs []agentDir, allowEmpty bool) (
 		return passStats{}, err
 	}
 	r.excludedPaths = excludedPathSet(excluded)
-	r.observer.Add("discovery_scans", 1)
-	r.observer.Add("discovery_candidates", uint64(len(candidates)))
 	if len(r.excludes) > 0 {
 		r.observer.Set("discovery_excluded", float64(len(excluded)), r.agent)
 	}
-	r.observer.Observe("discovery_duration", time.Since(discoveryStart))
+	observe.RecordDiscoveryScan(r.observer, len(candidates), time.Since(discoveryStart))
 	outcomes, err := r.watcher.Poll(candidates)
 	if err != nil {
 		return passStats{}, err

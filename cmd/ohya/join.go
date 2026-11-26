@@ -185,6 +185,7 @@ func runJoin(ctx context.Context, o joinOptions) error {
 
 	telem := startTelemetry(o.stateDir, o.observe, nil, observe.RoleJoin)
 	defer telem.close()
+	gaugeGroup := observe.NewGaugeGroup(telem.observer())
 	dial := func(ctx context.Context) (net.Conn, error) { return node.Dial(ctx, hubAddr) }
 	errs := make(chan error, len(o.roots))
 	runCtx, cancel := context.WithCancel(ctx)
@@ -194,14 +195,14 @@ func runJoin(ctx context.Context, o joinOptions) error {
 		wg.Wait()
 	}()
 	for _, root := range o.roots {
-		w, err := watch.New(o.stateDir, root.agent, watch.Options{Observer: telem.observer()})
+		agentObserver := gaugeGroup.Slot(root.agent)
+		w, err := watch.New(o.stateDir, root.agent, watch.Options{Observer: agentObserver})
 		if err != nil {
 			return err
 		}
 		dirs := root.dirs
 		agent := root.agent
-		observer := telem.observer()
-		discover, excluded := joinDiscover(dirs, agent, o.excludes, o.allowEmpty, observer, o.stderr)
+		discover, excluded := joinDiscover(dirs, agent, o.excludes, o.allowEmpty, agentObserver, o.stderr)
 		var sourceWorkspace func(string) (string, bool)
 		if root.agent == antigravity.AgentName {
 			sourceWorkspace = antigravitySourceWorkspace(root.dirs[0].dir, o.stderr)
@@ -209,7 +210,7 @@ func runJoin(ctx context.Context, o joinOptions) error {
 		up, err := uploader.New(w, cred, dial, uploader.Options{
 			Agent:           root.agent,
 			Interval:        o.interval,
-			Observer:        telem.observer(),
+			Observer:        agentObserver,
 			Events:          telem.eventsSink(),
 			Log:             o.stderr,
 			Excluded:        excluded,
@@ -327,8 +328,10 @@ func joinDiscover(dirs []agentDir, agent string, excludes excludeGlobs, allowEmp
 	excludedPaths := map[string]bool{}
 	lastExcluded := -1
 	discover := func() ([]string, error) {
+		discoveryStart := time.Now()
 		candidates, excluded, err := discoverAgentSessionFiles(agent, dirs, excludes, allowEmpty)
 		if err != nil {
+			observer.Add("discovery_errors", 1, "read")
 			return nil, err
 		}
 		if len(excludes) > 0 {
@@ -339,6 +342,7 @@ func joinDiscover(dirs []agentDir, agent string, excludes excludeGlobs, allowEmp
 				fmt.Fprintf(stderr, "ohya: %s: %d session files excluded by --exclude\n", agent, len(excluded))
 			}
 		}
+		observe.RecordDiscoveryScan(observer, len(candidates), time.Since(discoveryStart))
 		return candidates, nil
 	}
 	return discover, func(path string) bool { return excludedPaths[path] }

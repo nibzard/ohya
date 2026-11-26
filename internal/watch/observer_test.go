@@ -166,4 +166,23 @@ func TestObserverClassifiesWatchEvents(t *testing.T) {
 	if got := obs.Counter("watch_source_events", "missing"); got != 1 {
 		t.Errorf("missing events = %d, want 1", got)
 	}
+	poll(t, w, a)
+	if got := obs.Gauge("watch_sources", "missing"); got != 1 {
+		t.Errorf("missing sources on repeat poll = %v, want 1", got)
+	}
+	if got := obs.Counter("watch_source_events", "missing"); got != 1 {
+		t.Errorf("missing events on repeat poll = %d, want 1 (counted once per disappearance)", got)
+	}
+	writeFile(t, a, strings.Repeat("q", 60))
+	poll(t, w, a)
+	if got := obs.Gauge("watch_sources", "missing"); got != 0 {
+		t.Errorf("missing sources after return = %v, want 0", got)
+	}
+	if err := os.Remove(a); err != nil {
+		t.Fatal(err)
+	}
+	poll(t, w, a)
+	if got := obs.Counter("watch_source_events", "missing"); got != 2 {
+		t.Errorf("missing events on second disappearance = %d, want 2", got)
+	}
 }
