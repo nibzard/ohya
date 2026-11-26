@@ -33,6 +33,11 @@ IDs in diagnostics so that clients can identify hub-local sessions across
 separate state directories. The migration leaves the table empty because
 pre-upgrade session rows do not identify which process wrote them. Starting
 `ingest` with its existing state identifies older sessions under that ID.
+
+[011_event_duplicate_references.sql](internal/store/migrations/011_event_duplicate_references.sql)
+adds a partial index on non-null `events.duplicate_of`. Purge uses it to
+detach references across sources. SQLite uses it to check the foreign key
+when it deletes an event.
 Do not duplicate the DDL here.
 Databases ship with releases: v0.1.0 and v0.1.1 ship schema 6, v0.1.2 and
 v0.2.0 ship schema 7, v0.3.0, v0.4.0, v0.5.0, v0.5.1, v0.6.0, v0.6.1, v0.7.0, and v0.7.1 ship schema 8,

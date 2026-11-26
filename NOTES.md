@@ -3284,3 +3284,12 @@ How to use this file:
   model. The Go tests cover re-admission on live and reconnected
   clients. The model assumes retries after re-admission.
   See /notes/2026-11-27-ohya-implicit-state-machines.md.
+
+
+- Purge contention measured on 2026-11-27. Migration 011 indexes duplicate
+  references so SQLite can check the foreign key without scanning the
+  events table for each deletion. On a 600,000-event fixture, a
+  400,000-event purge took 23.3 s and the uploader caught up 16.2 s after
+  commit. The live hub migration cost is unmeasured. See
+  [performance](docs/performance.md#purge-and-concurrent-ingestion) and
+  /notes/2026-11-27-ohya-purge-contention.md.

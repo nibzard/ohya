@@ -845,6 +845,31 @@ imports in 4–13 minutes wall (about 2 minutes CPU) on comparable hardware.
 Ingestion work is linear in bytes: the per-byte rate is flat from 4 MiB to
 128 MiB corpora within measurement noise.
 
+## Purge and concurrent ingestion
+
+Measured on 2026-11-27 on an eight-vCPU Linux virtual machine. A disposable
+1.40 GiB database held 600,000 synthetic events across 1,200 sources. Each
+trial used a fresh copy, one competing local ingest, and a loopback uploader
+receiving 100 records per second during purge.
+
+| Events purged | Purge duration | Local ingest success | Upload caught up after commit |
+| ---: | ---: | ---: | ---: |
+| 50,000 | 2.77 s | 2.85 s | 0.99 s |
+| 200,000 | 8.09 s | 8.07 s | 4.15 s |
+| 400,000 | 23.30 s | 23.14 s | 16.20 s |
+
+Migration 011 indexes non-null `events.duplicate_of`. Before it, a
+50,000-event trial was still running after 89 seconds. SQLite scanned the
+events table to check the foreign key on event deletion. The index also
+supports the purge update that detaches duplicate references.
+
+At the normal 60-second request timeout, each uploader stayed connected
+and acknowledged every pending byte. The local ingest needed three busy
+retries in the 400,000-event run. When two large trials shared the disk,
+the repeat with the default timeout took 66.01 s and caught up 44.05 s
+after commit. Budget for a write pause during large purges. These timings
+depend on disk speed, database size, and event mix.
+
 ## Idle ingestion cost
 
 Measured 2026-11-16 (plan 004 S2): an ingest daemon holding a fully

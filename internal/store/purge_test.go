@@ -915,3 +915,38 @@ func TestPurgedSourceOwnershipHidesRefusalFromForeignDevice(t *testing.T) {
 		t.Fatalf("foreign Ingest err = %v, want ErrSourceOwnership only", err)
 	}
 }
+
+func TestPurgeUsesDuplicateReferenceIndex(t *testing.T) {
+	ctx := context.Background()
+	hub := ingestHub(t)
+	for _, query := range []struct {
+		sql  string
+		args []any
+	}{
+		{"DELETE FROM events WHERE source_id = ?", []any{"source"}},
+		{`UPDATE events SET duplicate_of = NULL
+		  WHERE source_id != ? AND duplicate_of IN (SELECT id FROM events WHERE source_id = ?)`,
+			[]any{"source", "source"}},
+	} {
+		rows, err := hub.Writer().QueryContext(ctx, "EXPLAIN QUERY PLAN "+query.sql, query.args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var details []string
+		for rows.Next() {
+			var id, parent, unused int
+			var detail string
+			if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+				rows.Close()
+				t.Fatal(err)
+			}
+			details = append(details, detail)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(strings.Join(details, "\n"), "INDEX events_duplicate_of (duplicate_of=?)") {
+			t.Errorf("query plan for %s does not use the duplicate reference index: %v", query.sql, details)
+		}
+	}
+}
