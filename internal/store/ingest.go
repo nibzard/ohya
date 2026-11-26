@@ -155,6 +155,151 @@ func (d *DB) SourceStateForDevice(ctx context.Context, id, deviceID string) (Sou
 	return sourceState(ctx, d.writer, id, deviceID)
 }
 
+type SourceProbeStatus uint8
+
+const (
+	SourceProbeUnknown SourceProbeStatus = iota + 1
+	SourceProbeKnown
+	SourceProbeOwnership
+	SourceProbePurged
+)
+
+type SourceProbe struct {
+	Status  SourceProbeStatus
+	Cursor  int64
+	Message string
+}
+
+func (d *DB) ProbeSourcesForDevice(ctx context.Context, deviceID string, sourceIDs []string) ([]SourceProbe, error) {
+	if deviceID == "" {
+		return nil, fmt.Errorf("store: probe sources: empty device ID: %w", ErrBatchRejected)
+	}
+	if len(sourceIDs) == 0 {
+		return nil, nil
+	}
+	out := make([]SourceProbe, len(sourceIDs))
+	indexByID := make(map[string][]int, len(sourceIDs))
+	unique := make([]string, 0, len(sourceIDs))
+	for i, id := range sourceIDs {
+		if id == "" {
+			return nil, fmt.Errorf("store: probe sources: empty source ID: %w", ErrBatchRejected)
+		}
+		out[i] = SourceProbe{Status: SourceProbeUnknown}
+		if _, seen := indexByID[id]; !seen {
+			unique = append(unique, id)
+		}
+		indexByID[id] = append(indexByID[id], i)
+	}
+
+	const chunkSize = 500
+	found := make(map[string]bool, len(unique))
+	for start := 0; start < len(unique); start += chunkSize {
+		chunk := unique[start:min(start+chunkSize, len(unique))]
+		query := `SELECT id, device_id, cursor_bytes FROM sources WHERE id IN (` + placeholders(len(chunk)) + `)`
+		args := stringArgs(chunk)
+		rows, err := d.writer.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("store: probe sources: %w", err)
+		}
+		for rows.Next() {
+			var id, storedDevice string
+			var cursor int64
+			if err := rows.Scan(&id, &storedDevice, &cursor); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("store: probe sources: %w", err)
+			}
+			found[id] = true
+			probe := SourceProbe{Status: SourceProbeKnown, Cursor: cursor}
+			if storedDevice != deviceID {
+				probe = SourceProbe{
+					Status: SourceProbeOwnership,
+					Message: fmt.Sprintf("store: source %s: source belongs to device %s, but the batch claims device %s: %v",
+						id, storedDevice, deviceID, ErrSourceOwnership),
+				}
+			}
+			for _, idx := range indexByID[id] {
+				out[idx] = probe
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("store: probe sources: %w", err)
+		}
+		rows.Close()
+	}
+
+	if len(found) == len(unique) {
+		return out, nil
+	}
+
+	missing := make([]string, 0, len(unique)-len(found))
+	for _, id := range unique {
+		if !found[id] {
+			missing = append(missing, id)
+		}
+	}
+	for start := 0; start < len(missing); start += chunkSize {
+		chunk := missing[start:min(start+chunkSize, len(missing))]
+		query := `SELECT source_id, device_id, scope, purged_at_ms FROM purged_sources WHERE source_id IN (` + placeholders(len(chunk)) + `)`
+		args := stringArgs(chunk)
+		rows, err := d.writer.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("store: probe purged sources: %w", err)
+		}
+		for rows.Next() {
+			var p PurgedSourceInfo
+			if err := rows.Scan(&p.SourceID, &p.DeviceID, &p.Scope, &p.PurgedAtMS); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("store: probe purged sources: %w", err)
+			}
+			var probe SourceProbe
+			if p.DeviceID != deviceID {
+				probe = SourceProbe{
+					Status: SourceProbeOwnership,
+					Message: fmt.Sprintf("store: source %s: source belongs to device %s, but the batch claims device %s: %v",
+						p.SourceID, p.DeviceID, deviceID, ErrSourceOwnership),
+				}
+			} else {
+				probe = SourceProbe{
+					Status:  SourceProbePurged,
+					Message: p.refusal().Error(),
+				}
+			}
+			for _, idx := range indexByID[p.SourceID] {
+				out[idx] = probe
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("store: probe purged sources: %w", err)
+		}
+		rows.Close()
+	}
+	return out, nil
+}
+
+func placeholders(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	buf := make([]byte, 2*n-1)
+	for i := range n {
+		if i > 0 {
+			buf[2*i-1] = ','
+		}
+		buf[2*i] = '?'
+	}
+	return string(buf)
+}
+
+func stringArgs(ss []string) []any {
+	args := make([]any, len(ss))
+	for i, s := range ss {
+		args[i] = s
+	}
+	return args
+}
+
 func sourceState(ctx context.Context, db *sql.DB, id, deviceID string) (SourceState, error) {
 	var st SourceState
 	var storedDevice string

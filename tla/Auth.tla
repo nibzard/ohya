@@ -195,6 +195,10 @@ ReadDiagnostics(c) ==
   /\ Authorized(c)
   /\ UNCHANGED vars
 
+ProbeSources(c) ==
+  /\ Authorized(c)
+  /\ UNCHANGED vars
+
 Next ==
   \/ \E i \in Invitations :
        \/ IssueInvitation(i)
@@ -208,6 +212,7 @@ Next ==
   \/ \E c \in Sessions :
        \/ CloseSession(c)
        \/ ReadDiagnostics(c)
+       \/ ProbeSources(c)
   \/ \E s \in Sources :
        \/ PurgeSource(s)
        \/ ReallowSource(s)

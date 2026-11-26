@@ -198,7 +198,7 @@ func TestCompressionOffKeepsTheSourceWorkspaceOffer(t *testing.T) {
 	if stats := f.mustSync(); stats.Inserted != 200 {
 		t.Fatalf("stats = %+v; want 200 events", stats)
 	}
-	if got, want := hubsync.Capabilities(old.offered.Load()), hubsync.CapSourceWorkspace; got != want {
+	if got, want := hubsync.Capabilities(old.offered.Load()), hubsync.CapSourceWorkspace|hubsync.CapBatchProbes; got != want {
 		t.Fatalf("offer = %#x; want %#x: only the zstd bit leaves the offer", uint16(got), uint16(want))
 	}
 	if got, want := old.markers(), "VRFBBW"; got != want {

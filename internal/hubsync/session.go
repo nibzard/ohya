@@ -18,22 +18,32 @@ import (
 var ErrRemoteUnauthorized = errors.New("hubsync: the hub refused this device's credential")
 
 type RemoteSessionOptions struct {
-	DeviceID string
-	Usage    mcpserver.UsageSink
-	Observer observe.Observer
+	DeviceID          string
+	Usage             mcpserver.UsageSink
+	Observer          observe.Observer
+	KeepaliveInterval time.Duration
 }
 
 type RemoteSession struct {
-	dial       func(ctx context.Context) (net.Conn, error)
-	credential string
-	timeout    time.Duration
-	record     bool
-	deviceID   string
-	usage      mcpserver.UsageSink
-	observer   observe.Observer
+	dial              func(ctx context.Context) (net.Conn, error)
+	credential        string
+	timeout           time.Duration
+	keepaliveInterval time.Duration
+	record            bool
+	deviceID          string
+	usage             mcpserver.UsageSink
+	observer          observe.Observer
 
-	mu     sync.Mutex
-	client *RemoteClient
+	loopCtx    context.Context
+	loopCancel context.CancelFunc
+	stopOnce   sync.Once
+	doneCh     chan struct{}
+
+	mu           sync.Mutex
+	client       *RemoteClient
+	lastUsed     time.Time
+	keepaliveOff bool
+	closed       bool
 }
 
 func NewRemoteSession(dial func(ctx context.Context) (net.Conn, error), credential string, opts RemoteSessionOptions) *RemoteSession {
@@ -41,15 +51,22 @@ func NewRemoteSession(dial func(ctx context.Context) (net.Conn, error), credenti
 	if observer == nil {
 		observer = observe.Disabled
 	}
-	return &RemoteSession{
-		dial:       dial,
-		credential: credential,
-		timeout:    DefaultRemoteTimeout,
-		record:     opts.Usage != nil || opts.Observer != nil,
-		deviceID:   opts.DeviceID,
-		usage:      opts.Usage,
-		observer:   observer,
+	s := &RemoteSession{
+		dial:              dial,
+		credential:        credential,
+		timeout:           DefaultRemoteTimeout,
+		keepaliveInterval: opts.KeepaliveInterval,
+		record:            opts.Usage != nil || opts.Observer != nil,
+		deviceID:          opts.DeviceID,
+		usage:             opts.Usage,
+		observer:          observer,
 	}
+	if opts.KeepaliveInterval > 0 {
+		s.loopCtx, s.loopCancel = context.WithCancel(context.Background())
+		s.doneCh = make(chan struct{})
+		go s.keepaliveLoop()
+	}
+	return s
 }
 
 func (s *RemoteSession) Query(ctx context.Context, query string) (mcpserver.Result, error) {
@@ -91,14 +108,71 @@ func (s *RemoteSession) Diagnostics(ctx context.Context) (RemoteStatus, error) {
 }
 
 func (s *RemoteSession) Close() error {
+	s.stopOnce.Do(func() {
+		if s.loopCancel != nil {
+			s.loopCancel()
+		}
+	})
+	s.mu.Lock()
+	s.closed = true
+	err := s.dropLocked()
+	s.mu.Unlock()
+	if s.doneCh != nil {
+		<-s.doneCh
+	}
+	return err
+}
+
+func (s *RemoteSession) keepaliveLoop() {
+	defer close(s.doneCh)
+	tick := max(min(s.keepaliveInterval/2, 30*time.Second), 5*time.Millisecond)
+	ticker := time.NewTicker(tick)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.loopCtx.Done():
+			return
+		case <-ticker.C:
+			s.stepKeepalive()
+		}
+	}
+}
+
+func (s *RemoteSession) stepKeepalive() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.dropLocked()
+	if s.closed || s.keepaliveOff || s.client == nil {
+		return
+	}
+	if !s.client.Alive() {
+		_ = s.dropLocked()
+		return
+	}
+	if time.Since(s.lastUsed) < s.keepaliveInterval {
+		return
+	}
+	kctx, cancel := context.WithTimeout(s.loopCtx, s.timeout)
+	err := s.client.Keepalive(kctx)
+	cancel()
+	if err == nil {
+		s.lastUsed = time.Now()
+		return
+	}
+	if errors.Is(err, ErrKeepaliveUnsupported) {
+		s.keepaliveOff = true
+	}
+	_ = s.dropLocked()
 }
 
 func (s *RemoteSession) call(ctx context.Context, exchange func(*RemoteClient) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return errors.New("hubsync: remote session is closed")
+	}
+	if s.client != nil && !s.client.Alive() {
+		_ = s.dropLocked()
+	}
 	if s.client == nil {
 		if err := s.connectLocked(ctx); err != nil {
 			return err
@@ -106,6 +180,7 @@ func (s *RemoteSession) call(ctx context.Context, exchange func(*RemoteClient) e
 	}
 	err := exchange(s.client)
 	if err == nil {
+		s.lastUsed = time.Now()
 		return nil
 	}
 	retry, mapped := s.finishAttemptLocked(ctx, err)
@@ -118,6 +193,7 @@ func (s *RemoteSession) call(ctx context.Context, exchange func(*RemoteClient) e
 	}
 	err = exchange(s.client)
 	if err == nil {
+		s.lastUsed = time.Now()
 		return nil
 	}
 	_, mapped = s.finishAttemptLocked(ctx, err)
@@ -165,6 +241,7 @@ func (s *RemoteSession) connectLocked(ctx context.Context) error {
 	_ = conn.SetWriteDeadline(time.Time{})
 	s.client = NewRemoteClient(conn)
 	s.client.Timeout = s.timeout
+	s.lastUsed = time.Now()
 	return nil
 }
 

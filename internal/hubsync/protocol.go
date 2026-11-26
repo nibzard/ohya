@@ -41,6 +41,8 @@ const (
 
 	MaxWorkspaces = 256
 
+	MaxProbes = 4096
+
 	maxRepoLen = workspace.MaxRepoBytes
 )
 
@@ -64,6 +66,8 @@ const (
 	markerDiagnostics     = 'G'
 	markerDiagnosticsRes  = 'g'
 	markerSourceWorkspace = 'F'
+	markerProbes          = 'I'
+	markerProbesReply     = 'i'
 )
 
 type Capabilities uint16
@@ -72,6 +76,7 @@ const (
 	CapZstdBatches     Capabilities = 1 << 0
 	CapRemoteStatus    Capabilities = 1 << 1
 	CapSourceWorkspace Capabilities = 1 << 2
+	CapBatchProbes     Capabilities = 1 << 3
 )
 
 const batchRecordFrameBytes = 12
@@ -210,6 +215,24 @@ type WorkspacesReply struct {
 	Pending []string
 }
 
+type Probes struct {
+	DeviceID  string
+	SourceIDs []string
+}
+
+type ProbeStatus = store.SourceProbeStatus
+
+const (
+	ProbeUnknown   = store.SourceProbeUnknown
+	ProbeKnown     = store.SourceProbeKnown
+	ProbeOwnership = store.SourceProbeOwnership
+	ProbePurged    = store.SourceProbePurged
+)
+
+type ProbesReply struct {
+	Entries []store.SourceProbe
+}
+
 type Frame struct {
 	Registration    *Registration
 	Batch           *Batch
@@ -219,6 +242,7 @@ type Frame struct {
 	Workspaces      *Workspaces
 	Diagnostics     *DiagnosticsRequest
 	SourceWorkspace *SourceWorkspace
+	Probes          *Probes
 }
 
 type frameReader struct {
@@ -363,6 +387,12 @@ func ReadFrame(r io.Reader) (Frame, error) {
 			return Frame{}, err
 		}
 		return Frame{Diagnostics: d}, nil
+	case markerProbes:
+		p, err := readProbes(fr)
+		if err != nil {
+			return Frame{}, err
+		}
+		return Frame{Probes: p}, nil
 	default:
 		return Frame{}, fmt.Errorf("hubsync: bad frame marker %q", marker)
 	}
@@ -853,6 +883,159 @@ func WriteWorkspacesReply(w io.Writer, r WorkspacesReply) error {
 		return fmt.Errorf("hubsync: write workspaces reply: %w", err)
 	}
 	return nil
+}
+
+func readProbes(fr *frameReader) (*Probes, error) {
+	var p Probes
+	var err error
+	if p.DeviceID, err = fr.str16(maxDeviceIDLen, "device ID"); err != nil {
+		return nil, err
+	}
+	count, err := fr.u16()
+	if err != nil {
+		return nil, err
+	}
+	if count == 0 {
+		return nil, fmt.Errorf("hubsync: probes frame carries no sources")
+	}
+	if count > MaxProbes {
+		return nil, fmt.Errorf("%w: probes frame carries %d sources, want at most %d", ErrTooLarge, count, MaxProbes)
+	}
+	p.SourceIDs = make([]string, 0, min(int(count), 512))
+	for range count {
+		id, err := fr.str16(maxSourceIDLen, "source ID")
+		if err != nil {
+			return nil, err
+		}
+		p.SourceIDs = append(p.SourceIDs, id)
+	}
+	return &p, nil
+}
+
+func WriteProbes(w io.Writer, p Probes) error {
+	switch {
+	case p.DeviceID == "":
+		return fmt.Errorf("hubsync: probes frame has an empty device ID")
+	case len(p.DeviceID) > maxDeviceIDLen:
+		return fmt.Errorf("%w: device ID length %d exceeds %d", ErrTooLarge, len(p.DeviceID), maxDeviceIDLen)
+	case len(p.SourceIDs) == 0:
+		return fmt.Errorf("hubsync: probes frame carries no sources")
+	case len(p.SourceIDs) > MaxProbes:
+		return fmt.Errorf("%w: %d probes, want at most %d", ErrTooLarge, len(p.SourceIDs), MaxProbes)
+	}
+	head := make([]byte, 0, 6+len(p.DeviceID)+len(p.SourceIDs)*34)
+	head = append(head, markerProbes, ProtocolVersion)
+	head = appendLen16(head, p.DeviceID)
+	head = append(head, p.DeviceID...)
+	head = binary.BigEndian.AppendUint16(head, uint16(len(p.SourceIDs)))
+	for _, id := range p.SourceIDs {
+		if id == "" {
+			return fmt.Errorf("hubsync: probes frame has an empty source ID")
+		}
+		if len(id) > maxSourceIDLen {
+			return fmt.Errorf("%w: source ID length %d exceeds %d", ErrTooLarge, len(id), maxSourceIDLen)
+		}
+		head = appendLen16(head, id)
+		head = append(head, id...)
+	}
+	if _, err := w.Write(head); err != nil {
+		return fmt.Errorf("hubsync: write probes: %w", err)
+	}
+	return nil
+}
+
+func WriteProbesReply(w io.Writer, r ProbesReply) error {
+	if len(r.Entries) == 0 {
+		return fmt.Errorf("hubsync: probes reply carries no entries")
+	}
+	if len(r.Entries) > MaxProbes {
+		return fmt.Errorf("%w: %d probe entries, want at most %d", ErrTooLarge, len(r.Entries), MaxProbes)
+	}
+	head := make([]byte, 0, 4+len(r.Entries)*11)
+	head = append(head, markerProbesReply, ProtocolVersion)
+	head = binary.BigEndian.AppendUint16(head, uint16(len(r.Entries)))
+	for _, e := range r.Entries {
+		switch e.Status {
+		case store.SourceProbeUnknown, store.SourceProbeKnown, store.SourceProbeOwnership, store.SourceProbePurged:
+		default:
+			return fmt.Errorf("hubsync: probe entry carries unknown status %d", e.Status)
+		}
+		if e.Cursor < 0 || (e.Status != store.SourceProbeKnown && e.Cursor != 0) {
+			return fmt.Errorf("hubsync: probe entry cursor %d is invalid for status %d", e.Cursor, e.Status)
+		}
+		head = append(head, byte(e.Status))
+		head = binary.BigEndian.AppendUint64(head, uint64(e.Cursor))
+		msg := truncate(e.Message, maxMessageLen)
+		head = appendLen16(head, msg)
+		head = append(head, msg...)
+	}
+	if _, err := w.Write(head); err != nil {
+		return fmt.Errorf("hubsync: write probes reply: %w", err)
+	}
+	return nil
+}
+
+func ReadProbesReply(r io.Reader) (ProbesReply, *Error, error) {
+	fr := &frameReader{r: r}
+	marker, err := replyHead(fr)
+	if err != nil {
+		return ProbesReply{}, nil, err
+	}
+	switch marker {
+	case markerProbesReply:
+		count, err := fr.u16()
+		if err != nil {
+			return ProbesReply{}, nil, err
+		}
+		if count == 0 {
+			return ProbesReply{}, nil, fmt.Errorf("hubsync: probes reply carries no entries")
+		}
+		if count > MaxProbes {
+			return ProbesReply{}, nil, fmt.Errorf("%w: reply carries %d probe entries, want at most %d", ErrTooLarge, count, MaxProbes)
+		}
+		entries := make([]store.SourceProbe, 0, min(int(count), 512))
+		for range count {
+			rawStatus, err := fr.u8()
+			if err != nil {
+				return ProbesReply{}, nil, err
+			}
+			status := store.SourceProbeStatus(rawStatus)
+			switch status {
+			case store.SourceProbeUnknown, store.SourceProbeKnown, store.SourceProbeOwnership, store.SourceProbePurged:
+			default:
+				return ProbesReply{}, nil, fmt.Errorf("hubsync: probes reply carries unknown status %d", rawStatus)
+			}
+			cursor, err := fr.i64()
+			if err != nil {
+				return ProbesReply{}, nil, err
+			}
+			if cursor < 0 || (status != store.SourceProbeKnown && cursor != 0) {
+				return ProbesReply{}, nil, fmt.Errorf("hubsync: probes reply cursor %d is invalid for status %d", cursor, rawStatus)
+			}
+			msgLen, err := fr.u16()
+			if err != nil {
+				return ProbesReply{}, nil, err
+			}
+			msg, err := fr.bytes(uint32(msgLen), maxMessageLen, "probe message")
+			if err != nil {
+				return ProbesReply{}, nil, err
+			}
+			entries = append(entries, store.SourceProbe{
+				Status:  status,
+				Cursor:  cursor,
+				Message: string(msg),
+			})
+		}
+		return ProbesReply{Entries: entries}, nil, nil
+	case markerError:
+		perr, err := readErrorFrame(fr)
+		if err != nil {
+			return ProbesReply{}, nil, err
+		}
+		return ProbesReply{}, perr, nil
+	default:
+		return ProbesReply{}, nil, fmt.Errorf("hubsync: bad probes reply marker %q", marker)
+	}
 }
 
 type boundedField struct {

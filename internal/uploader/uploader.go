@@ -79,6 +79,7 @@ type Uploader struct {
 
 	conn         *conn
 	ready        map[string]bool
+	unregistered map[string]bool
 	blocked      map[string]bool
 	stops        map[string]stopMark
 	idle         map[string]stopMark
@@ -155,7 +156,7 @@ func New(w *watch.Watcher, cred device.Credential, dial Dialer, opts Options) (*
 	return &Uploader{
 		watcher: w, credential: cred, dial: dial, opts: opts, log: log, observer: observer,
 		events: opts.Events,
-		ready:  map[string]bool{}, blocked: map[string]bool{},
+		ready:  map[string]bool{}, unregistered: map[string]bool{}, blocked: map[string]bool{},
 		stops: map[string]stopMark{}, idle: map[string]stopMark{}, seen: map[string]int64{},
 		lossReported: map[string]bool{}, gapReported: map[string]int64{},
 		sourceTold: map[string]bool{},
@@ -241,6 +242,9 @@ func (u *Uploader) Sync(ctx context.Context, candidates []string) (stats Stats, 
 	u.reportMissingAtStartup(missingAtStartup)
 	u.updateBacklog(outcomes)
 	if err = u.connect(ctx); err != nil {
+		return stats, err
+	}
+	if err = u.probeSources(ctx, outcomes); err != nil {
 		return stats, err
 	}
 	for _, o := range outcomes {
@@ -464,7 +468,7 @@ func (u *Uploader) syncSource(ctx context.Context, o watch.Outcome, stats *Stats
 }
 
 func (u *Uploader) prepare(ctx context.Context, o watch.Outcome) (int64, bool, error) {
-	if o.Cursor > 0 && o.RenamedFrom == "" {
+	if o.Cursor > 0 && o.RenamedFrom == "" && !u.unregistered[o.SourceID] {
 		hub, perr, err := u.probe(ctx, o.SourceID, o.Cursor)
 		if err != nil {
 			return 0, false, err
@@ -476,6 +480,7 @@ func (u *Uploader) prepare(ctx context.Context, o watch.Outcome) (int64, bool, e
 			return 0, false, u.sourceRefused(o, perr)
 		}
 	}
+	delete(u.unregistered, o.SourceID)
 	_, perr, err := u.exchange(ctx, func(w io.Writer) error {
 		return hubsync.WriteRegistration(w, hubsync.Registration{
 			DeviceID: u.credential.DeviceID, SourceID: o.SourceID, Agent: u.opts.Agent, Path: o.Path})
@@ -552,6 +557,104 @@ func (u *Uploader) probe(ctx context.Context, sourceID string, at int64) (int64,
 			DeviceID: u.credential.DeviceID, SourceID: sourceID, Start: at, End: at})
 	})
 	return ack.Cursor, perr, err
+}
+
+func (u *Uploader) probeSources(ctx context.Context, outcomes []watch.Outcome) error {
+	if u.hubCaps&hubsync.CapBatchProbes == 0 {
+		return nil
+	}
+	var pending []int
+	for i := range outcomes {
+		o := outcomes[i]
+		if u.blocked[o.SourceID] || u.ready[o.SourceID] || o.Cursor == 0 {
+			continue
+		}
+		if !o.Missing && o.RenamedFrom != "" {
+			continue
+		}
+		pending = append(pending, i)
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	for start := 0; start < len(pending); start += hubsync.MaxProbes {
+		chunk := pending[start:min(start+hubsync.MaxProbes, len(pending))]
+		ids := make([]string, len(chunk))
+		for i, idx := range chunk {
+			ids[i] = outcomes[idx].SourceID
+		}
+		var reply hubsync.ProbesReply
+		perr, err := u.roundTrip(ctx,
+			func(w io.Writer) error {
+				return hubsync.WriteProbes(w, hubsync.Probes{
+					DeviceID: u.credential.DeviceID, SourceIDs: ids})
+			},
+			func(r io.Reader) (*hubsync.Error, error) {
+				var perr *hubsync.Error
+				var err error
+				reply, perr, err = hubsync.ReadProbesReply(r)
+				return perr, err
+			})
+		if err != nil {
+			return err
+		}
+		if perr != nil {
+			switch perr.Code {
+			case hubsync.CodeInternal:
+				u.logf("hub failed to probe %d sources, retrying next pass: %s", len(ids), perr.Message)
+				return nil
+			default:
+				return connError(perr)
+			}
+		}
+		if len(reply.Entries) != len(chunk) {
+			u.Close()
+			u.observer.Add("upload_failures", 1, "read")
+			return u.disconnected(ctx, fmt.Errorf("hubsync: probes reply holds %d entries for %d sources", len(reply.Entries), len(chunk)))
+		}
+		for i, idx := range chunk {
+			o := outcomes[idx]
+			entry := reply.Entries[i]
+			switch entry.Status {
+			case hubsync.ProbeKnown:
+				if o.Missing {
+					u.recordMissingGap(o, entry.Cursor)
+					continue
+				}
+				cursor, ok, err := u.resume(ctx, o, entry.Cursor)
+				if err != nil {
+					return err
+				}
+				if ok {
+					outcomes[idx].Cursor = cursor
+				}
+			case hubsync.ProbeUnknown:
+				if o.Missing {
+					u.recordMissingGap(o, 0)
+					continue
+				}
+				u.unregistered[o.SourceID] = true
+			case hubsync.ProbeOwnership:
+				if err := u.sourceRefused(o, &hubsync.Error{Code: hubsync.CodeOwnership, Message: entry.Message}); err != nil {
+					return err
+				}
+			case hubsync.ProbePurged:
+				if err := u.sourceRefused(o, &hubsync.Error{Code: hubsync.CodeRejected, Message: entry.Message}); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (u *Uploader) recordMissingGap(o watch.Outcome, hub int64) {
+	u.ready[o.SourceID] = true
+	if hub < o.Cursor && u.gapReported[o.SourceID] != hub+1 {
+		u.gapReported[o.SourceID] = hub + 1
+		u.logf("%s: unrecoverable gap: the hub lost bytes [%d, %d) of source %s (hub restored from a backup?), and the file is no longer retained to replay them",
+			o.Path, hub, o.Cursor, o.SourceID)
+	}
 }
 
 func (u *Uploader) reconcile(o watch.Outcome, hub int64) (int64, bool) {
@@ -767,10 +870,11 @@ func (u *Uploader) connect(ctx context.Context) error {
 }
 
 func (u *Uploader) offer() hubsync.Capabilities {
-	if compressionDisabled() {
-		return hubsync.CapSourceWorkspace
+	caps := hubsync.CapSourceWorkspace | hubsync.CapBatchProbes
+	if !compressionDisabled() {
+		caps |= hubsync.CapZstdBatches
 	}
-	return hubsync.CapZstdBatches | hubsync.CapSourceWorkspace
+	return caps
 }
 
 func (u *Uploader) dialHello(ctx context.Context) error {
@@ -795,6 +899,7 @@ func (u *Uploader) dialHello(ctx context.Context) error {
 	}
 	u.hubCaps = 0
 	u.ready = map[string]bool{}
+	u.unregistered = map[string]bool{}
 	u.workspacesDue = true
 	return nil
 }

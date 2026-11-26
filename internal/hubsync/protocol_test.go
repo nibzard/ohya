@@ -448,6 +448,16 @@ func FuzzReadFrame(f *testing.F) {
 		f.Fatal(err)
 	}
 	f.Add(buf.Bytes())
+	buf.Reset()
+	if err := WriteDiagnosticsRequest(&buf, DiagnosticsFormatVersion); err != nil {
+		f.Fatal(err)
+	}
+	f.Add(buf.Bytes())
+	buf.Reset()
+	if err := WriteProbes(&buf, Probes{DeviceID: testDevice, SourceIDs: []string{testSource}}); err != nil {
+		f.Fatal(err)
+	}
+	f.Add(buf.Bytes())
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		frame, err := ReadFrame(bytes.NewReader(data))
@@ -468,8 +478,12 @@ func FuzzReadFrame(f *testing.F) {
 			err = WriteAnnotate(&out, frame.Annotate.Request)
 		case frame.Workspaces != nil:
 			err = WriteWorkspaces(&out, *frame.Workspaces)
+		case frame.Diagnostics != nil:
+			err = WriteDiagnosticsRequest(&out, frame.Diagnostics.FormatVersion)
 		case frame.SourceWorkspace != nil:
 			err = WriteSourceWorkspace(&out, *frame.SourceWorkspace)
+		case frame.Probes != nil:
+			err = WriteProbes(&out, *frame.Probes)
 		}
 		if err != nil {
 			return
@@ -484,7 +498,9 @@ func FuzzReadFrame(f *testing.F) {
 			(frame.Query == nil) != (again.Query == nil) ||
 			(frame.Annotate == nil) != (again.Annotate == nil) ||
 			(frame.Workspaces == nil) != (again.Workspaces == nil) ||
-			(frame.SourceWorkspace == nil) != (again.SourceWorkspace == nil) {
+			(frame.Diagnostics == nil) != (again.Diagnostics == nil) ||
+			(frame.SourceWorkspace == nil) != (again.SourceWorkspace == nil) ||
+			(frame.Probes == nil) != (again.Probes == nil) {
 			t.Fatal("frame kind changed across the round trip")
 		}
 	})
@@ -721,4 +737,105 @@ func TestPayloadFramesWireFormatAndWriteErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestProbesRoundTripAndBounds(t *testing.T) {
+	var buf bytes.Buffer
+	req := Probes{DeviceID: testDevice, SourceIDs: []string{testSource, "11111111111111111111111111111111"}}
+	if err := WriteProbes(&buf, req); err != nil {
+		t.Fatal(err)
+	}
+	frame, err := ReadFrame(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame.Probes == nil || frame.Probes.DeviceID != req.DeviceID || len(frame.Probes.SourceIDs) != 2 {
+		t.Fatalf("probes round trip = %+v", frame.Probes)
+	}
+
+	reply := ProbesReply{
+		Entries: []store.SourceProbe{
+			{Status: store.SourceProbeKnown, Cursor: 4096},
+			{Status: store.SourceProbeUnknown},
+			{Status: store.SourceProbeOwnership, Message: "held by another device"},
+			{Status: store.SourceProbePurged, Message: "purged by owner"},
+		},
+	}
+	buf.Reset()
+	if err := WriteProbesReply(&buf, reply); err != nil {
+		t.Fatal(err)
+	}
+	gotReply, perr, err := ReadProbesReply(&buf)
+	if err != nil || perr != nil || len(gotReply.Entries) != 4 {
+		t.Fatalf("probes reply round trip = %+v, %v, %v", gotReply, perr, err)
+	}
+	for i := range reply.Entries {
+		if gotReply.Entries[i] != reply.Entries[i] {
+			t.Fatalf("entry[%d] = %+v, want %+v", i, gotReply.Entries[i], reply.Entries[i])
+		}
+	}
+
+	buf.Reset()
+	if err := WriteError(&buf, CodeAuth, "revoked"); err != nil {
+		t.Fatal(err)
+	}
+	if _, perr, err := ReadProbesReply(&buf); err != nil || perr == nil || perr.Code != CodeAuth {
+		t.Fatalf("error over probes reply = %+v, %v", perr, err)
+	}
+
+	if err := WriteProbes(&buf, Probes{DeviceID: testDevice}); err == nil {
+		t.Fatal("empty probes source list was written")
+	}
+	if err := WriteProbes(&buf, Probes{DeviceID: testDevice, SourceIDs: make([]string, MaxProbes+1)}); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("oversized probes write err = %v, want ErrTooLarge", err)
+	}
+	rawTooMany := []byte{markerProbes, ProtocolVersion}
+	rawTooMany = appendLen16(rawTooMany, testDevice)
+	rawTooMany = append(rawTooMany, testDevice...)
+	rawTooMany = binary.BigEndian.AppendUint16(rawTooMany, MaxProbes+1)
+	if _, err := ReadFrame(bytes.NewReader(rawTooMany)); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("oversized probes read err = %v, want ErrTooLarge", err)
+	}
+}
+
+func FuzzReadProbesReply(f *testing.F) {
+	var buf bytes.Buffer
+	if err := WriteProbesReply(&buf, ProbesReply{
+		Entries: []store.SourceProbe{
+			{Status: store.SourceProbeKnown, Cursor: 128},
+			{Status: store.SourceProbeUnknown},
+			{Status: store.SourceProbePurged, Message: "purged"},
+		},
+	}); err != nil {
+		f.Fatal(err)
+	}
+	f.Add(buf.Bytes())
+	buf.Reset()
+	if err := WriteError(&buf, CodeRejected, "bad"); err != nil {
+		f.Fatal(err)
+	}
+	f.Add(buf.Bytes())
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		reply, perr, err := ReadProbesReply(bytes.NewReader(data))
+		if err != nil {
+			return
+		}
+		var out bytes.Buffer
+		if perr != nil {
+			err = WriteError(&out, perr.Code, perr.Message)
+		} else {
+			err = WriteProbesReply(&out, reply)
+		}
+		if err != nil {
+			t.Fatalf("re-encoding decoded probes reply failed: %v", err)
+		}
+		again, perr2, err := ReadProbesReply(&out)
+		if err != nil {
+			t.Fatalf("re-decoding re-encoded probes reply failed: %v", err)
+		}
+		if (perr == nil) != (perr2 == nil) || len(reply.Entries) != len(again.Entries) {
+			t.Fatal("probes reply shape changed across round trip")
+		}
+	})
 }

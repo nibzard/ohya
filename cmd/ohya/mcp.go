@@ -137,7 +137,12 @@ func runMcpRemote(ctx context.Context, stateDir string, observeOn bool) error {
 	session := hubsync.NewRemoteSession(
 		func(ctx context.Context) (net.Conn, error) { return node.Dial(ctx, hubAddr) },
 		cred.Secret,
-		hubsync.RemoteSessionOptions{DeviceID: cred.DeviceID, Usage: telem.usageSink(), Observer: telem.observer()})
+		hubsync.RemoteSessionOptions{
+			DeviceID:          cred.DeviceID,
+			Usage:             telem.usageSink(),
+			Observer:          telem.observer(),
+			KeepaliveInterval: hubsync.DefaultKeepaliveInterval,
+		})
 	defer session.Close()
 	server := mcpserver.New(session, mcpserver.EngineOptions{WriterID: cred.DeviceID})
 	err = mcpserver.Run(ctx, server)

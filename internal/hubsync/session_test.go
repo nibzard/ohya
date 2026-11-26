@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -179,5 +180,37 @@ func TestRemoteClientCancelsDuringRead(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Fatalf("canceled query blocked for %s waiting on read", elapsed)
+	}
+}
+
+func TestRemoteSessionKeepalivePreventsIdleDisconnect(t *testing.T) {
+	db := newTestDB(t)
+	readers, err := db.Reader()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { readers.Close() })
+	engine := mcpserver.NewEngine(readers, db.Writer(), mcpserver.EngineOptions{WriterID: "hub"})
+	auth := &helloAuth{secret: "cred-1", device: deviceB}
+	s := startEndpoint(t, db, auth, Options{Remote: engine, IdleTimeout: 120 * time.Millisecond})
+
+	var dials atomic.Int32
+	session := NewRemoteSession(
+		func(ctx context.Context) (net.Conn, error) {
+			dials.Add(1)
+			var d net.Dialer
+			return d.DialContext(ctx, "tcp", s.addr)
+		}, "cred-1", RemoteSessionOptions{KeepaliveInterval: 30 * time.Millisecond})
+	t.Cleanup(func() { session.Close() })
+
+	if _, err := session.Query(context.Background(), "SELECT 1"); err != nil {
+		t.Fatalf("initial query: %v", err)
+	}
+	time.Sleep(260 * time.Millisecond)
+	if _, err := session.Query(context.Background(), "SELECT 1"); err != nil {
+		t.Fatalf("query after idle period: %v", err)
+	}
+	if got := dials.Load(); got != 1 {
+		t.Fatalf("session dialed %d times; want 1 warm connection kept alive", got)
 	}
 }

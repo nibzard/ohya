@@ -1596,3 +1596,59 @@ func TestHalfOpenAcceptDoesNotPrematurelyEmitTransportOnline(t *testing.T) {
 		t.Fatalf("events after real recovery = %v, want [transport_offline transport_online]", gotCodes)
 	}
 }
+
+func TestReconnectBatchesManySourceProbesIntoOneRoundTrip(t *testing.T) {
+	f := newFixture(t, Options{})
+	basePath := filepath.Join(t.TempDir(), "hub.db")
+	db := openHubDB(t, basePath)
+	h := serve(t, db, f.reg, hubsync.Options{})
+	f.dialer.point(h.addr)
+
+	const total = 50
+	paths := make([]string, total)
+	for i := range total {
+		paths[i] = filepath.Join(f.dir, fmt.Sprintf("s-%02d.jsonl", i))
+		writeFile(t, paths[i], line(fmt.Sprintf("sess-%02d", i), "one"))
+	}
+	if stats := f.mustSync(); stats.Inserted != total {
+		t.Fatalf("initial stats = %+v, want %d inserted", stats, total)
+	}
+
+	backupPath := filepath.Join(t.TempDir(), "backup.db")
+	if _, err := db.Writer().Exec(`VACUUM INTO ?`, backupPath); err != nil {
+		t.Fatal(err)
+	}
+
+	appendFile(t, paths[0], line("sess-00", "after-backup"))
+	appendFile(t, paths[1], line("sess-01", "deleted-after-backup"))
+	if stats := f.mustSync(); stats.Inserted != 2 {
+		t.Fatalf("post-backup stats = %+v, want 2 inserted", stats)
+	}
+	if err := os.Remove(paths[1]); err != nil {
+		t.Fatal(err)
+	}
+
+	h.stop()
+	h2 := serve(t, db, f.reg, hubsync.Options{})
+	f.dialer.point(h2.addr)
+
+	before := f.obs.DurationCount("upload_round_trip_duration")
+	f.mustSync()
+	after := f.obs.DurationCount("upload_round_trip_duration")
+	if delta := after - before; delta != 2 {
+		t.Fatalf("reconnect round trips for %d sources = %d; want 2 (1 batched probes frame + 1 workspace check)", total, delta)
+	}
+
+	h2.stop()
+	restoredDB := openHubDB(t, backupPath)
+	h3 := serve(t, restoredDB, f.reg, hubsync.Options{})
+	f.dialer.point(h3.addr)
+
+	stats := f.mustSync()
+	if stats.Inserted != 1 {
+		t.Fatalf("replay after backup restore inserted = %d, want 1", stats.Inserted)
+	}
+	if !strings.Contains(f.log.String(), "unrecoverable gap") {
+		t.Fatalf("missing source regression was not reported via batched probe:\n%s", f.log)
+	}
+}

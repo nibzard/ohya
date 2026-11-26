@@ -280,6 +280,8 @@ func (e *Endpoint) serveConn(ctx context.Context, session *connSession) {
 			closeConn = e.handleWorkspaces(ctx, session, deviceID, *frame.Workspaces)
 		case frame.Diagnostics != nil:
 			closeConn = e.handleDiagnostics(ctx, session, deviceID, *frame.Diagnostics)
+		case frame.Probes != nil:
+			closeConn = e.handleProbes(ctx, session, deviceID, *frame.Probes)
 		}
 		if closeConn {
 			return
@@ -401,11 +403,37 @@ func (e *Endpoint) handleBatch(ctx context.Context, w io.Writer, deviceID string
 }
 
 func (e *Endpoint) capabilities() Capabilities {
-	caps := CapZstdBatches | CapSourceWorkspace
+	caps := CapZstdBatches | CapSourceWorkspace | CapBatchProbes
 	if e.diagnostics != nil {
 		caps |= CapRemoteStatus
 	}
 	return caps
+}
+
+func (e *Endpoint) handleProbes(ctx context.Context, w io.Writer, deviceID string, req Probes) bool {
+	if req.DeviceID != deviceID {
+		_ = WriteError(w, CodeAuth, fmt.Sprintf(
+			"probes frame names device %s, but the connection belongs to %s", req.DeviceID, deviceID))
+		return true
+	}
+	var entries []store.SourceProbe
+	storeStart := time.Now()
+	err := Retry(ctx, e.opts.Retry, permanentStoreError, func() error {
+		var err error
+		entries, err = e.db.ProbeSourcesForDevice(ctx, deviceID, req.SourceIDs)
+		return err
+	})
+	e.observer.Observe("hub_store_duration", time.Since(storeStart))
+	if err != nil {
+		e.observer.Add("hub_failures", 1, "commit")
+		_ = WriteError(w, storeErrorCode(err), err.Error())
+		return false
+	}
+	if err := WriteProbesReply(w, ProbesReply{Entries: entries}); err != nil {
+		e.observer.Add("hub_failures", 1, "write")
+		return true
+	}
+	return false
 }
 
 func (e *Endpoint) handleCapabilities(w io.Writer, offered Capabilities) bool {

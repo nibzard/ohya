@@ -16,6 +16,10 @@ import (
 
 const DefaultRemoteTimeout = 60 * time.Second
 
+const DefaultKeepaliveInterval = 3 * time.Minute
+
+var ErrKeepaliveUnsupported = errors.New("hubsync: hub does not accept keepalive capability frames")
+
 type RemoteClient struct {
 	conn       net.Conn
 	br         *bufio.Reader
@@ -36,6 +40,44 @@ func NewRemoteClient(conn net.Conn) *RemoteClient {
 }
 
 func (c *RemoteClient) Close() error { return c.conn.Close() }
+
+func (c *RemoteClient) Alive() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_ = c.conn.SetReadDeadline(time.Now().Add(time.Millisecond))
+	_, err := c.br.Peek(1)
+	_ = c.conn.SetReadDeadline(time.Time{})
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
+}
+
+func (c *RemoteClient) Keepalive(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var caps Capabilities
+	var perr *Error
+	err := c.roundTrip(ctx,
+		func(w io.Writer) error { return WriteCapabilities(w, CapRemoteStatus) },
+		func(r io.Reader) error {
+			var rerr error
+			caps, perr, rerr = ReadWelcome(r)
+			return rerr
+		})
+	if err != nil {
+		return fmt.Errorf("hubsync: remote keepalive: %w", err)
+	}
+	if perr != nil {
+		if perr.Code == CodeMalformed || perr.Code == CodeVersion {
+			c.negotiated = true
+			c.caps = 0
+			return ErrKeepaliveUnsupported
+		}
+		return perr
+	}
+	c.negotiated = true
+	c.caps = caps
+	return nil
+}
 
 func (c *RemoteClient) Query(ctx context.Context, query string) (mcpserver.Result, error) {
 	c.mu.Lock()
