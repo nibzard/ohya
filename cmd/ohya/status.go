@@ -946,7 +946,7 @@ func statusDeviceIdentity(stateDir string) (string, []statusFinding) {
 				Hint:     "run ohya doctor --state " + stateDir + "; the hub stores this device's sessions under the credential's device ID",
 			}}
 		case err != nil:
-			return cred.DeviceID, []statusFinding{statusIdentityUnusable(err)}
+			return cred.DeviceID, []statusFinding{statusIdentityUnusable(err, pairedIdentityRemedy)}
 		}
 		return cred.DeviceID, nil
 	}
@@ -955,16 +955,16 @@ func statusDeviceIdentity(stateDir string) (string, []statusFinding) {
 	case errors.Is(err, fs.ErrNotExist):
 		return "", nil
 	case err != nil:
-		return "", []statusFinding{statusIdentityUnusable(err)}
+		return "", []statusFinding{statusIdentityUnusable(err, "run ohya doctor; restore the device identity file, or delete it to start over as a new device")}
 	}
 	return id, nil
 }
 
-func statusIdentityUnusable(err error) statusFinding {
+func statusIdentityUnusable(err error, hint string) statusFinding {
 	return statusFinding{
 		Code: "device_identity_unusable", Severity: sevError,
 		Evidence: err.Error(),
-		Hint:     "run ohya doctor; restore the device identity file, or delete it to start over as a new device",
+		Hint:     hint,
 	}
 }
 

@@ -853,6 +853,21 @@ func TestStatusTopologyDeviceIdentity(t *testing.T) {
 					t.Errorf("%s error finding = %v, want %v: %+v", code, got, want, data.Findings)
 				}
 			}
+			if tc.wantFinding == "device_identity_unusable" {
+				for _, finding := range data.Findings {
+					if finding.Code != tc.wantFinding {
+						continue
+					}
+					if tc.credential != "" {
+						if !strings.Contains(finding.Hint, "credential.json preserves the device identity") ||
+							strings.Contains(finding.Evidence+" "+finding.Hint, "start over") {
+							t.Errorf("misleading paired recovery: %+v", finding)
+						}
+					} else if !strings.Contains(finding.Hint, "start over as a new device") {
+						t.Errorf("missing unpaired recovery: %+v", finding)
+					}
+				}
+			}
 			if tc.wantFinding != "" && !statusDegraded(data) {
 				t.Errorf("an identity finding must degrade the status: %+v", data.Findings)
 			}

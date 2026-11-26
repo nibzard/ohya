@@ -19,7 +19,7 @@ const stateVersion = 1
 
 const idBytes = 16
 
-var ErrUnusable = errors.New("device: identity file exists but cannot be used; restore it, or delete it to start over as a new device")
+var ErrUnusable = errors.New("device: identity file exists but cannot be used")
 
 type identityFile struct {
 	Version  int    `json:"version"`

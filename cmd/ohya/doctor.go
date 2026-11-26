@@ -418,6 +418,8 @@ func stoppedAt(ctx context.Context, hub *store.DB, agent string, s watch.SourceS
 	}, true
 }
 
+const pairedIdentityRemedy = "restore device.json from a backup, or delete it when only ohya join uses this state directory; credential.json preserves the device identity"
+
 func checkDeviceIdentity(stateDir string) finding {
 	if cred, err := device.LoadCredential(stateDir); err == nil {
 		err := device.CheckPairedIdentity(stateDir, cred)
@@ -430,8 +432,7 @@ func checkDeviceIdentity(stateDir string) finding {
 		case err != nil:
 			return finding{Check: "device_identity", Severity: sevError,
 				Detail: err.Error(),
-				Remedy: fmt.Sprintf("restore %s from a backup, or delete it when only ohya join uses this state directory; %s names the device",
-					device.FileName, device.CredentialFileName)}
+				Remedy: pairedIdentityRemedy}
 		}
 		return finding{Check: "device_identity", Severity: sevOK,
 			Detail: fmt.Sprintf("%s names device %s", device.CredentialFileName, cred.DeviceID)}
