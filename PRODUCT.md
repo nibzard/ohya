@@ -125,7 +125,7 @@ No Docker. No PostgreSQL. No cloud account. No vector infrastructure. No backgro
 
 **Intelligence belongs to the agent.** ohya stores facts and makes them queryable; connected models interpret, organize, and apply them.
 
-**Pull, never push.** ohya installs no hooks and injects nothing into an agent session. The user decides when and how an agent uses the memory.
+**Pull, never push.** The user decides when and how an agent uses memory. A workspace can opt in to a fixed reminder for fresh sessions. The reminder reads no stored memory, and the agent recalls history in response to the user’s request.
 
 **Minimal surface area.** One binary. One database. Two MCP tools. Deterministic ingestion and agent-side reasoning.
 

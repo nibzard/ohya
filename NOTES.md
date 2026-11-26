@@ -3199,3 +3199,15 @@ How to use this file:
     its colors, and the "Hub reachable" row uses `row(_:value:dot:)`.
   - The two commit subjects have 57 and 65 characters, and their bodies
     are not wrapped at 72. The commits were not changed.
+
+- Session-start recall pilot (2026-11-26): Codex 0.172.0 and Claude Code
+  2.1.332 both delivered the opt-in startup reminder. In the isolated
+  paired smoke test, both recovered the seeded decision with either the
+  skill alone or the skill plus reminder, and made zero Ohya calls for the
+  unrelated prompt. The handler took 10–14 ms including process launch.
+  Defer Pi and Antigravity until there is evidence of missed handoffs.
+- Synthetic ingest tests that override `--codex-root` still include
+  `$CODEX_HOME/archived_sessions`. Point `CODEX_HOME` at an empty scratch
+  directory for the ingest subprocess and verify the seeded session count
+  before passing a fixture database to a model. Audit
+  `cmd/memory-e2e/main.go`'s `seedAndVerify` subprocess for the same issue.

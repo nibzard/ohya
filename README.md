@@ -358,9 +358,78 @@ Register the MCP server in your agent, for example in Claude Code:
 }
 ```
 
-ohya installs no hooks and injects nothing into an agent session. The agent uses the memory only when the user asks for it.
+By default, the agent recalls memory when the user asks for it.
 
 </details>
+
+## Opt in to a session-start recall reminder
+
+For Codex or Claude Code, you can configure a workspace hook that reminds
+the agent to use Ohya when your request depends on prior work. The reminder
+is fixed text and runs only at a fresh session start. It reads no history
+and works while the hub is offline. The agent searches through its existing
+Ohya tools once your request calls for recall.
+
+After running `ohya setup`, add the example to the appropriate file in the
+workspace root. If the file already has a `hooks.SessionStart` array,
+append the example entry to that array. Replace the example path with the
+absolute path to your Ohya binary and keep the shell quotes around it.
+
+<details>
+<summary>Codex · .codex/hooks.json</summary>
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "^startup$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/absolute/path/to/ohya' session-start --harness codex",
+            "timeout": 1
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Trust the workspace and review the hook through `/hooks` in Codex.
+[Codex hook reference](https://learn.chatgpt.com/docs/hooks#sessionstart)
+
+</details>
+
+<details>
+<summary>Claude Code · .claude/settings.local.json</summary>
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "^startup$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/absolute/path/to/ohya' session-start --harness claude",
+            "timeout": 1
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Start a fresh Claude Code session in the workspace.
+[Claude Code hook reference](https://code.claude.com/docs/en/hooks#sessionstart)
+
+</details>
+
+To disable the reminder, remove the Ohya hook from the workspace file.
 
 ## Commands
 
@@ -370,6 +439,7 @@ ohya installs no hooks and injects nothing into an agent session. The agent uses
 | `ohya service status\|start\|stop\|restart` | Inspect or control the owned background user service (`--hub` for `ohya serve`) |
 | `ohya ingest [--once]` | Import local session history, then poll for new records |
 | `ohya mcp [--remote]` | Serve `sql`, `annotate`, and on-demand guide resources on stdio, locally or through a joined device |
+| `ohya session-start --harness codex\|claude` | Emit the fixed recall reminder for a workspace hook |
 | `ohya sql QUERY [--remote] [--json]` | Run one bounded read-only SQL query (or `-` for stdin) through the `sql` tool engine |
 | `ohya search QUERY [--repo] [--agent]` | Find sessions by keyword (BM25) and print excerpts, locally or through a joined device |
 | `ohya show SESSION_ID [--last N]` | Print one session's newest events, excerpted |
