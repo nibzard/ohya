@@ -88,7 +88,7 @@ func ownedTOML(raw []byte, r tomlReceipt) ([]byte, error) {
 		return raw, nil
 	}
 	for _, block := range []string{r.Block, r.Previous} {
-		if block == "" || bytes.Count(raw, []byte(block)) != 1 {
+		if block == "" {
 			continue
 		}
 		var expected struct {
@@ -97,11 +97,72 @@ func ownedTOML(raw []byte, r tomlReceipt) ([]byte, error) {
 		if err := toml.Unmarshal([]byte(block), &expected); err != nil {
 			return nil, err
 		}
-		if reflect.DeepEqual(actual, expected.Servers["ohya"]) {
+		if !reflect.DeepEqual(actual, expected.Servers["ohya"]) {
+			continue
+		}
+		if bytes.Count(raw, []byte(block)) == 1 {
 			return removeBlock(raw, []byte(block)), nil
+		}
+		if updated, ok := removeOhyaTable(raw); ok {
+			return updated, nil
 		}
 	}
 	return nil, errors.New("Codex ohya entry has been edited; preserve it")
+}
+
+func removeOhyaTable(raw []byte) ([]byte, bool) {
+	start, end := -1, len(raw)
+	offset := 0
+	for _, line := range bytes.SplitAfter(raw, []byte("\n")) {
+		trimmed := bytes.TrimSpace(line)
+		if bytes.HasPrefix(trimmed, []byte("[")) {
+			if start >= 0 && end == len(raw) {
+				end = offset
+			}
+			if isOhyaTableHeader(trimmed) {
+				if start >= 0 {
+					return nil, false
+				}
+				start = offset
+			}
+		}
+		offset += len(line)
+	}
+	if start < 0 {
+		return nil, false
+	}
+	updated := append(bytes.Clone(raw[:start]), raw[end:]...)
+	return updated, sameConfigWithoutOhya(raw, updated)
+}
+
+func isOhyaTableHeader(line []byte) bool {
+	if bytes.HasPrefix(line, []byte("[[")) {
+		return false
+	}
+	var header struct {
+		Servers map[string]map[string]any `toml:"mcp_servers"`
+	}
+	if err := toml.Unmarshal(line, &header); err != nil {
+		return false
+	}
+	table, exists := header.Servers["ohya"]
+	return exists && len(table) == 0 && len(header.Servers) == 1
+}
+
+func sameConfigWithoutOhya(raw, updated []byte) bool {
+	var before, after map[string]any
+	if toml.Unmarshal(raw, &before) != nil || toml.Unmarshal(updated, &after) != nil {
+		return false
+	}
+	servers, ok := before["mcp_servers"].(map[string]any)
+	if !ok {
+		return false
+	}
+	delete(servers, "ohya")
+	if len(servers) == 0 {
+		delete(before, "mcp_servers")
+	}
+	return reflect.DeepEqual(before, after)
 }
 
 func ApplyTOMLEntry(path, receiptPath string, command Command) (bool, error) {
