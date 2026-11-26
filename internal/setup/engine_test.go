@@ -2,6 +2,7 @@ package setup
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -356,20 +357,52 @@ func TestSetupRemovesAbandonedRecoveryStaging(t *testing.T) {
 	}
 }
 
-func rewindToSchema9(t *testing.T, database string) {
+func createSchema9Database(t *testing.T, database string) {
 	t.Helper()
-	hub, err := store.Open(context.Background(), database)
+	files, err := filepath.Glob("../store/migrations/00[1-9]_*.sql")
+	if err != nil || len(files) != 9 {
+		t.Fatalf("find schema 9 migrations: %v, %v", files, err)
+	}
+	db, err := sql.Open("sqlite3", database)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer hub.Close()
-	for _, q := range []string{
-		`DROP TABLE local_ingest_devices`,
-		`DELETE FROM schema_migrations WHERE version = 10`,
-	} {
-		if _, err := hub.Writer().Exec(q); err != nil {
+	defer db.Close()
+	if _, err := db.Exec(`PRAGMA journal_mode = WAL`); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`CREATE TABLE schema_migrations (
+		version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL,
+		applied_at_ms INTEGER NOT NULL
+	) STRICT`); err != nil {
+		t.Fatal(err)
+	}
+	for i, file := range files {
+		version := i + 1
+		prefix := fmt.Sprintf("%03d_", version)
+		name, ok := strings.CutPrefix(filepath.Base(file), prefix)
+		if !ok {
+			t.Fatalf("want migration %d, found %s", version, file)
+		}
+		script, err := os.ReadFile(file)
+		if err != nil {
 			t.Fatal(err)
 		}
+		if _, err := tx.Exec(string(script)); err != nil {
+			t.Fatalf("apply %s: %v", file, err)
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_migrations VALUES (?, ?, ?, 0)`,
+			version, strings.TrimSuffix(name, ".sql"), fmt.Sprintf("%x", sha256.Sum256(script))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -396,7 +429,7 @@ func serviceOptionsWithDatabase(t *testing.T) Options {
 
 func TestSetupMigratesTheDatabaseBeforeItStartsTheService(t *testing.T) {
 	o := serviceOptionsWithDatabase(t)
-	rewindToSchema9(t, o.Database)
+	createSchema9Database(t, o.Database)
 	want, err := store.SchemaVersion()
 	if err != nil || want < 10 {
 		t.Fatalf("schema of this build = %d, %v; want 10 or later", want, err)
@@ -465,7 +498,7 @@ func TestSetupMigratesTheDatabaseBeforeItStartsTheService(t *testing.T) {
 
 func TestSetupStopsBeforeTheServiceWhenTheMigrationFails(t *testing.T) {
 	o := serviceOptionsWithDatabase(t)
-	rewindToSchema9(t, o.Database)
+	createSchema9Database(t, o.Database)
 	blocker, err := sql.Open("sqlite3", o.Database)
 	if err != nil {
 		t.Fatal(err)

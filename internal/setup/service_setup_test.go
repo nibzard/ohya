@@ -121,7 +121,7 @@ func TestSetupCleansUpInitialInstallAfterStartFailure(t *testing.T) {
 
 func TestSetupUpgradeFailureNotesMigratedSchemaAndRecoveryPoint(t *testing.T) {
 	o := serviceOptionsWithDatabase(t)
-	rewindToSchema9(t, o.Database)
+	createSchema9Database(t, o.Database)
 	old, err := ServicePlan("linux", o.Clients.Home, o.Clients.State, o.Clients.Binary, []string{"ingest", "--state", "/previous"})
 	if err != nil {
 		t.Fatal(err)
