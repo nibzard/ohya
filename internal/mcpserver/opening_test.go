@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -98,7 +99,7 @@ func TestOpeningCallEndsWithItsOwnContext(t *testing.T) {
 	release := make(chan struct{})
 	opening := OpenInBackground(context.Background(), EngineOptions{Deadline: time.Minute}, func(context.Context) (Backend, func(), error) {
 		<-release
-		return nil, nil, nil
+		return &fakeBackend{}, nil, nil
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
@@ -178,5 +179,127 @@ func TestServerAnswersWhileTheDatabaseOpens(t *testing.T) {
 	var payload Result
 	if err := redecode(result, &payload); err != nil || payload.RowCount != 1 || fmt.Sprint(payload.Rows) != "[[2]]" {
 		t.Fatalf("payload after the open = %+v, %v; want the seeded rows", payload, err)
+	}
+}
+
+func TestOpeningCloseCancelsBlockedOpen(t *testing.T) {
+	started := make(chan struct{})
+	opening := OpenInBackground(context.Background(), EngineOptions{}, func(ctx context.Context) (Backend, func(), error) {
+		close(started)
+		<-ctx.Done()
+		return nil, nil, ctx.Err()
+	})
+	<-started
+
+	done := make(chan error, 1)
+	go func() {
+		done <- opening.Close()
+	}()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Close returned %v; want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close hung while open waited on its context")
+	}
+}
+
+func TestOpeningDoubleCloseInvokesCloseOnce(t *testing.T) {
+	var closed atomic.Int32
+	opening := OpenInBackground(context.Background(), EngineOptions{}, func(context.Context) (Backend, func(), error) {
+		return &fakeBackend{}, func() { closed.Add(1) }, nil
+	})
+	if err := opening.Wait(); err != nil {
+		t.Fatalf("Wait returned %v; want nil", err)
+	}
+
+	if err := opening.Close(); err != nil {
+		t.Fatalf("first Close returned %v; want nil", err)
+	}
+	if err := opening.Close(); err != nil {
+		t.Fatalf("second Close returned %v; want nil", err)
+	}
+	if got := closed.Load(); got != 1 {
+		t.Fatalf("closeFn invoked %d times; want 1", got)
+	}
+}
+
+func TestOpeningRejectsCallsAfterClose(t *testing.T) {
+	var backend fakeBackend
+	opening := OpenInBackground(context.Background(), EngineOptions{}, func(context.Context) (Backend, func(), error) {
+		return &backend, func() {}, nil
+	})
+	if err := opening.Wait(); err != nil {
+		t.Fatalf("Wait returned %v; want nil", err)
+	}
+	if err := opening.Close(); err != nil {
+		t.Fatalf("Close returned %v; want nil", err)
+	}
+
+	if _, err := opening.Query(context.Background(), "SELECT 1"); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Query after Close returned %v; want ErrClosed", err)
+	}
+	if _, err := opening.AnnotateAs(context.Background(), "dev1", json.RawMessage(`[]`)); !errors.Is(err, ErrClosed) {
+		t.Fatalf("AnnotateAs after Close returned %v; want ErrClosed", err)
+	}
+	if len(backend.queries) != 0 || backend.annotate != 0 {
+		t.Fatalf("backend saw calls after Close: %+v", backend)
+	}
+}
+
+func TestOpeningCloseCleansUpConcurrentBackend(t *testing.T) {
+	started := make(chan struct{})
+	canceled := make(chan struct{})
+	release := make(chan struct{})
+	var closed atomic.Int32
+
+	opening := OpenInBackground(context.Background(), EngineOptions{Deadline: time.Minute}, func(ctx context.Context) (Backend, func(), error) {
+		close(started)
+		<-ctx.Done()
+		close(canceled)
+		<-release
+		return &fakeBackend{}, func() { closed.Add(1) }, nil
+	})
+	<-started
+
+	closeErr := make(chan error, 1)
+	go func() {
+		closeErr <- opening.Close()
+	}()
+	<-canceled
+
+	if _, err := opening.Query(context.Background(), "SELECT 1"); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Query while Close awaits open returned %v; want ErrClosed", err)
+	}
+
+	close(release)
+	if err := <-closeErr; err != nil {
+		t.Fatalf("Close returned %v; want nil", err)
+	}
+	if got := closed.Load(); got != 1 {
+		t.Fatalf("closeFn invoked %d times; want 1 before Close returned", got)
+	}
+	if _, err := opening.AnnotateAs(context.Background(), "dev1", json.RawMessage(`[]`)); !errors.Is(err, ErrClosed) {
+		t.Fatalf("AnnotateAs after concurrent Close returned %v; want ErrClosed", err)
+	}
+}
+
+func TestOpeningNilBackendReturnsErrorWithoutPanicking(t *testing.T) {
+	opening := OpenInBackground(context.Background(), EngineOptions{}, func(context.Context) (Backend, func(), error) {
+		return nil, nil, nil
+	})
+	if err := opening.Wait(); !errors.Is(err, errNilBackend) {
+		t.Fatalf("Wait returned %v; want a missing backend error", err)
+	}
+	if _, err := opening.Query(context.Background(), "SELECT 1"); err == nil {
+		t.Fatal("Query returned nil error for nil backend; want non-nil error")
+	}
+	if _, err := opening.AnnotateAs(context.Background(), "dev1", json.RawMessage(`[]`)); err == nil {
+		t.Fatal("AnnotateAs returned nil error for nil backend; want non-nil error")
+	}
+	if err := opening.Close(); !errors.Is(err, errNilBackend) {
+		t.Fatalf("Close returned %v; want a missing backend error", err)
 	}
 }
