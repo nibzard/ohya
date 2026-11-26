@@ -1,0 +1,1 @@
+Review item 4 of menubar-session-tags. Written on a Linux VM without a Swift toolchain: neither xcrun swift build nor xcrun swift test ran locally. The first CI run on macOS after the push is the first build. Ternaries such as StatusDot(cond ? .good : .inactive) rely on the contextual type of init(_ health:).
