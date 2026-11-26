@@ -150,7 +150,7 @@ func runOnce(opts options, bin, root string, rep int, side, corpusDir string, ex
 	args := []string{"ingest",
 		"--db", dbPath,
 		"--state", stateDir,
-		"--claude-root", corpusDir, "--codex-root", "", "--pi-root", "",
+		"--claude-root", corpusDir, "--codex-root", "", "--pi-root", "", "--antigravity-root", "",
 		"--interval", opts.interval.String(),
 		"--max-record-bytes", strconv.Itoa(maxRecordBytesLimit),
 		"--observe", side}

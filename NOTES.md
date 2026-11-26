@@ -3220,3 +3220,9 @@ How to use this file:
   `CODEX_HOME` for the ingest subprocess and verifies the exact fixture
   inventory before launching either agent. `TestSeedIsolation` covers an
   ambient archive, preexisting extra sessions, and a substituted event.
+
+- Fixture ingest audit (2026-11-26): the initial import workload and the
+  upload backfill benchmark inherited Codex's archive root and enabled
+  default Antigravity discovery. Both now use a scratch Codex root, disable
+  Antigravity, and verify the fixture event count. The native install smoke,
+  demo seed, and observe-overhead benchmark also disable Antigravity.

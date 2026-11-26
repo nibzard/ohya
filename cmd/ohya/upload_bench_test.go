@@ -109,13 +109,14 @@ func runUploadBenchSide(t *testing.T, side *uploadBenchSide, dir string, index i
 		"--claude-root", filepath.Join(importRoot, "claude-code"),
 		"--codex-root", filepath.Join(importRoot, "codex"),
 		"--pi-root", filepath.Join(importRoot, "pi"),
+		"--antigravity-root", "",
 		"--interval", "500ms",
 		code,
 	}
 	joinLog := &bytes.Buffer{}
 	joinCmd := exec.Command(os.Args[0], append([]string{"child-join"}, joinArgs...)...)
 	joinCmd.Stderr = joinLog
-	joinCmd.Env = os.Environ()
+	joinCmd.Env = append(os.Environ(), "CODEX_HOME="+filepath.Join(sideDir, "codex-home"))
 	if side.compression != "" {
 		joinCmd.Env = append(joinCmd.Env, "OHYA_UPLOAD_COMPRESSION="+side.compression)
 	}
@@ -134,7 +135,10 @@ func runUploadBenchSide(t *testing.T, side *uploadBenchSide, dir string, index i
 	deadline := drainStart.Add(30 * time.Minute)
 	for {
 		events, _, _ := hubCounts(t, hubDB)
-		if events >= int(wantEvents) {
+		if events > int(wantEvents) {
+			t.Fatalf("imported %d events, expected only %d fixture events", events, wantEvents)
+		}
+		if events == int(wantEvents) {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -148,6 +152,9 @@ func runUploadBenchSide(t *testing.T, side *uploadBenchSide, dir string, index i
 	sampler.stopAndWait()
 	procs, dbBytes, walPeak, samples := sampler.peaks()
 	stopChild(t, joinCmd, joinLog, 30*time.Second)
+	if events, _, _ := hubCounts(t, hubDB); events != int(wantEvents) {
+		t.Fatalf("imported %d events, expected only %d fixture events", events, wantEvents)
+	}
 	side.payload, side.wireBytes = readUploadCounters(t, devState)
 	for _, line := range backlogCompleteLines(joinLog.String()) {
 		t.Logf("%s %s", side.name, line)

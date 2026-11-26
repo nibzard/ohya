@@ -104,7 +104,7 @@ record_claude() {
   find "$session_dir" -maxdepth 1 -name '*.jsonl' -newermt "@$started" \
     -exec cp {} "$work/claude-projects/$(basename "$session_dir")/" \;
   ohya ingest --once --db "$state/hub.db" --state "$state" \
-    --claude-root "$work/claude-projects" --codex-root '' --pi-root ''
+    --claude-root "$work/claude-projects" --codex-root '' --pi-root '' --antigravity-root ''
 }
 
 stop_codex_daemon() {

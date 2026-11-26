@@ -61,12 +61,14 @@ go run ./cmd/genfixture -agent codex -root /tmp/corpus-codex
 go run ./cmd/genfixture -agent pi -root /tmp/corpus-pi
 make build
 /usr/bin/time -v ./bin/ohya ingest --once --claude-root /tmp/corpus \
-    --codex-root '' --pi-root '' --db /tmp/hub.db --state /tmp/state
+    --codex-root '' --pi-root '' --antigravity-root '' --db /tmp/hub.db --state /tmp/state
 ```
 
-The Codex and Pi corpora ingest the same way with `--codex-root
-/tmp/corpus-codex` (and the other two roots empty) or `--pi-root
-/tmp/corpus-pi`.
+For the Codex corpus, set `CODEX_HOME` to a fresh empty directory and use
+`--codex-root /tmp/corpus-codex`. This keeps the operator’s Codex archives
+out of the fixture import. For the Pi corpus use `--pi-root /tmp/corpus-pi`.
+Disable the unused agent roots and start with a fresh database and state
+directory for each import.
 
 Benchmarks write only to temporary directories; profiles and other generated
 outputs belong under `perf/` (gitignored).
@@ -134,11 +136,13 @@ bytes):
 go run ./cmd/genfixture -agent mix -fixture import -root /tmp/ohya-import
 go run ./cmd/genfixture -agent mix -fixture query  -root /tmp/ohya-query
 make build
-/usr/bin/time -v ./bin/ohya ingest --once \
+import_state=$(mktemp -d)
+mkdir "$import_state/codex-home"
+CODEX_HOME="$import_state/codex-home" /usr/bin/time -v ./bin/ohya ingest --once \
     --claude-root /tmp/ohya-import/claude-code \
     --codex-root /tmp/ohya-import/codex \
-    --pi-root /tmp/ohya-import/pi \
-    --db /tmp/hub.db --state /tmp/state
+    --pi-root /tmp/ohya-import/pi --antigravity-root '' \
+    --db "$import_state/hub.db" --state "$import_state/state"
 ```
 
 `genfixture` prints the stats table above (sessions, files, records, events,

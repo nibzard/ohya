@@ -111,12 +111,14 @@ func TestWorkloadImport(t *testing.T) {
 			"--claude-root", filepath.Join(importRoot, "claude-code"),
 			"--codex-root", filepath.Join(importRoot, "codex"),
 			"--pi-root", filepath.Join(importRoot, "pi"),
+			"--antigravity-root", "",
 			"--interval", "2s",
 		}
 		if code != "" {
 			args = append(args, code)
 		}
 		cmd := exec.Command(os.Args[0], append([]string{"child-join"}, args...)...)
+		cmd.Env = append(os.Environ(), "CODEX_HOME="+filepath.Join(dir, "codex-home"))
 		cmd.Stderr = log
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
@@ -137,7 +139,10 @@ func TestWorkloadImport(t *testing.T) {
 	deadline := importStart.Add(10 * time.Minute)
 	for {
 		events, _, _ := hubCounts(t, hubDB)
-		if events >= int(wantEvents) {
+		if events > int(wantEvents) {
+			t.Fatalf("imported %d events, expected only %d fixture events", events, wantEvents)
+		}
+		if events == int(wantEvents) {
 			break
 		}
 		if time.Now().After(deadline) {

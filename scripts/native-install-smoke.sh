@@ -19,7 +19,7 @@ cleanup() {
     exit "$result"
 }
 trap cleanup EXIT HUP INT TERM
-"$ohya" setup --no-agents --no-modify-path --state "$state" --claude-root "$work/sessions" --codex-root '' --pi-root '' --json
+"$ohya" setup --no-agents --no-modify-path --state "$state" --claude-root "$work/sessions" --codex-root '' --pi-root '' --antigravity-root '' --json
 cp testdata/claude-code/main-session.jsonl "$work/sessions/session.jsonl"
 python3 - "$state/hub.db" "$work/sessions/session.jsonl" <<'PY'
 import pathlib
