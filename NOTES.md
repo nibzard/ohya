@@ -3193,9 +3193,14 @@ How to use this file:
     `ohya join` creates `device.json` only to pair, and `ohya mcp --remote`
     takes its writer ID from the credential. An unusable `device.json` is
     an error in both commands.
-  - The device ID that the hub reports is the identity of `ohya serve`.
-    It equals the identity of `ohya ingest` only when both use one state
-    directory, which `ohya setup --hub` guarantees.
+  - Review 2026-11-26: with separate supported `--state` directories
+    for `serve` and `ingest` on the same hub DB, the Hub badge falls
+    back to a shortened device ID for hub-local sessions. Diagnostics
+    publishes the serve identity, while ingest stamps its own identity
+    on sessions. `ohya setup --hub` shares one state directory.
+  - Review 2026-11-26: status tells a paired user with an unreadable
+    `device.json` that deleting it starts a new device. The credential
+    still names the same device. Use the paired remedy from doctor.
   - Swift, changed on 2026-11-26 and not built on this Linux VM (CI on
     macOS runs `xcrun swift test`): the tag symbol and each `StatusDot`
     are hidden from VoiceOver, `StatusDot` takes a `Health` value and owns
