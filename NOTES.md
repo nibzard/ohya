@@ -3177,8 +3177,25 @@ How to use this file:
     with `context.Canceled`. 1,800 runs passed under the same load. Research
     note: /notes/2026-11-25-timing-tests-on-loaded-runners.md.
 
+- v0.8.1 release (2026-11-26; the tag points to `ca4579c` on `main`, after
+  `make check` with `GOFLAGS=-count=1` and `make tla` passed on that
+  commit): candidate run 45799280418 passed all eight jobs on attempt 1.
+  Before the tag: four checksums, four `candidate.*.txt` files (revision
+  `ca4579c`, `dirty=false`), and the native library reports were verified.
+  Six assets. The MacBook (joined, darwin arm64) upgraded from v0.8.0 with
+  exit 0 and reports `topology.device_id`; the menu bar app 0.8.1 runs from
+  `/Applications`. Open: upgrade the hub host, then check that
+  `ohya status --remote --json` gives `remote_hub.hub.device_id` and
+  `local_ingest_device_ids`, and that Recall rows show **Hub**.
+- On the MacBook, `~/.codex/config.toml` held the ohya entry with
+  double-quoted TOML strings, while the setup receipt holds single-quoted
+  ones. v0.8.0 setup then reported "Codex ohya entry has been edited;
+  preserve it". The values were the same. Restoring the receipted quoting
+  made setup pass. Hypothesis (unverified): Codex rewrites its config file.
+  Setup compares bytes, not TOML values.
+
 - menubar-session-tags (2026-11-25; `b7e31f1` and `fbce579` by the owner,
-  merged in `6676d10` after the v0.8.0 tag, so it is in no release): `ohya
+  merged in `6676d10` after the v0.8.0 tag and released in v0.8.1): `ohya
   status --json` reports `topology.device_id`, the hub reports its device
   ID in the diagnostics frame, and the menu bar app labels each recalled
   session as This Mac, Hub, or a device. CI run 45706558153 on the branch

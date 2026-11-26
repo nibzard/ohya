@@ -1,8 +1,7 @@
 # Release and recovery operations
 
-The newest release is v0.8.0, published on 2026-11-25 from commit `915df53`
-after all eight candidate jobs passed, the macOS Intel job on the rerun of the
-same run; its macOS archives are unsigned and its menu bar app DMG is ad-hoc
+The newest release is v0.8.1, published on 2026-11-26 from commit `ca4579c`
+after all eight candidate jobs passed on the first attempt; its macOS archives are unsigned and its menu bar app DMG is ad-hoc
 signed. Apple signing and
 notarization must pass before a signed public release. Generated candidates
 are not qualified releases merely because packaging succeeds.
@@ -374,6 +373,16 @@ space before you upgrade. Beyond that:
   directory of 68 of 74 Antigravity sessions, and 40 of them have a
   repository. Not done: `ohya rederive` on the hub for Claude Code parser
   output version 3, and opening this DMG on a Mac.
+- v0.8.1 (commit `ca4579c`, dirty=false) was published on 2026-11-26 after
+  all eight candidate jobs passed on the first attempt of run 45799280418
+  and local `make check` (`GOFLAGS=-count=1`) + `make tla` passed with zero
+  errors on the release commit. It is the first release on schema 10
+  (migration 010 adds the empty table `local_ingest_devices`). The released
+  installer upgraded the macOS arm64 joined device from v0.8.0 with exit 0:
+  `service: running`, `memory: ready`, and an `mcp-builds` warning for two
+  older `ohya mcp` processes; `ohya doctor` reported only that warning. The
+  DMG was opened on that Mac: the app runs as 0.8.1 from `/Applications`.
+  Not done at publication: the upgrade of the hub host.
 - The installer refuses to replace an executable whose digest matches neither
   its receipt entry nor the previous one ("installed executable has changed;
   preserve it"). A copy installed by hand outside `install.sh` triggers this
