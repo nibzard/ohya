@@ -1,0 +1,15 @@
+# Context
+
+## Background
+Admission in Engine.query never waits: a query that finds the slot taken
+gets ErrBusy at once. The old tests started the slow query in a goroutine
+and probed in parallel, so either query could win the slot.
+
+## Why This Way
+The test waits on Engine.active (set after the slot is taken) instead of
+adding a hook to the engine. The engine behavior is correct and stays
+unchanged.
+
+## Related
+- /notes/2026-11-25-timing-tests-on-loaded-runners.md (follow-up section)
+- NOTES.md, "Time budgets of tests on loaded runners (2026-11-25)"
