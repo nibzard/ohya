@@ -49,6 +49,8 @@ workspaces   = 'W' ver(1) devLen(2) dev agentLen(2) agent count(2)
 pending      = 'D' ver(1) applied(8) unchanged(8) ignored(8) count(2)
                  count * [ pathLen(2) path ]
 sourceWorkspace = 'F' ver(1) devLen(2) dev srcLen(2) src pathLen(4) path
+probes       = 'I' ver(1) devLen(2) dev count(2) count * [ srcLen(2) src ]
+probesRes    = 'i' ver(1) count(2) count * [ status(1) cursor(8) msgLen(2) msg ]
 ```
 
 - `registration` announces one source before its first batch: the source ID
@@ -80,7 +82,8 @@ sourceWorkspace = 'F' ver(1) devLen(2) dev srcLen(2) src pathLen(4) path
   batch compression; bit 1 (`0x0002`) is remote hub status aggregates
   (`CapRemoteStatus`, advertised only when the hub enables its diagnostics
   provider); bit 2 (`0x0004`) is the `sourceWorkspace` frame
-  (`CapSourceWorkspace`). The mask must be nonzero, and a hub supporting
+  (`CapSourceWorkspace`); bit 3 (`0x0008`) is batched source cursor probing
+  (`CapBatchProbes`). The mask must be nonzero, and a hub supporting
   nothing offered answers with zero. An old hub answers `caps` with `CodeMalformed` like any
   unknown marker, which is how a device detects it and falls back cleanly; an
   old device sends no `caps` frame and is unaffected. The uploader also sends
@@ -131,6 +134,14 @@ sourceWorkspace = 'F' ver(1) devLen(2) dev srcLen(2) src pathLen(4) path
   `CapSourceWorkspace`, so the supported upgrade order is hub first: a hub
   without the bit gets no frame, and the sessions of the device that carry
   no working directory stay without one until the hub is upgraded.
+- `probes` queries the hub state of 1 to 4,096 source IDs for the
+  authenticated device in one round trip after the hub's `welcome` offered
+  `CapBatchProbes`. `probesRes` returns one positional entry per requested
+  source ID: `status` 1 (`unknown`, cursor 0), 2 (`known`, committed
+  `cursor`), 3 (`ownership` refusal with `msg`), or 4 (`purged` refusal with
+  `msg`). Per-source ownership and purge refusals travel inside `probesRes`
+  instead of failing the whole frame, so one refused source never blocks the
+  remaining sources on the connection.
 
 ## Bounds
 
@@ -155,6 +166,7 @@ the connection closes.
 | Query result | 4 MiB | 16 times the engine's default output bound |
 | Annotate request | 1 MiB | The `annotate` tool's request limit |
 | Workspaces per frame | 256 | Both in `workspaces` and in `pending` |
+| Probes per frame | 4,096 | Bounds per-frame allocation and SQLite lookup size |
 | Repository | 1,024 bytes | A normalized `host/path`; it can be empty |
 
 The writers refuse to build a frame past these bounds. An engine configured
@@ -250,8 +262,11 @@ The uploader (`internal/uploader`) implements the `SendBatch` and
   unflushed acknowledgment, equivalent to one that never reached the
   device, and the retained file replays it.
 - Offline catch-up needs no queue, because the retained source files are the
-  backlog. On every new connection, the uploader prepares each source once. A
-  source with an acknowledged checkpoint is probed first with an empty batch.
+  backlog. On every new connection, the uploader prepares each source once.
+  When the hub's `welcome` offered `CapBatchProbes`, the uploader probes all
+  checkpointed non-renamed sources first in chunks of at most 4,096 with
+  `probes`; against an older hub it probes each checkpointed source with an
+  empty batch.
   The hub cursor in the answer shows that the hub knows the source, and no
   registration follows. `CodeUnknownSource` means that the hub has no row for
   the source, for example after the hub was set up again: the uploader
@@ -279,7 +294,7 @@ The uploader (`internal/uploader`) implements the `SendBatch` and
   file whose observed end passed its acknowledged cursor, and a deleted file
   with unsent bytes. Each loss and gap is reported once.
 - After the hello, the uploader offers its capabilities with one `caps`
-  frame (zstd batches and source workspaces) and compresses data batches
+  frame (zstd batches, source workspaces, and batched source probes) and compresses data batches
   with `zbatch` while the hub's `welcome` offers it
   ([ADR 0014](adr/0014-zstd-compressed-batch-upload.md)). A hub
   that refuses the offer with `CodeMalformed` or `CodeVersion` is old: the
@@ -289,9 +304,11 @@ The uploader (`internal/uploader`) implements the `SendBatch` and
   same `SendBatch` action with a different encoding. Because only a new hub
   answers `welcome` and only a new device asks, the supported upgrade order
   is hub first: devices then pick up compression as they are upgraded, and
-  no mixed pair ever exchanges a compressed frame. `ohya mcp --remote` and
-  pairing send the plain hello and no `caps` frame; remote queries and
-  annotate stay plain in protocol version 1. Setting the environment
+  no mixed pair ever exchanges a compressed frame. Pairing sends the plain
+  hello and no `caps` frame; remote queries and annotate stay plain in
+  protocol version 1, while `ohya mcp --remote` sends periodic `caps`
+  keepalives when configured so an idle session stays open past the hub's
+  5-minute idle timeout. Setting the environment
   variable `OHYA_UPLOAD_COMPRESSION=off` in the joining process removes the
   zstd bit from the `caps` offer for its lifetime, so the device sends plain
   frames even against a compression-capable hub — the escape hatch for
@@ -346,8 +363,11 @@ The uploader (`internal/uploader`) implements the `SendBatch` and
 `hubsync.RemoteClient` runs query and annotate exchanges on one
 authenticated connection, serialized like the uploader's exchanges, with a
 60 s timeout per exchange. `hubsync.RemoteSession` backs `ohya mcp --remote`:
-it dials and authenticates on first use and replaces a dead connection once
-per call. A retry is safe, because a query is read-only and an identical
-annotate batch converges to a no-op. A protocol rejection is returned as the
-hub's answer, not retried. A refused credential is terminal
-(`ErrRemoteUnauthorized`).
+it dials and authenticates on first use, checks with a non-blocking read that
+an idle connection is still open before each call, sends a `caps` keepalive
+after 3 minutes of inactivity (`hubsync.DefaultKeepaliveInterval`) when
+enabled so the hub's 5-minute idle timeout does not drop warm MCP sessions,
+and replaces a dead connection once per call. A retry is safe, because a
+query is read-only and an identical annotate batch converges to a no-op. A
+protocol rejection is returned as the hub's answer, not retried. A refused
+credential is terminal (`ErrRemoteUnauthorized`).

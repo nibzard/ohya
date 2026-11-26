@@ -3237,3 +3237,35 @@ How to use this file:
   overcounted failures due to literal phrasing, last-citation selection,
   and a Codex trust warning. Local fixtures and adjudicated results are
   under `recall-runs/session-start-handoff-replay-20261126/`.
+
+- Joined-device diagnostic audit and fixes (2026-11-26, from a 5.87 h v0.8.2
+  darwin/arm64 `ohya diagnose` artifact on device `a4ca22cc…`):
+  - Telemetry accuracy: multi-agent `ingest`/`join` now sum per-agent watch
+    gauges via `observe.GaugeGroup` instead of clobbering on the last agent;
+    `watch_source_events{watch_event=missing}` counts disappearance transitions
+    once instead of every 2 s pass (`353,192` -> `34`); `joinDiscover` records
+    `discovery_*` counters, durations, and `last_scan_ms`; `Publisher`
+    schedules minute history writes on monotonic deadlines so 10 s ticker
+    jitter no longer slips ~45% of samples to 70 s (`56` -> `60` samples/h);
+    `ohya metrics` anchors windows with the nearest pre-window sample within
+    70 s plus the live snapshot and omits terminated ephemeral `mcp` runs by
+    default.
+  - Reconnect log accuracy: `Uploader` clears `offline` and emits
+    `transport_online` only after a valid hub reply (`Welcome`/reply frame)
+    rather than after buffered `WriteHello`, and `joinEventGate` coalesces
+    per-agent transport transitions into one offline/online pair per outage.
+  - Idle CPU, GC, and checkpoint amplification (`759.5` CPU-s, `11,006` GCs,
+    `184.7` MB across 119 checkpoint saves): `Watcher.Poll` reuses maps and
+    unchanged file identity strings, resolves ancestor directories once per
+    pass, and skips move/new-file map passes when all live probes match tracked
+    sources (`BenchmarkPollUnchanged` on 500 files: `1.15 ms / 626 KB / 3,227
+    allocs` -> `0.68 ms / 221 KB / 1,032 allocs`); checkpoint files encode as
+    compact JSON omitting zero fingerprint fields; settled session directories
+    cache child entries by `(dev, ino, mode, size, mtime_ns, ctime_ns)` with a
+    2 s racily-clean guard.
+  - Reconnect probe storm and cold remote MCP (`6,872` sequential source probes
+    costing `383.4` s RTT; `5–10` s remote SQL tail after 5 min idle): added
+    `CapBatchProbes` (`probes`/`probesRes`, up to 4,096 sources per frame,
+    modeled as `ProbeSources` in `tla/Auth.tla`, cutting a 50-source reconnect
+    from 51 round trips to 2) and 3-minute `caps` keepalives plus non-blocking
+    liveness checks on `hubsync.RemoteSession` for `ohya mcp --remote`.

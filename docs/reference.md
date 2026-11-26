@@ -797,8 +797,12 @@ is the monotonic time the process actually ran, and duration histogram
 deltas with p50/p95 bucket estimates — null below twenty observations.
 Percentiles are never averaged between instances, and a window the
 history does not cover is reported as partial rather than manufactured
-from less data. Retained terminated instances with no samples in the
-requested window are omitted by default; pass `--all` to include them.
+from less data. Windows anchor against the nearest pre-window minute sample
+within 70 s plus the live snapshot when fresh, so steady minute cadence
+covers 1m, 5m, and 1h windows cleanly. Retained terminated instances with no
+samples in the requested window, terminated ephemeral `mcp` sessions, and
+terminated daemons superseded by a running instance of the same role are
+omitted by default; pass `--all` or `--instance` to include them.
 Exit 3 marks a sample-less, gapped, or partial window.
 
 ### `ohya logs`

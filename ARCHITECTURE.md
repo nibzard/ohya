@@ -105,8 +105,8 @@ Local state files:
 - `sources/<agent>.json` (format version 1) maps each watched path to its
   checkpoint: source ID (32 lowercase hex characters from `crypto/rand`),
   agent, platform file identity, acknowledged cursor, observed size, and
-  the fingerprint window and SHA-256 digest (both empty while the cursor is
-  0). Agent names match `^[a-z0-9][a-z0-9._-]{0,63}$`, because they become
+  the fingerprint window and SHA-256 digest (both omitted while the cursor
+  is 0), encoded as compact JSON. Agent names match `^[a-z0-9][a-z0-9._-]{0,63}$`, because they become
   file names. `watch.InspectSources` reads the file without polling or
   writing, for `ohya doctor`. An unusable file is `ErrStateLost`: restore
   it, or delete it to re-import every source under new source IDs. The
@@ -375,7 +375,9 @@ the connection. Only a hub acknowledgment moves the checkpoint
 (`watch.Acknowledge`): a timeout, a reset, a busy hub or a lost
 acknowledgment leaves it in place, and `Run` reconnects with capped
 exponential backoff. On every new connection the uploader probes the hub
-cursor of each source that has a checkpoint with an empty batch. A source
+cursor of each source that has a checkpoint — in batches of up to 4,096
+sources via `probes`/`probesRes` when the hub advertises `CapBatchProbes`,
+or one empty batch per source against older hubs. A source
 that the hub does not know is registered and probed again; a source without
 a checkpoint is registered first. A hub cursor ahead of the
 checkpoint is a lost acknowledgment and is persisted without resending; one
@@ -449,7 +451,8 @@ address in its join state next to `credential.json`, and runs one
 uploader per agent from a state directory dedicated to the hub.
 `ohya mcp --remote` speaks the same MCP stdio surface through
 `hubsync.RemoteSession` (`internal/hubsync/session.go`): one authenticated
-connection, the writer derived from the paired credential, reconnect and
+connection kept open across the 5-minute hub idle timeout by 3-minute `caps`
+keepalives, the writer derived from the paired credential, reconnect and
 one retry on transport failure, and a terminal error on a refused
 credential. The end-to-end tests (`cmd/ohya/serve_e2e_test.go`,
 `cmd/ohya/tailcat_join_test.go`) drive real serve, join, and remote-MCP
