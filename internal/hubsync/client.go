@@ -189,8 +189,17 @@ func (c *RemoteClient) roundTrip(ctx context.Context, write func(io.Writer) erro
 		deadline = d
 	}
 	_ = c.conn.SetDeadline(deadline)
-	stop := context.AfterFunc(ctx, func() { _ = c.conn.SetDeadline(time.Unix(1, 0)) })
-	defer stop()
+	canceled := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		_ = c.conn.SetDeadline(time.Unix(1, 0))
+		close(canceled)
+	})
+	defer func() {
+		if !stop() {
+			<-canceled
+		}
+		_ = c.conn.SetDeadline(time.Time{})
+	}()
 
 	c.bw.Reset(c.conn)
 	if err := write(c.bw); err != nil {

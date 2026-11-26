@@ -196,7 +196,10 @@ func (s *RemoteSession) call(ctx context.Context, exchange func(*RemoteClient) e
 		s.lastUsed = time.Now()
 		return nil
 	}
-	_, mapped = s.finishAttemptLocked(ctx, err)
+	retry, mapped = s.finishAttemptLocked(ctx, err)
+	if retry {
+		_ = s.dropLocked()
+	}
 	return mapped
 }
 

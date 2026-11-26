@@ -203,7 +203,9 @@ type clientSlot struct {
 }
 
 type Device struct {
-	logf Logf
+	logf     Logf
+	shutdown context.Context
+	cancel   context.CancelFunc
 
 	mu      sync.Mutex
 	slot    *clientSlot
@@ -220,10 +222,22 @@ func NewDevice(opts DeviceOptions) *Device {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
+	shutdown, cancel := context.WithCancel(context.Background())
 	return &Device{
-		slot:    &clientSlot{client: &tailcat.Client{Key: key.NewNode(), Logf: logf}},
-		retired: map[*clientSlot]struct{}{},
-		logf:    logf,
+		shutdown: shutdown,
+		cancel:   cancel,
+		slot:     &clientSlot{client: &tailcat.Client{Key: key.NewNode(), Logf: logf}},
+		retired:  map[*clientSlot]struct{}{},
+		logf:     logf,
+	}
+}
+
+func (d *Device) operationContext(ctx context.Context) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(d.shutdown, cancel)
+	return ctx, func() {
+		stop()
+		cancel()
 	}
 }
 
@@ -249,10 +263,11 @@ func (d *Device) Dial(ctx context.Context, addr string) (net.Conn, error) {
 	slot.dialing++
 	d.mu.Unlock()
 
-	dialCtx := ctx
+	dialCtx, done := d.operationContext(ctx)
+	defer done()
 	if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > dialTimeout {
 		var cancel context.CancelFunc
-		dialCtx, cancel = context.WithTimeout(ctx, dialTimeout)
+		dialCtx, cancel = context.WithTimeout(dialCtx, dialTimeout)
 		defer cancel()
 	}
 	if _, err := slot.client.Ping(dialCtx); err != nil {
@@ -306,10 +321,11 @@ func (d *Device) releaseSlotLocked(slot *clientSlot) *tailcat.Client {
 		return nil
 	}
 	if d.closed {
-		if slot.dialing == 0 {
-			slot.closed = true
-			delete(d.retired, slot)
+		if slot.dialing > 0 {
+			return nil
 		}
+		slot.closed = true
+		delete(d.retired, slot)
 		return slot.client
 	}
 	if slot.retired && slot.open == 0 && slot.dialing == 0 {
@@ -343,14 +359,26 @@ func (c *deviceConn) Close() error {
 
 func (d *Device) Drain(ctx context.Context) error {
 	d.mu.Lock()
-	slot := d.slot
-	started := d.started
-	closed := d.closed
-	d.mu.Unlock()
-	if !started || closed {
+	if d.closed {
+		d.mu.Unlock()
 		return nil
 	}
-	return slot.client.DrainTCP(ctx)
+	var clients []*tailcat.Client
+	if d.started {
+		clients = append(clients, d.slot.client)
+	}
+	for s := range d.retired {
+		if s.open > 0 && !s.closed {
+			clients = append(clients, s.client)
+		}
+	}
+	d.mu.Unlock()
+	for _, c := range clients {
+		if err := c.DrainTCP(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (d *Device) Close() error {
@@ -360,6 +388,7 @@ func (d *Device) Close() error {
 		return nil
 	}
 	d.closed = true
+	d.cancel()
 	var toClose []*tailcat.Client
 	if c := d.releaseSlotLocked(d.slot); c != nil {
 		toClose = append(toClose, c)

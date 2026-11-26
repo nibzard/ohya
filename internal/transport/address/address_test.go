@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -613,5 +614,175 @@ func TestProbeRelayEndpointsFallsBackPastDownNode(t *testing.T) {
 	}
 	if err := dialAnyRelay(context.Background(), relays); err != nil {
 		t.Fatalf("dialAnyRelay failed when second node was reachable: %v", err)
+	}
+}
+
+func TestDeviceReleaseSlotLockedSingleCloseWithInFlightDial(t *testing.T) {
+	t.Run("unit", func(t *testing.T) {
+		dev := NewDevice(DeviceOptions{})
+		active := dev.slot
+		active.dialing = 2
+		retired := &clientSlot{
+			client:  &tailcat.Client{Key: key.NewNode()},
+			open:    1,
+			dialing: 1,
+			retired: true,
+		}
+		dev.retired[retired] = struct{}{}
+
+		if err := dev.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+
+		dev.mu.Lock()
+		defer dev.mu.Unlock()
+		for _, slot := range []*clientSlot{active, retired} {
+			if slot.closed || dev.releaseSlotLocked(slot) != nil {
+				t.Fatal("client released while its dials were still in flight")
+			}
+			slot.dialing = 0
+			if dev.releaseSlotLocked(slot) != slot.client {
+				t.Fatal("last dial did not claim the client for close")
+			}
+			if !slot.closed || dev.releaseSlotLocked(slot) != nil {
+				t.Fatal("client was released more than once")
+			}
+		}
+		if len(dev.retired) != 0 {
+			t.Fatalf("len(dev.retired) = %d; want 0", len(dev.retired))
+		}
+	})
+
+	t.Run("concurrent dial and close", func(t *testing.T) {
+		t.Parallel()
+		region := startLocalDERP(t)
+		hub, err := NewHub(HubOptions{StateDir: t.TempDir(), Region: region})
+		if err != nil {
+			t.Fatalf("NewHub: %v", err)
+		}
+		ln, err := hub.Listen(context.Background())
+		if err != nil {
+			t.Fatalf("Listen: %v", err)
+		}
+		addr := hub.Addr()
+		ln.Close()
+		hub.Close()
+
+		dev := NewDevice(DeviceOptions{})
+		dialCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		var wg sync.WaitGroup
+		errs := make(chan error, 2)
+		for range 2 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				conn, err := dev.Dial(dialCtx, addr)
+				if conn != nil {
+					conn.Close()
+				}
+				errs <- err
+			}()
+		}
+
+		var slot *clientSlot
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			dev.mu.Lock()
+			dialing := dev.slot.dialing
+			slot = dev.slot
+			dev.mu.Unlock()
+			if dialing == 2 {
+				break
+			}
+			if time.Now().After(deadline) {
+				cancel()
+				wg.Wait()
+				t.Fatalf("timed out waiting for two in-flight dials, got %d", dialing)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+
+		if err := dev.Close(); err != nil {
+			t.Fatalf("Device.Close: %v", err)
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err == nil {
+				t.Fatal("in-flight dial unexpectedly succeeded after hub and device close")
+			}
+		}
+
+		dev.mu.Lock()
+		remainingDialing := slot.dialing
+		closed := slot.closed
+		released := dev.releaseSlotLocked(slot)
+		dev.mu.Unlock()
+		if remainingDialing != 0 {
+			t.Fatalf("slot.dialing = %d after dials exited; want 0", remainingDialing)
+		}
+		if !closed || released != nil {
+			t.Fatalf("after final dial: closed = %v, released = %v; want true, nil", closed, released)
+		}
+	})
+}
+
+func TestDeviceDrainIncludesRetiredOpenConnections(t *testing.T) {
+	t.Parallel()
+	region := startLocalDERP(t)
+	hub, err := NewHub(HubOptions{StateDir: t.TempDir(), Region: region})
+	if err != nil {
+		t.Fatalf("NewHub: %v", err)
+	}
+	ln, err := hub.Listen(context.Background())
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer hub.Close()
+	serveEcho(t, ln)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	dev := NewDevice(DeviceOptions{})
+	defer dev.Close()
+
+	conn, err := dev.Dial(ctx, hub.Addr())
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	exchange(t, conn, "active before retire")
+
+	dev.mu.Lock()
+	slot1 := dev.slot
+	slot1.dialing++
+	dev.mu.Unlock()
+	dev.finishDialFailure(slot1, true)
+
+	dev.mu.Lock()
+	started := dev.started
+	retiredOpen := slot1.open
+	dev.mu.Unlock()
+	if started {
+		t.Fatal("dev.started = true after finishDialFailure; want false")
+	}
+	if retiredOpen != 1 {
+		t.Fatalf("slot1.open = %d; want 1", retiredOpen)
+	}
+
+	shortCtx, shortCancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer shortCancel()
+	if err := dev.Drain(shortCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Drain with open retired slot err = %v; want context.DeadlineExceeded", err)
+	}
+
+	if err := conn.Close(); err != nil {
+		t.Fatalf("conn.Close: %v", err)
+	}
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer drainCancel()
+	if err := dev.Drain(drainCtx); err != nil {
+		t.Fatalf("Drain after retired connection closed = %v; want nil", err)
 	}
 }

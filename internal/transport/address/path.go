@@ -58,6 +58,8 @@ func (d *Device) PathInfo(ctx context.Context, addr string) (PathReport, error) 
 	slot.dialing++
 	d.mu.Unlock()
 
+	ctx, done := d.operationContext(ctx)
+	defer done()
 	report := PathReport{Path: PathUnknown}
 	var err error
 	for range pathPingAttempts {

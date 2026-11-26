@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"sync/atomic"
 	"testing"
@@ -212,5 +213,56 @@ func TestRemoteSessionKeepalivePreventsIdleDisconnect(t *testing.T) {
 	}
 	if got := dials.Load(); got != 1 {
 		t.Fatalf("session dialed %d times; want 1 warm connection kept alive", got)
+	}
+}
+
+func TestRemoteSessionDropsClientAfterFailedRetry(t *testing.T) {
+	dials := 0
+	retryClosed := make(chan error, 1)
+	session := NewRemoteSession(func(ctx context.Context) (net.Conn, error) {
+		client, server := net.Pipe()
+		dials++
+		dial := dials
+		t.Cleanup(func() { server.Close() })
+		go func() {
+			defer server.Close()
+			if _, _, err := ReadAuthFrame(server); err != nil {
+				return
+			}
+			frame, err := ReadFrame(server)
+			if err != nil || frame.Query == nil {
+				return
+			}
+			switch dial {
+			case 1:
+				return
+			case 2:
+				_, err := server.Read(make([]byte, 1))
+				retryClosed <- err
+			default:
+				_ = WriteQueryResult(server, mcpserver.Result{
+					Columns: []string{"n"}, Rows: [][]any{{int64(1)}}, RowCount: 1,
+				})
+			}
+		}()
+		return client, nil
+	}, "cred-1", RemoteSessionOptions{})
+	session.timeout = time.Second
+	t.Cleanup(func() { session.Close() })
+
+	if _, err := session.Query(context.Background(), "SELECT 1"); err == nil {
+		t.Fatal("Query unexpectedly succeeded after two transport errors")
+	}
+	select {
+	case err := <-retryClosed:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("retry connection read = %v, want EOF", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("session did not close the failed retry connection")
+	}
+	res, err := session.Query(context.Background(), "SELECT 1")
+	if err != nil || res.RowCount != 1 || dials != 3 {
+		t.Fatalf("query after failed retry = %+v, %v, dials = %d", res, err, dials)
 	}
 }
