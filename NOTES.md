@@ -3177,22 +3177,14 @@ How to use this file:
     with `context.Canceled`. 1,800 runs passed under the same load. Research
     note: /notes/2026-11-25-timing-tests-on-loaded-runners.md.
 
-- v0.8.1 release (2026-11-26; the tag points to `ca4579c` on `main`, after
-  `make check` with `GOFLAGS=-count=1` and `make tla` passed on that
-  commit): candidate run 45799280418 passed all eight jobs on attempt 1.
-  Before the tag: four checksums, four `candidate.*.txt` files (revision
-  `ca4579c`, `dirty=false`), and the native library reports were verified.
-  Six assets. The MacBook (joined, darwin arm64) upgraded from v0.8.0 with
-  exit 0 and reports `topology.device_id`; the menu bar app 0.8.1 runs from
-  `/Applications`. Open: upgrade the hub host, then check that
-  `ohya status --remote --json` gives `remote_hub.hub.device_id` and
-  `local_ingest_device_ids`, and that Recall rows show **Hub**.
-- On the MacBook, `~/.codex/config.toml` held the ohya entry with
-  double-quoted TOML strings, while the setup receipt holds single-quoted
-  ones. v0.8.0 setup then reported "Codex ohya entry has been edited;
-  preserve it". The values were the same. Restoring the receipted quoting
-  made setup pass. Hypothesis (unverified): Codex rewrites its config file.
-  Setup compares bytes, not TOML values.
+- v0.8.1 and v0.8.2 releases (2026-11-26): v0.8.1 at `ca4579c` (run
+  45799280418) and v0.8.2 at `7bd2e5f` (run 45843831770), each with all
+  eight candidate jobs on attempt 1 and local `make check` + `make tla`.
+  The hub runs v0.8.1 and reports `remote_hub.hub.device_id` and
+  `local_ingest_device_ids` (both `05b0ff2c…`); the MacBook runs v0.8.2.
+  Open: upgrade the hub to v0.8.2, then run `ohya service restart --hub`
+  once (its v0.8.1 executable runs that setup); later upgrades restart
+  serve by themselves.
 
 - menubar-session-tags (2026-11-25; `b7e31f1` and `fbce579` by the owner,
   merged in `6676d10` after the v0.8.0 tag and released in v0.8.1): `ohya

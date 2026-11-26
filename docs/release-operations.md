@@ -1,6 +1,6 @@
 # Release and recovery operations
 
-The newest release is v0.8.1, published on 2026-11-26 from commit `ca4579c`
+The newest release is v0.8.2, published on 2026-11-26 from commit `7bd2e5f`
 after all eight candidate jobs passed on the first attempt; its macOS archives are unsigned and its menu bar app DMG is ad-hoc
 signed. Apple signing and
 notarization must pass before a signed public release. Generated candidates
@@ -382,7 +382,21 @@ space before you upgrade. Beyond that:
   `service: running`, `memory: ready`, and an `mcp-builds` warning for two
   older `ohya mcp` processes; `ohya doctor` reported only that warning. The
   DMG was opened on that Mac: the app runs as 0.8.1 from `/Applications`.
-  Not done at publication: the upgrade of the hub host.
+  The hub host was upgraded afterwards: migration 010 ran after a 17.2 GB
+  recovery point, but `ohya serve` kept the v0.8.0 process until a manual
+  `ohya service restart --hub`, because `install.sh` runs setup without
+  `--hub`. v0.8.2 fixes that.
+- v0.8.2 (commit `7bd2e5f`, dirty=false) was published on 2026-11-26 after
+  all eight candidate jobs passed on the first attempt of run 45843831770
+  and local `make check` (`GOFLAGS=-count=1`) + `make tla` passed with zero
+  errors on the release commit. Schema 10, no migration. A plain setup now
+  restarts an owned `ohya serve` service, and setup accepts a reformatted
+  Codex entry with the same values. The released installer upgraded the
+  macOS arm64 joined device from v0.8.1 with exit 0; `ohya doctor` reported
+  only an `mcp_build` warning for two older `ohya mcp` processes. The app
+  0.8.2 runs from `/Applications`. Not done at publication: the upgrade of
+  the hub host, which needs `ohya service restart --hub` one more time
+  because its v0.8.1 executable runs the setup.
 - The installer refuses to replace an executable whose digest matches neither
   its receipt entry nor the previous one ("installed executable has changed;
   preserve it"). A copy installed by hand outside `install.sh` triggers this
