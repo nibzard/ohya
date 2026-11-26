@@ -3276,3 +3276,11 @@ How to use this file:
     modeled as `ProbeSources` in `tla/Auth.tla`, cutting a 50-source reconnect
     from 51 round trips to 2) and 3-minute `caps` keepalives plus non-blocking
     liveness checks on `hubsync.RemoteSession` for `ohya mcp --remote`.
+
+
+- Implicit state machine follow-up (2026-11-27): completed the five
+  fixes from [the audit](docs/implicit-state-machines.md). TLC checked
+  163,216 states with one purge per source in the updated liveness
+  model. The Go tests cover re-admission on live and reconnected
+  clients. The model assumes retries after re-admission.
+  See /notes/2026-11-27-ohya-implicit-state-machines.md.
