@@ -401,6 +401,17 @@ space before you upgrade. Beyond that:
   reported v0.8.2 and the hub device ID in `ohya status --remote`. The fix
   applied to that same upgrade, because `install.sh` runs the setup of the
   downloaded executable.
+- v0.8.3 (commit `7a8c82a`, dirty=false) was published on 2026-11-26 after
+  all eight candidate jobs passed on the first attempt of run 45903154661
+  and local `make check` (`GOFLAGS=-count=1`) + `make tla` passed with zero
+  errors on the release commit. Schema 10, no migration. It adds the
+  `CapBatchProbes` capability and the `ohya mcp --remote` keepalive. The
+  released installer (`install.sh --hub --json`) upgraded the linux-amd64
+  hub host from v0.8.2 in 8 s with exit 0: `backup: not needed`,
+  `service` and `hub-service: running`, `hub: ready`, `memory: ready`, and
+  an `mcp-builds` warning for three `ohya mcp` processes of v0.8.2. The
+  macOS joined device and the app were not upgraded or opened for this
+  release.
 - The installer refuses to replace an executable whose digest matches neither
   its receipt entry nor the previous one ("installed executable has changed;
   preserve it"). A copy installed by hand outside `install.sh` triggers this

@@ -3186,6 +3186,13 @@ How to use this file:
   so the hub upgrade to v0.8.2 already restarted serve without a manual
   step.
 
+- v0.8.3 release (2026-11-26): `7a8c82a` (run 45903154661), all eight
+  candidate jobs on attempt 1, local `make check` (`GOFLAGS=-count=1`) and
+  `make tla` (12 min 56 s). Schema 10, no migration. The hub runs v0.8.3;
+  the MacBook still runs v0.8.2, so `CapBatchProbes` and the remote MCP
+  keepalive stay inactive there until the owner upgrades it. Open agent
+  sessions on the hub keep their v0.8.2 `ohya mcp` until `/mcp`.
+
 - menubar-session-tags (2026-11-25; `b7e31f1` and `fbce579` by the owner,
   merged in `6676d10` after the v0.8.0 tag and released in v0.8.1): `ohya
   status --json` reports `topology.device_id`, the hub reports its device
