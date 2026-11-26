@@ -35,15 +35,16 @@ type DiagnosticsRequest struct {
 }
 
 type RemoteIdentity struct {
-	DeviceID string         `json:"device_id,omitempty"`
-	Version  string         `json:"version"`
-	Revision string         `json:"revision"`
-	Dirty    string         `json:"dirty"`
-	Go       string         `json:"go"`
-	OS       string         `json:"os"`
-	Arch     string         `json:"arch"`
-	Schema   int            `json:"schema"`
-	Parsers  map[string]int `json:"parsers"`
+	DeviceID             string         `json:"device_id,omitempty"`
+	LocalIngestDeviceIDs []string       `json:"local_ingest_device_ids"`
+	Version              string         `json:"version"`
+	Revision             string         `json:"revision"`
+	Dirty                string         `json:"dirty"`
+	Go                   string         `json:"go"`
+	OS                   string         `json:"os"`
+	Arch                 string         `json:"arch"`
+	Schema               int            `json:"schema"`
+	Parsers              map[string]int `json:"parsers"`
 }
 
 type RemoteLimits struct {

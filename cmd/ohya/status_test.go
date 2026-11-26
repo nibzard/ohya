@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -360,24 +361,63 @@ func TestStatusRemoteHubSuccessAndFailure(t *testing.T) {
 }
 
 func TestHubDiagnosticsProviderExposesAggregatesWithoutPaths(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "secret-dir-name", "hub.db")
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
+	ctx := context.Background()
+	ingest := newSliceEnv(t)
+	ingest.dbPath = filepath.Join(t.TempDir(), "secret-dir-name", "hub.db")
+	copyFixture(t, ingest.session("main-session.jsonl"), "main-session.jsonl")
+	serveState := filepath.Join(t.TempDir(), "serve")
+	hubDevice, err := device.LoadOrCreate(serveState)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(dbPath, make([]byte, 4096), 0o600); err != nil {
+
+	stats, _ := ingest.runPass(t)
+	if stats.inserted != 16 {
+		t.Fatalf("seeded %d events, want 16", stats.inserted)
+	}
+	ingestDevice := ingest.deviceID(t)
+	hub := openHub(t, ingest.dbPath)
+	provider := hubDiagnosticsProvider{db: hub, dbPath: ingest.dbPath, deviceID: hubDevice}
+	before, err := provider.RemoteStatus(ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
-	hubDevice := strings.Repeat("ab", 16)
-	provider := hubDiagnosticsProvider{dbPath: dbPath, deviceID: hubDevice}
-	got, err := provider.RemoteStatus(context.Background())
+	if ids := before.Hub.LocalIngestDeviceIDs; ids == nil || len(ids) != 0 {
+		t.Fatalf("local ingest devices before registration = %#v, want an empty list", ids)
+	}
+
+	var stdout bytes.Buffer
+	options := ingestOptions{
+		dbPath: ingest.dbPath, stateDir: ingest.stateDir, roots: ingest.claudeRoots(),
+		once: true, stdout: &stdout, stderr: io.Discard,
+	}
+	for range 2 {
+		stdout.Reset()
+		if err := runIngest(ctx, options); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(stdout.String(), "imported 0 events") {
+			t.Fatalf("existing session should need no reimport: %s", stdout.String())
+		}
+	}
+	var sessionDevice string
+	if err := hub.Writer().QueryRowContext(ctx, `SELECT device_id FROM sessions`).Scan(&sessionDevice); err != nil {
+		t.Fatal(err)
+	}
+	if sessionDevice != ingestDevice || sessionDevice == hubDevice {
+		t.Fatalf("session device = %q, want ingest device %q distinct from serve device %q", sessionDevice, ingestDevice, hubDevice)
+	}
+	got, err := provider.RemoteStatus(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Hub.DeviceID != hubDevice {
 		t.Fatalf("hub device ID = %q, want %q", got.Hub.DeviceID, hubDevice)
 	}
-	if got.FormatVersion != hubsync.DiagnosticsFormatVersion || got.StorageFiles["db"] != 4096 || got.Limits.MaxConns != hubsync.DefaultMaxConns {
+	if ids := got.Hub.LocalIngestDeviceIDs; len(ids) != 1 || ids[0] != sessionDevice {
+		t.Fatalf("local ingest devices = %v, want only %q after two ingest runs", ids, sessionDevice)
+	}
+	if got.FormatVersion != hubsync.DiagnosticsFormatVersion || got.StorageFiles["db"] <= 0 || got.Limits.MaxConns != hubsync.DefaultMaxConns {
 		t.Fatalf("diagnostics = %+v", got)
 	}
 	raw, err := json.Marshal(got)

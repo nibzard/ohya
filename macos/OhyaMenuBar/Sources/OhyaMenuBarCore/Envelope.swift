@@ -41,10 +41,12 @@ public struct StatusData: Decodable, Sendable, Equatable {
 
 public struct RemoteHubIdentity: Decodable, Sendable, Equatable {
     public let deviceID: String?
+    public let localIngestDeviceIDs: [String]?
     public let version: String
 
     enum CodingKeys: String, CodingKey {
         case deviceID = "device_id"
+        case localIngestDeviceIDs = "local_ingest_device_ids"
         case version
     }
 }

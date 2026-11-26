@@ -116,6 +116,12 @@ func runIngest(ctx context.Context, o ingestOptions) error {
 	if err != nil {
 		return err
 	}
+	if err := hub.RecordLocalIngestDevice(ctx, deviceID); err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
+		return err
+	}
 	runners := make([]*ingestor, len(o.roots))
 	for i, root := range o.roots {
 		w, err := watch.New(o.stateDir, root.agent, watch.Options{Observer: o.observer})

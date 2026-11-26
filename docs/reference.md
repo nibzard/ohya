@@ -780,8 +780,12 @@ This device's ID is the ID under which the hub stores the sessions of
 this device. On a paired state directory, `credential.json` names it; a
 `device.json` there that names another device gives
 `device_identity_mismatch`. Without a credential, `device.json` names it.
-The text report prints it in the `Device` row, and the hub's device ID
-as `device=` in the `Remote hub` row.
+The text report prints it in the `Device` row. The `Remote hub` row shows
+the serve process's ID as `device=`. Remote JSON also lists the IDs recorded
+by the hub's local ingest processes in `remote_hub.hub.local_ingest_device_ids`.
+Recall uses those IDs for the Hub badge, even when serve and ingest use
+separate state directories. After upgrading the hub, run ingest with its
+existing state to identify older sessions under that device ID.
 
 ### `ohya metrics`
 

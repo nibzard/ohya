@@ -88,12 +88,14 @@ sourceWorkspace = 'F' ver(1) devLen(2) dev srcLen(2) src pathLen(4) path
 - `diagnostics` (`G`, 1-byte format version `1`) requests cached hub aggregate
   status on a short-lived authenticated connection after negotiating
   `CapRemoteStatus`. `diagnosticsRes` (`g`) replies with at most 256 KiB of
-  JSON carrying hub build identity, the hub's own device ID (optional; a hub
-  that predates the field omits it), monotonic uptime, cached snapshot timestamp,
-  storage file sizes (without filesystem paths), resource readings, and
-  configured bounds — never logs, source details, other devices, SQL, or
-  transcripts. Per-frame authorization and revocation apply; the hub enforces
-  a 5 s deadline, 2 concurrent diagnostic requests globally, and a 10 s
+  JSON carrying hub build identity, the serve process's device ID
+  (`hub.device_id`), up to 4,096 sorted device IDs recorded by local ingest
+  in the hub database (`hub.local_ingest_device_ids`), monotonic uptime,
+  cached snapshot timestamp, storage file sizes (without filesystem paths),
+  resource readings, and configured bounds. Either identity field may be
+  absent on older hubs. Diagnostics omit logs, source details, paired device
+  records, SQL, and transcripts. Per-frame authorization and revocation apply.
+  The hub enforces a 5 s deadline, 2 concurrent requests globally, and a 10 s
   per-device rate limit (`CodeBusy` on excess).
 - `ack` acknowledges a registration, a source workspace, or a batch. The hub
   writes it only after the durable commit. `cursor` is the committed cursor,

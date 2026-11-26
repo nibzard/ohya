@@ -25,7 +25,14 @@ workspace of a source (see "Repository derivation" and
 `sources.file_identity`, which no write path filled, and adds the index
 `events_source_parser_version` on `events(source_id, parser_version)`. The
 `parser_versions` check of `ohya doctor` reads that index alone and no row of
-`events`.
+`events`;
+[010_local_ingest_devices.sql](internal/store/migrations/010_local_ingest_devices.sql)
+adds `local_ingest_devices`. On startup, `ohya ingest` records its device ID
+in this database even when there are no new events. `ohya serve` uses those
+IDs in diagnostics so that clients can identify hub-local sessions across
+separate state directories. The migration leaves the table empty because
+pre-upgrade session rows do not identify which process wrote them. Starting
+`ingest` with its existing state identifies older sessions under that ID.
 Do not duplicate the DDL here.
 Databases ship with releases: v0.1.0 and v0.1.1 ship schema 6, v0.1.2 and
 v0.2.0 ship schema 7, v0.3.0, v0.4.0, v0.5.0, v0.5.1, v0.6.0, v0.6.1, v0.7.0, and v0.7.1 ship schema 8,

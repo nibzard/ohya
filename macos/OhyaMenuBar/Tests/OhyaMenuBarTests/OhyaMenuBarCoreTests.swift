@@ -150,6 +150,15 @@ final class OhyaMenuBarCoreTests: XCTestCase {
         XCTAssertEqual(SessionOrigin.resolve(deviceID: hub, status: joined), .hub)
         XCTAssertEqual(SessionOrigin.resolve(deviceID: third, status: joined), .device("77e1d0c4"))
 
+        let splitStateJSON = joinedJSON.replacingOccurrences(
+            of: #""device_id": "\#(hub)", "#,
+            with: #""device_id": "\#(hub)", "local_ingest_device_ids": ["\#(third)"], "#
+        )
+        let splitState = try decoder.decode(StatusData.self, from: Data(splitStateJSON.utf8))
+        XCTAssertEqual(SessionOrigin.resolve(deviceID: third, status: splitState), .hub)
+        XCTAssertEqual(SessionOrigin.resolve(deviceID: hub, status: splitState), .device("05b0ff2c"))
+        XCTAssertEqual(SessionOrigin.resolve(deviceID: local, status: splitState), .thisMac)
+
         let hubJSON = joinedJSON
             .replacingOccurrences(of: #""mode": "remote""#, with: #""mode": "local""#)
             .replacingOccurrences(of: #""device_id": "\#(local)""#, with: #""device_id": "\#(hub)""#)

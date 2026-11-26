@@ -356,7 +356,7 @@ func TestSetupRemovesAbandonedRecoveryStaging(t *testing.T) {
 	}
 }
 
-func rewindToSchema8(t *testing.T, database string) {
+func rewindToSchema9(t *testing.T, database string) {
 	t.Helper()
 	hub, err := store.Open(context.Background(), database)
 	if err != nil {
@@ -364,11 +364,8 @@ func rewindToSchema8(t *testing.T, database string) {
 	}
 	defer hub.Close()
 	for _, q := range []string{
-		`DROP INDEX events_source_parser_version`,
-		`ALTER TABLE sources DROP COLUMN workspace_path`,
-		`ALTER TABLE sources ADD COLUMN file_identity TEXT`,
-		`ALTER TABLE purged_sources DROP COLUMN workspace_path`,
-		`DELETE FROM schema_migrations WHERE version = 9`,
+		`DROP TABLE local_ingest_devices`,
+		`DELETE FROM schema_migrations WHERE version = 10`,
 	} {
 		if _, err := hub.Writer().Exec(q); err != nil {
 			t.Fatal(err)
@@ -399,10 +396,10 @@ func serviceOptionsWithDatabase(t *testing.T) Options {
 
 func TestSetupMigratesTheDatabaseBeforeItStartsTheService(t *testing.T) {
 	o := serviceOptionsWithDatabase(t)
-	rewindToSchema8(t, o.Database)
+	rewindToSchema9(t, o.Database)
 	want, err := store.SchemaVersion()
-	if err != nil || want < 9 {
-		t.Fatalf("schema of this build = %d, %v; want 9 or later", want, err)
+	if err != nil || want < 10 {
+		t.Fatalf("schema of this build = %d, %v; want 10 or later", want, err)
 	}
 	var schemaWhenCommandRan []bool
 	o.RunService = func(ctx context.Context, _ []string) error {
@@ -426,11 +423,11 @@ func TestSetupMigratesTheDatabaseBeforeItStartsTheService(t *testing.T) {
 	if r := report.Results[0]; r.Status != "saved" || !r.Changed {
 		t.Fatalf("backup = %+v", r)
 	}
-	if r := report.Results[1]; r.Status != "updated" || !r.Changed || r.Detail != fmt.Sprintf("database schema 8 is now %d", want) {
+	if r := report.Results[1]; r.Status != "updated" || !r.Changed || r.Detail != fmt.Sprintf("database schema 9 is now %d", want) {
 		t.Fatalf("schema = %+v", r)
 	}
 	if !slices.ContainsFunc(progress, func(line string) bool {
-		return strings.HasPrefix(line, "migrating the database from schema 8 to ")
+		return strings.HasPrefix(line, "migrating the database from schema 9 to ")
 	}) {
 		t.Fatalf("progress = %q", progress)
 	}
@@ -439,7 +436,7 @@ func TestSetupMigratesTheDatabaseBeforeItStartsTheService(t *testing.T) {
 		t.Fatal(err)
 	}
 	var held int
-	if err := point.QueryRow(`SELECT max(version) FROM schema_migrations`).Scan(&held); err != nil || held != 8 {
+	if err := point.QueryRow(`SELECT max(version) FROM schema_migrations`).Scan(&held); err != nil || held != 9 {
 		t.Fatalf("the recovery point holds schema %d, %v; want the schema before the migration", held, err)
 	}
 	if err := point.Close(); err != nil {
@@ -468,12 +465,12 @@ func TestSetupMigratesTheDatabaseBeforeItStartsTheService(t *testing.T) {
 
 func TestSetupStopsBeforeTheServiceWhenTheMigrationFails(t *testing.T) {
 	o := serviceOptionsWithDatabase(t)
-	rewindToSchema8(t, o.Database)
+	rewindToSchema9(t, o.Database)
 	blocker, err := sql.Open("sqlite3", o.Database)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := blocker.Exec(`CREATE TABLE events_source_parser_version (x)`); err != nil {
+	if _, err := blocker.Exec(`CREATE TABLE local_ingest_devices (x)`); err != nil {
 		t.Fatal(err)
 	}
 	if err := blocker.Close(); err != nil {

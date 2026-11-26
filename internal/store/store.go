@@ -71,6 +71,15 @@ func Open(ctx context.Context, path string, opts ...OpenOption) (*DB, error) {
 }
 
 func prepareWriter(ctx context.Context, d *DB) error {
+	return d.retryWriteLock(ctx, func() error {
+		if err := verifyWriter(ctx, d.writer); err != nil {
+			return err
+		}
+		return migrate(ctx, d.writer, migrationsFS)
+	})
+}
+
+func (d *DB) retryWriteLock(ctx context.Context, attempt func() error) error {
 	wait := busyTimeout
 	var report func(error)
 	if d.waitForLock {
@@ -80,10 +89,7 @@ func prepareWriter(ctx context.Context, d *DB) error {
 		}
 	}
 	return retryBusy(ctx, wait, func() error {
-		err := verifyWriter(ctx, d.writer)
-		if err == nil {
-			err = migrate(ctx, d.writer, migrationsFS)
-		}
+		err := attempt()
 		if busyDatabase(err) && report != nil {
 			report(err)
 		}

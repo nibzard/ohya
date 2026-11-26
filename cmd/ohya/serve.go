@@ -144,7 +144,7 @@ func runServe(ctx context.Context, o serveOptions) error {
 	})
 	endpoint, err := hubsync.NewEndpoint(hub, auth, hubsync.Options{
 		Remote:      engine,
-		Diagnostics: hubDiagnosticsProvider{dbPath: o.dbPath, deviceID: deviceID, telem: telem},
+		Diagnostics: hubDiagnosticsProvider{db: hub, dbPath: o.dbPath, deviceID: deviceID, telem: telem},
 		Observer:    telem.observer(),
 	})
 	if err != nil {
@@ -171,26 +171,34 @@ func runServe(ctx context.Context, o serveOptions) error {
 }
 
 type hubDiagnosticsProvider struct {
+	db       *store.DB
 	dbPath   string
 	deviceID string
 	telem    *telemetry
 }
 
-func (p hubDiagnosticsProvider) RemoteStatus(_ context.Context) (hubsync.RemoteStatus, error) {
+const maxDiagnosticsLocalIngestDevices = 4096
+
+func (p hubDiagnosticsProvider) RemoteStatus(ctx context.Context) (hubsync.RemoteStatus, error) {
+	ingestDevices, err := p.db.LocalIngestDevices(ctx, maxDiagnosticsLocalIngestDevices)
+	if err != nil {
+		return hubsync.RemoteStatus{}, err
+	}
 	nowMS := time.Now().UnixMilli()
 	id := statusCLIIdentity()
 	out := hubsync.RemoteStatus{
 		FormatVersion: hubsync.DiagnosticsFormatVersion,
 		Hub: hubsync.RemoteIdentity{
-			DeviceID: p.deviceID,
-			Version:  id.Version,
-			Revision: id.Revision,
-			Dirty:    id.Dirty,
-			Go:       id.Go,
-			OS:       id.OS,
-			Arch:     id.Arch,
-			Schema:   id.Schema,
-			Parsers:  id.Parsers,
+			DeviceID:             p.deviceID,
+			LocalIngestDeviceIDs: ingestDevices,
+			Version:              id.Version,
+			Revision:             id.Revision,
+			Dirty:                id.Dirty,
+			Go:                   id.Go,
+			OS:                   id.OS,
+			Arch:                 id.Arch,
+			Schema:               id.Schema,
+			Parsers:              id.Parsers,
 		},
 		GeneratedWallMS: nowMS,
 		Roles:           []string{string(observe.RoleServe)},

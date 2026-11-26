@@ -235,8 +235,10 @@ public enum SessionOrigin: Sendable, Equatable {
         if let local = status?.topology.deviceID, deviceID == local {
             return .thisMac
         }
-        if status?.topology.mode == "remote", let hub = status?.remoteHub?.hub?.deviceID, deviceID == hub {
-            return .hub
+        if status?.topology.mode == "remote", let hub = status?.remoteHub?.hub {
+            if hub.localIngestDeviceIDs?.contains(deviceID) ?? (deviceID == hub.deviceID) {
+                return .hub
+            }
         }
         return .device(DisplayFormat.shortID(deviceID))
     }
