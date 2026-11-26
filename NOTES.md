@@ -3226,3 +3226,14 @@ How to use this file:
   default Antigravity discovery. Both now use a scratch Codex root, disable
   Antigravity, and verify the fixture event count. The native install smoke,
   demo seed, and observe-overhead benchmark also disable Antigravity.
+
+- Handoff replay (2026-11-26): three synthetic cases based on prior
+  evidence of repeated work, lost decisions, and lost scope (hub events
+  58598, 1674040, 2582907, 645174). The historical sessions predate
+  setup-managed skills, and manual installation is unverified. Each
+  harness recovered and cited all three decisions with either the skill
+  alone or the skill plus reminder. All unrelated controls used zero
+  Ohya calls. This is one trial per scenario and arm. The transient scorer
+  overcounted failures due to literal phrasing, last-citation selection,
+  and a Codex trust warning. Local fixtures and adjudicated results are
+  under `recall-runs/session-start-handoff-replay-20261126/`.
