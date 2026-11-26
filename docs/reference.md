@@ -395,14 +395,17 @@ die with their events on purge, and the value splits at the first dot, so
 a namespace used with `--marked` gets no dot. At least one selector is
 required. Without `--apply` the command is a dry
 run that prints the affected sessions, sources, event counts, and bytes and
-changes nothing; `--apply` deletes, one transaction per source, so an
-interrupted run resumes when rerun with the same selectors. Every evicted
+changes nothing. `--apply` plans and deletes in a single write transaction.
+An error before commit leaves all sources intact. Every evicted
 source is tombstoned: its device's registration and batches are refused
 with the purge date and the remedy, other sources keep syncing, and the
 device's own files and checkpoints are untouched. `ohya sources reallow
 <source-id>` (same `--db` flag) removes one tombstone and restores the
 source at its purged cursor, so history resumes from the purge point and
-the purged bytes never return; re-admission reauthorizes nothing else.
+the purged bytes never return. Local ingestion checks refused sources on
+the next poll. Joined devices check again on reconnect, after a source file
+changes, or on the first poll after 30 seconds. Older joined builds may
+still need a restart. Re-admission reauthorizes nothing else.
 Freed pages stay in the database file (no VACUUM), and a recovery copy
 taken before a purge still holds the purged data.
 

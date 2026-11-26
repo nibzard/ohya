@@ -1652,3 +1652,81 @@ func TestReconnectBatchesManySourceProbesIntoOneRoundTrip(t *testing.T) {
 		t.Fatalf("missing source regression was not reported via batched probe:\n%s", f.log)
 	}
 }
+
+func TestReconcileClearsStopsOnCursorRegression(t *testing.T) {
+	f := newFixture(t, Options{})
+	db := openHubDB(t, filepath.Join(t.TempDir(), "hub.db"))
+	h := serve(t, db, f.reg, hubsync.Options{})
+	f.dialer.point(h.addr)
+
+	a := filepath.Join(f.dir, "a.jsonl")
+	one := line(sessA, "one")
+	two := line(sessA, "two")
+	writeFile(t, a, one+two)
+	f.mustSync()
+
+	backup := filepath.Join(t.TempDir(), "backup.db")
+	if _, err := db.Writer().Exec(`VACUUM INTO ?`, backup); err != nil {
+		t.Fatal(err)
+	}
+
+	appendFile(t, a, "{bad json\n")
+	f.mustSync()
+	if got := f.obs.Gauge("watch_sources", "stopped"); got != 1 {
+		t.Fatalf("stopped gauge before regression = %v, want 1", got)
+	}
+
+	writeFile(t, a, one+two+line(sessA, "three"))
+	h.stop()
+	restored := openHubDB(t, backup)
+	if _, err := restored.Writer().Exec(`UPDATE sources SET cursor_bytes = ?`, int64(len(one))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restored.Writer().Exec(`DELETE FROM events WHERE source_offset >= ?`, int64(len(one))); err != nil {
+		t.Fatal(err)
+	}
+	h2 := serve(t, restored, f.reg, hubsync.Options{})
+	f.dialer.point(h2.addr)
+
+	stats := f.mustSync()
+	if stats.Inserted != 2 {
+		t.Fatalf("stats after regression replay = %+v, want 2", stats)
+	}
+	if got := f.obs.Gauge("watch_sources", "stopped"); got != 0 {
+		t.Fatalf("stopped gauge after regression = %v, want 0", got)
+	}
+	if got := len(f.up.stops); got != 0 {
+		t.Fatalf("stops map size after regression = %d, want 0", got)
+	}
+}
+
+func TestCompressionOffStillNegotiatesBatchProbes(t *testing.T) {
+	t.Setenv("OHYA_UPLOAD_COMPRESSION", "off")
+	f := newFixture(t, Options{})
+	db := openHubDB(t, filepath.Join(t.TempDir(), "hub.db"))
+	h := serve(t, db, f.reg, hubsync.Options{})
+	f.dialer.point(h.addr)
+
+	const total = 10
+	for i := range total {
+		p := filepath.Join(f.dir, fmt.Sprintf("s-%02d.jsonl", i))
+		writeFile(t, p, line(fmt.Sprintf("sess-%02d", i), "one"))
+	}
+	if stats := f.mustSync(); stats.Inserted != total {
+		t.Fatalf("initial stats = %+v, want %d", stats, total)
+	}
+	if f.up.hubCaps&hubsync.CapBatchProbes == 0 {
+		t.Fatalf("hubCaps = %#x; want CapBatchProbes negotiated with compression off", uint16(f.up.hubCaps))
+	}
+
+	h.stop()
+	h2 := serve(t, db, f.reg, hubsync.Options{})
+	f.dialer.point(h2.addr)
+
+	before := f.obs.DurationCount("upload_round_trip_duration")
+	f.mustSync()
+	after := f.obs.DurationCount("upload_round_trip_duration")
+	if delta := after - before; delta != 2 {
+		t.Fatalf("reconnect round trips = %d; want 2 (batched probes + workspace check)", delta)
+	}
+}

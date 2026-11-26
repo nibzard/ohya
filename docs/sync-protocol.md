@@ -282,14 +282,13 @@ The uploader (`internal/uploader`) implements the `SendBatch` and
   source locally, because sending it would close the connection. A parse
   stop is not sent again until the file grows. A source refused for a
   reason retrying cannot fix is blocked for the rest of the process; a
-  changed file is a new source and starts clean. A purged source is exactly
-  such a refusal: the hub's message names the purge and the remedy, the
-  uploader blocks that one source and keeps uploading the others, and the
-  device's checkpoint and file stay untouched
-  ([ADR 0013](adr/0013-owner-scoped-session-purge.md)). After the owner
-  re-admits the source, the next registration succeeds and the probe finds
-  the hub cursor at the purge point, so history resumes from there and the
-  purged bytes are never replayed.
+  changed file is a new source and starts clean. A purge refusal pauses
+  only that source. The uploader records the refusal and preserves the
+  device's file and checkpoint. It probes again on reconnect, when the file
+  changes, or on the first poll after 30 seconds. After re-admission, the
+  probe returns the cursor at the purge point. The uploader resumes there
+  and never replays purged bytes
+  ([ADR 0013](adr/0013-owner-scoped-session-purge.md)).
 - The uploader reports bytes it can see were lost before upload: a replaced
   file whose observed end passed its acknowledged cursor, and a deleted file
   with unsent bytes. Each loss and gap is reported once.

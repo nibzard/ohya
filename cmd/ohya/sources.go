@@ -42,7 +42,7 @@ var sourcesReallowSpec = commandSpec{
 	name:      "ohya sources reallow",
 	synopsis:  "re-admit a purged source",
 	usageLine: "ohya sources reallow <source-id> [flags]",
-	description: "Removes one purge tombstone and restores the source row at its purged cursor, so history resumes from the purge point once the device's uploader restarts (a running ohya join caches refused sources for its process lifetime). " +
+	description: "Removes one purge tombstone and restores the source row at its purged cursor, so history resumes from the purge point when the source is checked again. " +
 		"The purged bytes themselves never return: a replay below the restored cursor is rejected. " +
 		"Re-admission does not reauthorize anything else; a revoked device stays revoked.",
 	args:     "<source-id>  the purged source ID printed by ohya purge and named in the device's refusal",
@@ -89,7 +89,7 @@ func runSourcesReallow(args []string, stdout, stderr io.Writer) error {
 			SourceID: sourceID, CursorBytes: info.Cursor,
 		})
 	}
-	fmt.Fprintf(stdout, "%s re-admitted at cursor %d; restart ohya join on its device (if running) so history resumes from the purge point\n",
+	fmt.Fprintf(stdout, "%s re-admitted at cursor %d; capture resumes from the purge point when the source is checked again\n",
 		sourceID, info.Cursor)
 	return nil
 }

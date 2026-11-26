@@ -24,6 +24,8 @@ const DefaultRequestTimeout = 60 * time.Second
 
 const DefaultKeepaliveInterval = 3 * time.Minute
 
+const DefaultPurgeRecheckInterval = 30 * time.Second
+
 const (
 	DefaultReconnectBase = time.Second
 	DefaultReconnectCap  = time.Minute
@@ -49,17 +51,18 @@ func compressionDisabled() bool {
 type Dialer func(ctx context.Context) (net.Conn, error)
 
 type Options struct {
-	Agent             string
-	RequestTimeout    time.Duration
-	KeepaliveInterval time.Duration
-	Reconnect         hubsync.RetryPolicy
-	Interval          time.Duration
-	Log               io.Writer
-	Resolve           workspace.Resolver
-	SourceWorkspace   func(sourcePath string) (string, bool)
-	Observer          observe.Observer
-	Events            observe.EventSink
-	Excluded          func(path string) bool
+	Agent                string
+	RequestTimeout       time.Duration
+	KeepaliveInterval    time.Duration
+	PurgeRecheckInterval time.Duration
+	Reconnect            hubsync.RetryPolicy
+	Interval             time.Duration
+	Log                  io.Writer
+	Resolve              workspace.Resolver
+	SourceWorkspace      func(sourcePath string) (string, bool)
+	Observer             observe.Observer
+	Events               observe.EventSink
+	Excluded             func(path string) bool
 }
 
 type Stats struct {
@@ -81,6 +84,7 @@ type Uploader struct {
 	ready        map[string]bool
 	unregistered map[string]bool
 	blocked      map[string]bool
+	purged       map[string]purgedState
 	stops        map[string]stopMark
 	idle         map[string]stopMark
 	seen         map[string]int64
@@ -119,6 +123,13 @@ type stopMark struct {
 	modTime     time.Time
 }
 
+type purgedState struct {
+	end        int64
+	modTime    time.Time
+	nextCheck  time.Time
+	recheckDue bool
+}
+
 func New(w *watch.Watcher, cred device.Credential, dial Dialer, opts Options) (*Uploader, error) {
 	switch {
 	case w == nil:
@@ -135,6 +146,9 @@ func New(w *watch.Watcher, cred device.Credential, dial Dialer, opts Options) (*
 	}
 	if opts.KeepaliveInterval == 0 {
 		opts.KeepaliveInterval = DefaultKeepaliveInterval
+	}
+	if opts.PurgeRecheckInterval == 0 {
+		opts.PurgeRecheckInterval = DefaultPurgeRecheckInterval
 	}
 	if opts.Reconnect.Base <= 0 {
 		opts.Reconnect.Base = DefaultReconnectBase
@@ -157,7 +171,8 @@ func New(w *watch.Watcher, cred device.Credential, dial Dialer, opts Options) (*
 		watcher: w, credential: cred, dial: dial, opts: opts, log: log, observer: observer,
 		events: opts.Events,
 		ready:  map[string]bool{}, unregistered: map[string]bool{}, blocked: map[string]bool{},
-		stops: map[string]stopMark{}, idle: map[string]stopMark{}, seen: map[string]int64{},
+		purged: map[string]purgedState{},
+		stops:  map[string]stopMark{}, idle: map[string]stopMark{}, seen: map[string]int64{},
 		lossReported: map[string]bool{}, gapReported: map[string]int64{},
 		sourceTold: map[string]bool{},
 	}, nil
@@ -217,10 +232,10 @@ func (u *Uploader) Sync(ctx context.Context, candidates []string) (stats Stats, 
 		return stats, err
 	}
 	u.observer.Set("watch_sources", float64(len(u.stops)), "stopped")
-	u.observer.Set("watch_sources", float64(len(u.blocked)), "blocked")
+	u.observer.Set("watch_sources", float64(len(u.blocked)+len(u.purged)), "blocked")
 	defer func() {
 		u.observer.Set("watch_sources", float64(len(u.stops)), "stopped")
-		u.observer.Set("watch_sources", float64(len(u.blocked)), "blocked")
+		u.observer.Set("watch_sources", float64(len(u.blocked)+len(u.purged)), "blocked")
 		if ferr := u.watcher.Flush(); ferr != nil {
 			u.logf("persist acknowledgments: %v", ferr)
 			u.observer.Add("upload_failures", 1, "checkpoint")
@@ -323,6 +338,7 @@ func (u *Uploader) noteLoss(o watch.Outcome) (missingAtStartup bool) {
 		delete(u.lossReported, old)
 		delete(u.stops, old)
 		delete(u.blocked, old)
+		delete(u.purged, old)
 		delete(u.idle, old)
 		delete(u.ready, old)
 		delete(u.sourceTold, old)
@@ -383,9 +399,15 @@ func (u *Uploader) syncSource(ctx context.Context, o watch.Outcome, stats *Stats
 		return nil
 	}
 	if o.Missing {
+		if u.isPurged(o.SourceID) {
+			return nil
+		}
 		return u.checkGap(ctx, o)
 	}
 	stats.Sources++
+	if p, isPurged := u.purged[o.SourceID]; isPurged && !u.shouldRecheckPurged(o, p, time.Now()) {
+		return nil
+	}
 	if !u.ready[o.SourceID] {
 		cursor, ok, err := u.prepare(ctx, o)
 		if err != nil || !ok {
@@ -468,7 +490,7 @@ func (u *Uploader) syncSource(ctx context.Context, o watch.Outcome, stats *Stats
 }
 
 func (u *Uploader) prepare(ctx context.Context, o watch.Outcome) (int64, bool, error) {
-	if o.Cursor > 0 && o.RenamedFrom == "" && !u.unregistered[o.SourceID] {
+	if (o.Cursor > 0 || u.isPurged(o.SourceID)) && o.RenamedFrom == "" && !u.unregistered[o.SourceID] {
 		hub, perr, err := u.probe(ctx, o.SourceID, o.Cursor)
 		if err != nil {
 			return 0, false, err
@@ -563,13 +585,24 @@ func (u *Uploader) probeSources(ctx context.Context, outcomes []watch.Outcome) e
 	if u.hubCaps&hubsync.CapBatchProbes == 0 {
 		return nil
 	}
+	now := time.Now()
 	var pending []int
 	for i := range outcomes {
 		o := outcomes[i]
-		if u.blocked[o.SourceID] || u.ready[o.SourceID] || o.Cursor == 0 {
+		if u.blocked[o.SourceID] || u.ready[o.SourceID] {
 			continue
 		}
 		if !o.Missing && o.RenamedFrom != "" {
+			continue
+		}
+		if p, isPurged := u.purged[o.SourceID]; isPurged {
+			if o.Missing || !u.shouldRecheckPurged(o, p, now) {
+				continue
+			}
+			pending = append(pending, i)
+			continue
+		}
+		if o.Cursor == 0 {
 			continue
 		}
 		pending = append(pending, i)
@@ -617,6 +650,7 @@ func (u *Uploader) probeSources(ctx context.Context, outcomes []watch.Outcome) e
 			entry := reply.Entries[i]
 			switch entry.Status {
 			case hubsync.ProbeKnown:
+				delete(u.purged, o.SourceID)
 				if o.Missing {
 					u.recordMissingGap(o, entry.Cursor)
 					continue
@@ -629,6 +663,7 @@ func (u *Uploader) probeSources(ctx context.Context, outcomes []watch.Outcome) e
 					outcomes[idx].Cursor = cursor
 				}
 			case hubsync.ProbeUnknown:
+				delete(u.purged, o.SourceID)
 				if o.Missing {
 					u.recordMissingGap(o, 0)
 					continue
@@ -639,9 +674,7 @@ func (u *Uploader) probeSources(ctx context.Context, outcomes []watch.Outcome) e
 					return err
 				}
 			case hubsync.ProbePurged:
-				if err := u.sourceRefused(o, &hubsync.Error{Code: hubsync.CodeRejected, Message: entry.Message}); err != nil {
-					return err
-				}
+				u.markPurged(o, (&hubsync.Error{Code: hubsync.CodeRejected, Message: entry.Message}).Error())
 			}
 		}
 	}
@@ -667,6 +700,8 @@ func (u *Uploader) reconcile(o watch.Outcome, hub int64) (int64, bool) {
 				hub, o.Cursor, err))
 			return 0, false
 		}
+		delete(u.stops, o.SourceID)
+		delete(u.idle, o.SourceID)
 		u.advances++
 		u.observer.Add("upload_ack_bytes", uint64(hub-o.Cursor))
 		u.advanceBacklog(hub - o.Cursor)
@@ -678,7 +713,10 @@ func (u *Uploader) reconcile(o watch.Outcome, hub int64) (int64, bool) {
 				hub, o.Cursor, err))
 			return 0, false
 		}
+		delete(u.stops, o.SourceID)
+		delete(u.idle, o.SourceID)
 	}
+	delete(u.purged, o.SourceID)
 	u.ready[o.SourceID] = true
 	return hub, true
 }
@@ -717,6 +755,9 @@ func (u *Uploader) batchRefused(ctx context.Context, o watch.Outcome, perr *hubs
 			cursor, ok := u.reconcile(o, hub)
 			return cursor, ok, nil
 		}
+		if isPurgeError(o.SourceID, perr2) {
+			return 0, false, u.sourceRefused(o, perr2)
+		}
 		return 0, false, u.sourceRefused(o, perr)
 	case hubsync.CodeUnknownSource:
 		delete(u.ready, o.SourceID)
@@ -727,12 +768,60 @@ func (u *Uploader) batchRefused(ctx context.Context, o watch.Outcome, perr *hubs
 	}
 }
 
+func isPurgeError(sourceID string, perr *hubsync.Error) bool {
+	return perr != nil && perr.Code == hubsync.CodeRejected &&
+		strings.HasPrefix(perr.Message, "store: source "+sourceID+" was purged by the owner on ")
+}
+
+func (u *Uploader) isPurged(id string) bool {
+	_, ok := u.purged[id]
+	return ok
+}
+
+func (u *Uploader) shouldRecheckPurged(o watch.Outcome, p purgedState, now time.Time) bool {
+	if p.recheckDue {
+		return true
+	}
+	if o.End > p.end || !o.ModTime.Equal(p.modTime) {
+		return true
+	}
+	return u.opts.PurgeRecheckInterval > 0 && !now.Before(p.nextCheck)
+}
+
+func (u *Uploader) markPurged(o watch.Outcome, reason string) {
+	_, already := u.purged[o.SourceID]
+	var nextCheck time.Time
+	if u.opts.PurgeRecheckInterval > 0 {
+		nextCheck = time.Now().Add(u.opts.PurgeRecheckInterval)
+	}
+	u.purged[o.SourceID] = purgedState{
+		end:       o.End,
+		modTime:   o.ModTime,
+		nextCheck: nextCheck,
+	}
+	delete(u.blocked, o.SourceID)
+	delete(u.ready, o.SourceID)
+	delete(u.unregistered, o.SourceID)
+	delete(u.stops, o.SourceID)
+	delete(u.idle, o.SourceID)
+	if !already {
+		u.logf("%s: source %s stops uploading: %s", o.Path, o.SourceID, reason)
+	}
+}
+
 func (u *Uploader) sourceRefused(o watch.Outcome, perr *hubsync.Error) error {
 	switch perr.Code {
 	case hubsync.CodeInternal:
 		u.logf("%s: hub failed to commit source %s, retrying next pass: %s", o.Path, o.SourceID, perr.Message)
 		return nil
-	case hubsync.CodeRejected, hubsync.CodeOwnership, hubsync.CodeUnsupported, hubsync.CodeUnknownSource:
+	case hubsync.CodeRejected:
+		if isPurgeError(o.SourceID, perr) {
+			u.markPurged(o, perr.Error())
+			return nil
+		}
+		u.block(o, perr.Error())
+		return nil
+	case hubsync.CodeOwnership, hubsync.CodeUnsupported, hubsync.CodeUnknownSource:
 		u.block(o, perr.Error())
 		return nil
 	default:
@@ -741,6 +830,7 @@ func (u *Uploader) sourceRefused(o watch.Outcome, perr *hubsync.Error) error {
 }
 
 func (u *Uploader) block(o watch.Outcome, reason string) {
+	delete(u.purged, o.SourceID)
 	u.blocked[o.SourceID] = true
 	u.logf("%s: source %s stops uploading: %s", o.Path, o.SourceID, reason)
 }
@@ -847,9 +937,6 @@ func (u *Uploader) connect(ctx context.Context) error {
 		if u.capsOff {
 			return nil
 		}
-		if compressionDisabled() && u.opts.SourceWorkspace == nil {
-			return nil
-		}
 		caps, perr, err := u.negotiate(ctx, u.offer())
 		if err != nil {
 			return err
@@ -900,6 +987,10 @@ func (u *Uploader) dialHello(ctx context.Context) error {
 	u.hubCaps = 0
 	u.ready = map[string]bool{}
 	u.unregistered = map[string]bool{}
+	for id, p := range u.purged {
+		p.recheckDue = true
+		u.purged[id] = p
+	}
 	u.workspacesDue = true
 	return nil
 }
@@ -1066,7 +1157,7 @@ func (u *Uploader) logf(format string, args ...any) {
 func (u *Uploader) updateBacklog(outcomes []watch.Outcome) {
 	var pending int64
 	for _, o := range outcomes {
-		if o.Missing || u.blocked[o.SourceID] {
+		if o.Missing || u.blocked[o.SourceID] || u.isPurged(o.SourceID) {
 			continue
 		}
 		if s, ok := u.stops[o.SourceID]; ok && s.offset == o.Cursor && s.end == o.End && s.modTime.Equal(o.ModTime) {

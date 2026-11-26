@@ -47,14 +47,12 @@ row at its purged cursor, so history resumes from the purge point.
 
 ### Execution
 
-- One transaction per source, in source ID order: bounded WAL per commit, and
-  an interrupted run leaves the already-purged sources durably purged; rerun
-  with the same selectors and it plans from the current state and continues
-  (pinned by a test that aborts the second source's tombstone insert and
-  resumes).
-- Delete order per source: re-read the source's authoritative `cursor_bytes`,
-  `path`, and `first_native_id` inside the transaction (so concurrent writes
-  never produce a stale tombstone cursor), verify no unselected real session
+- One immediate write transaction plans the purge, evicts sources in source
+  ID order, and removes empty selected sessions. The write lock keeps the
+  selected sources and cursors stable until commit. If any step fails, all
+  changes roll back, including any changes to cross-source duplicate links.
+- Delete order per source: keep its committed cursor, path, and native
+  session ID in the tombstone. After verifying that no unselected real session
   shares the source, delete `event_annotations` of the source's events, detach
   any cross-source `events.duplicate_of` references pointing into this source,
   delete `events` (the external-content FTS delete trigger fires per row),
@@ -80,22 +78,20 @@ purged paths and scopes do not linger in agent queries.
 - `store.RegisterSource`, `store.Ingest`, and `store.SourceState` check the
   tombstone whenever the source row is absent, and answer a deterministic
   refusal (`store.ErrSourcePurged`) whose text names the purge date, the
-  scope, and the remedy (`ohya sources reallow <id>` plus restarting a running
-  `ohya join` on the device). The endpoint maps it to `CodeRejected` — the
-  connection stays open, so other sources on the same device are unaffected;
-  the uploader blocks exactly the purged source for its process lifetime and
-  logs the remedy.
+  scope, and the remedy (`ohya sources reallow <id>`). The endpoint maps
+  this to `CodeRejected` for single-source requests or to the per-source
+  purge status for batched probes. The connection stays open. Other sources
+  keep syncing.
 - The refusal covers any device: the tombstone keeps the freed source ID
   from being re-registered by a stranger, exactly as ownership did while the
   row lived.
 - Reallow restores `cursor_bytes` and `first_native_id` from the tombstone (so
   header-first parsers such as Codex and Pi continue to parse and re-derive
-  past offset 0 without their deleted offset-0 event). After restarting
-  `ohya join` on the device, its probe finds the hub cursor equal to (or ahead
-  of) its checkpoint, so it never rewinds and never replays. A below-cursor
-  replay is refused by the write path's existing rule — there are no stored
-  records below the committed cursor — so the purged records cannot come back
-  even then.
+  past offset 0 without their deleted offset-0 event). Local ingestion
+  checks refused sources on its next poll. A joined device checks again on
+  reconnect, a file change, or a later poll. The probe returns the frozen
+  cursor. The write path refuses a replay into the deleted range, so the
+  purged records cannot come back.
 
 ### Why evict-and-tombstone, not a digest table
 

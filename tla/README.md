@@ -111,9 +111,8 @@ the model. The hub checks it anyway.
 Records below the eviction mark are the purged content: `HubCommit` never
 stores them again, because it only stores records at or beyond the
 committed cursor and purge never lowers that cursor. The bound `MaxPurges`
-keeps the counters (and the state space) finite; the liveness configuration
-sets it to `0`, because a purged source legitimately stops syncing — its
-refusal is required behavior, not a starvation bug. The purged state is
+keeps the counters and the state space finite. The liveness configuration
+allows one purge per source. The purged state is
 per-source, so with two sources every interleaving of a refused source and
 a healthy one is explored: the refusal cannot wedge unrelated sources.
 
@@ -160,14 +159,12 @@ after a reallow can only widen the purged range, never shrink it).
 
 ## Liveness property
 
-`EventualSync`: every appended record is eventually stored at the hub — or
-lies below a purge mark, the owner's terminal decision for it — and every
-stored record is eventually acknowledged. Checked under weak
-fairness per source on retries (`SendBatch`), commits (`HubCommit`), and
-checkpoint persistence (`DeliverAck`). Appends stay unfair: the protocol
-must sync whatever has arrived, on any schedule. The liveness configuration
-disables the purge actions (`MaxPurges = 0`); under purge, the escape
-clause is what the property means.
+`EventualSync` applies while a source is admitted. Each pending record
+eventually reaches the hub or the owner purges the source. If the owner
+re-admits it, pending records at or above the purge mark are subject to
+the same condition again. Each stored record is eventually acknowledged.
+TLC checks this under weak fairness per source for `SendBatch`,
+`HubCommit`, and `DeliverAck`. The owner can leave a source purged.
 
 ## Assumptions
 
@@ -209,8 +206,9 @@ clause is what the property means.
   (`Auth.tla`, below), not this one.
 - **Purge and reallow are owner actions** (ADR 0013), assumed correct and
   not subject to protocol fairness; `MaxPurges` bounds their counts so the
-  state space stays finite, and the liveness configuration disables them,
-  because a purged source legitimately stops syncing. The device-side
+  state space stays finite. The model assumes the client retries once
+  the source is admitted. Go integration tests cover how a running client
+  discovers re-admission through polling and reconnection. The device-side
   below-cursor replay they must survive cannot arise through the uploader
   (every new connection probes the hub cursor first and reconciles), so
   its deterministic rejection is pinned by write-path tests in
@@ -218,11 +216,11 @@ clause is what the property means.
 
 ## Models
 
-| Configuration | Bounds | What it exercises | Size (checked 2026-11-19) |
+| Configuration | Bounds | What it exercises | Measured state count and duration |
 |---|---|---|---|
 | `SyncConcurrent.cfg` | 2 sources, `MaxLen` 5, `MaxBatch` 2, 1 purge per source, loss and crashes | Cross-device interleaving under every failure action, including purge and reallow against a still-syncing neighbor | 929,296 states, ~30 s |
 | `SyncFailures.cfg` | 1 source, `MaxLen` 12, `MaxBatch` 3, 1 purge, loss and crashes | Long retry chains, many partial batches, every loss/crash window, purge between commit and acknowledgment | 13,711 states, <1 s |
-| `SyncLiveness.cfg` | 2 sources, `MaxLen` 4, `MaxBatch` 2, no purge, reliable network | `EventualSync` under fairness, plus all invariants | 12,100 states, ~13 s |
+| `SyncLiveness.cfg` | 2 sources, `MaxLen` 4, `MaxBatch` 2, 1 purge per source, reliable network | `EventualSync` under fairness through purge and reallow, plus all invariants | 163,216 states, 2 min 45 s (2026-11-27) |
 
 All runs use `-deadlock`: the drained system legitimately reaches a
 quiescent fixed point where no action changes state, and that is not an

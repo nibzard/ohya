@@ -1344,3 +1344,94 @@ func TestIngestInPlaceRepairSameSizeRetriesViaModTime(t *testing.T) {
 		t.Fatalf("pass after the same-size in-place repair = %+v, want the fixed record ingested", stats)
 	}
 }
+
+func TestLocalIngestCursorRegressionRewindsAndReplays(t *testing.T) {
+	ctx := context.Background()
+	e := newSliceEnv(t)
+	session := e.session("regress.jsonl")
+	line := func(content string) string {
+		return fmt.Sprintf(`{"type":"user","sessionId":%q,"message":{"role":"user","content":%q}}`+"\n", fixtureNativeID, content)
+	}
+	one := line("one")
+	two := line("two")
+	three := line("three")
+	writeFile(t, session, one+two)
+
+	var stderr bytes.Buffer
+	r, done := e.newRunner(t, &stderr)
+	defer done()
+
+	stats, err := r.poll(ctx, e.dirs(), false)
+	if err != nil || stats.inserted != 2 {
+		t.Fatalf("initial poll = %+v, %v", stats, err)
+	}
+	if _, cursor := soleCheckpoint(t, e.stateDir); cursor != int64(len(one+two)) {
+		t.Fatalf("initial checkpoint = %d, want %d", cursor, len(one+two))
+	}
+
+	if _, err := r.hub.Writer().Exec(`DELETE FROM events WHERE source_offset >= ?`, int64(len(one))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.hub.Writer().Exec(`UPDATE sources SET cursor_bytes = ?`, int64(len(one))); err != nil {
+		t.Fatal(err)
+	}
+
+	appendFile(t, session, three)
+	stats, err = r.poll(ctx, e.dirs(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.inserted != 2 || stats.failed != 0 {
+		t.Fatalf("post-regression poll = %+v, want 2 replayed+new events, 0 failed; stderr=%s", stats, stderr.String())
+	}
+	if got := countRows(t, r.hub.Writer(), `SELECT count(*) FROM events`); got != 3 {
+		t.Fatalf("hub events = %d, want 3", got)
+	}
+	if _, cursor := soleCheckpoint(t, e.stateDir); cursor != int64(len(one+two+three)) {
+		t.Fatalf("checkpoint after replay = %d, want %d", cursor, len(one+two+three))
+	}
+}
+
+func TestLocalIngestReallowReconcilesLostFirstAcknowledgment(t *testing.T) {
+	ctx := context.Background()
+	e := newSliceEnv(t)
+	path := e.session("lost-ack.jsonl")
+	line := func(content string) string {
+		return fmt.Sprintf(`{"type":"user","sessionId":%q,"message":{"role":"user","content":%q}}`+"\n", fixtureNativeID, content)
+	}
+	first, next := line("before purge"), line("after reallow")
+	writeFile(t, path, first)
+
+	r, closeHub := e.newRunner(t, io.Discard)
+	t.Cleanup(closeHub)
+	if stats, err := r.poll(ctx, e.dirs(), false); err != nil || stats.inserted != 1 {
+		t.Fatalf("initial poll = %+v, %v", stats, err)
+	}
+	id, _ := soleCheckpoint(t, e.stateDir)
+	if err := r.watcher.Rewind(path, id, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.watcher.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := r.hub.ApplyPurge(ctx, store.PurgeSelector{Session: fixtureNativeID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.hub.ReallowSource(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+
+	appendFile(t, path, next)
+	var stderr bytes.Buffer
+	reopened, closeReopened := e.newRunner(t, &stderr)
+	t.Cleanup(closeReopened)
+	if stats, err := reopened.poll(ctx, e.dirs(), false); err != nil || stats.inserted != 1 || stats.failed != 0 {
+		t.Fatalf("poll after reallow = %+v, %v\n%s", stats, err, &stderr)
+	}
+	if got := countRows(t, reopened.hub.Writer(), `SELECT count(*) FROM events`); got != 1 {
+		t.Fatalf("events after reallow = %d, want 1", got)
+	}
+	if _, cursor := soleCheckpoint(t, e.stateDir); cursor != int64(len(first+next)) {
+		t.Fatalf("cursor after reallow = %d, want %d", cursor, len(first+next))
+	}
+}

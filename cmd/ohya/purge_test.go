@@ -13,6 +13,7 @@ import (
 
 	"github.com/nibzard/ohya/internal/events"
 	"github.com/nibzard/ohya/internal/mcpserver"
+	"github.com/nibzard/ohya/internal/observe/observertest"
 	"github.com/nibzard/ohya/internal/store"
 	"github.com/nibzard/ohya/internal/watch"
 )
@@ -446,5 +447,149 @@ func TestLocalIngestDoesNotSpamPurgedSource(t *testing.T) {
 	}
 	if stderr.String() != firstLog {
 		t.Fatalf("second post-purge poll spammed stderr:\n%s", stderr.String())
+	}
+}
+
+func TestLocalIngestResumesInProcessAfterReallow(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "hub.db")
+	hub, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hub.Close()
+
+	srcDir := filepath.Join(tmp, "claude")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	line := func(content string) []byte {
+		return []byte(fmt.Sprintf(`{"type":"user","sessionId":"00000000-0000-4000-8000-0000000000a1","message":{"role":"user","content":%q}}`+"\n", content))
+	}
+	file := filepath.Join(srcDir, "sess.jsonl")
+	if err := os.WriteFile(file, line("before purge"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w, err := watch.New(filepath.Join(tmp, "state"), "claude-code", watch.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	ing := newIngestor(hub, w, "claude-code", "0123456789abcdef0123456789abcdef", 0, nil, &stderr, nil, nil)
+	dirs := []agentDir{{dir: srcDir}}
+	if stats, err := ing.poll(ctx, dirs, false); err != nil || stats.inserted != 1 {
+		t.Fatalf("initial poll = %+v, %v", stats, err)
+	}
+	srcID, _ := soleSourceID(t, hub.Writer())
+
+	if _, _, err := hub.ApplyPurge(ctx, store.PurgeSelector{Agent: "claude-code"}); err != nil {
+		t.Fatal(err)
+	}
+	appendFile(t, file, string(line("during purge")))
+	if _, err := ing.poll(ctx, dirs, false); err != nil {
+		t.Fatal(err)
+	}
+	firstLog := stderr.String()
+	if !strings.Contains(firstLog, "was purged") {
+		t.Fatalf("first post-purge poll stderr = %q, want purge refusal", firstLog)
+	}
+	if _, err := ing.poll(ctx, dirs, false); err != nil {
+		t.Fatal(err)
+	}
+	if stderr.String() != firstLog {
+		t.Fatalf("second post-purge poll spammed stderr:\n%s", stderr.String())
+	}
+
+	if _, err := hub.ReallowSource(ctx, srcID); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := ing.poll(ctx, dirs, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.inserted != 1 || stats.failed != 0 {
+		t.Fatalf("post-reallow poll = %+v, want 1 inserted, 0 failed; stderr=%s", stats, stderr.String())
+	}
+	if got := countRows(t, hub.Writer(), `SELECT count(*) FROM events`); got != 1 {
+		t.Fatalf("events after reallow = %d, want 1", got)
+	}
+
+	appendFile(t, file, string(line("after reallow")))
+	stats, err = ing.poll(ctx, dirs, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.inserted != 1 {
+		t.Fatalf("steady poll after reallow = %+v, want 1 inserted", stats)
+	}
+	if got := countRows(t, hub.Writer(), `SELECT count(*) FROM events`); got != 2 {
+		t.Fatalf("events after steady poll = %d, want 2", got)
+	}
+}
+
+func TestLocalIngestStoppedThenPurgedResetsStoppedGauge(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "hub.db")
+	hub, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hub.Close()
+
+	srcDir := filepath.Join(tmp, "claude")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(srcDir, "sess.jsonl")
+	copyFixture(t, file, "malformed-line.jsonl")
+	obs := observertest.New()
+	w, err := watch.New(filepath.Join(tmp, "state"), "claude-code", watch.Options{Observer: obs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	ing := newIngestor(hub, w, "claude-code", "0123456789abcdef0123456789abcdef", 0, nil, &stderr, obs, nil)
+	dirs := []agentDir{{dir: srcDir}}
+
+	if stats, err := ing.poll(ctx, dirs, false); err != nil || stats.stopped != 1 {
+		t.Fatalf("pass 1 = %+v, %v", stats, err)
+	}
+	if stats, err := ing.poll(ctx, dirs, false); err != nil || stats.stopped != 1 {
+		t.Fatalf("pass 2 = %+v, %v", stats, err)
+	}
+	if got := obs.Gauge("watch_sources", "stopped"); got != 1 {
+		t.Fatalf("stopped gauge before purge = %v, want 1", got)
+	}
+	srcID, _ := soleSourceID(t, hub.Writer())
+
+	if _, _, err := hub.ApplyPurge(ctx, store.PurgeSelector{Agent: "claude-code"}); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := ing.poll(ctx, dirs, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.stopped != 0 {
+		t.Fatalf("post-purge poll stats.stopped = %d, want 0", stats.stopped)
+	}
+	if got := obs.Gauge("watch_sources", "stopped"); got != 0 {
+		t.Fatalf("stopped gauge after purge = %v, want 0", got)
+	}
+	if len(ing.noProgress) != 0 || len(ing.reported) != 0 {
+		t.Fatalf("purged stopped source retained stale state: noProgress=%v reported=%v", ing.noProgress, ing.reported)
+	}
+
+	if _, err := hub.ReallowSource(ctx, srcID); err != nil {
+		t.Fatal(err)
+	}
+	appendFile(t, file, `{"type":"user","sessionId":"00000000-0000-4000-8000-0000000000a1","message":{"role":"user","content":"extra"}}`+"\n")
+	stats, err = ing.poll(ctx, dirs, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.stopped != 1 || obs.Gauge("watch_sources", "stopped") != 1 {
+		t.Fatalf("after reallow with remaining malformed line: stats=%+v stopped_gauge=%v", stats, obs.Gauge("watch_sources", "stopped"))
 	}
 }

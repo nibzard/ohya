@@ -300,3 +300,136 @@ func TestBlockedPurgedMissingSourceSkipsProbe(t *testing.T) {
 		t.Fatalf("missing blocked purged source re-probed and logged refusal again:\n%s", afterLog)
 	}
 }
+
+func TestPurgeReallowResumesRunningUploaderWithoutRestart(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("via reconnect", func(t *testing.T) {
+		reg, err := registry.Open(filepath.Join(t.TempDir(), registry.FileName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { reg.Close() })
+		hub := openHubDB(t, filepath.Join(t.TempDir(), "hub.db"))
+		h := serve(t, hub, reg, hubsync.Options{})
+
+		alice := newPurgeDevice(t, "alice", reg, h.addr)
+		aliceFile := filepath.Join(alice.dir, "a.jsonl")
+		writeFile(t, aliceFile, line(sessA, "before purge"))
+		alice.mustSync(t)
+
+		var srcID string
+		if err := hub.Writer().QueryRow(`SELECT id FROM sources LIMIT 1`).Scan(&srcID); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := hub.ApplyPurge(ctx, store.PurgeSelector{Session: sessA}); err != nil {
+			t.Fatal(err)
+		}
+		appendFile(t, aliceFile, line(sessA, "during purge"))
+		alice.mustSync(t)
+		firstLog := alice.log.String()
+		if !strings.Contains(firstLog, "stops uploading") {
+			t.Fatalf("log lacks purge refusal:\n%s", firstLog)
+		}
+
+		batchesBefore := alice.dialer.batches.Load()
+		alice.mustSync(t)
+		if alice.log.String() != firstLog {
+			t.Fatalf("still-purged source logged again:\n%s", alice.log)
+		}
+		if alice.dialer.batches.Load() != batchesBefore {
+			t.Fatalf("still-purged source sent %d extra batches", alice.dialer.batches.Load()-batchesBefore)
+		}
+
+		if _, err := hub.ReallowSource(ctx, srcID); err != nil {
+			t.Fatal(err)
+		}
+		h.stop()
+		h2 := serve(t, hub, reg, hubsync.Options{})
+		alice.dialer.point(h2.addr)
+
+		alice.mustSync(t)
+		if got := count(t, hub, `SELECT count(*) FROM events`); got != 1 {
+			t.Fatalf("events after reconnect resume = %d, want 1\nlog:\n%s", got, alice.log)
+		}
+	})
+
+	t.Run("via PurgeRecheckInterval on same connection", func(t *testing.T) {
+		f := newFixture(t, Options{PurgeRecheckInterval: 15 * time.Millisecond})
+		hub := openHubDB(t, filepath.Join(t.TempDir(), "hub.db"))
+		h := serve(t, hub, f.reg, hubsync.Options{})
+		f.dialer.point(h.addr)
+
+		a := filepath.Join(f.dir, "a.jsonl")
+		writeFile(t, a, line(sessA, "before purge"))
+		f.mustSync()
+
+		var srcID string
+		if err := hub.Writer().QueryRow(`SELECT id FROM sources LIMIT 1`).Scan(&srcID); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := hub.ApplyPurge(ctx, store.PurgeSelector{Session: sessA}); err != nil {
+			t.Fatal(err)
+		}
+		appendFile(t, a, line(sessA, "after purge"))
+		f.mustSync()
+		if got := f.obs.Gauge("watch_sources", "blocked"); got != 1 {
+			t.Fatalf("blocked gauge while purged = %v, want 1", got)
+		}
+		firstLog := f.log.String()
+
+		time.Sleep(25 * time.Millisecond)
+		f.mustSync()
+		if f.log.String() != firstLog {
+			t.Fatalf("recheck while still purged logged duplicate refusal:\n%s", f.log)
+		}
+
+		if _, err := hub.ReallowSource(ctx, srcID); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(25 * time.Millisecond)
+		stats := f.mustSync()
+		if stats.Inserted != 1 {
+			t.Fatalf("stats after recheck resume = %+v, want 1 inserted", stats)
+		}
+		if got := count(t, hub, `SELECT count(*) FROM events`); got != 1 {
+			t.Fatalf("events after recheck resume = %d, want 1", got)
+		}
+		if got := f.obs.Gauge("watch_sources", "blocked"); got != 0 {
+			t.Fatalf("blocked gauge after reallow = %v, want 0", got)
+		}
+	})
+
+	t.Run("via file growth on same connection", func(t *testing.T) {
+		f := newFixture(t, Options{PurgeRecheckInterval: time.Hour})
+		hub := openHubDB(t, filepath.Join(t.TempDir(), "hub.db"))
+		h := serve(t, hub, f.reg, hubsync.Options{})
+		f.dialer.point(h.addr)
+
+		a := filepath.Join(f.dir, "a.jsonl")
+		writeFile(t, a, line(sessA, "before purge"))
+		f.mustSync()
+
+		var srcID string
+		if err := hub.Writer().QueryRow(`SELECT id FROM sources LIMIT 1`).Scan(&srcID); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := hub.ApplyPurge(ctx, store.PurgeSelector{Session: sessA}); err != nil {
+			t.Fatal(err)
+		}
+		appendFile(t, a, line(sessA, "while purged"))
+		f.mustSync()
+
+		if _, err := hub.ReallowSource(ctx, srcID); err != nil {
+			t.Fatal(err)
+		}
+		appendFile(t, a, line(sessA, "after reallow"))
+		stats := f.mustSync()
+		if stats.Inserted != 2 {
+			t.Fatalf("stats after growth resume = %+v, want 2 inserted", stats)
+		}
+		if got := count(t, hub, `SELECT count(*) FROM events`); got != 2 {
+			t.Fatalf("events after growth resume = %d, want 2", got)
+		}
+	})
+}

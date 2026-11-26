@@ -201,7 +201,7 @@ PurgeMarkNeverRegresses ==
 
 EventualSync ==
   /\ \A s \in Sources, i \in 0..(MaxLen - 1) :
-       (fileLen[s] > i) ~> (i \in stored[s] \/ i < purgeMark[s])
+       (~purged[s] /\ fileLen[s] > i) ~> (i \in stored[s] \/ i < purgeMark[s] \/ purged[s])
   /\ \A s \in Sources, i \in 0..(MaxLen - 1) :
        (i \in stored[s]) ~> (ackCursor[s] > i)
 

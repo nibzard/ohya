@@ -226,13 +226,25 @@ type ingestor struct {
 	excludedPaths   map[string]bool
 	noProgress      map[string]noProgressMark
 	tails           map[string]int64
-	registered      map[string]string
-	purged          map[string]bool
+	sources         map[string]ingestSourceState
 	sourceWorkspace func(sourcePath string) (string, bool)
 	workspaceTried  map[string]bool
 	workspaceFailed map[string]bool
 	workspacesDue   bool
 	discovery       *discoveryCache
+}
+
+type ingestSourcePhase uint8
+
+const (
+	ingestUnregistered ingestSourcePhase = iota
+	ingestRegistered
+	ingestPurged
+)
+
+type ingestSourceState struct {
+	phase ingestSourcePhase
+	path  string
 }
 
 type noProgressMark struct {
@@ -252,7 +264,7 @@ func newIngestor(hub *store.DB, w *watch.Watcher, agent, deviceID string, maxRec
 		hub: hub, watcher: w, agent: agent, deviceID: deviceID,
 		maxRecordBytes: maxRecordBytes, excludes: excludes, stderr: stderr, observer: observer, events: events, reported: map[string]int64{},
 		missingReported: map[string]bool{}, present: map[string]bool{}, noProgress: map[string]noProgressMark{}, tails: map[string]int64{},
-		registered: map[string]string{}, purged: map[string]bool{}, workspacesDue: true,
+		sources: map[string]ingestSourceState{}, workspacesDue: true,
 		workspaceTried: map[string]bool{}, workspaceFailed: map[string]bool{},
 		discovery: newDiscoveryCache(),
 	}
@@ -349,51 +361,59 @@ func (r *ingestor) poll(ctx context.Context, dirs []agentDir, allowEmpty bool) (
 			if o.ReplacedSourceID != "" {
 				delete(r.noProgress, o.ReplacedSourceID)
 				delete(r.tails, o.ReplacedSourceID)
-				delete(r.registered, o.ReplacedSourceID)
-				delete(r.purged, o.ReplacedSourceID)
+				delete(r.sources, o.ReplacedSourceID)
+				delete(r.reported, o.ReplacedSourceID)
+				delete(r.missingReported, o.ReplacedSourceID)
+				delete(r.present, o.ReplacedSourceID)
+				delete(r.workspaceTried, o.ReplacedSourceID)
+				delete(r.workspaceFailed, o.ReplacedSourceID)
 			}
 			if o.Reason != "new file" {
 				fmt.Fprintf(r.stderr, "ohya: %s: new source %s re-imports from byte zero: %s\n",
 					o.Path, o.SourceID, o.Reason)
 			}
 		}
-		if r.purged[o.SourceID] {
-			continue
-		}
-		if r.registered[o.SourceID] != o.Path {
-			if err := r.hub.RegisterSource(ctx, o.SourceID, r.deviceID, r.agent, o.Path); err != nil {
-				if ctx.Err() != nil {
-					break
+		state := r.sources[o.SourceID]
+		cursor, err := r.prepareSource(ctx, o, state)
+		if err != nil {
+			if ctx.Err() != nil {
+				break
+			}
+			if errors.Is(err, store.ErrSourcePurged) {
+				if state.phase != ingestPurged {
+					r.reportSource(o.Path, err)
+					r.markPurged(o.SourceID)
 				}
-				r.reportSource(o.Path, err)
-				if errors.Is(err, store.ErrSourcePurged) {
-					r.purged[o.SourceID] = true
-					delete(r.registered, o.SourceID)
-					delete(r.tails, o.SourceID)
-					continue
-				}
-				r.observer.Add("ingest_failures", 1, "commit")
-				r.event(observe.LevelWarn, observe.EventCommitFailed, "register", nil)
-				stats.failed++
-				pendingComplete += o.End - o.Cursor
 				continue
 			}
-			r.registered[o.SourceID] = o.Path
+			r.reportSource(o.Path, err)
+			stats.failed++
+			pendingComplete += o.End - o.Cursor
+			continue
 		}
+		o.Cursor = cursor
 		if o.End <= o.Cursor {
 			continue
 		}
 		if mark, cached := r.noProgress[o.SourceID]; cached && mark.end == o.End && mark.cursor == o.Cursor && mark.modTime.Equal(o.ModTime) {
-			if mark.stopped {
-				stats.stopped++
-				stats.stops = append(stats.stops, stopReport{
-					SourceID: o.SourceID,
-					Path:     o.Path,
-					Offset:   mark.stopOffset,
-					Remedy:   stopRemedy(mark.recordTooLarge),
-				})
+			st, err := r.hub.SourceStateForDevice(ctx, o.SourceID, r.deviceID)
+			if errors.Is(err, store.ErrSourcePurged) {
+				r.reportSource(o.Path, err)
+				r.markPurged(o.SourceID)
+				continue
 			}
-			continue
+			if err == nil && st.Cursor == o.Cursor {
+				if mark.stopped {
+					stats.stopped++
+					stats.stops = append(stats.stops, stopReport{
+						SourceID: o.SourceID,
+						Path:     o.Path,
+						Offset:   mark.stopOffset,
+						Remedy:   stopRemedy(mark.recordTooLarge),
+					})
+				}
+				continue
+			}
 		}
 		inserted, committed, stop, err := r.ingestSource(ctx, o)
 		if err != nil {
@@ -402,15 +422,13 @@ func (r *ingestor) poll(ctx context.Context, dirs []agentDir, allowEmpty bool) (
 			}
 			r.reportSource(o.Path, err)
 			if errors.Is(err, store.ErrSourcePurged) {
-				r.purged[o.SourceID] = true
-				delete(r.registered, o.SourceID)
-				delete(r.tails, o.SourceID)
+				r.markPurged(o.SourceID)
 				continue
 			}
 			stats.failed++
 			pendingComplete += o.End - o.Cursor
 			if errors.Is(err, store.ErrSourceNotRegistered) {
-				delete(r.registered, o.SourceID)
+				delete(r.sources, o.SourceID)
 			}
 			continue
 		}
@@ -426,9 +444,6 @@ func (r *ingestor) poll(ctx context.Context, dirs []agentDir, allowEmpty bool) (
 			mark.stopped = true
 			mark.stopOffset = stop.Offset
 			mark.recordTooLarge = stop.RecordTooLarge
-			delete(r.tails, o.SourceID)
-		} else {
-			r.tails[o.SourceID] = o.End - committed
 		}
 		stats.inserted += inserted
 		if inserted > 0 {
@@ -440,6 +455,11 @@ func (r *ingestor) poll(ctx context.Context, dirs []agentDir, allowEmpty bool) (
 			r.event(observe.LevelWarn, observe.EventCheckpointFailed, "acknowledge", nil)
 			stats.failed++
 			continue
+		}
+		if stop != nil {
+			delete(r.tails, o.SourceID)
+		} else {
+			r.tails[o.SourceID] = o.End - committed
 		}
 		if committed == o.Cursor {
 			r.noProgress[o.SourceID] = mark
@@ -527,27 +547,102 @@ func (r *ingestor) observeWorkspaces(ctx context.Context) {
 	r.workspacesDue = false
 }
 
+func (r *ingestor) prepareSource(ctx context.Context, o watch.Outcome, state ingestSourceState) (int64, error) {
+	if state.phase == ingestRegistered && state.path == o.Path {
+		return o.Cursor, nil
+	}
+	if state.phase == ingestPurged {
+		st, err := r.hub.SourceStateForDevice(ctx, o.SourceID, r.deviceID)
+		switch {
+		case err == nil && st.Agent == r.agent && st.Path == o.Path:
+			if err := r.reconcileCursor(o.Path, o.SourceID, o.Cursor, st.Cursor); err != nil {
+				return o.Cursor, err
+			}
+			r.sources[o.SourceID] = ingestSourceState{phase: ingestRegistered, path: o.Path}
+			return st.Cursor, nil
+		case err != nil && !errors.Is(err, store.ErrSourceNotRegistered):
+			if ctx.Err() == nil && !errors.Is(err, store.ErrSourcePurged) {
+				r.observer.Add("ingest_failures", 1, "read")
+			}
+			return o.Cursor, err
+		}
+	}
+	if err := r.hub.RegisterSource(ctx, o.SourceID, r.deviceID, r.agent, o.Path); err != nil {
+		if ctx.Err() == nil && !errors.Is(err, store.ErrSourcePurged) {
+			r.observer.Add("ingest_failures", 1, "commit")
+			r.event(observe.LevelWarn, observe.EventCommitFailed, "register", nil)
+		}
+		return o.Cursor, err
+	}
+	st, err := r.hub.SourceStateForDevice(ctx, o.SourceID, r.deviceID)
+	if err != nil {
+		if ctx.Err() == nil && !errors.Is(err, store.ErrSourcePurged) {
+			r.observer.Add("ingest_failures", 1, "read")
+		}
+		return o.Cursor, err
+	}
+	if err := r.reconcileCursor(o.Path, o.SourceID, o.Cursor, st.Cursor); err != nil {
+		return o.Cursor, err
+	}
+	r.sources[o.SourceID] = ingestSourceState{phase: ingestRegistered, path: o.Path}
+	return st.Cursor, nil
+}
+
+func (r *ingestor) markPurged(id string) {
+	r.sources[id] = ingestSourceState{phase: ingestPurged}
+	delete(r.tails, id)
+	delete(r.noProgress, id)
+	delete(r.reported, id)
+}
+
+func (r *ingestor) reconcileCursor(path, id string, checkpoint, hub int64) error {
+	var err error
+	switch {
+	case hub < checkpoint:
+		err = r.watcher.Rewind(path, id, hub)
+	case hub > checkpoint:
+		err = r.watcher.Acknowledge(path, id, hub)
+	default:
+		return nil
+	}
+	if err != nil {
+		r.observer.Add("ingest_failures", 1, "checkpoint")
+		r.event(observe.LevelWarn, observe.EventCheckpointFailed, "reconcile", nil)
+		return err
+	}
+	delete(r.noProgress, id)
+	delete(r.reported, id)
+	return nil
+}
+
 func (r *ingestor) ingestSource(ctx context.Context, o watch.Outcome) (int, int64, *events.StopError, error) {
 	inserted := 0
+	checkpoint := o.Cursor
 	readEnd := min(o.End, o.Cursor+maxBatchBytes)
 	for o.Cursor < o.End {
+		st, err := r.hub.SourceStateForDevice(ctx, o.SourceID, r.deviceID)
+		if err != nil {
+			if ctx.Err() == nil && !errors.Is(err, store.ErrSourcePurged) {
+				r.observer.Add("ingest_failures", 1, "read")
+			}
+			return inserted, o.Cursor, nil, err
+		}
+		if st.Cursor != o.Cursor {
+			if err := r.reconcileCursor(o.Path, o.SourceID, checkpoint, st.Cursor); err != nil {
+				return inserted, o.Cursor, nil, err
+			}
+			checkpoint = st.Cursor
+			o.Cursor = st.Cursor
+			readEnd = min(o.End, o.Cursor+maxBatchBytes)
+			continue
+		}
+		opts := events.Options{SourceScope: o.SourceID, SourcePath: o.Path, FirstNative: st.FirstNativeID, MaxRecordBytes: r.maxRecordBytes}
 		chunk := o
 		chunk.End = readEnd
 		data, err := r.watcher.ReadPending(chunk)
 		if err != nil {
 			r.observer.Add("ingest_failures", 1, "read")
 			return inserted, o.Cursor, nil, err
-		}
-		opts := events.Options{SourceScope: o.SourceID, SourcePath: o.Path, MaxRecordBytes: r.maxRecordBytes}
-		if chunk.Cursor > 0 {
-			st, err := r.hub.SourceState(ctx, o.SourceID)
-			if err != nil {
-				if ctx.Err() == nil && !errors.Is(err, store.ErrSourcePurged) {
-					r.observer.Add("ingest_failures", 1, "read")
-				}
-				return inserted, o.Cursor, nil, err
-			}
-			opts.FirstNative = st.FirstNativeID
 		}
 		parseStart := time.Now()
 		res, perr := events.Parse(r.agent, data, chunk.Cursor, opts)
