@@ -526,3 +526,91 @@ func TestPublisherPeriodicallyCleansStaleInstances(t *testing.T) {
 	}
 	t.Fatal("publisher did not periodically clean stale terminated instances")
 }
+
+func TestPublisherHistoryCadenceDoesNotSlipOnTickJitter(t *testing.T) {
+	dir := t.TempDir()
+	clock := NewFakeClock(1_000_000)
+	inst, err := NewInstance(dir, "d63898e", false, clock, RoleJoin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := NewRecorder(inst, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := NewPublisher(PublisherConfig{
+		Dir:             dir,
+		Recorder:        rec,
+		Clock:           clock,
+		Interval:        time.Hour,
+		HistoryInterval: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	for step := 1; step <= 18; step++ {
+		if step%6 == 0 {
+			clock.Advance(9999 * time.Millisecond)
+		} else if step%6 == 1 && step > 1 {
+			clock.Advance(10001 * time.Millisecond)
+		} else {
+			clock.Advance(10 * time.Second)
+		}
+		p.tick()
+	}
+
+	raw, err := os.ReadFile(filepath.Join(p.Dir(), historyFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("history samples over 3m with -1ms tick jitter = %d, want 4 (0m, 1m, 2m, 3m)", len(lines))
+	}
+}
+
+func TestPublisherCloseAppendsFinalHistorySampleWhenElapsed(t *testing.T) {
+	dir := t.TempDir()
+	clock := NewFakeClock(2_000_000)
+	inst, err := NewInstance(dir, "d63898e", false, clock, RoleMCP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := NewRecorder(inst, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := NewPublisher(PublisherConfig{
+		Dir:             dir,
+		Recorder:        rec,
+		Clock:           clock,
+		Interval:        time.Hour,
+		HistoryInterval: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.Add("sql_requests", 1, "sql", "ok")
+	clock.Advance(250 * time.Millisecond)
+	if err := p.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(p.Dir(), historyFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("history samples after short clean exit = %d, want 2 (startup and shutdown)", len(lines))
+	}
+	var last Snapshot
+	if err := json.Unmarshal([]byte(lines[1]), &last); err != nil {
+		t.Fatal(err)
+	}
+	if !last.Stopped || last.Counters["sql_requests{query_class=sql,query_outcome=ok}"] != 1 {
+		t.Fatalf("final history sample = %+v, want stopped=true with final counter", last)
+	}
+}

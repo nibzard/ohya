@@ -391,3 +391,91 @@ func TestDurationAndRateTextStayShort(t *testing.T) {
 		}
 	}
 }
+
+func TestMetricsSteadyMinuteSamplesCover1m5mAnd1hWindows(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "hub.db")
+	id := strings.Repeat("a", 32)
+	now := time.Now()
+	var samples []observe.Snapshot
+	for m := 65; m >= 1; m-- {
+		uptime := int64(66-m) * 60_000
+		at := now.Add(-time.Duration(m)*time.Minute - 15*time.Second)
+		sample := historySample(at, uptime, func(s *observe.Snapshot) {
+			s.Instance.InstanceID = id
+			s.Counters["upload_batches{batch_result=successful}"] = uint64(66 - m)
+		})
+		samples = append(samples, sample)
+	}
+	writeHistory(t, dir, id, samples)
+	writeStatusFixture(t, dir, id, os.Getpid(), 5*time.Second, func(s *observe.Snapshot) {
+		s.Instance.InstanceID = id
+		s.UptimeMS = 66*60_000 + 10_000
+		s.Counters["upload_batches{batch_result=successful}"] = 67
+	})
+
+	for _, win := range []string{"1m", "5m", "1h"} {
+		env, raw, err := runMetricsForTest(t, "--state", dir, "--db", dbPath, "--window", win, "--json")
+		if err != nil {
+			t.Fatalf("window %s on steady 66m daemon returned %v (%s)", win, err, raw)
+		}
+		if !hasFindingCode(env.Data.Findings, "window_complete", sevOK) {
+			t.Errorf("window %s missing window_complete: %+v", win, env.Data.Findings)
+		}
+		inst := env.Data.Instances[0]
+		if !inst.Completeness.CoversWindow {
+			t.Errorf("window %s covers_window = false (%s)", win, inst.Completeness.Reason)
+		}
+		if inst.Counters["upload_batches{batch_result=successful}"] == 0 {
+			t.Errorf("window %s reported 0 batch delta: %+v", win, inst.Counters)
+		}
+	}
+}
+
+func TestMetricsOmitsTerminatedEphemeralMCPWithRecentSamplesUnlessAll(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "hub.db")
+	now := time.Now()
+	liveID := strings.Repeat("b", 32)
+	writeHistory(t, dir, liveID, []observe.Snapshot{
+		historySample(now.Add(-6*time.Minute), 60_000, func(s *observe.Snapshot) { s.Instance.InstanceID = liveID }),
+		historySample(now.Add(-5*time.Minute), 120_000, func(s *observe.Snapshot) { s.Instance.InstanceID = liveID }),
+		historySample(now.Add(-4*time.Minute), 180_000, func(s *observe.Snapshot) { s.Instance.InstanceID = liveID }),
+		historySample(now.Add(-3*time.Minute), 240_000, func(s *observe.Snapshot) { s.Instance.InstanceID = liveID }),
+		historySample(now.Add(-2*time.Minute), 300_000, func(s *observe.Snapshot) { s.Instance.InstanceID = liveID }),
+		historySample(now.Add(-1*time.Minute), 360_000, func(s *observe.Snapshot) { s.Instance.InstanceID = liveID }),
+	})
+	writeStatusFixture(t, dir, liveID, os.Getpid(), 4*time.Second, func(s *observe.Snapshot) {
+		s.Instance.InstanceID = liveID
+		s.UptimeMS = 416_000
+	})
+
+	ephemID := strings.Repeat("c", 32)
+	writeHistory(t, dir, ephemID, []observe.Snapshot{
+		historySample(now.Add(-2*time.Minute), 0, func(s *observe.Snapshot) {
+			s.Instance.InstanceID = ephemID
+			s.Instance.Roles = []string{"mcp"}
+		}),
+	})
+	writeStatusFixture(t, dir, ephemID, os.Getpid(), 2*time.Minute, func(s *observe.Snapshot) {
+		s.Instance.InstanceID = ephemID
+		s.Instance.Roles = []string{"mcp"}
+		s.Stopped = true
+	})
+
+	env, raw, err := runMetricsForTest(t, "--state", dir, "--db", dbPath, "--window", "5m", "--json")
+	if err != nil {
+		t.Fatalf("metrics degraded due to stopped ephemeral mcp: %v (%s)", err, raw)
+	}
+	if len(env.Data.Instances) != 1 || env.Data.Instances[0].InstanceID != liveID {
+		t.Fatalf("instances = %+v, want only live daemon", env.Data.Instances)
+	}
+
+	allEnv, _, err := runMetricsForTest(t, "--state", dir, "--db", dbPath, "--window", "5m", "--all", "--json")
+	if err != errDegraded {
+		t.Fatalf("--all with partial ephemeral mcp = %v, want errDegraded", err)
+	}
+	if len(allEnv.Data.Instances) != 2 {
+		t.Fatalf("--all instances = %d, want 2", len(allEnv.Data.Instances))
+	}
+}

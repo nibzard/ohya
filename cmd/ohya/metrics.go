@@ -200,6 +200,18 @@ func buildMetrics(o metricsOptions, requestedMS int64) (metricsData, error) {
 		views = []observe.InstanceView{view}
 	}
 	sinceMS := nowMS - requestedMS
+	liveRoles := map[string]bool{}
+	for _, view := range views {
+		if view.DecodeErr != "" || view.Snapshot == nil || view.Snapshot.Stopped {
+			continue
+		}
+		age := nowMS - view.Snapshot.SampledWallMS
+		if age >= 0 && age <= observe.SnapshotStaleAge.Milliseconds() && observe.ProbePID(view.Snapshot.Instance.PID) == "running" {
+			for _, role := range view.Snapshot.Instance.Roles {
+				liveRoles[role] = true
+			}
+		}
+	}
 	seen := 0
 	omittedRetained := 0
 	for _, view := range views {
@@ -207,8 +219,7 @@ func buildMetrics(o metricsOptions, requestedMS int64) (metricsData, error) {
 			continue
 		}
 		m := buildInstanceMetrics(view, sinceMS, nowMS, requestedMS)
-		if o.instanceID == "" && !o.all && m.SampleCount == 0 && view.Snapshot != nil && view.DecodeErr == "" &&
-			(view.Snapshot.Stopped || observe.ProbePID(view.Snapshot.Instance.PID) == "dead") {
+		if o.instanceID == "" && !o.all && isOmittedMetricsInstance(view, m, liveRoles) {
 			omittedRetained++
 			continue
 		}
@@ -217,7 +228,7 @@ func buildMetrics(o metricsOptions, requestedMS int64) (metricsData, error) {
 	}
 	if omittedRetained > 0 {
 		data.Coverage.Notes = append(data.Coverage.Notes,
-			fmt.Sprintf("%d retained terminated instances with no samples in window omitted; pass --all to include", omittedRetained))
+			fmt.Sprintf("%d retained terminated instances omitted; pass --all to include", omittedRetained))
 	}
 	if seen == 0 && o.instanceID == "" {
 		data.Coverage.Missing = append(data.Coverage.Missing, "instances")
@@ -281,6 +292,19 @@ func buildMetrics(o metricsOptions, requestedMS int64) (metricsData, error) {
 	return data, nil
 }
 
+func isOmittedMetricsInstance(view observe.InstanceView, m instanceMetrics, liveRoles map[string]bool) bool {
+	if view.DecodeErr != "" || view.Snapshot == nil {
+		return false
+	}
+	if !view.Snapshot.Stopped && observe.ProbePID(view.Snapshot.Instance.PID) != "dead" {
+		return false
+	}
+	if m.SampleCount == 0 || isEphemeralRoles(view.Snapshot.Instance.Roles) {
+		return true
+	}
+	return allRolesMarked(view.Snapshot.Instance.Roles, liveRoles)
+}
+
 func buildInstanceMetrics(view observe.InstanceView, sinceMS, nowMS, requestedMS int64) instanceMetrics {
 	instance := instanceMetrics{
 		InstanceID:  view.InstanceID,
@@ -292,10 +316,47 @@ func buildInstanceMetrics(view observe.InstanceView, sinceMS, nowMS, requestedMS
 	}
 	samples, corrupt := readHistorySamples(filepath.Join(view.Dir, "history.jsonl"))
 	instance.CorruptSamples = corrupt
+	maxWallMS := nowMS + observe.SnapshotStaleAge.Milliseconds()
+	anchorFloorMS := sinceMS - metricsHistoryCadenceMS - observe.SnapshotInterval.Milliseconds()
+	var preWindow *observe.Snapshot
 	var inWindow []observe.Snapshot
-	for _, sample := range samples {
-		if sample.SampledWallMS >= sinceMS && sample.SampledWallMS <= nowMS+observe.SnapshotStaleAge.Milliseconds() {
+	for i := range samples {
+		sample := samples[i]
+		if sample.SampledWallMS < sinceMS {
+			if sample.SampledWallMS >= anchorFloorMS {
+				s := sample
+				preWindow = &s
+			}
+			continue
+		}
+		if sample.SampledWallMS <= maxWallMS {
 			inWindow = append(inWindow, sample)
+		}
+	}
+	if view.DecodeErr == "" && view.Snapshot != nil &&
+		view.Snapshot.SampledWallMS >= sinceMS && view.Snapshot.SampledWallMS <= maxWallMS {
+		if len(inWindow) == 0 {
+			inWindow = append(inWindow, *view.Snapshot)
+		} else {
+			last := inWindow[len(inWindow)-1]
+			if view.Snapshot.Instance.InstanceID == last.Instance.InstanceID &&
+				view.Snapshot.SampledWallMS > last.SampledWallMS &&
+				view.Snapshot.UptimeMS >= last.UptimeMS {
+				inWindow = append(inWindow, *view.Snapshot)
+			}
+		}
+	}
+	if preWindow != nil {
+		if len(inWindow) == 0 {
+			inWindow = append(inWindow, *preWindow)
+		} else {
+			first, last := inWindow[0], inWindow[len(inWindow)-1]
+			span := max(last.SampledWallMS-first.SampledWallMS, last.UptimeMS-first.UptimeMS)
+			if (first.SampledWallMS > sinceMS || span < requestedMS) &&
+				preWindow.Instance.InstanceID == first.Instance.InstanceID &&
+				preWindow.UptimeMS <= first.UptimeMS {
+				inWindow = append([]observe.Snapshot{*preWindow}, inWindow...)
+			}
 		}
 	}
 	if len(inWindow) == 0 {
@@ -314,12 +375,20 @@ func buildInstanceMetrics(view observe.InstanceView, sinceMS, nowMS, requestedMS
 	}
 	gaps := historyGaps(inWindow)
 	instance.Gaps = &gaps
+	window := observe.Delta(&last, &first)
+	coveredSpan := observed
+	if window.SameInstance && monotonic > coveredSpan {
+		coveredSpan = monotonic
+	}
+	liveRightEdge := view.DecodeErr == "" && view.Snapshot != nil && !view.Snapshot.Stopped &&
+		last.SampledWallMS == view.Snapshot.SampledWallMS &&
+		nowMS >= last.SampledWallMS && nowMS-last.SampledWallMS <= observe.SnapshotStaleAge.Milliseconds()
+	coversSpan := coveredSpan >= requestedMS || (window.SameInstance && first.SampledWallMS <= sinceMS && liveRightEdge)
 	expected := int((requestedMS + metricsHistoryCadenceMS - 1) / metricsHistoryCadenceMS)
-	if observed < requestedMS {
-		expected = int((observed + metricsHistoryCadenceMS - 1) / metricsHistoryCadenceMS)
+	if !coversSpan {
+		expected = int((coveredSpan + metricsHistoryCadenceMS - 1) / metricsHistoryCadenceMS)
 	}
 	instance.ExpectedSamples = &expected
-	window := observe.Delta(&last, &first)
 	instance.Counters = window.Counters
 	instance.UnavailableCounters = window.UnavailableCounters
 	if monotonic > 0 && window.SameInstance {
@@ -332,7 +401,7 @@ func buildInstanceMetrics(view observe.InstanceView, sinceMS, nowMS, requestedMS
 	instance.Durations, instance.UnavailableDurations = durationDeltas(first, last)
 	reason := ""
 	switch {
-	case observed < requestedMS:
+	case !coversSpan:
 		reason = fmt.Sprintf("observed %s of the requested %s window", ageText(observed), ageText(requestedMS))
 	case gaps > 0:
 		reason = fmt.Sprintf("%d missing minute samples inside the window", gaps)

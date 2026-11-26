@@ -54,7 +54,10 @@ type Publisher struct {
 	mu                sync.Mutex
 	writeErrs         map[string]uint64
 	lastErr           error
+	nextHistoryMono   time.Duration
 	lastHistoryWallMS int64
+	lastHistoryUptime int64
+	hasHistory        bool
 	lastPruneWallMS   int64
 	lastCleanWallMS   int64
 	writeSnapshot     func(path string, data []byte) error
@@ -111,8 +114,8 @@ func NewPublisher(cfg PublisherConfig) (*Publisher, error) {
 		p.recordWriteError("other", err)
 	}
 	p.lastCleanWallMS = cfg.Clock.WallMS()
-	p.publish(false)
-	p.recordHistory()
+	startup := p.publish(false)
+	p.recordHistory(startup, true)
 	go p.run()
 	return p, nil
 }
@@ -136,8 +139,8 @@ func (p *Publisher) run() {
 func (p *Publisher) tick() {
 	SampleRuntime(p.cfg.Recorder)
 	p.sampleFiles()
-	p.publish(false)
-	p.recordHistory()
+	snapshot := p.publish(false)
+	p.recordHistory(snapshot, false)
 	p.cleanStale()
 }
 
@@ -161,8 +164,8 @@ func (p *Publisher) Close() error {
 	p.closeOnce.Do(func() {
 		close(p.stop)
 		<-p.done
-		p.publish(true)
-		p.recordHistory()
+		final := p.publish(true)
+		p.recordHistory(final, true)
 	})
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -179,7 +182,7 @@ func (p *Publisher) WriteErrors() map[string]uint64 {
 	return out
 }
 
-func (p *Publisher) publish(stopped bool) {
+func (p *Publisher) publish(stopped bool) Snapshot {
 	start := time.Now()
 	snapshot := p.cfg.Recorder.Snapshot()
 	snapshot.Stopped = stopped
@@ -201,21 +204,25 @@ func (p *Publisher) publish(stopped bool) {
 	p.cfg.Recorder.Observe("instrumentation_publish_duration", time.Since(start))
 	if err != nil {
 		p.recordWriteError("snapshot", err)
-		return
+		return snapshot
 	}
 	p.cfg.Recorder.Set("instrumentation_last_publish_ms", float64(p.cfg.Clock.Monotonic().Milliseconds()))
+	return snapshot
 }
 
-func (p *Publisher) recordHistory() {
-	now := p.cfg.Clock.WallMS()
-	interval := p.cfg.HistoryInterval.Milliseconds()
+func (p *Publisher) recordHistory(snapshot Snapshot, force bool) {
+	mono := time.Duration(snapshot.UptimeMS) * time.Millisecond
+	tolerance := min(p.cfg.Interval/4, p.cfg.HistoryInterval/4)
 	p.mu.Lock()
-	last := p.lastHistoryWallMS
-	p.mu.Unlock()
-	if last != 0 && now-last < interval {
+	if !force && p.hasHistory && mono+tolerance < p.nextHistoryMono {
+		p.mu.Unlock()
 		return
 	}
-	snapshot := p.cfg.Recorder.Snapshot()
+	if force && snapshot.Stopped && p.hasHistory && snapshot.SampledWallMS == p.lastHistoryWallMS && snapshot.UptimeMS == p.lastHistoryUptime {
+		p.mu.Unlock()
+		return
+	}
+	p.mu.Unlock()
 	data, err := json.Marshal(snapshot)
 	if err == nil {
 		err = p.appendHistory(filepath.Join(p.dir, historyFileName), append(data, '\n'))
@@ -225,9 +232,20 @@ func (p *Publisher) recordHistory() {
 		return
 	}
 	p.mu.Lock()
-	p.lastHistoryWallMS = now
+	if !p.hasHistory {
+		p.hasHistory = true
+		p.nextHistoryMono = mono + p.cfg.HistoryInterval
+	} else if !force {
+		next := p.nextHistoryMono + p.cfg.HistoryInterval
+		if next <= mono {
+			next = mono + p.cfg.HistoryInterval
+		}
+		p.nextHistoryMono = next
+	}
+	p.lastHistoryWallMS = snapshot.SampledWallMS
+	p.lastHistoryUptime = snapshot.UptimeMS
 	p.mu.Unlock()
-	p.pruneHistory(now)
+	p.pruneHistory(snapshot.SampledWallMS)
 }
 
 const historyPruneInterval = 15 * time.Minute
