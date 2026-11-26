@@ -80,6 +80,15 @@ func (m *childServiceManager) run(_ context.Context, args []string) error {
 	return nil
 }
 
+func (m *childServiceManager) servePID() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.serve == nil || m.serve.Process == nil || m.serve.ProcessState != nil {
+		return 0
+	}
+	return m.serve.Process.Pid
+}
+
 func serviceUnitName(serve bool) string {
 	if serve {
 		return "hub service"
@@ -297,6 +306,33 @@ func TestHubSetupTwoStepFlow(t *testing.T) {
 		t.Fatalf("rerun issued no fresh code: %+v", rerun.Data.Hub)
 	}
 	t.Log("hub setup rerun changed nothing and issued a fresh code")
+
+	servePID := manager.servePID()
+	plainArgs := []string{"--state", hubState, "--binary", wrapper,
+		"--no-agents", "--no-modify-path", "--claude-root", claudeRoot,
+		"--codex-root", "", "--pi-root", "", "--antigravity-root", "", "--json"}
+	stdout.Reset()
+	stderr.Reset()
+	if err := runSetupCommandWith(plainArgs, &stdout, &stderr, rt); err != nil {
+		t.Fatalf("plain setup on the hub = %v %s %s", err, stdout.String(), stderr.String())
+	}
+	var plain setupReportJSON
+	if err := json.Unmarshal(stdout.Bytes(), &plain); err != nil {
+		t.Fatal(err)
+	}
+	if r := resultStatus(t, plain, "hub-service"); r.Status != "running" {
+		t.Fatalf("plain setup hub-service = %+v", r)
+	}
+	if r := resultStatus(t, plain, "hub"); r.Status != "ready" {
+		t.Fatalf("plain setup hub check = %+v", r)
+	}
+	if plain.Data.Hub != nil {
+		t.Fatalf("plain setup issued a join code: %+v", plain.Data.Hub)
+	}
+	if pid := manager.servePID(); pid == 0 || pid == servePID {
+		t.Fatalf("plain setup left the serve process %d running; now %d", servePID, pid)
+	}
+	t.Log("plain setup on the hub restarted the owned hub service and issued no code")
 
 	delete(env, "OHYA_HUB_E2E_CODE")
 	devRerun := []string{"--state", devState, "--binary", wrapper,

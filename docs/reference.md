@@ -928,6 +928,12 @@ next step:
 - The serve service never created the identity — check its logs, then
   rerun `ohya setup --hub`.
 
+`ohya setup` without `--hub`, such as the run of `install.sh` that
+upgrades the hub, also reconfigures and restarts an owned `ohya serve`
+service (the one with a `hub-service.json` receipt) and checks the relay
+again. Thus the hub serves devices with the new executable. It issues no
+join code; run `ohya devices invite` for one.
+
 The installer's `--join` reads the join code from the terminal
 (`/dev/tty`) without echo, so the code never enters shell history or the
 screen. Without a terminal it requires `--join-code-env NAME` with the

@@ -21,7 +21,7 @@ import (
 
 var setupSpec = commandSpec{
 	name: "ohya setup", synopsis: "configure local memory and installed agents", usageLine: "ohya setup [flags]",
-	description: "Configures a user service for local ingestion and registers ohya with installed agents. Preserves unrelated settings and reports each result. Rerun to repair owned configuration. Use --dry-run to inspect changes without writing files. Pi 0.84.2 uses an owned compatibility extension when native MCP is unavailable. Remote setup accepts --join-code-env and saves the hub settings for reruns.\nUse --hub to also run this machine as the hub for other devices: it adds an owned ohya serve user service, creates the Tailcat identity, checks that a relay answers, and prints a one-time join code with the device command.",
+	description: "Configures a user service for local ingestion and registers ohya with installed agents. Preserves unrelated settings and reports each result. Rerun to repair owned configuration. Use --dry-run to inspect changes without writing files. Pi 0.84.2 uses an owned compatibility extension when native MCP is unavailable. Remote setup accepts --join-code-env and saves the hub settings for reruns.\nUse --hub to also run this machine as the hub for other devices: it adds an owned ohya serve user service, creates the Tailcat identity, checks that a relay answers, and prints a one-time join code with the device command. Without --hub, setup still restarts an owned hub service, so the hub runs the installed executable.",
 	examples:    []string{"ohya setup", "ohya setup --hub", "ohya setup --dry-run --json"},
 }
 
@@ -222,7 +222,7 @@ func runSetupCommandWith(args []string, stdout, stderr io.Writer, rt setupRuntim
 	if run, loaded := runners(); run != nil {
 		options.RunService, options.LoadedService = run, loaded
 	}
-	if *hubMode {
+	if *hubMode || (connection.Mode != "remote" && hubReceipt(absState)) {
 		options.HubServiceArgs = hubServiceArgs(absState, filepath.Join(absState, "hub.db"))
 		options.CheckHub = func(ctx context.Context) error {
 			return checkHubSetup(ctx, absState)
