@@ -419,6 +419,23 @@ func stoppedAt(ctx context.Context, hub *store.DB, agent string, s watch.SourceS
 }
 
 func checkDeviceIdentity(stateDir string) finding {
+	if cred, err := device.LoadCredential(stateDir); err == nil {
+		err := device.CheckPairedIdentity(stateDir, cred)
+		switch {
+		case errors.Is(err, device.ErrIdentityMismatch):
+			return finding{Check: "device_identity", Severity: sevError,
+				Detail: err.Error() + "; the hub stores this device's sessions under " + cred.DeviceID,
+				Remedy: fmt.Sprintf("restore the %s that holds device %s, or delete %s when only ohya join uses this state directory; %s names the device",
+					device.FileName, cred.DeviceID, device.FileName, device.CredentialFileName)}
+		case err != nil:
+			return finding{Check: "device_identity", Severity: sevError,
+				Detail: err.Error(),
+				Remedy: fmt.Sprintf("restore %s from a backup, or delete it when only ohya join uses this state directory; %s names the device",
+					device.FileName, device.CredentialFileName)}
+		}
+		return finding{Check: "device_identity", Severity: sevOK,
+			Detail: fmt.Sprintf("%s names device %s", device.CredentialFileName, cred.DeviceID)}
+	}
 	id, err := device.Load(stateDir)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):

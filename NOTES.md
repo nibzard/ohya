@@ -3185,25 +3185,17 @@ How to use this file:
   passed `xcrun swift test`, `make check`, and `make build` on macOS. The
   app was not opened on a Mac during the review. Review items, none a
   blocker:
-  - On a paired device the uploader stores sessions under the device ID of
-    `credential.json`, and `ohya join` keeps that ID when `device.json` was
-    created again. `topology.device_id` reads `device.json`. The two are
-    equal after a normal join. They differ after `device.json` is deleted
-    and created again, which the remedy text of `device.ErrUnusable`, of
-    `ohya doctor`, and of the new finding suggests. In that state `ohya
-    status --json` reports the new ID, the sessions of this Mac are stored
-    under the old one, and the app labels them as another device. No check
-    compares the two files. Possible fix: a doctor check that compares
-    `device.json` with the credential and reports the mismatch, with a
-    remedy that names re-pairing.
-  - `docs/reference.md` says that the output of `ohya status` carries this
-    device's ID. Only `--json` does; the text report has no row for it and
-    none for the device ID of the hub.
+  - Fixed on 2026-11-26: on a paired state directory `credential.json`
+    names the device. `ohya status` reports the credential's ID, the text
+    report has a `Device` row and `device=` in the `Remote hub` row, and a
+    `device.json` that names another device gives
+    `device_identity_mismatch` in status and an error in `ohya doctor`.
+    `ohya join` creates `device.json` only to pair, and `ohya mcp --remote`
+    takes its writer ID from the credential. An unusable `device.json` is
+    an error in both commands.
   - The device ID that the hub reports is the identity of `ohya serve`.
     It equals the identity of `ohya ingest` only when both use one state
     directory, which `ohya setup --hub` guarantees.
-  - `ohya status` grades an unusable `device.json` as `warn` and `ohya
-    doctor` as `error`. The exit code of status is the same for both.
   - Swift: the "Hub reachable" row copies the layout of `row(_:value:)`,
     and the color of the dot is written in two places. VoiceOver reads the
     name of the symbol of a tag before its text.

@@ -294,19 +294,31 @@ func fakeHubAddr(t *testing.T) string {
 	return string(ci.Addr())
 }
 
+func pairDoctorEnv(t *testing.T, e *doctorEnv) {
+	t.Helper()
+	deviceID, err := device.Load(e.stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := device.SaveCredential(e.stateDir, device.Credential{DeviceID: deviceID, Secret: "s3cret"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDoctorJoinState(t *testing.T) {
 	t.Parallel()
-	const deviceID = "0123456789abcdef0123456789abcdef"
 	pairedEnv := func(t *testing.T) *doctorEnv {
 		e := newDoctorEnv(t)
-		if err := device.SaveCredential(e.stateDir, device.Credential{DeviceID: deviceID, Secret: "s3cret"}); err != nil {
-			t.Fatal(err)
-		}
+		pairDoctorEnv(t, e)
 		return e
 	}
 
 	t.Run("missing hub address warns", func(t *testing.T) {
 		e := pairedEnv(t)
+		deviceID, err := device.Load(e.stateDir)
+		if err != nil {
+			t.Fatal(err)
+		}
 		code, out, _ := doctorRun(t, e)
 		if code != 0 {
 			t.Fatalf("exit code %d; want 0 — a missing hub address warns (stdout %q)", code, out)
@@ -395,7 +407,6 @@ func TestDoctorJoinState(t *testing.T) {
 
 func TestDoctorHubTransport(t *testing.T) {
 	t.Parallel()
-	const deviceID = "0123456789abcdef0123456789abcdef"
 
 	t.Run("unpaired state reports no transport object", func(t *testing.T) {
 		e := newDoctorEnv(t)
@@ -415,9 +426,7 @@ func TestDoctorHubTransport(t *testing.T) {
 
 	t.Run("unreachable hub reports unknown values in JSON", func(t *testing.T) {
 		e := newDoctorEnv(t)
-		if err := device.SaveCredential(e.stateDir, device.Credential{DeviceID: deviceID, Secret: "s3cret"}); err != nil {
-			t.Fatal(err)
-		}
+		pairDoctorEnv(t, e)
 		addr := fakeHubAddr(t)
 		if err := device.SaveHubAddress(e.stateDir, addr); err != nil {
 			t.Fatal(err)
@@ -493,6 +502,65 @@ func TestDoctorUnusableDeviceIdentityIsAnError(t *testing.T) {
 	f := soleFinding(t, parseDoctorFindings(t, out), "device_identity")
 	if f.Severity != sevError || !strings.Contains(f.Remedy, "restore device.json from a backup") {
 		t.Fatalf("finding = %+v; want error with the restore remedy", f)
+	}
+}
+
+func TestDoctorPairedDeviceIdentity(t *testing.T) {
+	const paired = "fedcba9876543210fedcba9876543210"
+	cases := []struct {
+		name         string
+		credentialID func(local string) string
+		removeLocal  bool
+		wantCode     int
+		wantSeverity string
+		wantDetail   []string
+	}{
+		{name: "matching", credentialID: func(local string) string { return local },
+			wantSeverity: sevOK, wantDetail: []string{"credential.json names device"}},
+		{name: "no device.json", credentialID: func(string) string { return paired }, removeLocal: true,
+			wantSeverity: sevOK, wantDetail: []string{"credential.json names device " + paired}},
+		{name: "other device", credentialID: func(string) string { return paired },
+			wantCode: 1, wantSeverity: sevError, wantDetail: []string{"is paired as device " + paired, "stores this device's sessions under " + paired}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newDoctorEnv(t)
+			local, err := device.Load(e.stateDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := device.SaveCredential(e.stateDir, device.Credential{DeviceID: tc.credentialID(local), Secret: "s3cret"}); err != nil {
+				t.Fatal(err)
+			}
+			if tc.removeLocal {
+				if err := os.Remove(filepath.Join(e.stateDir, device.FileName)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			code, out, _ := doctorRun(t, e)
+			f := soleFinding(t, parseDoctorFindings(t, out), "device_identity")
+			if f.Severity != tc.wantSeverity {
+				t.Fatalf("finding = %+v; want severity %s", f, tc.wantSeverity)
+			}
+			for _, want := range tc.wantDetail {
+				if !strings.Contains(f.Detail, want) {
+					t.Fatalf("detail %q misses %q", f.Detail, want)
+				}
+			}
+			if tc.wantCode != 0 {
+				if code != tc.wantCode {
+					t.Fatalf("exit code %d; want %d (stdout %q)", code, tc.wantCode, out)
+				}
+				if !strings.Contains(f.Remedy, "credential.json names the device") {
+					t.Fatalf("remedy misses the rule: %s", f.Remedy)
+				}
+			}
+			if tc.removeLocal {
+				if _, err := os.Stat(filepath.Join(e.stateDir, device.FileName)); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("doctor created a device identity: %v", err)
+				}
+			}
+		})
 	}
 }
 

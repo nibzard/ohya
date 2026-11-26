@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -17,6 +18,8 @@ const credentialVersion = 1
 const maxSecretLen = 128
 
 var ErrCredentialUnusable = errors.New("device: credential file exists but cannot be used; restore it, or ask the hub to revoke this device identity and re-pair with a new one")
+
+var ErrIdentityMismatch = errors.New("device: identity file and credential name different devices")
 
 type Credential struct {
 	DeviceID string
@@ -68,4 +71,18 @@ func LoadCredential(dir string) (Credential, error) {
 		return Credential{}, fmt.Errorf("%w: %s holds no valid credential", ErrCredentialUnusable, path)
 	}
 	return Credential{DeviceID: file.DeviceID, Secret: file.Secret}, nil
+}
+
+func CheckPairedIdentity(dir string, cred Credential) error {
+	id, err := Load(dir)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil
+	case err != nil:
+		return err
+	case id != cred.DeviceID:
+		return fmt.Errorf("%w: %s holds device %s, but %s is paired as device %s",
+			ErrIdentityMismatch, FileName, id, CredentialFileName, cred.DeviceID)
+	}
+	return nil
 }

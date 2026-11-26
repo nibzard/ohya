@@ -174,14 +174,16 @@ func unpairedHubAddress(t *testing.T) string {
 
 func TestJoinContextCancelDuringStartupStopsCleanly(t *testing.T) {
 	cases := []struct {
-		name       string
-		paired     bool
-		passCode   bool
-		wantCredOK bool
+		name           string
+		paired         bool
+		removeIdentity bool
+		passCode       bool
+		wantCredOK     bool
 	}{
 		{name: "pair window", passCode: true},
 		{name: "rejoin window", paired: true, passCode: true, wantCredOK: true},
 		{name: "resume window", paired: true, wantCredOK: true},
+		{name: "resume without identity file", paired: true, removeIdentity: true, wantCredOK: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -202,6 +204,11 @@ func TestJoinContextCancelDuringStartupStopsCleanly(t *testing.T) {
 				if err := device.SaveHubAddress(stateDir, unpairedHubAddress(t)); err != nil {
 					t.Fatal(err)
 				}
+				if tc.removeIdentity {
+					if err := os.Remove(filepath.Join(stateDir, device.FileName)); err != nil {
+						t.Fatal(err)
+					}
+				}
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
@@ -220,6 +227,9 @@ func TestJoinContextCancelDuringStartupStopsCleanly(t *testing.T) {
 				}
 			} else if !errors.Is(credErr, os.ErrNotExist) {
 				t.Fatalf("a credential was paired despite the canceled stop: %v", credErr)
+			}
+			if _, err := os.Stat(filepath.Join(stateDir, device.FileName)); tc.removeIdentity && !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("a rejoin with a credential created a second identity file: %v", err)
 			}
 		})
 	}

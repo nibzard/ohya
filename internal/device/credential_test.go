@@ -77,3 +77,33 @@ func TestCredentialUnusableNeverRepairs(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckPairedIdentity(t *testing.T) {
+	paired := Credential{DeviceID: "0123456789abcdef0123456789abcdef", Secret: "s"}
+	cases := map[string]struct {
+		identity string
+		want     error
+	}{
+		"absent":   {},
+		"matching": {identity: `{"version":1,"device_id":"0123456789abcdef0123456789abcdef"}`},
+		"other":    {identity: `{"version":1,"device_id":"fedcba9876543210fedcba9876543210"}`, want: ErrIdentityMismatch},
+		"unusable": {identity: "{not json", want: ErrUnusable},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tc.identity != "" {
+				if err := os.WriteFile(filepath.Join(dir, FileName), []byte(tc.identity), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := CheckPairedIdentity(dir, paired)
+			if tc.want == nil && err != nil || tc.want != nil && !errors.Is(err, tc.want) {
+				t.Fatalf("CheckPairedIdentity = %v, want %v", err, tc.want)
+			}
+			if _, statErr := os.Stat(filepath.Join(dir, FileName)); tc.identity == "" && !errors.Is(statErr, fs.ErrNotExist) {
+				t.Fatalf("the check created %s: %v", FileName, statErr)
+			}
+		})
+	}
+}

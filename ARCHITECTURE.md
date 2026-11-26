@@ -94,6 +94,14 @@ Local state files:
   already holds the identity as paired and refuses a new invitation for
   it. Restore the file, or have the hub revoke the identity and pair a new
   one.
+- On a paired state directory, `credential.json` names the device: uploads,
+  annotation writers, usage records, and `ohya status` use its Device ID.
+  `device.json` there only supplies the ID of the first pairing, so
+  `ohya join` creates it only to pair. `device.CheckPairedIdentity` reports
+  a `device.json` that names another device as `ErrIdentityMismatch`;
+  `ohya doctor` and `ohya status` report it as an error. The remedy is to
+  restore the matching `device.json`, or to delete it when only `ohya join`
+  uses that state directory.
 - `sources/<agent>.json` (format version 1) maps each watched path to its
   checkpoint: source ID (32 lowercase hex characters from `crypto/rand`),
   agent, platform file identity, acknowledged cursor, observed size, and

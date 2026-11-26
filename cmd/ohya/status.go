@@ -327,15 +327,9 @@ func buildStatus(ctx context.Context, o statusOptions) (statusData, error) {
 	if o.instanceID != "" {
 		data.Coverage.Notes = append(data.Coverage.Notes, "filtered to instance "+o.instanceID)
 	}
-	if deviceID, err := device.Load(o.stateDir); err == nil {
-		data.Topology.DeviceID = deviceID
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		data.Findings = append(data.Findings, statusFinding{
-			Code: "device_identity_unusable", Severity: sevWarn,
-			Evidence: err.Error(),
-			Hint:     "run ohya doctor; restore the device identity file, or delete it to start over as a new device",
-		})
-	}
+	deviceID, identityFindings := statusDeviceIdentity(o.stateDir)
+	data.Topology.DeviceID = deviceID
+	data.Findings = append(data.Findings, identityFindings...)
 	data.Topology.AgentRoots = statusAgentRoots(o.home)
 	data.Topology.Services = statusServices(ctx, o)
 	joined := connection.Mode == "remote"
@@ -940,6 +934,40 @@ func safeUploadBytes(instance statusInstance) map[string]float64 {
 	return instance.Backlog.UploadBytes
 }
 
+func statusDeviceIdentity(stateDir string) (string, []statusFinding) {
+	cred, err := device.LoadCredential(stateDir)
+	if err == nil {
+		err := device.CheckPairedIdentity(stateDir, cred)
+		switch {
+		case errors.Is(err, device.ErrIdentityMismatch):
+			return cred.DeviceID, []statusFinding{{
+				Code: "device_identity_mismatch", Severity: sevError,
+				Evidence: err.Error(),
+				Hint:     "run ohya doctor --state " + stateDir + "; the hub stores this device's sessions under the credential's device ID",
+			}}
+		case err != nil:
+			return cred.DeviceID, []statusFinding{statusIdentityUnusable(err)}
+		}
+		return cred.DeviceID, nil
+	}
+	id, err := device.Load(stateDir)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return "", nil
+	case err != nil:
+		return "", []statusFinding{statusIdentityUnusable(err)}
+	}
+	return id, nil
+}
+
+func statusIdentityUnusable(err error) statusFinding {
+	return statusFinding{
+		Code: "device_identity_unusable", Severity: sevError,
+		Evidence: err.Error(),
+		Hint:     "run ohya doctor; restore the device identity file, or delete it to start over as a new device",
+	}
+}
+
 func writeStatusText(w io.Writer, data statusData) {
 	s := styleFor(w)
 	sep := " " + s.bullet() + " "
@@ -951,6 +979,9 @@ func writeStatusText(w io.Writer, data statusData) {
 
 	var meta [][2]string
 	meta = append(meta, [2]string{"State", data.Topology.StateDir})
+	if data.Topology.DeviceID != "" {
+		meta = append(meta, [2]string{"Device", data.Topology.DeviceID})
+	}
 	meta = append(meta, [2]string{"Storage", formatStatusStorage(s, data)})
 	if data.RemoteHub != nil {
 		meta = append(meta, formatRemoteHubRows(s, *data.RemoteHub)...)
@@ -1030,6 +1061,9 @@ func formatRemoteHubRows(s cliStyle, remote statusRemoteHub) [][2]string {
 	var parts []string
 	if remote.Hub != nil {
 		parts = append(parts, fmt.Sprintf("version=%s schema=%d", remote.Hub.Version, remote.Hub.Schema))
+		if remote.Hub.DeviceID != "" {
+			parts = append(parts, "device="+remote.Hub.DeviceID)
+		}
 	}
 	if remote.UptimeMS != nil {
 		parts = append(parts, "uptime="+ageText(*remote.UptimeMS))

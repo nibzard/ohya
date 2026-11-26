@@ -125,12 +125,9 @@ func runJoin(ctx context.Context, o joinOptions) error {
 	if err := os.MkdirAll(o.stateDir, 0o700); err != nil {
 		return fmt.Errorf("create state directory: %w", err)
 	}
-	deviceID, err := device.LoadOrCreate(o.stateDir)
-	if err != nil {
-		return err
-	}
 	invitation, codeAddr := "", ""
 	if o.code != "" {
+		var err error
 		invitation, codeAddr, err = parseJoinCode(o.code)
 		if err != nil {
 			return err
@@ -147,6 +144,10 @@ func runJoin(ctx context.Context, o joinOptions) error {
 			return errors.New("this device is not paired yet; pass the join code printed by ohya devices invite")
 		}
 		hubAddr = codeAddr
+		deviceID, err := device.LoadOrCreate(o.stateDir)
+		if err != nil {
+			return err
+		}
 		cred, err = pair(ctx, node, hubAddr, invitation, deviceID)
 		if err != nil {
 			if errors.Is(ctx.Err(), context.Canceled) {

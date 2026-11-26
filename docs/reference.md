@@ -749,9 +749,9 @@ disk under retention (for `ohya logs`, `ohya metrics`, `ohya usage`, and
 list retained instances explicitly. `multiple_instances` checks only
 live daemon roles (`ingest`, `serve`, `join`); multiple concurrent
 `mcp` stdio sessions are normal. Output carries the CLI identity,
-topology (mode, state directory, this device's ID when its identity
-file exists, agent-root counts without paths, owned service
-loaded/running facts), storage sizes with their observation time
+topology (mode, state directory, this device's ID, agent-root counts
+without paths, owned service loaded/running facts), storage sizes with
+their observation time
 (a joined client never reports its old local database as the hub),
 active instances with freshness, liveness, clean-shutdown state
 (`stopped`), source-state gauges, per-agent counts of files skipped by
@@ -762,8 +762,8 @@ snapshot. Findings carry a stable code, severity, evidence, and hint:
 `instance_unsupported_version`, `not_set_up` (no owned service and no
 running instance), `no_instances`, `multiple_instances`,
 `pending_backlog`, `upload_backlog`, `sources_stopped`,
-`discovery_truncated`, `device_identity_unusable`,
-`remote_status_unsupported`,
+`discovery_truncated`, `device_identity_unusable` (error),
+`device_identity_mismatch` (error), `remote_status_unsupported`,
 `remote_status_failed`. Instances are never merged; a null value and a
 zero value stay distinct. `--remote` opens one short-lived authenticated
 connection to the hub (negotiating `CapRemoteStatus` via
@@ -775,6 +775,13 @@ not advertise `CapRemoteStatus` report `remote_status_unsupported`
 cleanly. Exit 0 means every selected live instance is fresh with no
 degraded component; exit 3 means the result is valid but partial, stale,
 or degraded.
+
+This device's ID is the ID under which the hub stores the sessions of
+this device. On a paired state directory, `credential.json` names it; a
+`device.json` there that names another device gives
+`device_identity_mismatch`. Without a credential, `device.json` names it.
+The text report prints it in the `Device` row, and the hub's device ID
+as `device=` in the `Remote hub` row.
 
 ### `ohya metrics`
 

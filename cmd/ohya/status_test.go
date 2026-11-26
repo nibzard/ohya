@@ -304,7 +304,7 @@ func TestStatusRemoteHubSuccessAndFailure(t *testing.T) {
 				TransportPath: "direct",
 				Status: hubsync.RemoteStatus{
 					FormatVersion: hubsync.DiagnosticsFormatVersion,
-					Hub:           hubsync.RemoteIdentity{Version: "v0.3.0", Schema: 8},
+					Hub:           hubsync.RemoteIdentity{Version: "v0.3.0", Schema: 8, DeviceID: strings.Repeat("ab", 16)},
 					UptimeMS:      &uptime,
 					SampledWallMS: &sampled,
 					Roles:         []string{"serve"},
@@ -329,6 +329,9 @@ func TestStatusRemoteHubSuccessAndFailure(t *testing.T) {
 	writeStatusText(&text, data)
 	if !strings.Contains(text.String(), "version=v0.3.0 schema=8") || !strings.Contains(text.String(), "uptime=42s") || !strings.Contains(text.String(), "path=direct") || !strings.Contains(text.String(), "db 8.0 KiB, wal 1.0 KiB") {
 		t.Fatalf("text output lacks remote hub lines:\n%s", text.String())
+	}
+	if !strings.Contains(text.String(), "device="+strings.Repeat("ab", 16)) {
+		t.Fatalf("text output lacks the hub device ID:\n%s", text.String())
 	}
 
 	failed, err := buildStatus(context.Background(), statusOptions{
@@ -792,19 +795,40 @@ func TestStatusBeforeSetupNamesTheSetupStep(t *testing.T) {
 }
 
 func TestStatusTopologyDeviceIdentity(t *testing.T) {
+	const local = "0123456789abcdef0123456789abcdef"
+	const paired = "fedcba9876543210fedcba9876543210"
 	cases := []struct {
 		name        string
 		identity    string
-		wantFinding bool
+		credential  string
+		wantID      string
+		wantFinding string
 	}{
 		{name: "absent"},
-		{name: "unusable", identity: "{not json", wantFinding: true},
+		{name: "local", identity: local, wantID: local},
+		{name: "unusable", identity: "{not json", wantFinding: "device_identity_unusable"},
+		{name: "paired", identity: local, credential: local, wantID: local},
+		{name: "paired without identity file", credential: paired, wantID: paired},
+		{name: "paired as another device", identity: local, credential: paired, wantID: paired, wantFinding: "device_identity_mismatch"},
+		{name: "paired with unusable identity file", identity: "{not json", credential: paired, wantID: paired, wantFinding: "device_identity_unusable"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			if tc.identity != "" {
+			switch {
+			case tc.identity == "":
+			case strings.HasPrefix(tc.identity, "{"):
 				if err := os.WriteFile(filepath.Join(dir, device.FileName), []byte(tc.identity), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			default:
+				identity := fmt.Sprintf(`{"version":1,"device_id":%q}`, tc.identity)
+				if err := os.WriteFile(filepath.Join(dir, device.FileName), []byte(identity), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.credential != "" {
+				if err := device.SaveCredential(dir, device.Credential{DeviceID: tc.credential, Secret: "s3cret"}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -821,11 +845,27 @@ func TestStatusTopologyDeviceIdentity(t *testing.T) {
 			if err != nil {
 				t.Fatalf("buildStatus: %v", err)
 			}
-			if data.Topology.DeviceID != "" {
-				t.Errorf("device ID = %q, want empty", data.Topology.DeviceID)
+			if data.Topology.DeviceID != tc.wantID {
+				t.Errorf("device ID = %q, want %q", data.Topology.DeviceID, tc.wantID)
 			}
-			if got := hasFindingCode(data.Findings, "device_identity_unusable", sevWarn); got != tc.wantFinding {
-				t.Errorf("device_identity_unusable finding = %v, want %v: %+v", got, tc.wantFinding, data.Findings)
+			for _, code := range []string{"device_identity_unusable", "device_identity_mismatch"} {
+				if got, want := hasFindingCode(data.Findings, code, sevError), code == tc.wantFinding; got != want {
+					t.Errorf("%s error finding = %v, want %v: %+v", code, got, want, data.Findings)
+				}
+			}
+			if tc.wantFinding != "" && !statusDegraded(data) {
+				t.Errorf("an identity finding must degrade the status: %+v", data.Findings)
+			}
+			var text bytes.Buffer
+			writeStatusText(&text, data)
+			if got := strings.Contains(text.String(), "\nDevice "); got != (tc.wantID != "") {
+				t.Errorf("text report Device row = %v, want %v:\n%s", got, tc.wantID != "", text.String())
+			}
+			if tc.wantID != "" && !strings.Contains(text.String(), tc.wantID) {
+				t.Errorf("text report lacks the device ID %s:\n%s", tc.wantID, text.String())
+			}
+			if strings.Contains(text.String(), "s3cret") {
+				t.Errorf("text report leaks the credential secret:\n%s", text.String())
 			}
 		})
 	}

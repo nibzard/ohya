@@ -131,19 +131,15 @@ func runMcpRemote(ctx context.Context, stateDir string, observeOn bool) error {
 	if err != nil {
 		return err
 	}
-	deviceID, err := device.LoadOrCreate(stateDir)
-	if err != nil {
-		return err
-	}
 	telem := startTelemetry(stateDir, observeOn, nil, observe.RoleMCP)
 	defer telem.close()
 	node := address.NewDevice(address.DeviceOptions{})
 	session := hubsync.NewRemoteSession(
 		func(ctx context.Context) (net.Conn, error) { return node.Dial(ctx, hubAddr) },
 		cred.Secret,
-		hubsync.RemoteSessionOptions{DeviceID: deviceID, Usage: telem.usageSink(), Observer: telem.observer()})
+		hubsync.RemoteSessionOptions{DeviceID: cred.DeviceID, Usage: telem.usageSink(), Observer: telem.observer()})
 	defer session.Close()
-	server := mcpserver.New(session, mcpserver.EngineOptions{WriterID: deviceID})
+	server := mcpserver.New(session, mcpserver.EngineOptions{WriterID: cred.DeviceID})
 	err = mcpserver.Run(ctx, server)
 	drainCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 	_ = node.Drain(drainCtx)

@@ -265,11 +265,11 @@ func TestPermuteFlags(t *testing.T) {
 
 func TestJoinParsesFlagsOnEitherSideOfPositional(t *testing.T) {
 	cases := []struct {
-		name           string
-		flags          func(state string) []string
-		code           int
-		wantErr        string
-		wantDeviceFile bool
+		name         string
+		flags        func(state string) []string
+		code         int
+		wantErr      string
+		wantStateDir bool
 	}{
 		{"state applied", func(state string) []string { return []string{"--state", state} },
 			1, "a join code starts with ohya1.", true},
@@ -280,7 +280,7 @@ func TestJoinParsesFlagsOnEitherSideOfPositional(t *testing.T) {
 	for _, tc := range cases {
 		for _, side := range []string{"before", "after"} {
 			t.Run(tc.name+" — flags "+side, func(t *testing.T) {
-				state := t.TempDir()
+				state := filepath.Join(t.TempDir(), "join")
 				args := []string{"join"}
 				if side == "before" {
 					args = append(append(args, tc.flags(state)...), "notacode")
@@ -294,10 +294,11 @@ func TestJoinParsesFlagsOnEitherSideOfPositional(t *testing.T) {
 				if !strings.Contains(stderr.String(), tc.wantErr) {
 					t.Fatalf("stderr = %q; want it to contain %q", stderr.String(), tc.wantErr)
 				}
-				if tc.wantDeviceFile {
-					if _, err := os.Stat(filepath.Join(state, "device.json")); err != nil {
-						t.Fatalf("the join state directory holds no device identity: %v", err)
-					}
+				if _, err := os.Stat(state); (err == nil) != tc.wantStateDir {
+					t.Fatalf("join state directory exists = %v; want %v", err == nil, tc.wantStateDir)
+				}
+				if _, err := os.Stat(filepath.Join(state, "device.json")); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("a join with an invalid code created a device identity: %v", err)
 				}
 			})
 		}
