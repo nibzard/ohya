@@ -3299,5 +3299,11 @@ How to use this file:
   on attempt 1. The separate main-branch CI run passed on attempt 2 after
   a macOS lock timing test failed on attempt 1. All six published assets
   matched the qualified files. An isolated Linux upgrade preserved the
-  16 events and 6,528-byte source cursor. The live hub upgrade remains
-  pending. [Candidate run](https://github.com/nibzard/ohya/actions/runs/45914898304)
+  16 events and 6,528-byte source cursor. The live Linux hub now runs
+  schema 11 with both services on v0.8.4. The first setup reached the
+  SQLite lock timeout after saving a 17.7 GiB recovery point. The
+  process holding the lock finished migration 011. The installer retry
+  restarted both services, and doctor reported 20 passed checks and
+  one warning for older MCP processes. See
+  /notes/2026-11-27-ohya-v0.8.4-live-upgrade.md.
+  [Candidate run](https://github.com/nibzard/ohya/actions/runs/45914898304)

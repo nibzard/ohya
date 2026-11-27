@@ -417,8 +417,15 @@ space before you upgrade. Beyond that:
   The published six assets matched the qualified files byte for byte.
   An isolated Linux install upgraded 16 events and a 6,528-byte source
   cursor from schema 10 to schema 11. The schema 10 recovery point stayed
-  readable, and `ohya doctor` exited successfully. Production migration
-  time and first launch on a graphical Mac remain unmeasured.
+  readable, and `ohya doctor` exited successfully.
+  On the live Linux hub, setup saved a 17.7 GiB recovery point. Its first
+  migration attempt reached the SQLite write-lock timeout. A newly started
+  Model Context Protocol (MCP) process held that lock and committed
+  migration 011 about 4 min 24 s after it started. The hub service was
+  stopped for 3 min 3 s. Rerunning the installer after the commit took
+  9 s and restarted both services on v0.8.4. `ohya doctor` reported
+  20 checks passed and one warning for older MCP processes.
+  First launch on a graphical Mac remains unmeasured.
   [Candidate run](https://github.com/nibzard/ohya/actions/runs/45914898304)
 - The installer refuses to replace an executable whose digest matches neither
   its receipt entry nor the previous one ("installed executable has changed;
