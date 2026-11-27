@@ -1,10 +1,10 @@
 # Release and recovery operations
 
-The newest release is v0.8.2, published on 2026-11-26 from commit `7bd2e5f`
-after all eight candidate jobs passed on the first attempt; its macOS archives are unsigned and its menu bar app DMG is ad-hoc
-signed. Apple signing and
-notarization must pass before a signed public release. Generated candidates
-are not qualified releases merely because packaging succeeds.
+The newest release is v0.8.4, published on 2026-11-27 from commit `18eab6f`.
+All eight candidate jobs passed on the first attempt. The macOS archives
+are unsigned, and the menu bar app disk image is ad-hoc signed. Apple
+signing and notarization are required for a Developer ID signed release.
+[Release](https://github.com/nibzard/ohya/releases/tag/v0.8.4)
 
 ## Prepare a candidate
 
@@ -412,6 +412,14 @@ space before you upgrade. Beyond that:
   an `mcp-builds` warning for three `ohya mcp` processes of v0.8.2. The
   macOS joined device and the app were not upgraded or opened for this
   release.
+- v0.8.4 (commit `18eab6f`, schema 11) passed local `make check` and
+  `make tla`. All eight native candidate jobs passed on attempt 1.
+  The published six assets matched the qualified files byte for byte.
+  An isolated Linux install upgraded 16 events and a 6,528-byte source
+  cursor from schema 10 to schema 11. The schema 10 recovery point stayed
+  readable, and `ohya doctor` exited successfully. Production migration
+  time and first launch on a graphical Mac remain unmeasured.
+  [Candidate run](https://github.com/nibzard/ohya/actions/runs/45914898304)
 - The installer refuses to replace an executable whose digest matches neither
   its receipt entry nor the previous one ("installed executable has changed;
   preserve it"). A copy installed by hand outside `install.sh` triggers this
