@@ -484,6 +484,30 @@ How to use this file:
   task filed; the study lists candidate actions (recall-bench arm, dated
   comparison sections, a decision on a deterministic session-start index).
 
+- Competitive clock — sessions (verified 2026-11-27): nicknisi/sessions
+  (TypeScript/Bun, MIT, 53 stars, created 2026-05, pushed 2026-11-16, brew
+  tap, sessions.engineering) is the closest single-machine overlap: one BM25
+  index (bun:sqlite at ~/.cache/sessions, a rebuildable cache) over Claude
+  Code, Codex, Pi, and OpenCode (reads opencode.db directly), plus a durable
+  transcript vault and a mined, triaged memory store under
+  ~/.local/share/sessions. Thirteen fixed MCP tools and 8 skills ship the
+  recall flow: message-granular search hits (msg index, then targeted reads),
+  session digests (~2k tokens), a git-drift handoff brief ("continue": did
+  the work land, what changed since), read-only git↔session correlation
+  ("why"), and usage reports. Search runs porter stemming plus a CJK
+  two-character side index; an optional embedding lane (Ollama/openai/tei,
+  RRF fusion) degrades to lexical when absent. Content scanning withholds
+  secrets, injection phrasing, and invisible Unicode at every memory
+  boundary. An opt-in SessionStart hook can auto-inject a primer (Claude
+  Code only, off by default). Single machine, no sync, no formal
+  verification. ohya's wedge stays intact: cross-device sync, byte-for-byte
+  originals in the store of record, two bounded tools, checked sync. Gaps it
+  exposes: events_fts is unicode61 (no stemming, no CJK), no OpenCode source
+  yet, no derived digest or drift-aware handoff recipe on the pull path. Full
+  study: /notes/2026-11-27-sessions-vs-ohya.md. No follow-up task filed; the
+  study lists candidate actions (FTS upgrade, digest recipes in DB.md,
+  drift-aware handoff prompt, OpenCode source, annotate/egress scanning).
+
 - Device-side exclude globs landed 2026-11-20 (T147): one repeatable
   `--exclude GLOB` flag on ingest, join, and setup; one enforcement point
   (discoverSessionFiles in cmd/ohya/ingest.go — an excluded path is never

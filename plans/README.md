@@ -7,6 +7,7 @@
 | [003: Recall tool improvements](003-recall-tool-improvements.md) | P2 | 002 baseline (R1 is independent) | IN DELIVERY — R1, R2, R5 done (T103, T104, T107); R3 (T105) and R4 (T106) open |
 | [004: Storage efficiency](004-storage-efficiency.md) | P2 cheap items; rest deferred | S1–S3 none; D1–D3 need the 002 acceptance gate | IN DELIVERY — S1–S3 done (T100–T102); D1–D3 (T110–T112) open, deferred |
 | [005: macOS menu bar app](005-macos-menubar.md) | P2 | M1/M5.1 none; M5.2 needs Apple Developer ID signing on macOS | IN DELIVERY — M1 and remote-hub data plane done; M2–M4 SwiftPM app implemented under `macos/OhyaMenuBar/` (macOS compile/signing deferred) |
+| [006: Pull-path recall upgrades](006-pull-path-recall-upgrades.md) | P2 | none; O1 gated on its spike | PROPOSED 2026-11-27 — response to nicknisi/sessions (study: /notes/2026-11-27-sessions-vs-ohya.md); R1/C1/F1 ready, F2 and O1 gated on decisions |
 
 Plan 001 was written against `33df75d` on 2026-11-15. Implement local collection before remote aggregates; measure overhead before optimizing product behavior. Its milestones 1–4 shipped on 2026-11-16 and 2026-11-17.
 
