@@ -514,7 +514,9 @@ How to use this file:
   phrasing is flagged with `injection_flags`, not replaced. F1 porter FTS
   (migration 012) is implemented; the schema 10 to 12 migration of the
   18.4 GB hub copy took 14 min 47 s. Open: F1f recall-bench ohya-arm
-  before/after (needs model runs), F2 CJK spike, O1 OpenCode spike, D1.
+  before/after (needs model runs), F2 CJK spike, D1. O1a spike done: the
+  design is in /notes/2026-11-27-opencode-source-spike.md and awaits owner
+  acceptance; check whether doctor assumes a file path for `<db>#<session>`.
 
 - Device-side exclude globs landed 2026-11-20 (T147): one repeatable
   `--exclude GLOB` flag on ingest, join, and setup; one enforcement point

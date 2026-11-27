@@ -25,3 +25,8 @@ These are dependencies and acceptance criteria, not a promise of parallel work.
 6. **OpenCode spike.** Depends on evidence of demand; OpenCode v2 stores sessions
    in SQLite (`opencode.db`), so a byte cursor does not apply. Design a
    poll-based source cursor before committing to implementation.
+   Spike done 2026-11-27 (`/notes/2026-11-27-opencode-source-spike.md`):
+   one Source per session at `<db>#<session_id>`, `cursor_bytes` holds the
+   last committed `session_message.seq`, and the cursor advances only past
+   complete messages. Implementation (plan 006 O1b–O1d) waits for owner
+   acceptance of that design.
