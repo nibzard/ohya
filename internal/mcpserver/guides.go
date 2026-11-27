@@ -31,7 +31,7 @@ func addGuides(server *mcp.Server, o EngineOptions) {
 			uri:         GuideAnalyticsReviewURI,
 			name:        "analytics-and-review",
 			title:       "Analytics, filtering, and review pagination recipes",
-			description: "SQL recipes for model and device scoping, session token totals, and paginated security-review annotation loops.",
+			description: "SQL recipes for session digests, handoffs with git drift checks, model and device scoping, session token totals, and paginated security-review annotation loops.",
 			text:        AnalyticsReviewGuide(o),
 		},
 	}
@@ -135,6 +135,37 @@ One device's sessions (discover values first with SELECT DISTINCT device_id FROM
 SELECT s.id, s.agent, s.repo, substr(s.first_prompt, 1, 160) AS first_prompt, datetime(s.last_event_at_ms/1000, 'unixepoch') AS last_utc
 FROM sessions s WHERE s.device_id = 'laptop'
 ORDER BY s.last_event_at_ms DESC LIMIT 10;
+
+Session digest (one row per user prompt with the final text reply of that exchange; keeps the first 5 and last 5 exchanges; tool results and tool calls are skipped; drill into the event ids with a session_id read):
+WITH t AS (
+  SELECT e.id, e.time_ms, e.kind, e.text FROM events_settled e
+  WHERE e.session_id = 'claude-code:dev1:s-digest' AND e.duplicate_of IS NULL
+    AND e.kind IN ('user', 'assistant') AND length(e.text) > 0
+    AND e.tool_name IS NULL AND e.metadata NOT LIKE '%%"type":"tool_result"%%'),
+g AS (
+  SELECT id, time_ms, kind, text, SUM(kind = 'user') OVER (ORDER BY time_ms, id) AS turn FROM t),
+r AS (
+  SELECT id, turn, kind, text, ROW_NUMBER() OVER (PARTITION BY turn, kind ORDER BY time_ms DESC, id DESC) AS from_end FROM g WHERE turn > 0),
+x AS (
+  SELECT u.turn, u.id AS user_event_id, substr(u.text, 1, 300) AS user_text, a.id AS reply_event_id, substr(a.text, 1, 500) AS final_reply
+  FROM r u LEFT JOIN r a ON a.turn = u.turn AND a.kind = 'assistant' AND a.from_end = 1
+  WHERE u.kind = 'user' AND u.from_end = 1)
+SELECT * FROM x WHERE turn <= 5 OR turn > (SELECT max(turn) FROM x) - 5 ORDER BY turn;
+
+Session handoff (first prompt, last prompt, final reply, branch, and event id range of one settled session):
+SELECT s.id, s.agent, s.device_id, s.branch, s.cwd, s.started_at_ms, s.last_event_at_ms, substr(s.first_prompt, 1, 300) AS first_prompt,
+  (SELECT substr(e.text, 1, 500) FROM events_settled e
+   WHERE e.session_id = s.id AND e.kind = 'user' AND e.duplicate_of IS NULL AND length(e.text) > 0
+     AND e.metadata NOT LIKE '%%"type":"tool_result"%%'
+   ORDER BY e.time_ms DESC, e.id DESC LIMIT 1) AS last_user_prompt,
+  (SELECT substr(e.text, 1, 800) FROM events_settled e
+   WHERE e.session_id = s.id AND e.kind = 'assistant' AND e.tool_name IS NULL AND e.duplicate_of IS NULL AND length(e.text) > 0
+   ORDER BY e.time_ms DESC, e.id DESC LIMIT 1) AS final_reply,
+  (SELECT min(e.id) FROM events e WHERE e.session_id = s.id) AS first_event_id,
+  (SELECT max(e.id) FROM events e WHERE e.session_id = s.id) AS last_event_id
+FROM sessions s WHERE s.id = 'claude-code:dev1:s-digest';
+
+After the handoff row, check drift with read-only git in the session's cwd: git log --since=<started_at> --until=<last_event_at plus 2h> shows whether the work landed, and git status plus git log since last_event_at shows what changed after. Do not trust the final reply over the repository.
 
 Session token totals:
 SELECT s.id, sum(u.input_tokens) AS input_tokens, sum(u.output_tokens) AS output_tokens

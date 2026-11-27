@@ -657,6 +657,52 @@ FROM events e WHERE e.id IN (
 ORDER BY e.time_ms, e.id;
 ```
 
+**Session digest.** One bounded result per session: each user prompt with
+the final text reply of its exchange, the first five and last five
+exchanges, and event ids for drill-in. Tool calls (`tool_name` set) and
+tool results (`"type":"tool_result"` in `metadata`) are skipped, so a
+reply is the last assistant text before the next prompt. Replace the
+session id with a settled session found through the recipes above.
+
+```sql
+WITH t AS (
+  SELECT e.id, e.time_ms, e.kind, e.text FROM events_settled e
+  WHERE e.session_id = 'claude-code:dev1:s-digest' AND e.duplicate_of IS NULL
+    AND e.kind IN ('user', 'assistant') AND length(e.text) > 0
+    AND e.tool_name IS NULL AND e.metadata NOT LIKE '%"type":"tool_result"%'),
+g AS (
+  SELECT id, time_ms, kind, text, SUM(kind = 'user') OVER (ORDER BY time_ms, id) AS turn FROM t),
+r AS (
+  SELECT id, turn, kind, text, ROW_NUMBER() OVER (PARTITION BY turn, kind ORDER BY time_ms DESC, id DESC) AS from_end FROM g WHERE turn > 0),
+x AS (
+  SELECT u.turn, u.id AS user_event_id, substr(u.text, 1, 300) AS user_text, a.id AS reply_event_id, substr(a.text, 1, 500) AS final_reply
+  FROM r u LEFT JOIN r a ON a.turn = u.turn AND a.kind = 'assistant' AND a.from_end = 1
+  WHERE u.kind = 'user' AND u.from_end = 1)
+SELECT * FROM x WHERE turn <= 5 OR turn > (SELECT max(turn) FROM x) - 5 ORDER BY turn;
+```
+
+**Session handoff.** One row for a chosen settled session: first and last
+user prompt, final assistant reply, `branch`, and the event id range. The
+agent that continues the work then checks drift with read-only git in the
+session's `cwd`. `git log --since=<started_at> --until=<last_event_at plus
+2h>` shows whether the work landed. `git status` and `git log` since
+`last_event_at` show what changed afterward. ohya never runs git; the
+agent does, and trusts the repository over the final reply.
+
+```sql
+SELECT s.id, s.agent, s.device_id, s.branch, s.cwd, s.started_at_ms, s.last_event_at_ms, substr(s.first_prompt, 1, 300) AS first_prompt,
+  (SELECT substr(e.text, 1, 500) FROM events_settled e
+   WHERE e.session_id = s.id AND e.kind = 'user' AND e.duplicate_of IS NULL AND length(e.text) > 0
+     AND e.metadata NOT LIKE '%"type":"tool_result"%'
+   ORDER BY e.time_ms DESC, e.id DESC LIMIT 1) AS last_user_prompt,
+  (SELECT substr(e.text, 1, 800) FROM events_settled e
+   WHERE e.session_id = s.id AND e.kind = 'assistant' AND e.tool_name IS NULL AND e.duplicate_of IS NULL AND length(e.text) > 0
+   ORDER BY e.time_ms DESC, e.id DESC LIMIT 1) AS final_reply,
+  (SELECT min(e.id) FROM events e WHERE e.session_id = s.id) AS first_event_id,
+  (SELECT max(e.id) FROM events e WHERE e.session_id = s.id) AS last_event_id
+FROM sessions s WHERE s.id = 'claude-code:dev1:s-digest';
+```
+
 **Filter by model.** `sessions.model` keeps the first non-empty model the
 session's own records carried, so it is NULL for sessions whose records
 named none. Discover the values present on the hub first, then filter (one

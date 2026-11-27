@@ -15,7 +15,7 @@ import (
 const (
 	toolDescriptionSQLBlockCount = 11
 	garbageGuideSQLBlockCount    = 8
-	analyticsGuideSQLBlockCount  = 5
+	analyticsGuideSQLBlockCount  = 7
 )
 
 var sqlBlockOpeners = []string{"SELECT ", "WITH ", "PRAGMA ", "EXPLAIN ", "VALUES "}
@@ -58,6 +58,7 @@ func openPublishedRecipesHub(t *testing.T) *Engine {
 	const hour, day = int64(3600_000), int64(86400_000)
 	settled1, settled2, live, old := now-hour, now-2*hour, now, now-30*day
 	fresh, stale := now-60_000, now-40*day
+	digestAt := now - 10*day
 	oversizedRaw := `{"type":"user","sessionId":"s-old","message":{"role":"user","content":"` + strings.Repeat("x", 70000) + `"}}`
 	seed := []string{
 		fmt.Sprintf(`INSERT INTO sessions(id,agent,device_id,native_id,repo,cwd,model,first_prompt,last_event_at_ms,event_count) VALUES
@@ -91,6 +92,16 @@ func openPublishedRecipesHub(t *testing.T) *Engine {
 			old, old+1000, old+5000, oversizedRaw, old+2000, old+3000, old+4000),
 		fmt.Sprintf(`INSERT INTO events(id,session_id,source_id,source_offset,time_ms,kind,role,text,raw_json,duplicate_of) VALUES
 		 (51,'claude-code:dev1:s2','src-2',300,%d,'message','user',NULL,'{"type":"user","sessionId":"s2"}',4)`, old),
+		fmt.Sprintf(`INSERT INTO sessions(id,agent,device_id,native_id,repo,cwd,branch,first_prompt,started_at_ms,last_event_at_ms,event_count) VALUES
+		 ('claude-code:dev1:s-digest','claude-code','dev1','s-digest','github.com/owner/name','/repo','feature/digest','add the digest',%d,%d,7)`, digestAt, digestAt+6000),
+		fmt.Sprintf(`INSERT INTO events(id,session_id,source_id,source_offset,time_ms,kind,role,tool_name,text,metadata,raw_json) VALUES
+		 (60,'claude-code:dev1:s-digest','src-3',1000,%d,'user','user',NULL,'add the digest','{"blocks":[{"type":"text"}]}','{}'),
+		 (61,'claude-code:dev1:s-digest','src-3',1100,%d,'assistant','assistant','Bash','Bash {"command":"ls"}','{}','{}'),
+		 (62,'claude-code:dev1:s-digest','src-3',1200,%d,'user','user',NULL,'ls output','{"blocks":[{"type":"tool_result"}]}','{}'),
+		 (63,'claude-code:dev1:s-digest','src-3',1300,%d,'assistant','assistant',NULL,'digest added','{}','{}'),
+		 (64,'claude-code:dev1:s-digest','src-3',1400,%d,'user','user',NULL,'now ship it','{"blocks":[{"type":"text"}]}','{}'),
+		 (65,'claude-code:dev1:s-digest','src-3',1500,%d,'assistant','assistant',NULL,'shipped','{}','{}')`,
+			digestAt, digestAt+1000, digestAt+2000, digestAt+3000, digestAt+4000, digestAt+5000),
 		fmt.Sprintf(`INSERT INTO workspaces(device_id,path,repo,observed_at_ms) VALUES('dev1','/gone',NULL,%d)`, old),
 		`INSERT INTO session_token_usage VALUES('claude-code:dev1:s1','msg-1',110,20,30,40)`,
 		`INSERT INTO event_annotations VALUES(100,'security','review','{"status":"reviewed"}','dev1',1,1)`,
@@ -167,6 +178,18 @@ func TestPublishedRecipesRunVerbatim(t *testing.T) {
 			ids = append(ids, id)
 		}
 		return ids
+	}
+
+	digest := find("SUM(kind = 'user') OVER")
+	if digest.RowCount != 2 {
+		t.Fatalf("digest rows = %d (%v), want 2 exchanges", digest.RowCount, digest.Rows)
+	}
+	if digest.Rows[0][1] != int64(60) || digest.Rows[0][3] != int64(63) || digest.Rows[1][1] != int64(64) || digest.Rows[1][3] != int64(65) {
+		t.Fatalf("digest = %v, want user 60 with reply 63 and user 64 with reply 65", digest.Rows)
+	}
+	handoff := find("AS last_user_prompt")
+	if row := handoff.Rows[0]; row[3] != "feature/digest" || row[8] != "now ship it" || row[9] != "shipped" || row[10] != int64(60) || row[11] != int64(65) {
+		t.Fatalf("handoff = %v, want branch feature/digest, last prompt, final reply, ids 60 to 65", row)
 	}
 
 	dateBounded := eventIDs(find("AND ev.time_ms >="))
