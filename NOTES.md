@@ -508,6 +508,14 @@ How to use this file:
   study lists candidate actions (FTS upgrade, digest recipes in DB.md,
   drift-aware handoff prompt, OpenCode source, annotate/egress scanning).
 
+- Plan 006 progress (2026-11-27): R1 digest and handoff recipes (T154) and
+  C1 content policy (T155, ADR 0019) landed. C1d measured 161 events with
+  "ignore previous instructions" in about 110 sessions, so injection
+  phrasing is flagged with `injection_flags`, not replaced. F1 porter FTS
+  (migration 012) is implemented; the schema 10 to 12 migration of the
+  18.4 GB hub copy took 14 min 47 s. Open: F1f recall-bench ohya-arm
+  before/after (needs model runs), F2 CJK spike, O1 OpenCode spike, D1.
+
 - Device-side exclude globs landed 2026-11-20 (T147): one repeatable
   `--exclude GLOB` flag on ingest, join, and setup; one enforcement point
   (discoverSessionFiles in cmd/ohya/ingest.go — an excluded path is never

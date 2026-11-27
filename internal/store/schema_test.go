@@ -108,3 +108,16 @@ func TestDriverAuthorizerAndCancellation(t *testing.T) {
 		t.Fatalf("expected deadline, got %v", err)
 	}
 }
+
+func TestEventsFTSMatchesMorphologicalVariants(t *testing.T) {
+	db := setup(t)
+	if _, err := db.Exec(`INSERT INTO events(id,session_id,source_id,source_offset,kind,raw_json,text) VALUES(2,'s','f',1,'message','{}','we are refactoring the parser')`); err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []string{"refactor", "refactoring", "parsers"} {
+		var count int
+		if err := db.QueryRow(`SELECT count(*) FROM events_fts WHERE events_fts MATCH ?`, query).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("MATCH %q = %d, %v; want the refactoring event", query, count, err)
+		}
+	}
+}

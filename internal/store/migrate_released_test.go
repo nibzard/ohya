@@ -216,6 +216,11 @@ func assertReleasedRowsSurviveUpgrade(t *testing.T, db *sql.DB, fromSchema, toSc
 		Scan(&ftsID); err != nil || ftsID != claudeEventID {
 		t.Fatalf("FTS lookup after upgrade matched event %d, want the released event %d: %v", ftsID, claudeEventID, err)
 	}
+	var stemmedID int
+	if err := db.QueryRow(`SELECT rowid FROM events_fts WHERE events_fts MATCH 'ohyarelupgrading'`).
+		Scan(&stemmedID); err != nil || stemmedID != claudeEventID {
+		t.Fatalf("stemmed FTS lookup after upgrade matched event %d, want the released event %d: %v", stemmedID, claudeEventID, err)
+	}
 	var settled int
 	if err := db.QueryRow(`SELECT count(*) FROM events_settled WHERE session_id=?`, releasedClaudeSession).
 		Scan(&settled); err != nil || settled != 1 {

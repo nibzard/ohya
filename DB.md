@@ -38,6 +38,20 @@ pre-upgrade session rows do not identify which process wrote them. Starting
 adds a partial index on non-null `events.duplicate_of`. Purge uses it to
 detach references across sources. SQLite uses it to check the foreign key
 when it deletes an event.
+
+[012_fts_porter.sql](internal/store/migrations/012_fts_porter.sql)
+recreates `events_fts` with the `porter unicode61` tokenizer and rebuilds
+it from `events`. A query for `refactor` now matches `refactoring`, and
+`parsers` matches `parser`. The insert and delete triggers on `events` are
+unchanged. The index covers the same text as before, so recall recipes
+and the quoting rule for punctuation-bearing terms (see Search example)
+apply unchanged. Stemming also widens matches, and a quoted phrase is stemmed
+too. Check the excerpt when the exact wording matters.
+The rebuild is the cost of the upgrade: on a copy of the 18.4 GB hub at
+schema 10 (2.9 million events), migrations 011 and 012 together took
+14 min 47 s with 19 MB resident memory, and the database file did not
+grow. Plan for about 10 minutes of that for migration 012 and keep the
+usual recovery point free space (about 20 GB).
 Do not duplicate the DDL here.
 Databases ship with releases: v0.1.0 and v0.1.1 ship schema 6, v0.1.2 and
 v0.2.0 ship schema 7, v0.3.0, v0.4.0, v0.5.0, v0.5.1, v0.6.0, v0.6.1, v0.7.0, and v0.7.1 ship schema 8,
@@ -124,7 +138,7 @@ attempt, so an open that is stopped during the wait returns up to one busy timeo
 | `events` | One immutable original JSONL record and normalized searchable fields |
 | `session_token_usage` | Token counts of one API response, keyed by session and message ID |
 | `event_annotations` | Agent-written JSON values keyed by event, namespace, key and writer |
-| `events_fts` | Search index over event text, maintained transactionally |
+| `events_fts` | Porter-stemmed search index over event text, maintained transactionally |
 | `events_settled` | View over `events` holding only records of sessions idle at least 10 minutes |
 | `workspaces` | Write-once repository observation for one session working directory on one device |
 | `purged_sources` | Tombstone of one owner-purged source; refuses the write path until the owner re-admits it |
