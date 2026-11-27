@@ -514,7 +514,9 @@ How to use this file:
   phrasing is flagged with `injection_flags`, not replaced. F1 porter FTS
   (migration 012) is implemented; the schema 10 to 12 migration of the
   18.4 GB hub copy took 14 min 47 s. Open: F1f recall-bench ohya-arm
-  before/after (needs model runs), F2 CJK spike, D1. O1a spike done: the
+  before/after (needs model runs), D1. F2a/b CJK spike done: ADR 0020 proposes a CJK-only bigram side table
+  (1.5 MB vs trigram 24.1 MB on the spike corpus), awaiting owner adoption.
+  O1a spike done: the
   design is in /notes/2026-11-27-opencode-source-spike.md and awaits owner
   acceptance; check whether doctor assumes a file path for `<db>#<session>`.
 
