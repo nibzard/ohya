@@ -454,7 +454,9 @@ device's writer ID, and steers agents to the `events_settled` view —
 agent does not read its own live session. Lower-frequency playbooks
 (`ohya://guides/garbage-audit` and `ohya://guides/analytics-and-review`) are
 served on demand as MCP resources instead of being loaded upfront on every
-session. To connect an agent, register
+session. Results also carry `injection_flags`, the count of instruction-like
+phrases in served text; the text stays unchanged
+([ADR 0019](adr/0019-content-policy.md)). To connect an agent, register
 the command, for example
 for Claude Code:
 

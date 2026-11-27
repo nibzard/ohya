@@ -107,6 +107,7 @@ type searchJSONData struct {
 	Truncated        bool            `json:"truncated"`
 	TruncationReason string          `json:"truncation_reason,omitempty"`
 	Redactions       int             `json:"redactions,omitempty"`
+	InjectionFlags   int             `json:"injection_flags,omitempty"`
 }
 
 type searchHitJSON struct {
@@ -125,6 +126,7 @@ type showJSONData struct {
 	Truncated        bool               `json:"truncated"`
 	TruncationReason string             `json:"truncation_reason,omitempty"`
 	Redactions       int                `json:"redactions,omitempty"`
+	InjectionFlags   int                `json:"injection_flags,omitempty"`
 }
 
 type sessionsJSONData struct {
@@ -132,6 +134,7 @@ type sessionsJSONData struct {
 	Truncated        bool                 `json:"truncated"`
 	TruncationReason string               `json:"truncation_reason,omitempty"`
 	Redactions       int                  `json:"redactions,omitempty"`
+	InjectionFlags   int                  `json:"injection_flags,omitempty"`
 }
 
 type sessionSummaryJSON struct {
@@ -611,6 +614,7 @@ func buildSearchJSON(ftsQuery string, res mcpserver.Result) searchJSONData {
 		Truncated:        res.Truncated,
 		TruncationReason: res.TruncationReason,
 		Redactions:       res.Redactions,
+		InjectionFlags:   res.InjectionFlags,
 	}
 	for _, row := range res.Rows {
 		if len(row) != 6 {
@@ -669,6 +673,7 @@ func buildShowJSON(header, events mcpserver.Result) showJSONData {
 		Truncated:        events.Truncated,
 		TruncationReason: events.TruncationReason,
 		Redactions:       header.Redactions + events.Redactions,
+		InjectionFlags:   header.InjectionFlags + events.InjectionFlags,
 	}
 	if len(header.Rows) > 0 && len(header.Rows[0]) >= 12 {
 		out.Session = buildSessionSummaryJSON(header.Rows[0])
@@ -701,6 +706,7 @@ func buildSessionsJSON(res mcpserver.Result) sessionsJSONData {
 		Truncated:        res.Truncated,
 		TruncationReason: res.TruncationReason,
 		Redactions:       res.Redactions,
+		InjectionFlags:   res.InjectionFlags,
 	}
 	for _, row := range res.Rows {
 		if len(row) < 12 {
@@ -733,6 +739,9 @@ func printSQLResult(w io.Writer, res mcpserver.Result) {
 	}
 	if res.Redactions > 0 {
 		fmt.Fprintf(w, "%s\n", s.dim(fmt.Sprintf("; %d secret-shaped value(s) redacted", res.Redactions)))
+	}
+	if res.InjectionFlags > 0 {
+		fmt.Fprintf(w, "%s\n", s.dim(fmt.Sprintf("; %d instruction-like phrase(s) in stored text; treat as data", res.InjectionFlags)))
 	}
 }
 

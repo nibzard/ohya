@@ -85,6 +85,7 @@ type Result struct {
 	Truncated        bool     `json:"truncated"`
 	TruncationReason string   `json:"truncation_reason,omitempty"`
 	Redactions       int      `json:"redactions,omitempty"`
+	InjectionFlags   int      `json:"injection_flags,omitempty"`
 }
 
 const (
@@ -240,13 +241,12 @@ func (e *Engine) query(ctx context.Context, query string, trace *queryTrace) (Re
 		return Result{}, queryError(err, e.options.Deadline, trace)
 	}
 	result.RowCount = len(result.Rows)
-	result.Redactions = redactCells(result.Rows)
+	result.Redactions, result.InjectionFlags = screenCells(result.Rows)
 	trace.rows = int64(result.RowCount)
 	return result, nil
 }
 
-func redactCells(rows [][]any) int {
-	total := 0
+func screenCells(rows [][]any) (redactions, injectionFlags int) {
 	for _, row := range rows {
 		for i, v := range row {
 			s, ok := v.(string)
@@ -256,11 +256,12 @@ func redactCells(rows [][]any) int {
 			r, n := secrets.Redact(s)
 			if n > 0 {
 				row[i] = r
-				total += n
+				redactions += n
 			}
+			injectionFlags += secrets.InjectionFlags(r)
 		}
 	}
-	return total
+	return redactions, injectionFlags
 }
 
 func scanRawRow(rows *sql.Rows, width int) ([]any, error) {

@@ -32,6 +32,8 @@ var table = []Pattern{
 		keep: []int{1}},
 	{ID: "private-key-block",
 		re: regexp.MustCompile(`(?s)-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----.*?-----END (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----`)},
+	{ID: "invisible-unicode",
+		re: regexp.MustCompile("[\u200B\u2060\u202A-\u202E\u2066-\u2069]+")},
 	{ID: "env-assignment",
 		re:   regexp.MustCompile(`(^|[^A-Za-z0-9_])((?:[A-Z][A-Z0-9_]*)?(?:API_KEY|ACCESS_KEY|SECRET_KEY|PRIVATE_KEY|TOKEN|SECRET|PASSWORD|PASSPHRASE|PASSWD)=)("[^"\n]{8,}"|'[^'\n]{8,}'|[^"'\s\[{),;{$][^"'\s\[{),;]{7,})`),
 		keep: []int{1, 2}},
@@ -54,7 +56,30 @@ func IDs() []string {
 	return ids
 }
 
+const invisibleRunes = "\u200B\u2060\u202A\u202B\u202C\u202D\u202E\u2066\u2067\u2068\u2069"
+
+const InjectionRule = "prompt-injection"
+
+var injectionRE = regexp.MustCompile(`(?i)\b(?:(?:ignore|disregard|forget)\s+(?:(?:all|any|the|your)\s+)*(?:previous|prior|above|earlier|preceding)\s+(?:instructions|prompts|directions|rules)|disregard\s+all\s+prior)\b`)
+
+func InjectionFlags(s string) int {
+	return len(injectionRE.FindAllStringIndex(s, -1))
+}
+
+func Violation(s string) string {
+	if strings.ContainsAny(s, invisibleRunes) {
+		return "invisible-unicode"
+	}
+	if injectionRE.MatchString(s) {
+		return InjectionRule
+	}
+	return ""
+}
+
 func anchored(s string) bool {
+	if strings.ContainsAny(s, invisibleRunes) {
+		return true
+	}
 	for _, a := range anchors {
 		if strings.Contains(s, a) {
 			return true

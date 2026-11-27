@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/nibzard/ohya/internal/secrets"
 )
 
 type AnnotationOpKind string
@@ -100,6 +102,37 @@ func Annotate(ctx context.Context, writer *sql.DB, writerID string, ops []Annota
 	return result, nil
 }
 
+func valueViolation(value string) string {
+	var decoded any
+	if err := json.Unmarshal([]byte(value), &decoded); err != nil {
+		return ""
+	}
+	return jsonViolation(decoded)
+}
+
+func jsonViolation(v any) string {
+	switch x := v.(type) {
+	case string:
+		return secrets.Violation(x)
+	case []any:
+		for _, item := range x {
+			if rule := jsonViolation(item); rule != "" {
+				return rule
+			}
+		}
+	case map[string]any:
+		for k, item := range x {
+			if rule := secrets.Violation(k); rule != "" {
+				return rule
+			}
+			if rule := jsonViolation(item); rule != "" {
+				return rule
+			}
+		}
+	}
+	return ""
+}
+
 func validateAnnotationBatch(writerID string, ops []AnnotationOp) error {
 	if writerID == "" {
 		return fmt.Errorf("%w: no writer ID; the hub assigns it from the device identity", ErrAnnotationRejected)
@@ -133,6 +166,10 @@ func validateAnnotationBatch(writerID string, ops []AnnotationOp) error {
 			}
 			if !json.Valid([]byte(op.Value)) {
 				return fmt.Errorf("%w: operation %d: value is not valid JSON", ErrAnnotationRejected, i)
+			}
+			if rule := valueViolation(op.Value); rule != "" {
+				return fmt.Errorf("%w: operation %d: value matches content rule %q; annotations hold your own interpretation, not copied instructions or hidden characters",
+					ErrAnnotationRejected, i, rule)
 			}
 			if len(op.Value) > MaxAnnotationValueBytes {
 				return fmt.Errorf("%w: operation %d: value holds %d bytes, above the %d byte limit",

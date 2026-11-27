@@ -45,6 +45,7 @@ Fixed shapes, no classifier, no model, no new dependency:
 | `openai-api-key` | `sk-` + 20 key characters |
 | `slack-token` | `xox[abposr]-` + 20 token characters |
 | `google-api-key` | `AIza` + exactly 35 key characters |
+| `invisible-unicode` | bidi controls U+202A–202E and U+2066–2069, U+2060, U+200B ([ADR 0019](0019-content-policy.md)) |
 | `private-key-block` | a full `-----BEGIN … PRIVATE KEY-----` … `-----END …-----` block |
 | `env-assignment` | `UPPER_SNAKE` secret-suffixed name (`API_KEY`, `ACCESS_KEY`, `SECRET_KEY`, `PRIVATE_KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `PASSPHRASE`, `PASSWD`) `=` a value of at least 8 characters; the variable name is kept, only the value is replaced |
 
